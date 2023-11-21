@@ -21,11 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
-const testCount = 20000000
+const testCount = 20000
 const testRate = 0.00001
-const vecCount = 2000
+const vecCount = 10
 
 func TestBloomFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -38,6 +39,23 @@ func TestBloomFilter(t *testing.T) {
 	for j := 0; j < vecCount; j++ {
 		boom.TestAndAdd(vecs[j], func(_ bool, _ int) {})
 	}
+	for j := 0; j < vecCount; j++ {
+		vecs[j].Free(mp)
+	}
+
+	testVec := testutil.NewVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	allAdd := true
+	boom.Test(testVec, func(exits bool, _ int) {
+		allAdd = allAdd && exits
+	})
+	require.Equal(t, allAdd, true)
+
+	testVec = testutil.NewVector(testCount*1.2, types.New(types.T_int64, 0, 0), mp, false, nil)
+	allAdd = true
+	boom.Test(testVec, func(exits bool, _ int) {
+		allAdd = allAdd && exits
+	})
+	require.Equal(t, allAdd, false)
 }
 
 func BenchmarkBloomFiltrer(b *testing.B) {

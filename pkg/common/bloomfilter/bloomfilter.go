@@ -22,6 +22,7 @@ import (
 
 func (bf *BloomFilter) Clean() {
 	bf.bitmap.Reset()
+	bf.bitmap = nil
 	bf.hashSeed = nil
 	bf.keys = nil
 	bf.states = nil
@@ -60,14 +61,20 @@ func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 	valLength := len(bf.hashSeed) * 3
 	var exits bool
 	var vals []uint64
+	var contains bool
 	bf.getValue(v, func(idx int, beginIdx int) {
 		exits = true
 		vals = bf.vals[idx]
 		for j := 0; j < valLength; j++ {
 			if exits {
-				exits = bf.bitmap.Contains(vals[j])
+				contains = bf.bitmap.Contains(vals[j])
+				if !contains {
+					bf.bitmap.Add(vals[j])
+					exits = false
+				}
+			} else {
+				bf.bitmap.Add(vals[j])
 			}
-			bf.bitmap.Add(vals[j])
 		}
 		callBack(exits, beginIdx+idx)
 	})

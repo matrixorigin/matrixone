@@ -15,6 +15,7 @@
 package bloomfilter
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -77,4 +78,28 @@ func encodeHashKeys(keys [][]byte, vec *vector.Vector, start, count int) {
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+func computeMemAndHashCount(rowCount int64, probability float64) (int64, int) {
+	k := 1
+	if rowCount < 10001 {
+		k = 1
+	} else if rowCount < 100001 {
+		k = 1
+	} else if rowCount < 1000001 {
+		k = 1
+	} else if rowCount < 10000001 {
+		k = 2
+	} else if rowCount < 100000001 {
+		k = 3
+	} else if rowCount < 1000000001 {
+		k = 3
+	} else if rowCount < 10000000001 {
+		k = 3
+	} else {
+		panic("unsupport rowCount")
+	}
+	hashCount := k * 3
+	m := -float64(hashCount) * float64(rowCount) / math.Log(1-math.Pow(probability, 1.0/float64(hashCount)))
+	return int64(m), k
 }
