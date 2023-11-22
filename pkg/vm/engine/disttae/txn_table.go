@@ -1885,12 +1885,9 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	for _, key := range keys {
-		if snap.PrimaryKeyMayBeModified(from, to, key) {
-			return true, nil
-		}
+	if snap.PrimaryKeyMayBeModified(from, to, keys) {
+		return true, nil
 	}
-
 	return false, nil
 }
 

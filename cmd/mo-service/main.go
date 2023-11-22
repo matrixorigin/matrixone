@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
@@ -221,6 +222,9 @@ func startCNService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 ) error {
+	// start up system module to do some calculation.
+	system.Run(stopper)
+
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}

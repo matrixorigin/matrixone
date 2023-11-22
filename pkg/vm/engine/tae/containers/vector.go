@@ -79,21 +79,12 @@ func NewConstBytes(typ types.Type, val []byte, length int, opts ...Options) *vec
 func NewConstNullVector(
 	typ types.Type,
 	length int,
-	opts ...Options,
+	mp *mpool.MPool,
 ) *vectorWrapper {
 	vec := &vectorWrapper{
-		wrapped: vector.NewConstNull(typ, length, nil),
+		wrapped: vector.NewConstNull(typ, length, mp),
 	}
-	var (
-		alloc *mpool.MPool
-	)
-	if len(opts) > 0 {
-		alloc = opts[0].Allocator
-	}
-	if alloc == nil {
-		alloc = common.DefaultAllocator
-	}
-	vec.mpool = alloc
+	vec.mpool = mp
 	return vec
 }
 

@@ -4904,6 +4904,69 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// function `mo_memory`
+	{
+		functionId: MO_MEMORY,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoMemory
+				},
+			},
+		},
+	},
+	// function `mo_cpu`
+	{
+		functionId: MO_CPU,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoCPU
+				},
+			},
+		},
+	},
+	// function `mo_cpu_dump`
+	{
+		functionId: MO_CPU_DUMP,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoCPUDump
+				},
+			},
+		},
+	},
 
 	// function `mo_show_visible_bin`
 	{
