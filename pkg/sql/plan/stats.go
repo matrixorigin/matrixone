@@ -372,7 +372,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in":
+		case "in", "startswith":
 			// use ndv map,do not need nodeID
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
