@@ -35,8 +35,8 @@ const (
 	objectNameOffset = 0
 	extentOffset     = objectNameOffset + ObjectNameLen
 	rowCntOffset     = extentOffset + ExtentLen
-	blkCntOffset     = rowCntOffset + 4
-	zoneMapOffset    = blkCntOffset + 4
+	blkCntOffset     = rowCntOffset + rowCntLen
+	zoneMapOffset    = blkCntOffset + blkCntLen
 )
 
 var ZeroObjectStats ObjectStats
@@ -151,4 +151,15 @@ func SetObjectStatsSortKeyZoneMap(stats *ObjectStats, zoneMap ZoneMap) error {
 
 func SetObjectStatsLocation(stats *ObjectStats, location Location) error {
 	return setHelper(stats, objectNameOffset, location[:ObjectNameLen+ExtentLen])
+}
+
+// ForeachObjectStats executes onStats on each object stats until onStats returns false
+// or all object stats have been visited
+func ForeachObjectStats(onStats func(stats *ObjectStats) bool, statsList ...ObjectStats) {
+	statsLen := len(statsList)
+	for idx := 0; idx < statsLen; idx++ {
+		if !onStats(&statsList[idx]) {
+			return
+		}
+	}
 }

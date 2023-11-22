@@ -189,16 +189,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		}
 
 		if arg.ctr.samplePool != nil {
-			for _, p := range arg.ctr.samplePool.sPools {
-				if p.bat != nil {
-					proc.PutBatch(p.bat)
-				}
-			}
-			for _, p := range arg.ctr.samplePool.mPools {
-				if p.bat != nil {
-					proc.PutBatch(p.bat)
-				}
-			}
+			arg.ctr.samplePool.Free()
 		}
 	}
 }

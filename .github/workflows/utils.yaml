@@ -3,6 +3,31 @@ name: MatrixOne Utils CI
 
 on:
   workflow_call:
+    secrets:
+      TOKEN_ACTION:
+        description: 'A token passed from the caller workflow'
+        required: true
+      S3ENDPOINT:
+        description: 'S3ENDPOINT For Test'
+        required: true
+      S3REGION:
+        description: 'S3REGION For Test'
+        required: true
+      S3APIKEY:
+        description: 'S3APIKEY For Test'
+        required: true
+      S3APISECRET:
+        description: 'S3APISECRET For Test'
+        required: true
+      S3BUCKET:
+        description: 'S3BUCKET For Test'
+        required: true
+      DOCU_GROUP_HOOK:
+        description: 'DOCU_GROUP_HOOK For Notice'
+        required: true
+      OPENAI_API_KEY:
+        description: 'OPENAI_API_KEY For get PR Suggestion'
+        required: true
 
 jobs:
   check_organization_user:

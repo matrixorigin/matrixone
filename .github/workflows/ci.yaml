@@ -3,6 +3,22 @@ name: MatrixOne CI
 
 on:
   workflow_call:
+    secrets:
+      S3ENDPOINT:
+        description: 'S3ENDPOINT For Test'
+        required: true
+      S3REGION:
+        description: 'S3REGION For Test'
+        required: true
+      S3APIKEY:
+        description: 'S3APIKEY For Test'
+        required: true
+      S3APISECRET:
+        description: 'S3APISECRET For Test'
+        required: true
+      S3BUCKET:
+        description: 'S3BUCKET For Test'
+        required: true
 
 jobs:
   ut-linux-x86:

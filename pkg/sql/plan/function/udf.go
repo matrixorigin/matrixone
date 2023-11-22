@@ -17,12 +17,10 @@ package function
 import (
 	"context"
 	"encoding/json"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/sync/errgroup"
 )
 
 type Udf struct {
