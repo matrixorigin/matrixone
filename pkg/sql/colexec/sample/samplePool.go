@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math/rand"
@@ -82,6 +81,16 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 	}
 }
 
+func (s *sPool) Free() {
+	mp := s.proc.Mp()
+	for _, sp := range s.sPools {
+		sp.data.clean(mp)
+	}
+	for _, m := range s.mPools {
+		m.data.clean(mp)
+	}
+}
+
 func (s *sPool) growSiPool(target int) {
 	if target <= len(s.sPools) {
 		return
@@ -91,7 +100,7 @@ func (s *sPool) growSiPool(target int) {
 			capacity: s.capacity,
 			seen:     0,
 			space:    s.capacity,
-			bat:      nil,
+			data:     poolData{validBatch: nil, invalidBatch: nil},
 		}
 		s.sPools = append(s.sPools, sp)
 	}
@@ -111,8 +120,8 @@ func (s *sPool) growMulPool(target int, colNumber int) {
 			full:   false,
 			seen:   0,
 			have:   0,
-			bat:    nil,
 			space:  s1,
+			data:   poolData{validBatch: nil, invalidBatch: nil},
 			tSpace: make([]int, colNumber),
 		}
 		s.mPools = append(s.mPools, sp)
@@ -349,40 +358,37 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 
 	mp := s.proc.Mp()
 	if len(s.sPools) > 0 {
-		bat = s.sPools[0].bat
-		s.sPools[0].bat = nil
+		bat = s.sPools[0].data.output()
+		if bat != nil {
+			for i := 1; i < len(s.sPools); i++ {
+				b := s.sPools[i].data.output()
+				if b == nil {
+					continue
+				}
 
-		for i := 1; i < len(s.sPools); i++ {
-			if s.sPools[i].bat == nil {
-				continue
+				bat, err = bat.Append(s.proc.Ctx, mp, b)
+				s.proc.PutBatch(b)
+				if err != nil {
+					s.proc.PutBatch(bat)
+					return nil, err
+				}
 			}
-
-			bat, err = bat.Append(s.proc.Ctx, mp, s.sPools[i].bat)
-			if err != nil {
-				s.proc.PutBatch(bat)
-				return nil, err
-			}
-
-			s.proc.PutBatch(s.sPools[i].bat)
-			s.sPools[i].bat = nil
 		}
 	} else if len(s.mPools) > 0 {
-		bat = s.mPools[0].bat
-		s.mPools[0].bat = nil
+		bat = s.mPools[0].data.output()
 
 		for i := 1; i < len(s.mPools); i++ {
-			if s.mPools[i].bat == nil {
+			b := s.mPools[i].data.output()
+			if b == nil {
 				continue
 			}
 
-			bat, err = bat.Append(s.proc.Ctx, mp, s.mPools[i].bat)
+			bat, err = bat.Append(s.proc.Ctx, mp, b)
+			s.proc.PutBatch(b)
 			if err != nil {
 				s.proc.PutBatch(bat)
 				return nil, err
 			}
-
-			s.proc.PutBatch(s.mPools[i].bat)
-			s.mPools[i].bat = nil
 		}
 	}
 
@@ -402,8 +408,7 @@ type singlePool struct {
 	// free space of pool.
 	space int
 
-	// bat stores the sample data in the pool.
-	bat *batch.Batch
+	data poolData
 }
 
 func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *batch.Batch) error {
@@ -420,8 +425,12 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			if k <= sp.space {
 				for i := 0; i < k; i++ {
 					if column.isNull(i) {
+						err := sp.data.appendInvalidRow(proc, mp, bat, i)
+						if err != nil {
+							return err
+						}
 						if length > 0 {
-							err := sp.appendResult(proc, mp, bat, offset, length)
+							err = sp.data.appendValidRow(proc, mp, bat, offset, length)
 							if err != nil {
 								return err
 							}
@@ -434,7 +443,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 					length++
 				}
 				if offset < k && length > 0 {
-					err := sp.appendResult(proc, mp, bat, offset, length)
+					err := sp.data.appendValidRow(proc, mp, bat, offset, length)
 					if err != nil {
 						return err
 					}
@@ -448,8 +457,12 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			var i = 0
 			for ; i < k && sp.space >= length; i++ {
 				if column.isNull(i) {
+					err := sp.data.appendInvalidRow(proc, mp, bat, i)
+					if err != nil {
+						return err
+					}
 					if length > 0 {
-						err := sp.appendResult(proc, mp, bat, offset, length)
+						err = sp.data.appendValidRow(proc, mp, bat, offset, length)
 						if err != nil {
 							return err
 						}
@@ -463,7 +476,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			}
 			if length > 0 {
 				if sp.space >= length {
-					err := sp.appendResult(proc, mp, bat, offset, length)
+					err := sp.data.appendValidRow(proc, mp, bat, offset, length)
 					if err != nil {
 						return err
 					}
@@ -471,7 +484,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 					sp.seen += oldSpace
 					return nil
 				}
-				err := sp.appendResult(proc, mp, bat, offset, sp.space)
+				err := sp.data.appendValidRow(proc, mp, bat, offset, sp.space)
 				if err != nil {
 					return err
 				}
@@ -486,7 +499,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			if k <= sp.space {
 				sp.space -= k
 				sp.seen += k
-				err := sp.appendResult(proc, mp, bat, 0, k)
+				err := sp.data.appendValidRow(proc, mp, bat, 0, k)
 				if err != nil {
 					return err
 				}
@@ -494,7 +507,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			}
 			// case: pool can store part of rows.
 			randReplaceStart = sp.space
-			err := sp.appendResult(proc, mp, bat, 0, sp.space)
+			err := sp.data.appendValidRow(proc, mp, bat, 0, sp.space)
 			if err != nil {
 				return err
 			}
@@ -508,13 +521,17 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 	if column.anyNull() {
 		for i := randReplaceStart; i < k; i++ {
 			if column.isNull(i) {
+				err := sp.data.appendInvalidRow(proc, mp, bat, i)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			sp.seen++
 
 			r = rand.Intn(sp.seen)
 			if r < sp.capacity {
-				err := batRowReplace(mp, sp.bat, bat, r, i)
+				err := sp.data.replaceValidRow(mp, bat, r, i)
 				if err != nil {
 					return err
 				}
@@ -526,7 +543,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 
 			r = rand.Intn(sp.seen)
 			if r < sp.capacity {
-				err := batRowReplace(mp, sp.bat, bat, r, i)
+				err := sp.data.replaceValidRow(mp, bat, r, i)
 				if err != nil {
 					return err
 				}
@@ -551,7 +568,7 @@ func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, b
 			}
 
 			if percent == 10000 || rand.Intn(10000) < percent {
-				if err := sp.appendResult(proc, mp, bat, i, 1); err != nil {
+				if err := sp.data.appendValidRow(proc, mp, bat, i, 1); err != nil {
 					return err
 				}
 			}
@@ -559,7 +576,7 @@ func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, b
 	} else {
 		for i := 0; i < k; i++ {
 			if percent == 10000 || rand.Intn(10000) < percent {
-				if err := sp.appendResult(proc, mp, bat, i, 1); err != nil {
+				if err := sp.data.appendValidRow(proc, mp, bat, i, 1); err != nil {
 					return err
 				}
 			}
@@ -570,17 +587,17 @@ func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, b
 
 func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int) (err error) {
 	if column.isNull(row) {
-		return
+		return sp.data.appendInvalidRow(proc, mp, bat, row)
 	}
 
 	sp.seen++
 	if sp.space > 0 {
 		sp.space--
-		err = sp.appendResult(proc, mp, bat, row, 1)
+		err = sp.data.appendValidRow(proc, mp, bat, row, 1)
 	} else {
 		r := rand.Intn(sp.seen)
 		if r < sp.capacity {
-			err = batRowReplace(mp, sp.bat, bat, r, row)
+			err = sp.data.replaceValidRow(mp, bat, r, row)
 		}
 	}
 	return err
@@ -596,26 +613,9 @@ func (sp *singlePool) addRowByPercent(proc *process.Process, mp *mpool.MPool, co
 	}
 
 	if percent == 10000 || rand.Intn(10000) < percent {
-		err = sp.appendResult(proc, mp, bat, row, 1)
+		err = sp.data.appendValidRow(proc, mp, bat, row, 1)
 	}
 	return
-}
-
-func (sp *singlePool) appendResult(proc *process.Process, mp *mpool.MPool, bat *batch.Batch, offset int, length int) (err error) {
-	if sp.bat == nil {
-		sp.bat = batch.NewWithSize(len(bat.Vecs))
-		for i := range sp.bat.Vecs {
-			sp.bat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
-		}
-	}
-
-	for i := range sp.bat.Vecs {
-		if err = sp.bat.Vecs[i].UnionBatch(bat.Vecs[i], int64(offset), length, nil, mp); err != nil {
-			return err
-		}
-	}
-	sp.bat.AddRowCount(length)
-	return nil
 }
 
 // pool for sample by multi columns.
@@ -629,11 +629,10 @@ type multiPool struct {
 	// count of rows which has been stored.
 	have int
 
-	// bat stores the sample data in the pool.
-	bat *batch.Batch
-
 	// reused.
 	tSpace []int
+
+	data poolData
 }
 
 func (p *multiPool) isFull() bool {
@@ -645,20 +644,8 @@ func (p *multiPool) isFull() bool {
 	return true
 }
 
-func (p *multiPool) appendOneRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
-	if p.bat == nil {
-		p.bat = batch.NewWithSize(len(bat.Vecs))
-		for i := range p.bat.Vecs {
-			p.bat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
-		}
-	}
-
-	for i := range p.bat.Vecs {
-		if err = p.bat.Vecs[i].UnionBatch(bat.Vecs[i], int64(row), 1, nil, mp); err != nil {
-			return err
-		}
-	}
-	p.bat.AddRowCount(1)
+func (p *multiPool) appendValidRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
+	err = p.data.appendValidRow(proc, mp, bat, row, 1)
 
 	for i, col := range columns {
 		if !col.isNull(row) {
@@ -666,7 +653,24 @@ func (p *multiPool) appendOneRow(proc *process.Process, mp *mpool.MPool, columns
 		}
 	}
 	p.have++
-	return nil
+	return err
+}
+
+func (p *multiPool) tryReplaceValidRow(mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row1, row2 int) (err error) {
+	// the replacement action cannot destroy the original integrity of the sample pool.
+	for j := range p.space {
+		p.tSpace[j] = p.space[j]
+		if columns[j].isNull(row2) {
+			if p.space[j] < -1 {
+				p.tSpace[j]++
+			} else {
+				return
+			}
+		}
+	}
+
+	p.tSpace, p.space = p.space, p.tSpace
+	return p.data.replaceValidRow(mp, bat, row1, row2)
 }
 
 func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, bat *batch.Batch) (err error) {
@@ -680,7 +684,7 @@ func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, ba
 			p.seen++
 			for colIndex := range p.space {
 				if p.space[colIndex] > 0 && !columns[colIndex].isNull(i) {
-					err = p.appendOneRow(proc, proc.Mp(), columns, bat, i)
+					err = p.appendValidRow(proc, proc.Mp(), columns, bat, i)
 					if err != nil {
 						return err
 					}
@@ -691,7 +695,6 @@ func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, ba
 	}
 
 	var r int
-	var canReplace bool
 	mp := proc.Mp()
 	for ; i < k; i++ {
 		if columns.isAllNull(i) {
@@ -701,26 +704,9 @@ func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, ba
 
 		r = rand.Intn(p.seen)
 		if r < p.have {
-			// check if replace action will cause sample condition failed.
-			canReplace = true
-			for j := range p.space {
-				p.tSpace[j] = p.space[j]
-				if columns[j].isNull(i) {
-					if p.space[j] < -1 {
-						p.tSpace[j]++
-					} else {
-						canReplace = false
-						break
-					}
-				}
-			}
-
-			if canReplace {
-				p.tSpace, p.space = p.space, p.tSpace
-				err = batRowReplace(mp, p.bat, bat, r, i)
-				if err != nil {
-					return err
-				}
+			err = p.tryReplaceValidRow(mp, columns, bat, r, i)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -740,7 +726,7 @@ func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList
 			continue
 		}
 		if percent == 10000 || rand.Intn(10000) < percent {
-			err = p.appendOneRow(proc, proc.Mp(), columns, bat, i)
+			err = p.appendValidRow(proc, proc.Mp(), columns, bat, i)
 			if err != nil {
 				return err
 			}
@@ -751,14 +737,14 @@ func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList
 
 func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
 	if columns.isAllNull(row) {
-		return
+		return p.data.appendInvalidRow(proc, mp, bat, row)
 	}
 
 	if !p.full {
 		p.seen++
 		for colIndex := range p.space {
 			if p.space[colIndex] > 0 && !columns[colIndex].isNull(row) {
-				err = p.appendOneRow(proc, proc.Mp(), columns, bat, row)
+				err = p.appendValidRow(proc, proc.Mp(), columns, bat, row)
 				if err != nil {
 					return err
 				}
@@ -770,26 +756,9 @@ func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampl
 		p.seen++
 		r := rand.Intn(p.seen)
 		if r < p.have {
-			// check if replace action will cause sample condition failed.
-			canReplace := true
-			for j := range p.space {
-				p.tSpace[j] = p.space[j]
-				if columns[j].isNull(row) {
-					if p.space[j] < -1 {
-						p.tSpace[j]++
-					} else {
-						canReplace = false
-						break
-					}
-				}
-			}
-
-			if canReplace {
-				p.tSpace, p.space = p.space, p.tSpace
-				err = batRowReplace(mp, p.bat, bat, r, row)
-				if err != nil {
-					return err
-				}
+			err = p.tryReplaceValidRow(mp, columns, bat, r, row)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -802,10 +771,11 @@ func (p *multiPool) addRowByPercent(proc *process.Process, mp *mpool.MPool, colu
 	}
 
 	if columns.isAllNull(row) {
-		return
+		return p.data.appendInvalidRow(proc, mp, bat, row)
 	}
+
 	if percent == 10000 || rand.Intn(10000) < percent {
-		err = p.appendOneRow(proc, mp, columns, bat, row)
+		err = p.appendValidRow(proc, mp, columns, bat, row)
 	}
 	return
 }
@@ -835,66 +805,4 @@ func (l sampleColumnList) isAllNull(index int) bool {
 		}
 	}
 	return true
-}
-
-// batRowReplace replaces the row1 of toBatch with the bat's row2.
-// TODO: need an optimized function to do the row replace work.
-func batRowReplace(mp *mpool.MPool, toBatch *batch.Batch, bat *batch.Batch, row1, row2 int) (err error) {
-	var right int
-	for i, vec := range bat.Vecs {
-		right = row2
-		if vec.IsConst() {
-			right = 0
-		}
-		switch vec.GetType().Oid {
-		case types.T_int8:
-			err = vector.SetFixedAt[int8](toBatch.Vecs[i], row1, vector.GetFixedAt[int8](vec, right))
-		case types.T_int16:
-			err = vector.SetFixedAt[int16](toBatch.Vecs[i], row1, vector.GetFixedAt[int16](vec, right))
-		case types.T_int32:
-			err = vector.SetFixedAt[int32](toBatch.Vecs[i], row1, vector.GetFixedAt[int32](vec, right))
-		case types.T_int64:
-			err = vector.SetFixedAt[int64](toBatch.Vecs[i], row1, vector.GetFixedAt[int64](vec, right))
-		case types.T_uint8:
-			err = vector.SetFixedAt[uint8](toBatch.Vecs[i], row1, vector.GetFixedAt[uint8](vec, right))
-		case types.T_uint16:
-			err = vector.SetFixedAt[uint16](toBatch.Vecs[i], row1, vector.GetFixedAt[uint16](vec, right))
-		case types.T_uint32:
-			err = vector.SetFixedAt[uint32](toBatch.Vecs[i], row1, vector.GetFixedAt[uint32](vec, right))
-		case types.T_uint64:
-			err = vector.SetFixedAt[uint64](toBatch.Vecs[i], row1, vector.GetFixedAt[uint64](vec, right))
-		case types.T_float32:
-			err = vector.SetFixedAt[float32](toBatch.Vecs[i], row1, vector.GetFixedAt[float32](vec, right))
-		case types.T_float64:
-			err = vector.SetFixedAt[float64](toBatch.Vecs[i], row1, vector.GetFixedAt[float64](vec, right))
-		case types.T_date:
-			err = vector.SetFixedAt[types.Date](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Date](vec, right))
-		case types.T_datetime:
-			err = vector.SetFixedAt[types.Datetime](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Datetime](vec, right))
-		case types.T_timestamp:
-			err = vector.SetFixedAt[types.Timestamp](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Timestamp](vec, right))
-		case types.T_time:
-			err = vector.SetFixedAt[types.Time](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Time](vec, right))
-		case types.T_enum:
-			err = vector.SetFixedAt[types.Enum](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Enum](vec, right))
-		case types.T_decimal64:
-			err = vector.SetFixedAt[types.Decimal64](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Decimal64](vec, right))
-		case types.T_decimal128:
-			err = vector.SetFixedAt[types.Decimal128](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Decimal128](vec, right))
-		case types.T_TS:
-			err = vector.SetFixedAt[types.TS](toBatch.Vecs[i], row1, vector.GetFixedAt[types.TS](vec, right))
-		case types.T_Rowid:
-			err = vector.SetFixedAt[types.Rowid](toBatch.Vecs[i], row1, vector.GetFixedAt[types.Rowid](vec, right))
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-			types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
-			err = vector.SetBytesAt(toBatch.Vecs[i], row1, vec.GetBytesAt(right), mp)
-		default:
-			err = moerr.NewInternalErrorNoCtx("unsupported type for sample pool.")
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
