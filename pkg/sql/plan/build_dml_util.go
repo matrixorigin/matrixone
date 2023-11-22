@@ -997,14 +997,12 @@ func makeInsertPlan(
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
-		needCheck := true
-		useFuzzyFilter := false
+		// needCheck := true
+		needCheck := !builder.qry.LoadTag
+		useFuzzyFilter := CNPrimaryCheck
 		if isUpdate {
 			needCheck = updatePkCol
 			useFuzzyFilter = false
-		} else {
-			needCheck = !builder.qry.LoadTag
-			useFuzzyFilter = CNPrimaryCheck
 		}
 
 		// insert stmt or update pk col, we need check insert pk dup

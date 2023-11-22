@@ -111,7 +111,7 @@ drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
 show create table pri01;
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
-insert into pri01 (col1) values ('323242r34df432432');
+insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 (col1) values ('323242r34df432432');
 insert into pri01 (col1) values (null);
 select * from pri01;
