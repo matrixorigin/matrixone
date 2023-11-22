@@ -59,12 +59,18 @@ type dmlTableInfo struct {
 	haveConstraint bool
 	isMulti        bool
 	needAggFilter  bool
-	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
-	oldColPosMap   []map[string]int       // origin table values to their position in derived table
-	newColPosMap   []map[string]int       // insert/update values to their position in derived table
-	nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
-	idToName       map[uint64]string      // Mapping of tableId to full path name of table
-	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+	updateKeys     []map[string]tree.Expr           // This slice index correspond to tableDefs
+	oldColPosMap   []map[string]int                 // origin table values to their position in derived table
+	newColPosMap   []map[string]int                 // insert/update values to their position in derived table
+	nameToIdx      map[string]int                   // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
+	idToName       map[uint64]string                // Mapping of tableId to full path name of table
+	alias          map[string]int                   // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+	partitionInfos map[string]partitionSubTableInfo // key: Main Table Name, value: Partition sub table information
+}
+
+type partitionSubTableInfo struct {
+	partTableIDs   []uint64 // Align array index with the partition number
+	partTableNames []string // Align partition subtable names with partition numbers
 }
 
 var constTextType *plan.Type

@@ -175,9 +175,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 
-		databaseName := key[0]
-		tableName := key[1]
-		_, tableDef := GetTableDef(txn.proc.Ctx, tbl, databaseName, tableName, nil)
+		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 
 		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
 		if err != nil {

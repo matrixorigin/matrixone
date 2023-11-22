@@ -499,6 +499,10 @@ func (mr *MockRelationMockRecorder) TableDefs(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs), arg0)
 }
 
+func (m *MockRelation) GetTableDef(context.Context) *plan.TableDef {
+	return nil
+}
+
 // Update mocks base method.
 func (m *MockRelation) Update(arg0 context.Context, arg1 *batch.Batch) error {
 	m.ctrl.T.Helper()
