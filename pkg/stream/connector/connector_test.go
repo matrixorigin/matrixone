@@ -123,7 +123,7 @@ func TestKafkaMoConnector(t *testing.T) {
 		"sql":               "select * from testDB.testStream",
 	}
 	rt := runtime.DefaultRuntime()
-	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor)
+	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor, 1)
 	if err != nil {
 		t.Fatalf("Failed to create KafkaMoConnector: %s", err)
 	}

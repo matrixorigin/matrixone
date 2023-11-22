@@ -16,6 +16,7 @@ package moconnector
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,20 @@ func KafkaSinkConnectorExecutor(
 		ss := strings.Split(fullTableName, ".")
 		options["database"] = ss[0]
 		options["table"] = ss[1]
-		c, err := NewKafkaMoConnector(logger, options, ieFactory())
+		bufferLimitString, exists := options["buffer_size"]
+		var bufferLimit int // Declare bufferLimit outside the if/else scope
+		if !exists {
+			bufferLimit = 1 // Assign default value if the key does not exist
+		} else {
+			var err error
+			bufferLimit, err = strconv.Atoi(bufferLimitString) // Convert the string to an integer
+			if err != nil {
+				// Handle the error, perhaps set to default if the conversion fails
+				bufferLimit = 1
+			}
+		}
+
+		c, err := NewKafkaMoConnector(logger, options, ieFactory(), bufferLimit)
 		if err != nil {
 			return err
 		}
@@ -83,6 +97,7 @@ type KafkaMoConnector struct {
 	resumeC      chan struct{}
 	cancelC      chan struct{}
 	pauseC       chan struct{}
+	bufferLimit  int
 }
 
 func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
@@ -106,13 +121,14 @@ func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
 	return kafkaConfigs
 }
 
-func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.InternalExecutor) (*KafkaMoConnector, error) {
+func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.InternalExecutor, buffer_limit int) (*KafkaMoConnector, error) {
 	// Validate options before proceeding
 	kmc := &KafkaMoConnector{
-		logger:  logger,
-		options: options,
-		ie:      ie,
-		decoder: newJsonDecoder(),
+		logger:      logger,
+		options:     options,
+		ie:          ie,
+		decoder:     newJsonDecoder(),
+		bufferLimit: buffer_limit,
 	}
 	if err := kmc.validateParams(); err != nil {
 		return nil, err
@@ -179,7 +195,6 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	// Continuously listen for messages
 
 	var buffered_messages []*kafka.Message
-	const buffer_limit = 10
 	for {
 		select {
 		case <-ctx.Done():
@@ -209,9 +224,9 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 			switch e := ev.(type) {
 			case *kafka.Message:
 				buffered_messages = append(buffered_messages, e)
-				if len(buffered_messages) >= buffer_limit {
+				if len(buffered_messages) >= k.bufferLimit {
 					k.insertRow(buffered_messages)
-					buffered_messages = nil
+					buffered_messages = buffered_messages[:0]
 				}
 
 			case kafka.Error:
