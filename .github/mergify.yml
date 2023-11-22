@@ -2,7 +2,7 @@ queue_rules:
   - name: main
     merge_conditions: []
     checks_timeout: 4h
-  - name: 1.0-dev
+  - name: release-branch
     merge_conditions: []
     checks_timeout: 4h
 
@@ -23,7 +23,7 @@ pull_request_rules:
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
-  - name: Automatic queue on approval for 1.0-dev
+  - name: Automatic queue on approval for release-branch
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
@@ -33,7 +33,7 @@ pull_request_rules:
         users:
           - sukki37
       queue:
-        name: 1.0-dev
+        name: release-branch
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
