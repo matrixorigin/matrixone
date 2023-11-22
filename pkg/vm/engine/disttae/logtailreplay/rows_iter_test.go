@@ -105,7 +105,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		bs := EncodePrimaryKey(int64(i), packer)
-		iter := state.NewPrimaryKeyIter(ts, Exact(bs))
+		iter := state.NewPrimaryKeyIter(ts, Exact(bs), false)
 		n := 0
 		for iter.Next() {
 			n++
@@ -215,7 +215,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		{
 			// primary key iter
 			key := EncodePrimaryKey(int64(i), packer)
-			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key))
+			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key), false)
 			n := 0
 			for iter.Next() {
 				n++

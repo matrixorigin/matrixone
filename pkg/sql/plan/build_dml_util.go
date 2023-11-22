@@ -271,6 +271,22 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
 			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+				if isUpdate {
+					skipDel := true
+					for _, colName := range indexdef.Parts {
+						if colIdx, ok := posMap[colName]; ok {
+							col := delCtx.tableDef.Cols[colIdx]
+							if _, exists := delCtx.updateColPosMap[colName]; exists || col.OnUpdate != nil {
+								skipDel = false
+								break
+							}
+						}
+					}
+					if skipDel {
+						continue
+					}
+				}
+
 				var isUk = indexdef.Unique
 				var isSK = !isUk
 
