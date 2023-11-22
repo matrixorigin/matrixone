@@ -756,7 +756,7 @@ func TestVectorPool3(t *testing.T) {
 }
 
 func TestConstNullVector(t *testing.T) {
-	vec := NewConstNullVector(types.T_int32.ToType(), 10)
+	vec := NewConstNullVector(types.T_int32.ToType(), 10, common.DefaultAllocator)
 	defer vec.Close()
 	assert.Equal(t, 10, vec.Length())
 	assert.True(t, vec.IsConstNull())

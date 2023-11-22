@@ -49,17 +49,17 @@ func GetBindings(expr *plan.Expr) []int32 {
 	return bindings
 }
 
-func doGetBindings(expr *plan.Expr) map[int32]any {
-	res := make(map[int32]any)
+func doGetBindings(expr *plan.Expr) map[int32]emptyType {
+	res := make(map[int32]emptyType)
 
 	switch expr := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = nil
+		res[expr.Col.RelPos] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, child := range expr.F.Args {
 			for id := range doGetBindings(child) {
-				res[id] = nil
+				res[id] = emptyStruct
 			}
 		}
 	}
@@ -189,7 +189,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]any, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]emptyType, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -826,10 +826,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	}
 }
 
-func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]emptyType) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {

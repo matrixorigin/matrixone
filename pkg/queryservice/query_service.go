@@ -20,8 +20,6 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -50,18 +48,13 @@ type QueryService interface {
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	log       *log.MOLogger
-	cluster   clusterservice.MOCluster
 	client    morpc.RPCClient
 	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
 	pool      morpc.MessagePool[*pb.Request, *pb.Response]
-
-	// sessionMgr manages the sessions, we can get sessions from it.
-	sessionMgr *SessionManager
 }
 
 // NewQueryService creates a new queryService instance.
-func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *SessionManager) (QueryService, error) {
+func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryService, error) {
 	serviceName := "query-service"
 	rt := runtime.ProcessLevelRuntime()
 	if rt == nil {
@@ -86,21 +79,12 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 		return nil, err
 	}
 	qs := &queryService{
-		serviceID:  serviceID,
-		log:        logger,
-		cluster:    clusterservice.GetMOCluster(),
-		client:     client,
-		handler:    h,
-		pool:       pool,
-		sessionMgr: sm,
+		serviceID: serviceID,
+		client:    client,
+		handler:   h,
+		pool:      pool,
 	}
-	qs.registerHandlers()
 	return qs, nil
-}
-
-func (s *queryService) registerHandlers() {
-	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_ShowProcessList),
-		s.handleShowProcessList, false)
 }
 
 // AddHandleFunc implements the QueryService interface.
