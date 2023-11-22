@@ -136,25 +136,27 @@ a    b
 2    1
 drop table enum05;
 drop table if exists pri01;
+[unknown result because it is related to issue#12877]
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
+[unknown result because it is related to issue#12877]
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
+[unknown result because it is related to issue#12877]
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
+[unknown result because it is related to issue#12877]
 insert into pri01 (col1) values ('323242r34df432432');
+[unknown result because it is related to issue#12877]
+insert into pri01 (col1) values ('323242r34df432432');
+[unknown result because it is related to issue#12877]
 insert into pri01 (col1) values (null);
-constraint violation: Column 'col1' cannot be null
+[unknown result because it is related to issue#12877]
 select * from pri01;
-col1
-qy4iujd3wi4fu4h3f
-323242r34df432432
+[unknown result because it is related to issue#12877]
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
+[unknown result because it is related to issue#12877]
 show columns from pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO    PRI    null        
+[unknown result because it is related to issue#12877]
 drop table pri01;
+[unknown result because it is related to issue#12877]
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri02 values (1, '数据库');

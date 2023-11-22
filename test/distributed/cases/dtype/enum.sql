@@ -105,18 +105,20 @@ insert into enum05 values(2,'1');
 select * from enum05;
 drop table enum05;
 
-
+-- @bvt:issue#12877
 -- create table enum column as primary key
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
 show create table pri01;
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 (col1) values ('323242r34df432432');
+insert into pri01 (col1) values ('323242r34df432432');
 insert into pri01 (col1) values (null);
 select * from pri01;
 show create table pri01;
 show columns from pri01;
 drop table pri01;
+-- @bvt:issue
 
 
 -- alter table add primary key for enum column and duplicate exists

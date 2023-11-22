@@ -1003,7 +1003,7 @@ func makeInsertPlan(
 			needCheck = updatePkCol
 			useFuzzyFilter = false
 		} else {
-			// needCheck = !builder.qry.LoadTag
+			needCheck = !builder.qry.LoadTag
 			useFuzzyFilter = CNPrimaryCheck
 		}
 
