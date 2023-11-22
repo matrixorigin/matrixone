@@ -70,9 +70,6 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 			}
 		}
 	}
-	//for _, opt := range st.Options {
-	//	options[string(opt.Key)] = opt.Val.String()
-	//}
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,
@@ -151,7 +148,6 @@ func duplicate(t pb.DaemonTask, options map[string]string) bool {
 		checkFields := []string{
 			moconnector.OptConnectorType,
 			moconnector.OptConnectorTopic,
-			moconnector.OptConnectorPartition,
 			moconnector.OptConnectorServers,
 		}
 		for _, field := range checkFields {
