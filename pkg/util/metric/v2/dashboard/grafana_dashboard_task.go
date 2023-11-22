@@ -80,7 +80,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 		),
 		c.getPercentHist(
 			"Flush table deletes count",
-			c.getMetricWithFilter(`mo_task_count_hist_bucket`, `type="flush_deletes_count"`),
+			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="flush_deletes_count"`),
 			[]float64{0.5, 0.7, 0.8, 0.9},
 			timeseries.Axis(tsaxis.Unit("")),
 			timeseries.Span(3),
@@ -89,7 +89,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 
 		c.getPercentHist(
 			"Flush table deletes file size",
-			c.getMetricWithFilter(`mo_task_bytes_hist_bucket`, `type="flush_deletes_size"`),
+			c.getMetricWithFilter(`mo_task_hist_bytes_bucket`, `type="flush_deletes_size"`),
 			[]float64{0.5, 0.7, 0.8, 0.9},
 			timeseries.Axis(tsaxis.Unit("decbytes")),
 			timeseries.Span(3),
@@ -214,7 +214,7 @@ func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
 		counterRateFunc("Column update request", "column"),
 		c.getPercentHist(
 			"Iterate deletes rows count per block",
-			c.getMetricWithFilter(`mo_task_count_hist_bucket`, `type="load_mem_deletes_per_block"`),
+			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="load_mem_deletes_per_block"`),
 			[]float64{0.5, 0.7, 0.8, 0.9},
 			timeseries.Axis(tsaxis.Unit("")),
 			timeseries.Span(4),
