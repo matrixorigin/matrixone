@@ -558,6 +558,28 @@ func (tbl *txnTable) resetSnapshot() {
 	tbl.objInfosUpdated = false
 }
 
+func (tbl *txnTable) checkObjectStats(state *logtailreplay.PartitionState) {
+	statsIter := state.GetObjectStats().Iter()
+	shadowIter := state.GetObjectStatsShadow().Iter()
+
+	for shadowIter.Next() && statsIter.Next() {
+		x := shadowIter.Item()
+		y := statsIter.Item()
+
+		if x.EntryState != y.EntryState ||
+			x.CommitTS != y.CommitTS ||
+			x.CreateTime != y.CreateTime ||
+			x.DeleteTime != y.DeleteTime {
+			panic("check object stats failed: stats not equal to shadow")
+		}
+	}
+
+	if shadowIter.Next() || statsIter.Next() {
+		panic("check object stats failed: the number not equal")
+	}
+
+}
+
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
@@ -581,6 +603,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
+
+	tbl.checkObjectStats(part)
 
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})

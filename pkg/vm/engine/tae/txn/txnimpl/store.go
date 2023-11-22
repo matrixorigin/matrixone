@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -371,6 +372,42 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
+func fillObjectInfoShadowBatch(store *txnStore, shadowBat *containers.Batch, blkEntries []*catalog.BlockEntry) {
+	segIds := make(map[types.Objectid]struct{})
+	for idx := 0; idx < len(blkEntries); idx++ {
+		node := blkEntries[idx].GetLatestNodeLocked()
+
+		// only need these blocks which is newly created or deleted
+		if blkEntries[idx].Depth() == 1 || node.DeletedAt.Equal(txnif.UncommitTS) {
+
+			// counting an object only once
+			if _, ok := segIds[blkEntries[idx].GetSegment().ID]; !ok {
+				segIds[blkEntries[idx].GetSegment().ID] = struct{}{}
+			} else {
+				continue
+			}
+
+			deleteAt := store.txn.GetPrepareTS()
+
+			createAt := node.CreatedAt
+			if createAt.Equal(txnif.UncommitTS) {
+				createAt = store.txn.GetPrepareTS()
+			}
+
+			commitTS := store.txn.GetPrepareTS()
+
+			shadowBat.GetVectorByName(catalog.ObjectAttr_State).Append(blkEntries[idx].IsAppendable(), false)
+			shadowBat.GetVectorByName(catalog.SnapshotAttr_DBID).Append(
+				blkEntries[idx].GetSegment().GetTable().GetDB().ID, false)
+			shadowBat.GetVectorByName(catalog.SnapshotAttr_TID).Append(
+				blkEntries[idx].GetSegment().GetTable().ID, false)
+			shadowBat.GetVectorByName(catalog.EntryNode_CreateAt).Append(createAt, false)
+			shadowBat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(deleteAt, false)
+			shadowBat.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Append(commitTS, false)
+		}
+	}
+}
+
 func (store *txnStore) ObserveTxn(
 	visitDatabase func(db any),
 	visitTable func(tbl any),
@@ -378,7 +415,8 @@ func (store *txnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(seg any),
 	visitAppend func(bat any),
-	visitDelete func(ctx context.Context, vnode txnif.DeleteNode)) {
+	visitDelete func(ctx context.Context, vnode txnif.DeleteNode),
+	shadowBat *containers.Batch) {
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
 			visitDatabase(db.entry)
@@ -386,6 +424,7 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
+			var blkEntries []*catalog.BlockEntry
 			tblName := tbl.GetLocalSchema().Name
 			tid := tbl.entry.ID
 			rotateTable(dbName, tblName, dbid, tid)
@@ -397,6 +436,7 @@ func (store *txnStore) ObserveTxn(
 				case *catalog.SegmentEntry:
 					visitSegment(txnEntry)
 				case *catalog.BlockEntry:
+					blkEntries = append(blkEntries, txnEntry)
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					visitDelete(store.ctx, txnEntry)
@@ -422,6 +462,8 @@ func (store *txnStore) ObserveTxn(
 					}
 				}
 			}
+
+			fillObjectInfoShadowBatch(store, shadowBat, blkEntries)
 		}
 	}
 }

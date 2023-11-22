@@ -52,6 +52,7 @@ type PartitionState struct {
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
 	dataObjects           *btree.BTreeG[ObjectEntry]
+	dataObjectsShadow     *btree.BTreeG[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
@@ -275,6 +276,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		noData:                noData,
 		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
 		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		dataObjectsShadow:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
 		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
@@ -288,6 +290,7 @@ func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		rows:                  p.rows.Copy(),
 		dataObjects:           p.dataObjects.Copy(),
+		dataObjectsShadow:     p.dataObjectsShadow.Copy(),
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
 		blockDeltas:           p.blockDeltas.Copy(),
 		primaryIndex:          p.primaryIndex.Copy(),
@@ -347,8 +350,10 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO
-		}else if IsObjTable(entry.TableName) {
-			p.HandleObject(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObject(entry.Bat)
+		} else if IsObjShadowTable(entry.TableName) {
+			p.HandleObjectShadow(entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -365,25 +370,65 @@ func (p *PartitionState) HandleLogtailEntry(
 	}
 }
 
-func (p *PartitionState) HandleObject(
-	ctx context.Context,
-	input *api.Batch) {
-	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[2]))
-	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
-	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[4]))
-	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[5]))
-	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[6]))
-	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
-	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[8]))
-	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
-	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
-	for i, name := range nameVector {
-		stats := objectio.ObjectStats(name)
-		logutil.Infof("lalala blk %v, state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
-			stats.String(),
-			stateVector[i], dbIDVector[i], tIDVector[i],
-			createAtVector[i].ToString(), deleteAtVector[i].ToString(),
-			startVector[i].ToString(), prepareVector[i].ToString(), commitVector[i].ToString())
+func (p *PartitionState) HandleObjectShadow(bat *api.Batch) {
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(stateCol); idx++ {
+		var objEntry ObjectEntry
+
+		if stateCol[idx] {
+			continue
+		}
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjects.Set(objEntry)
+		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+	}
+}
+
+func (p *PartitionState) HandleObject(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		if stateCol[idx] {
+			continue
+		}
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		if objEntry.ObjectStats.OriginSize() == 0 {
+			continue
+		}
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjects.Set(objEntry)
+		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+		e := ObjectIndexByTSEntry{
+			Time:         createTSCol[idx],
+			ShortObjName: *objEntry.ObjectShortName(),
+			IsDelete:     false,
+
+			IsAppendable: objEntry.EntryState,
+		}
+		p.objectIndexByTS.Set(e)
 	}
 }
 
@@ -899,6 +944,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
 			p.dataObjects.Delete(objEntry)
+			p.dataObjectsShadow.Delete(objEntry)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
 			//	//ShortObjName: objEntry.ShortObjName,
