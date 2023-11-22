@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"runtime/debug"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -593,12 +594,12 @@ func (s *Scope) isRight() bool {
 func (s *Scope) LoadRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	ss := make([]*Scope, mcpu)
-	bat := batch.NewWithSize(1)
-	{
-		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.SetRowCount(1)
-	}
 	for i := 0; i < mcpu; i++ {
+		bat := batch.NewWithSize(1)
+		{
+			bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
+			bat.SetRowCount(1)
+		}
 		ss[i] = &Scope{
 			Magic: Normal,
 			DataSource: &Source{
