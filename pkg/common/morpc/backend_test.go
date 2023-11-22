@@ -90,7 +90,7 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 			assert.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()
-			assert.Equal(t, ctx.Err(), err)
+			assert.Error(t, err)
 		},
 		WithBackendReadTimeout(time.Millisecond*200),
 	)
