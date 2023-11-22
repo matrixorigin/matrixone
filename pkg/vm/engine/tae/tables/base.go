@@ -774,55 +774,6 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	return bat, nil
 }
 
-func (blk *baseBlock) adjustScore(
-	rawScoreFn func() (int, bool),
-	ttl time.Duration,
-	force bool) int {
-	score, dropped := rawScoreFn()
-	if dropped {
-		return 0
-	}
-	if force {
-		score = 100
-	}
-	if score == 0 || score > 1 {
-		return score
-	}
-	var ratio float32
-	if blk.meta.IsAppendable() {
-		currRows := uint32(blk.Rows())
-		ratio = float32(currRows) / float32(blk.meta.GetSchema().BlockMaxRows)
-		if ratio >= 0 && ratio < 0.2 {
-			ttl = 3*ttl - ttl/2
-		} else if ratio >= 0.2 && ratio < 0.4 {
-			ttl = 2 * ttl
-		} else if ratio >= 0.4 && ratio < 0.6 {
-			ttl = 2*ttl - ttl/2
-		}
-	}
-
-	deleteCnt := blk.mvcc.GetDeleteCnt()
-	ratio = float32(deleteCnt) / float32(blk.meta.GetSchema().BlockMaxRows)
-	if ratio <= 1 && ratio > 0.5 {
-		ttl /= 8
-	} else if ratio <= 0.5 && ratio > 0.3 {
-		ttl /= 4
-	} else if ratio <= 0.3 && ratio > 0.2 {
-		ttl /= 2
-	} else if ratio <= 0.2 && ratio > 0.1 {
-		ttl /= 1
-	} else {
-		factor := 1.25 - ratio
-		factor = factor * factor * factor * factor
-		ttl = time.Duration(float32(ttl) * factor)
-	}
-
-	if time.Now().After(blk.ttl.Add(ttl)) {
-		return 100
-	}
-	return 1
-}
-
 func (blk *baseBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	blk.mvcc.OnReplayDeleteNode(node)
 	err = node.OnApply()
