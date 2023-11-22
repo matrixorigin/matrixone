@@ -40,7 +40,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	
+
 	anal.Start()
 	defer anal.Stop()
 
