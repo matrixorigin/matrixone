@@ -70,6 +70,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 			}
 		}
 	}
+	options[moconnector.OptConnectorSql] = query.String()
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,
