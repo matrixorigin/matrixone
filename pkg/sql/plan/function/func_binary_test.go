@@ -1906,8 +1906,8 @@ func initStartsWithTestCase() []tcTemp {
 				origVecs[0],
 				origVecs[1],
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
 				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
 		},
 	}
@@ -1971,8 +1971,8 @@ func initEndsWithTestCase() []tcTemp {
 				origVecs[0],
 				origVecs[1],
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
 				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
 		},
 	}
