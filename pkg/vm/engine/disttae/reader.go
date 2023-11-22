@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -415,6 +416,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
+	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
@@ -432,6 +434,7 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
+		encodedPrimaryKey: encodedPrimaryKey,
 	}
 	return r
 }
@@ -500,13 +503,32 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	// load deletes from partition state for the specified block
-	{
-		state, err := r.table.getPartitionState(ctx)
-		if err != nil {
-			return err
+	filter := r.getReadFilter(r.proc, len(r.blks))
+
+	state, err := r.table.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+	ts := types.TimestampToTS(r.ts)
+
+	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
+		iter := state.NewPrimaryKeyIter(
+			ts,
+			logtailreplay.Prefix(r.encodedPrimaryKey),
+			true,
+		)
+		for iter.Next() {
+			entry := iter.Entry()
+			if !entry.Deleted {
+				continue
+			}
+			_, offset := entry.RowID.Decode()
+			r.buffer = append(r.buffer, int64(offset))
 		}
-		ts := types.TimestampToTS(r.ts)
+		iter.Close()
+	} else {
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
 		for iter.Next() {
 			entry := iter.Entry()
