@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
 )
 
@@ -895,6 +897,8 @@ func (rb *remoteBackend) scheduleResetConn() {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
 	case <-time.After(time.Second * 10):
+		// dump all goroutines to stderr
+		profile.ProfileGoroutine(os.Stderr, 2)
 		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
 	}
 }
