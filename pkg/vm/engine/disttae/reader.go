@@ -493,11 +493,13 @@ func (r *blockMergeReader) prefetchDeletes() error {
 	return nil
 }
 
-func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
+func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error {
 	if len(r.blks) == 0 {
 		return nil
 	}
 	info := r.blks[0]
+
+	r.tryUpdateColumns(cols)
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
@@ -577,7 +579,7 @@ func (r *blockMergeReader) Read(
 		return nil, err
 	}
 	//load deletes for the specified block
-	if err := r.loadDeletes(ctx); err != nil {
+	if err := r.loadDeletes(ctx, cols); err != nil {
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
