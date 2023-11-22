@@ -178,6 +178,8 @@ func trimObjectsData(
 					bat.Shrink(deleteRow)
 				}
 			} else {
+				// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
+				isCkpChange = true
 				meta, err := objectio.FastLoadObjectMeta(ctx, &block.location, false, fs)
 				if err != nil {
 					return isCkpChange, err
@@ -200,7 +202,6 @@ func trimObjectsData(
 						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), block.location.String())
 						isChange = true
-						isCkpChange = true
 						break
 					}
 				}
