@@ -180,11 +180,11 @@ type txnOperator struct {
 		waitLocks map[uint64]Lock
 	}
 	cannotCleanWorkspace bool
-	workspace       Workspace
-	timestampWaiter TimestampWaiter
-	clock           clock.Clock
-	createAt        time.Time
-	commitAt        time.Time
+	workspace            Workspace
+	timestampWaiter      TimestampWaiter
+	clock                clock.Clock
+	createAt             time.Time
+	commitAt             time.Time
 }
 
 func newTxnOperator(
