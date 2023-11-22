@@ -271,7 +271,6 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 }
 
 func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
-	// todo : get the sql from the user input
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	ctx = context.WithValue(ctx, "msgs", msgs)
