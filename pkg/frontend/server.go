@@ -99,7 +99,9 @@ func NewMOServer(
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
 			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize),
 			goetty.WithSessionAllocator(NewSessionAllocator(pu))),
-		goetty.WithAppSessionAware(rm))
+		goetty.WithAppSessionAware(rm),
+		//when the readTimeout expires the goetty will close the tcp connection.
+		goetty.WithReadTimeout(pu.SV.SessionTimeout.Duration))
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
