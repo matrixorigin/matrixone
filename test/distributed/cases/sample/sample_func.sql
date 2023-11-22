@@ -44,6 +44,11 @@ select count(*) from (select sample(c2, 2 rows) from s_t1 limit 1);
 select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1 limit 2);
 /* 10. with alias */
 select sample(c3, 3 rows) as k from s_t1 where c1 = 2;
+/* 11. sample from all invalid rows, should get only one invalid row */
+select sample(c3, 1 rows) from s_t1 where c1 = 3;
+select sample(c3, 2 rows) from s_t1 where c1 = 3;
+select c1, sample(c3, 3 rows) from s_t1 where c1 = 3 group by c1;
+select c1, sample(c3, 3 rows) from s_t1 group by c1 order by c1, c3;
 
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
