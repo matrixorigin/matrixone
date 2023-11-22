@@ -152,14 +152,13 @@ func TestShuffleRange(t *testing.T) {
 	leng := len(testcase)
 
 	for i := 0; i < leng; i++ {
-		shufflerange := NewShuffleRange(false, "test")
+		shufflerange := NewShuffleRange(false)
 		for j := 0; j < len(testcase[i].min); j++ {
 			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000, 1)
 		}
-
 		shufflerange.Eval()
 	}
-	shufflerange := NewShuffleRange(true, "test")
+	shufflerange := NewShuffleRange(true)
 	shufflerange.UpdateString([]byte("0000"), []byte("1000"), 1000, 1)
 	shufflerange.UpdateString([]byte("2000"), []byte("3000"), 1000, 1)
 	shufflerange.UpdateString([]byte("4000"), []byte("5000"), 1000, 1)
