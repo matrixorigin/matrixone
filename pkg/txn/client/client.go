@@ -508,18 +508,14 @@ func (client *txnClient) AbortAllRunningTxn() {
 	}
 
 	for _, op := range ops {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 	}
 	for _, op := range waitOps {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 		op.notifyActive()
 	}
 
