@@ -337,7 +337,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: projectProjection,
 						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
+						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.objRef.SchemaName, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
 						if err != nil {
 							return err
 						}
@@ -905,7 +905,7 @@ func makeInsertPlan(
 				}
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
+				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, objRef.SchemaName, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
 				if err != nil {
 					return err
 				}
@@ -1476,6 +1476,10 @@ func makeOneDeletePlan(
 			RefreshTsIdxInBat:  -1, //unsupport now
 			// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 			LockTable: delNodeInfo.lockTable,
+			TableName: delNodeInfo.tableDef.Name,
+			DbName:    delNodeInfo.objRef.SchemaName,
+			IsFakePk:  delNodeInfo.tableDef.Pkey != nil && delNodeInfo.tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName,
+			IsInsert:  false,
 		}
 		// if delNodeInfo.tableDef.Partition != nil {
 		// 	lockTarget.IsPartitionTable = true
@@ -2051,12 +2055,13 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 			builder,
 			bindCtx,
 			lastNodeId,
+			objRef.SchemaName,
 			tableDef,
 			false,
 			false,
 			partitionIdx,
 			partTableIds,
-			isUpdate,
+			!isUpdate,
 		); ok {
 			lastNodeId = lockNodeId
 		}
@@ -2070,6 +2075,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 func appendPreInsertUkPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
+	dbName string,
 	tableDef *TableDef,
 	lastNodeId int32,
 	indexIdx int,
@@ -2175,12 +2181,13 @@ func appendPreInsertUkPlan(
 		builder,
 		bindCtx,
 		lastNodeId,
+		dbName,
 		uniqueTableDef,
 		false,
 		false,
 		-1,
 		nil,
-		isUpddate,
+		!isUpddate,
 	); ok {
 		lastNodeId = lockNodeId
 	}
@@ -2530,6 +2537,10 @@ func makePreUpdateDeletePlan(
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1,
 		LockTable:          false,
+		TableName:          delCtx.tableDef.Name,
+		DbName:             delCtx.objRef.SchemaName,
+		IsFakePk:           delCtx.tableDef.Pkey != nil && delCtx.tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName,
+		IsInsert:           false,
 	}
 	if delCtx.tableDef.Partition != nil {
 		lockTarget.IsPartitionTable = true
@@ -2619,6 +2630,10 @@ func makePreUpdateDeletePlan(
 			PrimaryColTyp:      pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
 			LockTable:          false,
+			TableName:          delCtx.tableDef.Name,
+			DbName:             delCtx.objRef.SchemaName,
+			IsFakePk:           delCtx.tableDef.Pkey != nil && delCtx.tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName,
+			IsInsert:           false,
 		}
 		if delCtx.tableDef.Partition != nil {
 			lockTarget.IsPartitionTable = true
@@ -2684,25 +2699,23 @@ func appendLockNode(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	lastNodeId int32,
+	dbName string,
 	tableDef *TableDef,
 	lockTable bool,
 	block bool,
 	partitionIdx int,
 	partTableIDs []uint64,
-	isUpdate bool,
+	isInsert bool,
 ) (int32, bool) {
-	// for insert stmt: do not lock rows if table have no PK.  that will make some bug before we got R lock
-	// todo: when we finish R lock for table. then we can remove lock node(only insert stmt) for the table with fake PK
-	// ignoreFakePK := !isUpdate
 	ignoreFakePK := false
 	pkPos, pkTyp := getPkPos(tableDef, ignoreFakePK)
 	if pkPos == -1 {
 		return -1, false
 	}
 
-	if builder.qry.LoadTag && !lockTable {
-		return -1, false
-	}
+	// if builder.qry.LoadTag && !lockTable {
+	// 	return -1, false
+	// }
 
 	lockTarget := &plan.LockTarget{
 		TableId:            tableDef.TblId,
@@ -2711,6 +2724,10 @@ func appendLockNode(
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
 		Block:              block,
+		TableName:          tableDef.Name,
+		DbName:             dbName,
+		IsFakePk:           tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName,
+		IsInsert:           isInsert,
 	}
 
 	if !lockTable && tableDef.Partition != nil {

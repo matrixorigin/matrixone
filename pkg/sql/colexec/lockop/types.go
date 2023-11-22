@@ -15,6 +15,8 @@
 package lockop
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,6 +66,8 @@ type Argument struct {
 	targets []lockTarget
 	block   bool
 
+	metaLocked bool
+
 	// state used for save lock op temp state.
 	rt *state
 
@@ -81,6 +85,10 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 
 type lockTarget struct {
 	tableID                      uint64
+	dbName                       string
+	tableName                    string
+	isFakePk                     bool
+	isInsert                     bool
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
@@ -111,6 +119,7 @@ type state struct {
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
 	batchFetchFunc       func(process.Analyze) (*batch.Batch, bool, error)
+	lockMetaFunc         func(context.Context, *process.Process, engine.Engine, string, string, lock.LockMode) error
 	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 

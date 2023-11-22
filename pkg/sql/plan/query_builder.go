@@ -2211,6 +2211,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+			objRef := builder.qry.Nodes[nodeID].GetObjRef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
@@ -2219,6 +2220,10 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
+				DbName:             objRef.SchemaName,
+				TableName:          tableDef.Name,
+				IsFakePk:           tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName,
+				IsInsert:           false,
 			}
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,

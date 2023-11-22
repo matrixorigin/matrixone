@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"go.uber.org/zap"
@@ -1164,7 +1165,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
-			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetDbName(), target.GetTableName(), target.GetIsFakePk(), target.GetIsInsert(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {

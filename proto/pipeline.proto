@@ -169,6 +169,10 @@ message LockTarget {
   bool lock_table               = 6;
   bool ChangeDef               = 7;
   lock.LockMode Mode         = 8;
+  string db_name              = 9;
+  string table_name           = 10;
+  bool is_fake_pk             = 11;
+  bool is_insert              = 12;
 }
 
 message LockOp {

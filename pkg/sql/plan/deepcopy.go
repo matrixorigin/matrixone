@@ -171,6 +171,9 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,
 		Block:              target.Block,
+		DbName:             target.DbName,
+		TableName:          target.TableName,
+		IsFakePk:           target.IsFakePk,
 	}
 }
 

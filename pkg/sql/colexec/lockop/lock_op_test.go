@@ -59,6 +59,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
+			arg.rt.lockMetaFunc = notLockMeta
 			result, err := arg.Call(proc)
 			require.NoError(t, err)
 
@@ -81,6 +82,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
+			arg.rt.lockMetaFunc = notLockMeta
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -122,6 +124,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
+			arg.rt.lockMetaFunc = notLockMeta
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -144,10 +147,9 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 						IsLast:  false,
 					},
 				}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
+				arg2.rt.lockMetaFunc = notLockMeta
 				arg2.rt.hasNewVersionInRange = testFunc
 				valueScan := arg.children[0].(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
@@ -176,6 +178,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
+			arg.rt.lockMetaFunc = notLockMeta
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -209,11 +212,10 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 						IsFirst: false,
 						IsLast:  false,
 					}}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
+				arg2.rt.lockMetaFunc = notLockMeta
 				valueScan := arg.children[0].(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
@@ -241,6 +243,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
+			arg.rt.lockMetaFunc = notLockMeta
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -274,11 +277,10 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 						IsFirst: false,
 						IsLast:  false,
 					}}
-				arg2.rt = &state{}
-				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
+				arg2.rt.lockMetaFunc = notLockMeta
 				valueScan := arg.children[0].(*value_scan.Argument)
 				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
@@ -418,6 +420,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				from, to timestamp.Timestamp) (bool, error) {
 				return true, nil
 			}
+			arg.rt.lockMetaFunc = notLockMeta
 
 			_, err := arg.Call(proc)
 			require.NoError(t, err)
@@ -455,7 +458,7 @@ func runLockNonBlockingOpTest(
 				IsLast:  false,
 			}
 			for idx, table := range tables {
-				arg.AddLockTarget(table, offset, pkType, offset+1)
+				arg.AddLockTarget(table, "testDb", "testTbl", false, false, offset, pkType, offset+1)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
@@ -490,7 +493,7 @@ func runLockBlockingOpTest(
 
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgument(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
+			arg := NewArgument(nil).SetBlock(true).AddLockTarget(table, "testDb", "testTbl", false, false, 0, pkType, 1)
 
 			var batches []*batch.Batch
 			var batches2 []*batch.Batch
@@ -517,6 +520,7 @@ func runLockBlockingOpTest(
 				batches = batches[1:]
 				return bat, false, nil
 			}
+			arg.rt.lockMetaFunc = notLockMeta
 
 			var err error
 			var end bool
@@ -595,4 +599,14 @@ func resetChildren(arg *Argument, bat *batch.Batch) {
 			Batchs: []*batch.Batch{bat},
 		})
 	}
+}
+
+func notLockMeta(
+	ctx context.Context,
+	proc *process.Process,
+	eng engine.Engine,
+	dbName string,
+	tblName string,
+	lockMode lock.LockMode) error {
+	return nil
 }

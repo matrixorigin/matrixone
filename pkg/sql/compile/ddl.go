@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,7 +55,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		return moerr.NewDBAlreadyExists(c.ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err := lockop.LockMoDatabase(c.ctx, c.proc, c.e, dbName); err != nil {
 		return err
 	}
 
@@ -80,7 +79,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
 
-	if err := lockMoDatabase(c, dbName); err != nil {
+	if err := lockop.LockMoDatabase(c.ctx, c.proc, c.e, dbName); err != nil {
 		return err
 	}
 
@@ -126,7 +125,7 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -215,7 +214,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		if err = lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -634,7 +633,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		getLogger().Info("createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1271,7 +1270,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
+		if e := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1412,7 +1411,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1464,7 +1463,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
+		if e := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1713,7 +1712,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1798,7 +1797,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return moerr.NewInternalError(c.ctx, "sequence %s not exists", tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+	if err := lockop.LockMoTable(c.ctx, c.proc, c.e, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -2385,29 +2384,6 @@ func lockTable(
 	return nil
 }
 
-func lockRows(
-	eng engine.Engine,
-	proc *process.Process,
-	rel engine.Relation,
-	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-
-	if vec == nil || vec.Length() == 0 {
-		panic("lock rows is empty")
-	}
-
-	id := rel.GetTableID(proc.Ctx)
-
-	err := lockop.LockRows(
-		eng,
-		proc,
-		id,
-		vec,
-		*vec.GetType(),
-		lockMode)
-	return err
-}
-
 func maybeCreateAutoIncrement(
 	ctx context.Context,
 	db engine.Database,
@@ -2434,83 +2410,4 @@ func maybeCreateAutoIncrement(
 		def.TblId,
 		cols,
 		txnOp)
-}
-
-func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
-	dbSource, err := c.e.Database(c.ctx, catalog.MO_CATALOG, c.proc.TxnOperator)
-	if err != nil {
-		return nil, err
-	}
-
-	rel, err := dbSource.Relation(c.ctx, tblName, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return rel, nil
-}
-
-func getLockVector(proc *process.Process, accountId uint32, names []string) (*vector.Vector, error) {
-	vecs := make([]*vector.Vector, len(names)+1)
-	defer func() {
-		for _, v := range vecs {
-			if v != nil {
-				proc.PutVector(v)
-			}
-		}
-	}()
-
-	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
-	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
-	if err != nil {
-		return nil, err
-	}
-	vecs[0] = accountIdVec
-	// append names
-	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
-		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
-		vecs[i+1] = nameVec
-	}
-
-	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vecs, 1)
-	if err != nil {
-		return nil, err
-	}
-	return vec, nil
-}
-
-func lockMoDatabase(c *Compile, dbName string) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
-	if err != nil {
-		return err
-	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName})
-	if err != nil {
-		return err
-	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
-	return nil
-}
-
-func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
-	if err != nil {
-		return err
-	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName, tblName})
-	if err != nil {
-		return err
-	}
-	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
-		return err
-	}
-	return nil
 }

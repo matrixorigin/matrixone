@@ -608,9 +608,9 @@ func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*l
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 		if target.IsPartitionTable {
-			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
+			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetDbName(), target.GetTableName(), target.GetIsFakePk(), target.GetIsInsert(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
 		} else {
-			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+			arg.AddLockTarget(target.GetTableId(), target.GetDbName(), target.GetTableName(), target.GetIsFakePk(), target.GetIsInsert(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
 		}
 
 	}

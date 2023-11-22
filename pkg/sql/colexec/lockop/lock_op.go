@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,16 +85,63 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return arg.children[0].Call(proc)
 	}
 
+	if !arg.metaLocked {
+		arg.metaLocked = true
+		target := arg.targets[0]
+		if !target.lockTable {
+			if target.dbName == catalog.MO_CATALOG && (target.tableID == catalog.MO_DATABASE_ID || target.tableID == catalog.MO_TABLES_ID || target.tableID == catalog.MO_COLUMNS_ID) {
+				// do not lock meta table for meta table
+			} else {
+				if arg.rt.lockMetaFunc == nil {
+					arg.rt.lockMetaFunc = LockMoTable
+				}
+				err := arg.rt.lockMetaFunc(proc.Ctx, proc, arg.engine, target.dbName, target.tableName, lock.LockMode_Shared)
+				if err != nil {
+					arg.rt.retryError = retryWithDefChangedError
+					result := vm.NewCallResult()
+					result.Status = vm.ExecStop
+					return result, arg.rt.retryError
+				}
+			}
+		}
+
+	}
+
+	// insert into no_pk_table.  we do nothing, just call its child
+	if !arg.targets[0].lockTable && arg.targets[0].isFakePk && arg.targets[0].isInsert {
+		return callChild(arg, proc)
+	}
+
 	if !arg.block {
 		return callNonBlocking(arg.info.Idx, proc, arg)
 	}
 
 	return callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
-	// if ok {
-	// 	result.Status = vm.ExecStop
-	// 	return result, err
-	// }
-	// return result, err
+}
+
+func callChild(arg *Argument, proc *process.Process) (vm.CallResult, error) {
+	if len(arg.children) > 0 {
+		return arg.children[0].Call(proc)
+	} else {
+		anal := proc.GetAnalyze(arg.info.Idx)
+		anal.Start()
+		defer anal.Stop()
+		result := vm.NewCallResult()
+		for {
+			bat, err := arg.getBatch(proc, anal, arg.info.IsFirst)
+			if err != nil {
+				return result, err
+			}
+			if bat == nil {
+				return result, nil
+			}
+			if bat.IsEmpty() {
+				continue
+			}
+			result.Batch = bat
+			return result, nil
+		}
+	}
 }
 
 func callNonBlocking(
@@ -591,11 +639,19 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 // AddLockTarget add lock target, LockMode_Exclusive will used
 func (arg *Argument) AddLockTarget(
 	tableID uint64,
+	dbName string,
+	tableName string,
+	isFakePk bool,
+	isInsert bool,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32) *Argument {
 	return arg.AddLockTargetWithMode(
 		tableID,
+		dbName,
+		tableName,
+		isFakePk,
+		isInsert,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
@@ -605,6 +661,10 @@ func (arg *Argument) AddLockTarget(
 // AddLockTargetWithMode add lock target with lock mode
 func (arg *Argument) AddLockTargetWithMode(
 	tableID uint64,
+	dbName string,
+	tableName string,
+	isFakePk bool,
+	isInsert bool,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
@@ -615,6 +675,10 @@ func (arg *Argument) AddLockTargetWithMode(
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		dbName:                       dbName,
+		tableName:                    tableName,
+		isFakePk:                     isFakePk,
+		isInsert:                     isInsert,
 	})
 	return arg
 }
@@ -657,12 +721,20 @@ func (arg *Argument) LockTableWithMode(
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
 func (arg *Argument) AddLockTargetWithPartition(
 	tableIDs []uint64,
+	dbName string,
+	tableName string,
+	isFakePk bool,
+	isInsert bool,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
 	partitionTableIDMappingInBatch int32) *Argument {
 	return arg.AddLockTargetWithPartitionAndMode(
 		tableIDs,
+		dbName,
+		tableName,
+		isFakePk,
+		isInsert,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
@@ -674,6 +746,10 @@ func (arg *Argument) AddLockTargetWithPartition(
 // the lock mode
 func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	tableIDs []uint64,
+	dbName string,
+	tableName string,
+	isFakePk bool,
+	isInsert bool,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
@@ -686,6 +762,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 	// only one partition table, process as normal table
 	if len(tableIDs) == 1 {
 		return arg.AddLockTarget(tableIDs[0],
+			dbName,
+			tableName,
+			isFakePk,
+			isInsert,
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
@@ -701,6 +781,10 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
 			mode:                         mode,
+			dbName:                       dbName,
+			tableName:                    tableName,
+			isFakePk:                     isFakePk,
+			isInsert:                     isInsert,
 		})
 	}
 	return arg
