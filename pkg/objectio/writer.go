@@ -117,6 +117,10 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
+func (w *objectWriterV1) GetObjectStats() []ObjectStats {
+	return w.objStats
+}
+
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
 	ss := NewObjectStats()
 	SetObjectStatsObjectName(ss, w.name)
