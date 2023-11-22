@@ -2120,7 +2120,6 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		return nil, err
 	}
 
-	tenantInfo := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -2131,7 +2130,9 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	accountId = tenantInfo.GetTenantID()
+	if tenantInfo := ses.GetTenantInfo(); tenantInfo != nil {
+		accountId = tenantInfo.GetTenantID()
+	}
 	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
 	bh.ClearExecResultSet()
