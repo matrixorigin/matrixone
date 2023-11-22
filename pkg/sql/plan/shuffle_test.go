@@ -124,17 +124,15 @@ func TestStringToUint64(t *testing.T) {
 }
 
 type ShuffleRangeTestCase struct {
-	min           []float64
-	max           []float64
-	expectoverlap float64
+	min []float64
+	max []float64
 }
 
 func TestShuffleRange(t *testing.T) {
 	testcase := make([]ShuffleRangeTestCase, 0)
 	testcase = append(testcase, ShuffleRangeTestCase{
-		min:           []float64{},
-		max:           []float64{},
-		expectoverlap: 0,
+		min: []float64{},
+		max: []float64{},
 	})
 	testcase[0].min = append(testcase[0].min, 0)
 	testcase[0].max = append(testcase[0].max, 10000)
@@ -147,6 +145,26 @@ func TestShuffleRange(t *testing.T) {
 	for i := 100001; i <= 200000; i++ {
 		testcase[0].min = append(testcase[0].min, testcase[0].max[i-1]+float64(rand.Int()%10000))
 		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000+100))
+	}
+
+	testcase = append(testcase, ShuffleRangeTestCase{
+		min: []float64{},
+		max: []float64{},
+	})
+	for i := 0; i <= 100000; i++ {
+		testcase[1].min = append(testcase[1].min, float64(rand.Int()))
+		testcase[1].max = append(testcase[1].max, testcase[1].min[i]+float64(rand.Int()))
+	}
+
+	testcase = append(testcase, ShuffleRangeTestCase{
+		min: []float64{},
+		max: []float64{},
+	})
+	testcase[2].min = append(testcase[2].min, 0)
+	testcase[2].max = append(testcase[2].max, 10000)
+	for i := 1; i < 100000; i++ {
+		testcase[2].min = append(testcase[2].min, testcase[2].max[i-1]-10)
+		testcase[2].max = append(testcase[2].max, testcase[2].min[i]+10000)
 	}
 
 	leng := len(testcase)
