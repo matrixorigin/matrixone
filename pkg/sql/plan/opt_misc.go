@@ -1101,7 +1101,7 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(nodeID, builder, false, true)
+		ReCalcNodeStats(nodeID, builder, false, true, true)
 		nodeID = joinNodeID
 
 		break

@@ -532,11 +532,13 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		iter.Close()
 	} else {
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
+		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
 
