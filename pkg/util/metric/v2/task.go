@@ -38,10 +38,12 @@ var (
 			Subsystem: "task",
 			Name:      "long_duration_seconds",
 			Help:      "Bucketed histogram of long tn task execute duration.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 20),
 		}, []string{"type"})
 
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
+	TaskLoadMemDeletesPerBlockHistogram  = taskLongDurationHistogram.WithLabelValues("load_mem_deletes_per_block")
+	TaskFlushDeletesHistogram            = taskLongDurationHistogram.WithLabelValues("flush_deletes")
 )
 
 var (

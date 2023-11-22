@@ -64,7 +64,8 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 		c.getTimeSeries(
 			"Flush table tail Count",
 			[]string{fmt.Sprintf(
-				"increase(%s[$interval])",
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
 				c.getMetricWithFilter(`mo_task_short_duration_seconds_count`, `type="flush_table_tail"`),
 			)},
 			[]string{"Count"},
@@ -85,11 +86,13 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 			"Merge Count",
 			[]string{
 				fmt.Sprintf(
-					"increase(%s[$interval])",
+					"sum by (%s) (increase(%s[$interval]))",
+					c.by,
 					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_block"`)),
 
 				fmt.Sprintf(
-					"increase(%s[$interval])",
+					"sum by (%s) (increase(%s[$interval]))",
+					c.by,
 					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
 			},
 			[]string{
@@ -100,7 +103,8 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 		c.getTimeSeries(
 			"Merge Batch Size",
 			[]string{fmt.Sprintf(
-				"increase(%s[$interval])",
+				"sum by (%s) (increase(%s[$interval]))",
+				c.by,
 				c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_size"`))},
 			[]string{"Size"},
 			timeseries.Axis(tsaxis.Unit("decbytes")),
@@ -129,11 +133,13 @@ func (c *DashboardCreator) initTaskCheckpointRow() dashboard.Option {
 			"Checkpoint Load Object Count",
 			[]string{
 				fmt.Sprintf(
-					"increase(%s[$interval])",
+					"sum by (%s) (increase(%s[$interval]))",
+					c.by,
 					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="gckp_load_object"`)),
 
 				fmt.Sprintf(
-					"increase(%s[$interval])",
+					"sum by (%s) (increase(%s[$interval]))",
+					c.by,
 					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="ickp_load_object"`)),
 			},
 			[]string{
