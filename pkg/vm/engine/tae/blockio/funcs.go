@@ -79,3 +79,24 @@ func LoadTombstoneColumns(
 ) (bat *batch.Batch, err error) {
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
+
+func LoadOneBlock(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, err
+	}
+	data := meta.MustGetMeta(metaType)
+
+	idxes := make([]uint16, data.BlockHeader().ColumnCount())
+	for i := range idxes {
+		idxes[i] = uint16(i)
+	}
+	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
+		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
+	return bat, err
+}

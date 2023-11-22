@@ -369,7 +369,7 @@ func (h *Handle) handleRequests(
 			}
 			write++
 		default:
-			panic(moerr.NewNYI(ctx, "Pls implement me"))
+			err = moerr.NewNotSupported(ctx, "unknown txn request type: %T", req)
 		}
 		//Need to roll back the txn.
 		if err != nil {
@@ -538,18 +538,14 @@ func (h *Handle) HandleBackup(
 
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
-	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	if err != nil {
-		return nil, err
-	}
-	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	var locations string
+	locations += backupTime.Format(time.DateTime) + ";"
+	location, err := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	var locations string
-	locations += backupTime.Format(time.DateTime) + ";"
+	locations += location + ";"
 	for i := range data {
 		locations += data[i].GetLocation().String()
 		locations += ":"
@@ -842,7 +838,7 @@ func (h *Handle) HandlePreCommitWrite(
 				return err
 			}
 		default:
-			panic(moerr.NewNYI(ctx, ""))
+			return moerr.NewNYI(ctx, "pre commit write type: %T", cmds)
 		}
 	}
 	//evaluate all the txn requests.

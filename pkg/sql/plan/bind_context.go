@@ -28,6 +28,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
+		sampleByAst:    make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
 		windowByAst:    make(map[string]int32),
 		timeByAst:      make(map[string]int32),
@@ -167,7 +168,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 
 	leftPos := leftBinding.colIdByName[col]
 	rightPos := rightBinding.colIdByName[col]
-	expr, err := bindFuncExprImplByPlanExpr(bc.binder.GetContext(), "=", []*plan.Expr{
+	expr, err := BindFuncExprImplByPlanExpr(bc.binder.GetContext(), "=", []*plan.Expr{
 		{
 			Typ: DeepCopyType(leftBinding.types[leftPos]),
 			Expr: &plan.Expr_Col{
@@ -197,7 +198,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		var exprs []tree.SelectExpr
 		var names []string
 
-		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]any), &exprs, &names, isSysAccount)
+		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]emptyType), &exprs, &names, isSysAccount)
 
 		return exprs, names, nil
 	} else {
@@ -230,7 +231,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 	}
 }
 
-func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]any, exprs *[]tree.SelectExpr, names *[]string, isSysAccount bool) {
+func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]emptyType, exprs *[]tree.SelectExpr, names *[]string, isSysAccount bool) {
 	if root == nil {
 		return
 	}
@@ -268,7 +269,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		}
 		if _, ok := visitedUsingCols[using.col]; !ok {
 			handledUsingCols = append(handledUsingCols, using.col)
-			visitedUsingCols[using.col] = nil
+			visitedUsingCols[using.col] = emptyStruct
 
 			expr, _ := tree.NewUnresolvedName(ctx, using.table, using.col)
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})

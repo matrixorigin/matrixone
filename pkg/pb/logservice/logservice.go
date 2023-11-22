@@ -96,6 +96,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
+	storeInfo.Resource = hb.Resource
 	s.Stores[hb.UUID] = storeInfo
 }
 

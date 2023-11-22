@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -47,6 +48,7 @@ type objectWriterV1 struct {
 	bloomFilter       []byte
 	objStats          []ObjectStats
 	pkColIdx          uint16
+	appendable        bool
 }
 
 type blockData struct {
@@ -89,6 +91,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		buffer:   NewObjectBuffer(fileName),
 		blocks:   make([][]blockData, 2),
 		lastId:   0,
+		pkColIdx: math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
@@ -107,10 +110,15 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 		buffer:    NewObjectBuffer(fileName),
 		blocks:    make([][]blockData, 2),
 		lastId:    0,
+		pkColIdx:  math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
+}
+
+func (w *objectWriterV1) GetObjectStats() []ObjectStats {
+	return w.objStats
 }
 
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
@@ -194,14 +202,18 @@ func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, er
 	return block, nil
 }
 
-func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
-	w.blocks[SchemaData][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
+func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint16, zm ZoneMap) {
+	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
 	w.pkColIdx = seqnum
 	return
+}
+
+func (w *objectWriterV1) SetAppendable() {
+	w.appendable = true
 }
 
 func (w *objectWriterV1) WriteObjectMetaBF(buf []byte) (err error) {
@@ -419,6 +431,8 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			return nil, err
 		}
 		objectMetas[i].BlockHeader().SetBFExtent(bloomFilterExtents[i])
+		objectMetas[i].BlockHeader().SetAppendable(w.appendable)
+		objectMetas[i].BlockHeader().SetSortKey(w.pkColIdx)
 		offset += bloomFilterExtents[i].Length()
 
 		// prepare zone map area

@@ -393,7 +393,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm, s)
+	s.createMOServer(cancelMoServerCtx, pu, aicm)
 	return nil
 }
 
@@ -431,11 +431,10 @@ func (s *service) createMOServer(
 	inputCtx context.Context,
 	pu *config.ParameterUnit,
 	aicm *defines.AutoIncrCacheManager,
-	baseService frontend.BaseService,
 ) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, baseService)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, s)
 }
 
 func (s *service) runMoServer() error {
@@ -532,7 +531,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				panic("should never happen")
+				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
