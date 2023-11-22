@@ -118,6 +118,7 @@ type state struct {
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch
+	buf                  *batch.Batch
 	batchFetchFunc       func(process.Analyze) (*batch.Batch, bool, error)
 	lockMetaFunc         func(context.Context, *process.Process, engine.Engine, string, string, lock.LockMode) error
 	hasNewVersionInRange hasNewVersionInRangeFunc

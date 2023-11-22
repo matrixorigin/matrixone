@@ -321,9 +321,6 @@ func TestLockWithBlocking(t *testing.T) {
 			}
 			end, err := arg.Call(proc)
 			require.NoError(t, err)
-			if end.Batch != nil {
-				end.Batch.Clean(proc.GetMPool())
-			}
 			if end.Status == vm.ExecStop {
 				if arg.rt.parker != nil {
 					arg.rt.parker.FreeMem()

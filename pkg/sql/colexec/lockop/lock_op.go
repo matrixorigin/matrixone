@@ -127,6 +127,10 @@ func callChild(arg *Argument, proc *process.Process) (vm.CallResult, error) {
 		anal.Start()
 		defer anal.Stop()
 		result := vm.NewCallResult()
+		if arg.rt.buf != nil {
+			proc.PutBatch(arg.rt.buf)
+			arg.rt.buf = nil
+		}
 		for {
 			bat, err := arg.getBatch(proc, anal, arg.info.IsFirst)
 			if err != nil {
@@ -138,7 +142,8 @@ func callChild(arg *Argument, proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				continue
 			}
-			result.Batch = bat
+			arg.rt.buf = bat
+			result.Batch = arg.rt.buf
 			return result, nil
 		}
 	}
@@ -220,9 +225,14 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		} else {
+			if arg.rt.buf != nil {
+				proc.PutBatch(arg.rt.buf)
+				arg.rt.buf = nil
+			}
 			bat := arg.rt.cachedBatches[0]
 			arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
-			result.Batch = bat
+			arg.rt.buf = bat
+			result.Batch = arg.rt.buf
 			return result, nil
 		}
 	}
@@ -624,6 +634,10 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 	for i, target := range arg.targets {
 		targets[i] = &pipeline.LockTarget{
 			TableId:            target.tableID,
+			DbName:             target.dbName,
+			TableName:          target.tableName,
+			IsFakePk:           target.isFakePk,
+			IsInsert:           target.isInsert,
 			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
 			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
 			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
@@ -761,11 +775,12 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 
 	// only one partition table, process as normal table
 	if len(tableIDs) == 1 {
-		return arg.AddLockTarget(tableIDs[0],
+		return arg.AddLockTargetWithMode(tableIDs[0],
 			dbName,
 			tableName,
 			isFakePk,
 			isInsert,
+			mode,
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
@@ -805,9 +820,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) cleanCachedBatch(proc *process.Process) {
 	// do not need clean,  only set nil
-	// for _, bat := range arg.rt.cachedBatches {
-	// 	bat.Clean(proc.Mp())
-	// }
+	for _, bat := range arg.rt.cachedBatches {
+		bat.Clean(proc.Mp())
+	}
+	if arg.rt.buf != nil {
+		arg.rt.buf.Clean(proc.Mp())
+		arg.rt.buf = nil
+	}
 	arg.rt.cachedBatches = nil
 }
 
