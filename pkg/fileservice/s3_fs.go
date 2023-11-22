@@ -244,6 +244,51 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}, nil
 }
 
+func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return err
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: filePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
+	// load to disk cache
+	if s.diskCache != nil {
+		if err := s.diskCache.SetFile(
+			ctx, path.File,
+			func(ctx context.Context) (io.ReadCloser, error) {
+				return s.newReadCloser(ctx, filePath)
+			},
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	key := s.pathToKey(filePath)
+	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -326,7 +371,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// write to disk cache
 	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, content); err != nil {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}); err != nil {
 			return 0, err
 		}
 	}
@@ -656,7 +703,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		len(contentBytes) > 0 &&
 		s.diskCache != nil &&
 		!vector.Policy.Any(SkipDiskCacheWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, contentBytes); err != nil {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(contentBytes)), nil
+		}); err != nil {
 			return err
 		}
 	}
