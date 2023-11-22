@@ -126,7 +126,7 @@ type Block interface {
 		mp *mpool.MPool,
 	) error
 	PPString(level common.PPLevel, depth int, prefix string) string
-	EstimateMemSize() int
+	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 
 	Init() error
