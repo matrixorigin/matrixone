@@ -16,7 +16,6 @@ package gc2
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sync"
@@ -24,11 +23,12 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
+
+type ObjectEntry struct {
+	commitTS types.TS
+}
 
 // GCTable is a data structure in memory after consuming checkpoint
 type GCTable struct {
