@@ -591,24 +591,28 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		messages[i] = nil
 	}
 	messages = messages[:0]
-	heartbeatFunc := func() {
+
+	doHeartbeat := func() {
+		rb.lastPingTime = time.Now()
+		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
+		// no need wait response, close immediately
+		f.Close()
+		messages = append(messages, f)
+		rb.pingTimer.Reset(rb.getPingTimeout())
+	}
+	handleHeartbeat := func() {
 		select {
 		case <-rb.pingTimer.C:
-			rb.lastPingTime = time.Now()
-			f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
-			// no need wait response, close immediately
-			f.Close()
-			messages = append(messages, f)
-			rb.pingTimer.Reset(rb.getPingTimeout())
+			doHeartbeat()
 		default:
 		}
 	}
 
 	select {
 	case <-rb.pingTimer.C:
-		heartbeatFunc()
+		doHeartbeat()
 	case f := <-rb.writeC:
-		heartbeatFunc()
+		handleHeartbeat()
 		messages = append(messages, f)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
