@@ -2,7 +2,10 @@ queue_rules:
   - name: main
     merge_conditions: []
     checks_timeout: 4h
-  - name: release-branch
+  - name: release-1.0
+    merge_conditions: []
+    checks_timeout: 4h
+  - name: release-1.1
     merge_conditions: []
     checks_timeout: 4h
 
@@ -23,7 +26,7 @@ pull_request_rules:
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
 
-  - name: Automatic queue on approval for release-branch
+  - name: Automatic queue on approval for release-1.0
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
@@ -33,7 +36,26 @@ pull_request_rules:
         users:
           - sukki37
       queue:
-        name: release-branch
+        name: release-1.0
+        method: squash
+        commit_message_template: |
+          {{ title }} (#{{ number }})
+
+          {{ body | get_section("## What this PR does / why we need it:") }}
+
+          Approved by: @{{ approved_reviews_by | join(', @') }}
+
+  - name: Automatic queue on approval for release-1.1
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=1.1-dev
+    actions:
+      request_reviews:
+        users:
+          - sukki37
+      queue:
+        name: release-1.1
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
