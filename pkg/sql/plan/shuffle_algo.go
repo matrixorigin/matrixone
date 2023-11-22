@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const DefaultEvalSize = 1024
@@ -102,10 +103,10 @@ func NewShuffleRange(isString bool, tableName string) *ShuffleRange {
 }
 func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32, nullCount uint32) {
 	if len(zmmin) > 8 {
-		zmmin = zmmin[len(zmmin)-8:]
+		zmmin = zmmin[:8]
 	}
 	if len(zmmax) > 8 {
-		zmmax = zmmax[len(zmmax)-8:]
+		zmmax = zmmax[:8]
 	}
 	if s.size == 0 {
 		s.size = int(rowCount)
