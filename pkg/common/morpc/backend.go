@@ -446,10 +446,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
 		interval := time.Since(lastScheduleTime)
-		if interval > time.Second*5 {
+		if rb.options.readTimeout > 0 && interval > time.Second*5 {
 			getLogger().Warn("system is busy, write loop schedule interval is too large",
 				zap.Duration("interval", interval),
-				zap.Time("last-ping-trigger_time", rb.lastPingTime),
+				zap.Time("last-ping-trigger-time", rb.lastPingTime),
 				zap.Duration("ping-interval", rb.getPingTimeout()))
 		}
 		if len(messages) > 0 {
@@ -593,16 +593,29 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		messages[i] = nil
 	}
 	messages = messages[:0]
-	select {
-	case <-rb.pingTimer.C:
+
+	doHeartbeat := func() {
 		rb.lastPingTime = time.Now()
 		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
 		// no need wait response, close immediately
 		f.Close()
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		messages = append(messages, f)
 		rb.pingTimer.Reset(rb.getPingTimeout())
+	}
+	handleHeartbeat := func() {
+		select {
+		case <-rb.pingTimer.C:
+			doHeartbeat()
+		default:
+		}
+	}
+
+	select {
+	case <-rb.pingTimer.C:
+		doHeartbeat()
 	case f := <-rb.writeC:
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		handleHeartbeat()
+		messages = append(messages, f)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
@@ -611,10 +624,15 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
-	return messages, false
+
+	return rb.fetchN(messages, maxFetchCount), false
 }
 
-func (rb *remoteBackend) fetchN(messages []*Future, n int) []*Future {
+func (rb *remoteBackend) fetchN(messages []*Future, max int) []*Future {
+	if len(messages) >= max {
+		return messages
+	}
+	n := max - len(messages)
 	for i := 0; i < n; i++ {
 		select {
 		case f := <-rb.writeC:
