@@ -630,6 +630,24 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
+// Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
+func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	entry.entryType = ET_Incremental
+	success = r.tryAddNewIncrementalCheckpointEntry(entry)
+	if !success {
+		return
+	}
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	it := r.storage.entries.Iter()
+	for it.Next() {
+		e := it.Item()
+		e.ckpLSN = 0
+		e.truncateLSN = 0
+	}
+	return
+}
+
 func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	// ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	_, count := r.source.ScanInRange(start, end)
@@ -731,48 +749,6 @@ func (r *runner) fillDefaults() {
 	if r.options.checkpointSize <= 0 {
 		r.options.checkpointSize = logtail.DefaultCheckpointSize
 	}
-}
-
-func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
-	if !r.rt.Throttle.CanCompact() {
-		return
-	}
-	db, err := r.catalog.GetDatabaseByID(dbID)
-	if err != nil {
-		panic(err)
-	}
-	table, err := db.GetTableEntryByID(tableID)
-	if err != nil {
-		panic(err)
-	}
-	sid := objectio.ToSegmentId(id)
-	segment, err := table.GetSegmentByID(sid)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := segment.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	blkData := blk.GetBlockData()
-	score := blkData.EstimateScore(r.options.maxFlushInterval, force)
-	logutil.Debugf("%s [SCORE=%d]", blk.String(), score)
-	if score < 100 {
-		return
-	}
-
-	factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
-	if err != nil || factory == nil {
-		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
-		return nil
-	}
-
-	if _, err = r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, factory); err != nil {
-		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
-	}
-
-	// always return nil
-	return nil
 }
 
 func (r *runner) onWaitWaitableItems(items ...any) {
@@ -908,13 +884,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		return moerr.GetOkStopCurrRecur()
 	}
-	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
-		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
-			id := objectio.NewBlockid(segmentID, num, seq)
-			return r.tryCompactBlock(dbID, tableID, id, force)
-		}
-	}(force)
-
 	if err := entry.GetTree().Visit(visitor); err != nil {
 		panic(err)
 	}
