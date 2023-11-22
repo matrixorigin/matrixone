@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -873,5 +874,83 @@ func TestS3RestoreFromCache(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
+
+}
+
+func TestS3PrefetchFile(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+
+	cacheDir := t.TempDir()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:          "s3",
+			Endpoint:      config.Endpoint,
+			Bucket:        config.Bucket,
+			KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+			AssumeRoleARN: config.RoleARN,
+		},
+		CacheConfig{
+			DiskPath: ptrTo(cacheDir),
+		},
+		nil,
+		false,
+	)
+	assert.Nil(t, err)
+
+	data := bytes.Repeat([]byte("abcd"), 2<<20)
+
+	// write file
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), pcSet.FileService.Cache.Disk.WriteFile.Load())
+
+	// preload
+	err = fs.PrefetchFile(ctx, "foo/bar")
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
+	err = fs.PrefetchFile(ctx, "foo/bar")
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
+
+	// read
+	lastHit := int64(0)
+	for i := 1; i < len(data); i += len(data) / 1000 {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Size: int64(i),
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, data[:i], vec.Entries[0].Data)
+		assert.Equal(t, lastHit+1, pcSet.FileService.Cache.Disk.Hit.Load())
+		lastHit++
+	}
 
 }
