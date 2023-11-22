@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -597,7 +596,6 @@ func (s *Scope) LoadRun(c *Compile) error {
 	for i := 0; i < mcpu; i++ {
 		bat := batch.NewWithSize(1)
 		{
-			bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
 			bat.SetRowCount(1)
 		}
 		ss[i] = &Scope{
