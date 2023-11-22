@@ -110,6 +110,8 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if err != nil {
 			return err
 		}
+		//45s suggest by xzxiong
+		newDBConn.SetConnMaxLifetime(45 * time.Second)
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)
@@ -240,7 +242,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	// Use the transaction to execute the SQL command
 
-	_, execErr := sqlDb.Exec(loadSQL)
+	_, execErr := sqlDb.ExecContext(ctx, loadSQL)
 
 	return execErr
 
