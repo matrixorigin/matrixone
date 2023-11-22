@@ -67,12 +67,7 @@ func (pd *poolData) appendInvalidRow(proc *process.Process, mp *mpool.MPool, bat
 	return nil
 }
 
-func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row2 int) error {
-	return batRowReplace(mp, pd.validBatch, bat, row1, row2)
-}
-
-// batRowReplace replaces the row1 of toBatch with the bat's row2.
-func batRowReplace(mp *mpool.MPool, toBatch *batch.Batch, bat *batch.Batch, row1, row2 int) (err error) {
+func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row2 int) (err error) {
 	var right int
 	for i, vec := range bat.Vecs {
 		right = row2
@@ -80,7 +75,7 @@ func batRowReplace(mp *mpool.MPool, toBatch *batch.Batch, bat *batch.Batch, row1
 			right = 0
 		}
 		if f := replaceMethods[vec.GetType().Oid]; f != nil {
-			err = f(toBatch.Vecs[i], vec, row1, right, mp)
+			err = f(pd.validBatch.Vecs[i], vec, row1, right, mp)
 		} else {
 			return moerr.NewInternalErrorNoCtx("unsupported type for sample pool.")
 		}
