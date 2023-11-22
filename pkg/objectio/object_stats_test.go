@@ -16,8 +16,10 @@ package objectio
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -68,4 +70,32 @@ func Test_ObjectStats(t *testing.T) {
 	s := ShortName(x)
 	SetObjectStatsShortName(stats, s)
 	require.True(t, bytes.Equal(stats.ObjectShortName()[:], s[:]))
+}
+
+func TestObjectStats_Clone(t *testing.T) {
+	stats := NewObjectStats()
+	require.Nil(t, SetObjectStatsRowCnt(stats, 99))
+
+	copied := stats.Clone()
+	require.True(t, bytes.Equal(stats.Marshal(), copied.Marshal()))
+
+	require.Nil(t, SetObjectStatsRowCnt(copied, 199))
+	require.False(t, bytes.Equal(stats.Marshal(), copied.Marshal()))
+
+	fmt.Println(stats.String())
+	fmt.Println(copied.String())
+}
+
+func TestObjectStats_Marshal_UnMarshal(t *testing.T) {
+	rawBytes := make([]byte, ObjectStatsLen)
+	for idx := 0; idx < ObjectStatsLen; idx++ {
+		rr := rand.Uint32()
+		rawBytes[idx] = types.EncodeUint32(&rr)[0]
+	}
+
+	stats := NewObjectStats()
+	stats.UnMarshal(rawBytes)
+
+	require.True(t, bytes.Equal(stats.Marshal(), rawBytes))
+	fmt.Println(stats.String())
 }

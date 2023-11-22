@@ -229,6 +229,12 @@ func (b *deletedBlocks) isDeleted(blockID *types.Blockid) bool {
 	return ok
 }
 
+func (b *deletedBlocks) isEmpty() bool {
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets) == 0
+}
+
 func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
 	b.RLock()
 	defer b.RUnlock()

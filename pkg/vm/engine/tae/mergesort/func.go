@@ -52,6 +52,7 @@ func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret 
 		if v.isNull {
 			col.Update(i, nil, true)
 		} else {
+			// FIXME: memory waste for varlen type
 			col.Update(i, v.data, false)
 		}
 	}
