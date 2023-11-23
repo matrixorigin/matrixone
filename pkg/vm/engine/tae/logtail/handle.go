@@ -525,7 +525,11 @@ func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *cat
 	} else {
 		node.TxnMVCCNode.AppendTuple(batch)
 	}
-	node.EntryMVCCNode.AppendTuple(batch)
+	if push {
+		node.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.EntryMVCCNode.AppendTuple(batch)
+	}
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
