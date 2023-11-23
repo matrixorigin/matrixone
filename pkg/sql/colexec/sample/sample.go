@@ -212,7 +212,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 		if err != nil {
 			return err
 		}
-		err = ctr.samplePool.BatchSample(n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
+		err = ctr.samplePool.BatchSample(i, n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
 		if err != nil {
 			return err
 		}
