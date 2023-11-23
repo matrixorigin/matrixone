@@ -82,30 +82,30 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	}
 }
 
-func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
+func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 	switch typ.Oid {
 	case types.T_int8:
-		return float64(types.DecodeInt8(buf))
+		return float64(types.DecodeInt8(buf)), true
 	case types.T_int16:
-		return float64(types.DecodeInt16(buf))
+		return float64(types.DecodeInt16(buf)), true
 	case types.T_int32:
-		return float64(types.DecodeInt32(buf))
+		return float64(types.DecodeInt32(buf)), true
 	case types.T_int64:
-		return float64(types.DecodeInt64(buf))
+		return float64(types.DecodeInt64(buf)), true
 	case types.T_uint8:
-		return float64(types.DecodeUint8(buf))
+		return float64(types.DecodeUint8(buf)), true
 	case types.T_uint16:
-		return float64(types.DecodeUint16(buf))
+		return float64(types.DecodeUint16(buf)), true
 	case types.T_uint32:
-		return float64(types.DecodeUint32(buf))
+		return float64(types.DecodeUint32(buf)), true
 	case types.T_uint64:
-		return float64(types.DecodeUint64(buf))
+		return float64(types.DecodeUint64(buf)), true
 	case types.T_date:
-		return float64(types.DecodeDate(buf))
-	//case types.T_char, types.T_varchar, types.T_text:
-	//return float64(plan2.ByteSliceToUint64(buf)), true
+		return float64(types.DecodeDate(buf)), true
+	case types.T_char, types.T_varchar, types.T_text:
+		return float64(plan2.ByteSliceToUint64(buf)), true
 	default:
-		panic("unsupported type")
+		return 0, false
 	}
 }
 
@@ -147,19 +147,13 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				if info.ColumnNDVs[idx] > 100 {
-					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
-						if info.ColumnZMs[idx].IsInited() {
-							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-							info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
-						}
-					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
-						if info.ColumnZMs[idx].IsInited() {
-							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
-						}
+					info.ShuffleRanges[idx] = plan2.NewShuffleRange()
+					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+					if !succ {
+						info.ShuffleRanges[idx] = nil
+					} else {
+						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
@@ -175,13 +169,12 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				if info.ShuffleRanges[idx] != nil {
-					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
-						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
+					if !succ {
+						info.ShuffleRanges[idx] = nil
+					} else {
+						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
-					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
