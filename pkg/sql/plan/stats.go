@@ -181,7 +181,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] && s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
-				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].Eval(1024)
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil
