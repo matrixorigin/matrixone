@@ -943,6 +943,10 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		return nodeID
 	}
 
+	if node.Stats.Selectivity > 0.1 {
+		return nodeID
+	}
+
 	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
 		fn, ok := expr.Expr.(*plan.Expr_F)
@@ -982,6 +986,9 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
 			numParts--
+		}
+		if numParts == 0 {
+			continue
 		}
 
 		filterIdx = filterIdx[:0]
