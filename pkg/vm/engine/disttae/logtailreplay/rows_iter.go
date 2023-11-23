@@ -110,13 +110,12 @@ func (p *rowsIter) Close() error {
 }
 
 type primaryKeyIter struct {
-	ts             types.TS
-	spec           PrimaryKeyMatchSpec
-	iter           btree.IterG[*PrimaryIndexEntry]
-	firstCalled    bool
-	rows           *btree.BTreeG[RowEntry]
-	curRow         RowEntry
-	deletedVisible bool
+	ts          types.TS
+	spec        PrimaryKeyMatchSpec
+	iter        btree.IterG[*PrimaryIndexEntry]
+	firstCalled bool
+	rows        *btree.BTreeG[RowEntry]
+	curRow      RowEntry
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -155,15 +154,13 @@ func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
 func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
-	deletedVisible bool,
 ) *primaryKeyIter {
 	iter := p.primaryIndex.Copy().Iter()
 	return &primaryKeyIter{
-		ts:             ts,
-		spec:           spec,
-		iter:           iter,
-		rows:           p.rows.Copy(),
-		deletedVisible: deletedVisible,
+		ts:   ts,
+		spec: spec,
+		iter: iter,
+		rows: p.rows.Copy(),
 	}
 }
 
@@ -213,7 +210,7 @@ func (p *primaryKeyIter) Next() bool {
 				// not visible
 				continue
 			}
-			if row.Deleted && !p.deletedVisible {
+			if row.Deleted {
 				// visible and deleted, no longer valid
 				break
 			}

@@ -818,9 +818,9 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		}
 	case *plan.Expr_W:
 		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
-		for _, arg := range exprImpl.W.PartitionBy {
-			increaseRefCnt(arg, inc, colRefCnt)
-		}
+		//for _, arg := range exprImpl.W.PartitionBy {
+		//	increaseRefCnt(arg, inc, colRefCnt)
+		//}
 		for _, order := range exprImpl.W.OrderBy {
 			increaseRefCnt(order.Expr, inc, colRefCnt)
 		}
@@ -859,7 +859,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		return moerr.NewParseError(ctx, "unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
-	// right is not UNION allways
+	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
 		if stmt.Type == tree.UNION && !stmt.All {
@@ -1090,7 +1090,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
-				return e, nil
+				return nil, err
 			}
 			exprList[i] = foldExpr
 		}
@@ -1131,9 +1131,11 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
-			return nil, err
+		foldExpr, errFold := ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst)
+		if errFold != nil {
+			return nil, errFold
 		}
+		ef.F.Args[i] = foldExpr
 	}
 	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil

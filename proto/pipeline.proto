@@ -65,8 +65,6 @@ message Shuffle{
   int64 ShuffleColMin = 3;
   int64 ShuffleColMax = 4;
   int32 AliveRegCnt = 5;
-  repeated uint64 shuffle_ranges_uint64 = 6;
-  repeated int64 shuffle_ranges_int64=7;
 }
 
 message Dispatch {
@@ -191,6 +189,10 @@ message OnDuplicateKey{
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
   bool is_ignore                            = 4;
+}
+
+message FuzzyFilter {
+
 }
 
 message Join {
@@ -422,6 +424,7 @@ message Instruction{
   StreamScan stream_scan = 35;
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
+  FuzzyFilter fuzzy_filter = 38;
 }
 
 message AnalysisList {

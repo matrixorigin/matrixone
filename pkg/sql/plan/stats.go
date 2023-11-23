@@ -181,7 +181,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] && s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
-				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].Eval(1024)
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil
@@ -671,10 +671,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
+		node.Stats = builder.qry.Nodes[sourceNode].Stats
 
 	case plan.Node_RECURSIVE_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
+		node.Stats = builder.qry.Nodes[sourceNode].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -704,6 +706,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
 
+	case plan.Node_FUNCTION_SCAN:
+		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {
+			if len(node.Children) > 0 && childStats != nil {
+				node.Stats.Outcnt = childStats.Outcnt
+				node.Stats.Cost = childStats.Outcnt
+				node.Stats.Selectivity = childStats.Selectivity
+			}
+		}
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -720,6 +731,91 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 	}
+}
+
+func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
+	if name != "generate_series" {
+		return false
+	}
+	var cost float64
+	var canGetCost bool
+	if len(exprs) == 2 {
+		if exprs[0].Typ.Id != exprs[1].Typ.Id {
+			return false
+		}
+		cost, canGetCost = getCost(exprs[0], exprs[1], nil)
+	} else if len(exprs) == 3 {
+		if !(exprs[0].Typ.Id == exprs[1].Typ.Id && exprs[1].Typ.Id == exprs[2].Typ.Id) {
+			return false
+		}
+		cost, canGetCost = getCost(exprs[0], exprs[1], exprs[2])
+	} else {
+		return false
+	}
+	if !canGetCost {
+		return false
+	}
+	nodeStat.Outcnt = cost
+	nodeStat.TableCnt = cost
+	nodeStat.Cost = cost
+	nodeStat.Selectivity = 1
+	return true
+}
+
+func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
+	var startNum, endNum, stepNum float64
+	var flag1, flag2, flag3 bool
+	getInt32Val := func(e *Expr) (float64, bool) {
+		if s, ok := e.Expr.(*plan.Expr_C); ok {
+			if v, ok := s.C.Value.(*plan.Const_I32Val); ok && !s.C.Isnull {
+				return float64(v.I32Val), true
+			}
+		}
+		return 0, false
+	}
+	getInt64Val := func(e *Expr) (float64, bool) {
+		if s, ok := e.Expr.(*plan.Expr_C); ok {
+			if v, ok := s.C.Value.(*plan.Const_I64Val); ok && !s.C.Isnull {
+				return float64(v.I64Val), true
+			}
+		}
+		return 0, false
+	}
+
+	switch start.Typ.Id {
+	case int32(types.T_int32):
+		startNum, flag1 = getInt32Val(start)
+		endNum, flag2 = getInt32Val(end)
+		flag3 = true
+		if step != nil {
+			stepNum, flag3 = getInt32Val(step)
+		}
+		if !(flag1 && flag2 && flag3) {
+			return 0, false
+		}
+	case int32(types.T_int64):
+		startNum, flag1 = getInt64Val(start)
+		endNum, flag2 = getInt64Val(end)
+		flag3 = true
+		if step != nil {
+			stepNum, flag3 = getInt64Val(step)
+		}
+		if !(flag1 && flag2 && flag3) {
+			return 0, false
+		}
+	}
+	if step == nil {
+		if startNum > endNum {
+			stepNum = -1
+		} else {
+			stepNum = 1
+		}
+	}
+	ret := (endNum - startNum) / stepNum
+	if ret < 0 {
+		return 0, false
+	}
+	return ret, true
 }
 
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
