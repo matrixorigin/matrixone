@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -70,7 +71,8 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 			}
 		}
 	}
-	options[moconnector.OptConnectorSql] = query.String()
+
+	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,

@@ -45,6 +45,10 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	columnCount := int(obj.ColumnCount())
 	rowCount := int(obj.RowCount())
 
+	if columnCount == 0 || rowCount == 0 {
+		return "", nil
+	}
+
 	var fields, values string
 	var colNames []string
 

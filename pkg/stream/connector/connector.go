@@ -223,6 +223,9 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 
 			switch e := ev.(type) {
 			case *kafka.Message:
+				if e.Value == nil {
+					continue
+				}
 				buffered_messages = append(buffered_messages, e)
 				if len(buffered_messages) >= k.bufferLimit {
 					k.insertRow(buffered_messages)
@@ -279,6 +282,9 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	if err != nil {
 		k.logger.Error("failed to get sql", zap.String("SQL", sql), zap.Error(err))
 	}
+	if sql == "" {
+		return
+	}
 	err = k.ie.Exec(ctx, sql, opts)
 	if err != nil {
 		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
@@ -287,7 +293,7 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 
 func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
 	ctx = context.WithValue(ctx, "msgs", msgs)
 	defer cancel()
 	res := k.ie.Query(ctx, sql, opts)
