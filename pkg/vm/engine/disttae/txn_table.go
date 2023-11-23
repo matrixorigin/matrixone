@@ -1181,8 +1181,8 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
-func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
-	if table.tableDef == nil {
+func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
+	if tbl.tableDef == nil {
 		var clusterByDef *plan.ClusterByDef
 		var cols []*plan.ColDef
 		var defs []*plan.TableDef_DefType
@@ -1199,7 +1199,7 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 
 		i := int32(0)
 		name2index := make(map[string]int32)
-		for _, def := range table.defs {
+		for _, def := range tbl.defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				name2index[attr.Attr.Name] = i
 				cols = append(cols, &plan.ColDef{
@@ -1210,7 +1210,7 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Width:       attr.Attr.Type.Width,
 						Scale:       attr.Attr.Type.Scale,
 						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       table.tableName,
+						Table:       tbl.tableName,
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
 					},
@@ -1234,16 +1234,16 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			}
 		}
 
-		if table.comment != "" {
+		if tbl.comment != "" {
 			properties = append(properties, &plan.Property{
 				Key:   catalog.SystemRelAttr_Comment,
-				Value: table.comment,
+				Value: tbl.comment,
 			})
 		}
 
-		if table.partitioned > 0 || table.partition != "" {
+		if tbl.partitioned > 0 {
 			p := &plan.PartitionByDef{}
-			err := p.UnMarshalPartitionInfo(([]byte)(table.partition))
+			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
 			if err != nil {
 				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
 				return nil
@@ -1251,15 +1251,15 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			partitionInfo = p
 		}
 
-		if table.viewdef != "" {
+		if tbl.viewdef != "" {
 			viewSql = &plan.ViewDef{
-				View: table.viewdef,
+				View: tbl.viewdef,
 			}
 		}
 
-		if len(table.constraint) > 0 {
+		if len(tbl.constraint) > 0 {
 			c := &engine.ConstraintDef{}
-			err := c.UnmarshalBinary(table.constraint)
+			err := c.UnmarshalBinary(tbl.constraint)
 			if err != nil {
 				//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
 				return nil
@@ -1282,16 +1282,16 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 
 		properties = append(properties, &plan.Property{
 			Key:   catalog.SystemRelAttr_Kind,
-			Value: table.relKind,
+			Value: tbl.relKind,
 		})
-		TableType = table.relKind
+		TableType = tbl.relKind
 
-		if table.createSql != "" {
+		if tbl.createSql != "" {
 			properties = append(properties, &plan.Property{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: table.createSql,
+				Value: tbl.createSql,
 			})
-			Createsql = table.createSql
+			Createsql = tbl.createSql
 		}
 
 		if len(properties) > 0 {
@@ -1315,9 +1315,9 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			cols = append(cols, rowIdCol)
 		}
 
-		table.tableDef = &plan.TableDef{
-			TblId:         table.tableId,
-			Name:          table.tableName,
+		tbl.tableDef = &plan.TableDef{
+			TblId:         tbl.tableId,
+			Name:          tbl.tableName,
 			Cols:          cols,
 			Name2ColIndex: name2index,
 			Defs:          defs,
@@ -1330,11 +1330,11 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
 			Indexes:       indexes,
-			Version:       table.version,
+			Version:       tbl.version,
 		}
 	}
-	tableDef := plan2.DeepCopyTableDef(table.tableDef, true)
-	tableDef.IsTemporary = table.GetEngineType() == engine.Memory
+	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
+	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
 	return tableDef
 }
 

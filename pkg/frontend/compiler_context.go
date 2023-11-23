@@ -317,7 +317,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		}
 	}
 	return obj, tableDef
-	//return disttae.GetTableDef(ctx, table, dbName, tableName, sub)
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
