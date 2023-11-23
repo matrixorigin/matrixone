@@ -88,7 +88,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if !arg.metaLocked {
 		arg.metaLocked = true
 		target := arg.targets[0]
-		if !target.lockTable {
+		if !target.lockTable && proc.TxnOperator.GetWorkspace() != nil {
 			if target.dbName == catalog.MO_CATALOG && (target.tableID == catalog.MO_DATABASE_ID || target.tableID == catalog.MO_TABLES_ID || target.tableID == catalog.MO_COLUMNS_ID) {
 				// do not lock meta table for meta table
 			} else {
