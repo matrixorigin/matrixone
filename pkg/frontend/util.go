@@ -725,3 +725,7 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 	}
 	return false
 }
+
+const (
+	quitStr = "!!!COM_QUIT!!!"
+)
