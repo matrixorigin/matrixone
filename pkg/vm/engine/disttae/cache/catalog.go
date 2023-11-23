@@ -684,11 +684,12 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 		})
 	}
 
-	if tblItem.Partitioned > 0 || tblItem.Partition != "" {
+	if tblItem.Partitioned > 0 {
 		p := &plan.PartitionByDef{}
 		err := p.UnMarshalPartitionInfo(([]byte)(tblItem.Partition))
 		if err != nil {
-			panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+			//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+			return nil
 		}
 		partitionInfo = p
 	}
@@ -703,7 +704,8 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 		c := &engine.ConstraintDef{}
 		err := c.UnmarshalBinary(tblItem.Constraint)
 		if err != nil {
-			panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+			//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+			return nil
 		}
 		for _, ct := range c.Cts {
 			switch k := ct.(type) {

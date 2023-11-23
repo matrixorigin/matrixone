@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"time"
 	"unsafe"
@@ -630,10 +629,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef,             // table definition (schema)
-	exprs []*plan.Expr,                  // filter expression
-	ranges *[][]byte,                    // output marshaled block list after filtering
-	proc *process.Process,               // process of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
+	ranges *[][]byte, // output marshaled block list after filtering
+	proc *process.Process, // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
@@ -1196,6 +1195,7 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var primarykey *plan.PrimaryKeyDef
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
+		var hasRowId bool
 
 		i := int32(0)
 		name2index := make(map[string]int32)
@@ -1227,6 +1227,9 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Name: attr.Attr.Name,
 					}
 				}
+				if attr.Attr.Name == catalog.Row_ID {
+					hasRowId = true
+				}
 				i++
 			}
 		}
@@ -1242,7 +1245,8 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			p := &plan.PartitionByDef{}
 			err := p.UnMarshalPartitionInfo(([]byte)(table.partition))
 			if err != nil {
-				panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
 			}
 			partitionInfo = p
 		}
@@ -1257,7 +1261,8 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			c := &engine.ConstraintDef{}
 			err := c.UnmarshalBinary(table.constraint)
 			if err != nil {
-				panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+				//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+				return nil
 			}
 			for _, ct := range c.Cts {
 				switch k := ct.(type) {
@@ -1305,6 +1310,10 @@ func (table *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
 			clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 		}
+		if !hasRowId {
+			rowIdCol := plan2.MakeRowIdColDef()
+			cols = append(cols, rowIdCol)
+		}
 
 		table.tableDef = &plan.TableDef{
 			TblId:         table.tableId,
@@ -1343,6 +1352,8 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
@@ -1360,6 +1371,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
