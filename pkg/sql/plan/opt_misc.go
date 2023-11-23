@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -970,15 +972,21 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		col2filter[col.Col.ColPos] = i
 	}
 
+	indexes := node.TableDef.Indexes
+	sort.Slice(indexes, func(i, j int) bool {
+		return indexes[i].Unique && !indexes[j].Unique
+	})
+
 	filterIdx := make([]int, 0, len(col2filter))
 	for _, idxDef := range node.TableDef.Indexes {
+		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
-			continue
+			numParts--
 		}
 
 		filterIdx = filterIdx[:0]
-		for _, part := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[part]
+		for i := 0; i < numParts; i++ {
+			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
@@ -987,7 +995,7 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 			filterIdx = append(filterIdx, idx)
 		}
 
-		if len(filterIdx) != len(idxDef.Parts) {
+		if len(filterIdx) < numParts {
 			continue
 		}
 
@@ -998,22 +1006,36 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
 		var idxFilter *plan.Expr
-		if len(idxDef.Parts) == 1 {
+		if numParts == 1 {
 			idx := filterIdx[0]
 
-			idxFilter = node.FilterList[idx]
-			col := idxFilter.Expr.(*plan.Expr_F).F.Args[0].Expr.(*plan.Expr_Col).Col
+			args := node.FilterList[idx].Expr.(*plan.Expr_F).F.Args
+			col := args[0].Expr.(*plan.Expr_Col).Col
 			col.RelPos = idxTag
 			col.ColPos = 0
+			col.Name = idxTableDef.Cols[0].Name
+
+			if idxDef.Unique {
+				idxFilter = node.FilterList[idx]
+			} else {
+				args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+				args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{args[1]})
+				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "startswith", args)
+			}
 
 			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
 		} else {
-			serialArgs := make([]*plan.Expr, len(filterIdx))
+			serialArgs := make([]*plan.Expr, numParts)
 			for i := range filterIdx {
 				serialArgs[i] = node.FilterList[filterIdx[i]].Expr.(*plan.Expr_F).F.Args[1]
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+
+			funcName := "="
+			if !idxDef.Unique {
+				funcName = "startswith"
+			}
+			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
 				{
 					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
 					Expr: &plan.Expr_Col{
@@ -1031,7 +1053,7 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 				hitFilterSet[filterIdx[i]] = emptyStruct
 			}
 
-			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
+			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-numParts)
 			for i, filter := range node.FilterList {
 				if _, ok := hitFilterSet[i]; !ok {
 					newFilterList = append(newFilterList, filter)
@@ -1042,12 +1064,12 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:        plan.Node_TABLE_SCAN,
-			ObjRef:          idxObjRef,
-			TableDef:        idxTableDef,
-			FilterList:      []*plan.Expr{idxFilter},
-			BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
-			BindingTags:     []int32{idxTag},
+			NodeType:   plan.Node_TABLE_SCAN,
+			ObjRef:     idxObjRef,
+			TableDef:   idxTableDef,
+			FilterList: []*plan.Expr{idxFilter},
+			//BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
+			BindingTags: []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
@@ -1079,7 +1101,7 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(nodeID, builder, false, true)
+		ReCalcNodeStats(nodeID, builder, false, true, true)
 		nodeID = joinNodeID
 
 		break

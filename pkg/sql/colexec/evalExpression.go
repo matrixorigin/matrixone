@@ -1051,8 +1051,10 @@ func GetExprZoneMap(
 
 		} else {
 			args := t.F.Args
-			// `in` is special.
-			if t.F.Func.ObjName == "in" {
+
+			// Some expressions need to be handled specifically
+			switch t.F.Func.ObjName {
+			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
@@ -1078,6 +1080,18 @@ func GetExprZoneMap(
 				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
+				return zms[expr.AuxId]
+
+			case "startswith":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				s := []byte(args[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval)
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.HasPrefix(s))
 				return zms[expr.AuxId]
 			}
 
