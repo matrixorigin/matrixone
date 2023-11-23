@@ -16,8 +16,11 @@ package frontend
 
 import (
 	"context"
+	"go.uber.org/zap"
+	"io"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -34,10 +37,11 @@ var ConnIDAllocKey = "____server_conn_id"
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr  string
-	uaddr string
-	app   goetty.NetApplication
-	rm    *RoutineManager
+	addr        string
+	uaddr       string
+	app         goetty.NetApplication
+	rm          *RoutineManager
+	readTimeout time.Duration
 }
 
 // BaseService is an interface which indicates that the instance is
@@ -90,10 +94,17 @@ func NewMOServer(
 	if unixAddr != "" {
 		addresses = append(addresses, "unix://"+unixAddr)
 	}
+	mo := &MOServer{
+		addr:        addr,
+		uaddr:       pu.SV.UnixSocketAddress,
+		rm:          rm,
+		readTimeout: pu.SV.SessionTimeout.Duration,
+	}
 	app, err := goetty.NewApplicationWithListenAddress(
 		addresses,
 		rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),
+		goetty.WithAppHandleSessionFunc(mo.handleMessage),
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
@@ -109,11 +120,38 @@ func NewMOServer(
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	return &MOServer{
-		addr:  addr,
-		app:   app,
-		uaddr: pu.SV.UnixSocketAddress,
-		rm:    rm,
+	mo.app = app
+	return mo
+}
+
+// handleMessage receives the message from the client and executes it
+func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
+	received := uint64(0)
+	option := goetty.ReadOptions{Timeout: mo.readTimeout}
+	for {
+		msg, err := rs.Read(option)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+
+			logutil.Error("session read failed",
+				zap.Error(err))
+			return err
+		}
+
+		received++
+
+		err = mo.rm.Handler(rs, msg, received)
+		if err != nil {
+			if strings.Contains(err.Error(), quitStr) {
+				logutil.Warn("mo quit", zap.Error(err))
+				return nil
+			} else {
+				logutil.Error("session handle failed, close this session", zap.Error(err))
+			}
+			return err
+		}
 	}
 }
 
