@@ -272,7 +272,8 @@ func (entry *SegmentEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
 	})
-	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+	// in some unit tests, node doesn't exist
+	if node == nil || node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
 		return
 	}
 

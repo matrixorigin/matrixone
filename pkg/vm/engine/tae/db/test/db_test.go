@@ -2942,7 +2942,7 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "obj"))
-	require.Equal(t, uint32(9), resp.Commands[2].Bat.Vecs[0].Len) /* 5 segments (create) + 4 (update object info) */
+	require.Equal(t, uint32(6), resp.Commands[2].Bat.Vecs[0].Len) /* 2 segments (create) + 4 (update object info) */
 
 	close()
 
@@ -2968,7 +2968,7 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, uint32(6), ins.Vecs[0].Len)    // 6 nablk
 		require.Equal(t, uint32(6), del.Vecs[0].Len)    // 3 ablk + 3 nablk
 		require.Equal(t, uint32(6), cnins.Vecs[0].Len)  // 3 ablk + 3 nablk
-		require.Equal(t, uint32(9), segdel.Vecs[0].Len) // 4 create + 5 update
+		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
 		require.Equal(t, 2, len(del.Vecs))
 		require.Equal(t, 11, len(segdel.Vecs))
 	}
@@ -4376,7 +4376,7 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(resp.Commands)) // object info, insert data and delete data
+	require.Equal(t, 2, len(resp.Commands)) // 2 insert data and delete data
 
 	// blk meta change
 	// blkMetaEntry := resp.Commands[0]
@@ -4385,7 +4385,7 @@ func TestLogtailBasic(t *testing.T) {
 	// check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
 
 	// check data change
-	insDataEntry := resp.Commands[1]
+	insDataEntry := resp.Commands[0]
 	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
 	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
 	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
@@ -4395,7 +4395,7 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	require.NoError(t, err)
 
-	delDataEntry := resp.Commands[2]
+	delDataEntry := resp.Commands[1]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
 	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
@@ -6696,15 +6696,14 @@ func TestAlterFakePk(t *testing.T) {
 	}, true)
 
 	defer close()
-	require.Equal(t, 3, len(resp.Commands)) // first blk 4 insert; first blk 2 dels; object info
+	require.Equal(t, 2, len(resp.Commands)) // first blk 4 insert; first blk 2 dels
 	for i, cmd := range resp.Commands {
 		t.Logf("command %d, table name %v, type %d", i, cmd.TableName, cmd.EntryType)
 	}
-	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType) // object info
-	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType) // data insert
-	require.Equal(t, api.Entry_Delete, resp.Commands[2].EntryType) // data delete
+	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType) // data insert
+	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType) // data delete
 
-	insBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
+	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	require.NoError(t, err)
 	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
@@ -6714,7 +6713,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
-	delBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
+	delBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
 	require.NoError(t, err)
 	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
@@ -6856,15 +6855,15 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, true)
 
-	require.Equal(t, 4, len(resp.Commands)) // 1 object info and 3 version insert
-	bat0 := resp.Commands[1].Bat
+	require.Equal(t, 3, len(resp.Commands)) // 3 version insert
+	bat0 := resp.Commands[0].Bat
 	require.Equal(t, 12, len(bat0.Attrs))
 	require.Equal(t, "mock_9", bat0.Attrs[2+schema.GetSeqnum("mock_9")])
-	bat1 := resp.Commands[2].Bat
+	bat1 := resp.Commands[1].Bat
 	require.Equal(t, 13, len(bat1.Attrs))
 	require.Equal(t, "mock_9", bat1.Attrs[2+schema1.GetSeqnum("mock_9")])
 	require.Equal(t, "xyz", bat1.Attrs[2+schema1.GetSeqnum("xyz")])
-	bat2 := resp.Commands[3].Bat
+	bat2 := resp.Commands[2].Bat
 	require.Equal(t, 13, len(bat2.Attrs))
 	require.Equal(t, "mock_9", bat2.Attrs[2+schema1.GetSeqnum("mock_9")])
 	require.Equal(t, "mock_9", bat2.Attrs[2+schema2.GetSeqnum("mock_9")])
