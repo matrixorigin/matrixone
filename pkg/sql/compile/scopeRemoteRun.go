@@ -796,8 +796,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Shuffle.ShuffleColMax = t.ShuffleColMax
 		in.Shuffle.ShuffleColMin = t.ShuffleColMin
 		in.Shuffle.AliveRegCnt = t.AliveRegCnt
-		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
-		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -1215,13 +1213,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Shuffle:
 		t := opr.GetShuffle()
 		v.Arg = &shuffle.Argument{
-			ShuffleColIdx:      t.ShuffleColIdx,
-			ShuffleType:        t.ShuffleType,
-			ShuffleColMin:      t.ShuffleColMin,
-			ShuffleColMax:      t.ShuffleColMax,
-			AliveRegCnt:        t.AliveRegCnt,
-			ShuffleRangeInt64:  t.ShuffleRangesInt64,
-			ShuffleRangeUint64: t.ShuffleRangesUint64,
+			ShuffleColIdx: t.ShuffleColIdx,
+			ShuffleType:   t.ShuffleType,
+			ShuffleColMin: t.ShuffleColMin,
+			ShuffleColMax: t.ShuffleColMax,
+			AliveRegCnt:   t.AliveRegCnt,
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()

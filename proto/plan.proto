@@ -483,8 +483,6 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
-	int64 nullcnt=10;
-	repeated double ranges	= 11;
 }
 
 message Stats {
