@@ -21,13 +21,18 @@ package reuse
 // be created, and if these places are in our hot path, we need to consider using
 // a pool to reduce the number of temporary objects.
 type Pool[T ReusableObject] interface {
-	Alloc() T
-	Free(T)
+	Alloc() *T
+	Free(*T)
 }
 
 // Options options to create object pool
 type Options[T ReusableObject] struct {
-	release func(T)
+	release       func(*T)
+	enableChecker bool
+	memCapacity   int64
+
+	// for testing
+	gcRecover func()
 }
 
 // ReusableObject all reusable objects must implements this interface

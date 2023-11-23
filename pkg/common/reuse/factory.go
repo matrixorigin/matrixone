@@ -16,13 +16,28 @@ package reuse
 
 import (
 	"fmt"
-	"runtime"
-	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 var (
 	pools = map[string]any{}
 )
+
+var (
+	SyncBased  = SPI(0)
+	MpoolBased = SPI(1)
+
+	defaultSPI = SyncBased
+)
+
+// SPI choose pool implementation
+type SPI int
+
+// Use use specified spi
+func Use(spi SPI) {
+	defaultSPI = spi
+}
 
 // DefaultOptions default options
 func DefaultOptions[T ReusableObject]() *Options[T] {
@@ -31,31 +46,51 @@ func DefaultOptions[T ReusableObject]() *Options[T] {
 
 // WithReleaseFunc with specified release function. The release function is used to
 // release resources before gc.
-func (opts *Options[T]) WithReleaseFunc(release func(T)) *Options[T] {
+func (opts *Options[T]) WithReleaseFunc(release func(*T)) *Options[T] {
 	opts.release = release
+	return opts
+}
+
+// WithEnableChecker enable check double free, leak free.
+func (opts *Options[T]) WithEnableChecker() *Options[T] {
+	opts.enableChecker = true
+	return opts
+}
+
+func (opts *Options[T]) withGCRecover(fn func()) *Options[T] {
+	opts.gcRecover = fn
 	return opts
 }
 
 func (opts *Options[T]) adjust() {
 	if opts.release == nil {
-		opts.release = func(T) {}
+		opts.release = func(*T) {}
+	}
+	if opts.memCapacity == 0 {
+		opts.memCapacity = mpool.MB
 	}
 }
 
 // CreatePool create pool instance.
 func CreatePool[T ReusableObject](
-	new func() T,
-	reset func(T),
+	new func() *T,
+	reset func(*T),
 	opts *Options[T]) {
-	v := new()
+	var v T
 	if p := get(v); p != nil {
 		panic(fmt.Sprintf("%T pool already created", v))
 	}
-	pools[v.Name()] = newSyncPoolBased(new, reset, opts)
+
+	switch defaultSPI {
+	case SyncBased:
+		pools[v.Name()] = newSyncPoolBased(new, reset, opts)
+	case MpoolBased:
+		pools[v.Name()] = newMpoolBased(mpool.MB*5, opts)
+	}
 }
 
 // Alloc allocates a pooled object.
-func Alloc[T ReusableObject]() T {
+func Alloc[T ReusableObject]() *T {
 	var v T
 	p := get(v)
 	if p == nil {
@@ -65,8 +100,9 @@ func Alloc[T ReusableObject]() T {
 }
 
 // Free free a pooled object.
-func Free[T ReusableObject](v T) {
-	p := get(v)
+func Free[T ReusableObject](v *T) {
+	var ev T
+	p := get(ev)
 	if p == nil {
 		panic(fmt.Sprintf("%T pool not created", v))
 	}
@@ -78,26 +114,4 @@ func get[T ReusableObject](v T) Pool[T] {
 		return pool.(Pool[T])
 	}
 	return nil
-}
-
-func newSyncPoolBased[T ReusableObject](
-	new func() T,
-	reset func(T),
-	opts *Options[T]) Pool[T] {
-	opts.adjust()
-	return &syncPoolBased[T]{
-		pool: sync.Pool{
-			New: func() any {
-				v := new()
-				runtime.SetFinalizer(
-					v,
-					func(v T) {
-						opts.release(v)
-					})
-				return v
-			},
-		},
-		reset: reset,
-		opts:  opts,
-	}
 }

@@ -13,3 +13,35 @@
 // limitations under the License.
 
 package reuse
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDoubleFree(t *testing.T) {
+	c := newChecker[person](true)
+	p := &person{}
+	c.created(p)
+
+	c.got(p)
+	c.free(p)
+
+	defer func() {
+		assert.NotNil(t, recover())
+	}()
+	c.free(p)
+}
+
+func TestLeakFree(t *testing.T) {
+	c := newChecker[person](true)
+	p := &person{}
+	c.created(p)
+	c.got(p)
+
+	defer func() {
+		assert.NotNil(t, recover())
+	}()
+	c.gc(p)
+}

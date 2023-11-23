@@ -15,54 +15,49 @@
 package reuse
 
 import (
-	"runtime"
-	"sync"
+	"fmt"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-type syncPoolBased[T ReusableObject] struct {
-	pool  sync.Pool
-	reset func(*T)
-	opts  *Options[T]
-	c     *checker[T]
+type mpoolBased[T ReusableObject] struct {
+	pool *mpool.MPool
+	opts *Options[T]
+	c    *checker[T]
 }
 
-func newSyncPoolBased[T ReusableObject](
-	new func() *T,
-	reset func(*T),
+func newMpoolBased[T ReusableObject](
+	capacity int64,
 	opts *Options[T]) Pool[T] {
 	opts.adjust()
+	var v T
 	c := newChecker[T](opts.enableChecker)
-	return &syncPoolBased[T]{
-		pool: sync.Pool{
-			New: func() any {
-				v := new()
-				c.created(v)
-				runtime.SetFinalizer(
-					v,
-					func(v *T) {
-						if opts.gcRecover != nil {
-							defer opts.gcRecover()
-						}
-						c.gc(v)
-						opts.release(v)
-					})
-				return v
-			},
-		},
-		reset: reset,
-		opts:  opts,
-		c:     c,
+	mp, err := mpool.NewMPool(fmt.Sprintf("reuse-%s", v.Name()), opts.memCapacity, 0)
+	if err != nil {
+		panic(err)
+	}
+	return &mpoolBased[T]{
+		pool: mp,
+		opts: opts,
+		c:    c,
 	}
 }
 
-func (p *syncPoolBased[T]) Alloc() *T {
-	v := p.pool.Get().(*T)
+func (p *mpoolBased[T]) Alloc() *T {
+	var t T
+	data, err := p.pool.Alloc(int(unsafe.Sizeof(t)))
+	if err != nil {
+		panic(err)
+	}
+	v := (*T)(unsafe.Pointer(unsafe.SliceData(data)))
+	p.c.created(v)
 	p.c.got(v)
 	return v
 }
 
-func (p *syncPoolBased[T]) Free(v *T) {
+func (p *mpoolBased[T]) Free(v *T) {
 	p.c.free(v)
-	p.reset(v)
-	p.pool.Put(v)
+	p.opts.release(v)
+	p.pool.Free(unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v)))
 }
