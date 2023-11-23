@@ -630,8 +630,7 @@ func (catalog *Catalog) replaySegmentByBlock(
 			seg = NewSegmentEntryOnReplay(
 				tbl,
 				segmentID,
-				start, end, state,
-				dataFactory.MakeSegmentFactory())
+				start, end, state)
 			tbl.AddEntryLocked(seg)
 		}
 	}

@@ -181,7 +181,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTx
 	return e
 }
 
-func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
+func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
