@@ -46,7 +46,7 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	segCmd, err := seg.MakeCommand(1)
 	assert.Nil(t, err)
 	composed.AddCmd(segCmd)
