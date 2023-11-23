@@ -590,8 +590,6 @@ type blockMergeReader struct {
 	*blockReader
 	table *txnTable
 
-	encodedPrimaryKey []byte
-
 	//for perfetch deletes
 	loaded     bool
 	pkidx      int
