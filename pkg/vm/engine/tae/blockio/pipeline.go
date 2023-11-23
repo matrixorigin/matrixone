@@ -153,7 +153,13 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 			func(_ context.Context) (res *tasks.JobResult) {
 				// TODO
 				res = &tasks.JobResult{}
-				err := reader.GetFs().PrefetchFile(ctx, params.key.Name().String())
+				var name string
+				if params.reader == nil {
+					name = params.key.Name().String()
+				} else {
+					name = params.reader.GetName()
+				}
+				err := reader.GetFs().PrefetchFile(ctx, name)
 				if err != nil {
 					res.Err = err
 					return
