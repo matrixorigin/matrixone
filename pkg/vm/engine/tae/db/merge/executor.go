@@ -69,7 +69,7 @@ func (e *MergeExecutor) RefreshMemInfo() {
 
 func (e *MergeExecutor) PrintStats() {
 	cnt := atomic.LoadInt32(&e.activeMergeBlkCount)
-	if cnt == 0 && e.MemAvailBytes() > 512*const1MBytes {
+	if cnt == 0 && e.MemAvailBytes() > 512*common.Const1MBytes {
 		return
 	}
 
