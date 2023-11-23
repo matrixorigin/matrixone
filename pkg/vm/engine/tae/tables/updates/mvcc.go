@@ -91,12 +91,12 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
-func (n *MVCCHandle) EstimateMemSizeLocked() int {
-	size := n.deletes.Load().EstimateMemSizeLocked()
+func (n *MVCCHandle) EstimateMemSizeLocked() (asize int, dsize int) {
+	dsize += n.deletes.Load().EstimateMemSizeLocked()
 	if n.appends != nil {
-		size += len(n.appends.MVCC) * AppendNodeApproxSize
+		asize += len(n.appends.MVCC) * AppendNodeApproxSize
 	}
-	return size + MVCCHandleApproxSize
+	return asize, dsize + MVCCHandleApproxSize
 }
 
 // ==========================================================
