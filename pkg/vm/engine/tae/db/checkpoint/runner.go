@@ -802,8 +802,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	return nil
 }
 
-func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) int {
-	size := 0
+func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, seg := range tree.Segs {
 		segment, err := table.GetSegmentByID(seg.ID)
 		if err != nil {
@@ -815,10 +814,12 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 			if err != nil {
 				panic(err)
 			}
-			size += block.GetBlockData().EstimateMemSize()
+			a, d := block.GetBlockData().EstimateMemSize()
+			asize += a
+			dsize += d
 		}
 	}
-	return size
+	return
 }
 
 func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
@@ -847,17 +848,18 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		dirtyTree := entry.GetTree().GetTable(tableID)
 		_, endTs := entry.GetTimeRange()
 
-		size := r.EstimateTableMemSize(table, dirtyTree)
+		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 
 		stats := &table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 
 		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && size > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %s(%s)  FlushCountDown %v",
+		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v",
 				table.GetLastestSchema().Name,
-				common.HumanReadableBytes(size),
+				common.HumanReadableBytes(asize+dsize),
+				common.HumanReadableBytes(dsize),
 				time.Until(stats.FlushDeadline))
 		}
 
@@ -876,7 +878,20 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			return moerr.GetOkStopCurrRecur()
 		}
 
-		if stats.FlushDeadline.Before(time.Now()) || size > stats.FlushMemCapacity {
+		flushReady := func() bool {
+			if stats.FlushDeadline.Before(time.Now()) {
+				return true
+			}
+			if asize+dsize > stats.FlushMemCapacity {
+				return true
+			}
+			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
+				return true
+			}
+			return false
+		}
+
+		if flushReady() {
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
