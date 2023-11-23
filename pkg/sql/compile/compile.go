@@ -229,7 +229,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 		}
 	}()
 
-	if c.proc.TxnOperator.Txn().IsPessimistic() {
+	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
 		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
 			if qry.Query.StmtType == plan.Query_SELECT {
 				for _, n := range qry.Query.Nodes {
