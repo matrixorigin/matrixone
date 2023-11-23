@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -373,7 +374,12 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
+
+	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
+	stats.ExecutionStart()
+
 	defer func() {
+		stats.ExecutionEnd()
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
