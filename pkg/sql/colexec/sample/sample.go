@@ -89,14 +89,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// duplicate code from other operators.
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
-
 	result, lastErr := arg.children[0].Call(proc)
 	if lastErr != nil {
 		return result, lastErr
 	}
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
