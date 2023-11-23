@@ -18,10 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
-
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
