@@ -64,7 +64,8 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	if node.Stats.Selectivity > SelectivityThreshold {
+	rightChild := builder.qry.Nodes[node.Children[1]]
+	if rightChild.Stats.Selectivity > SelectivityThreshold {
 		return
 	}
 
@@ -154,7 +155,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 				},
 			},
 		})
-
+		recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
 		return
 	}
 
@@ -234,4 +235,5 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		Tag:  rfTag,
 		Expr: buildExpr,
 	})
+	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
 }
