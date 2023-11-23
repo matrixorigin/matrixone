@@ -547,7 +547,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 }
 
-func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
+func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch) {
 	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < dbidVec.Length(); i++ {
 		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -561,7 +561,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataF
 		if !state {
 			entryState = ES_NotAppendable
 		}
-		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
+		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, entryState)
 	}
 }
 
@@ -572,7 +572,6 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
 	state EntryState,
-	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {

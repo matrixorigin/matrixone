@@ -94,9 +94,10 @@ const (
 	SEGStorageUsageIDX
 
 	ObjectInfoIDX
+	TNObjectInfoIDX
 )
 
-const MaxIDX = ObjectInfoIDX + 1
+const MaxIDX = TNObjectInfoIDX + 1
 
 const (
 	Checkpoint_Meta_TID_IDX                 = 2
@@ -164,6 +165,7 @@ func init() {
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -192,6 +194,7 @@ func init() {
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
+		ObjectInfoSchema,
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
@@ -222,6 +225,7 @@ func init() {
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -250,6 +254,7 @@ func init() {
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
+		ObjectInfoSchema,
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
@@ -280,6 +285,7 @@ func init() {
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
+		ObjectInfoSchema,
 	}
 
 	checkpointDataSchemas_V6 = [MaxIDX]*catalog.Schema{
@@ -309,6 +315,7 @@ func init() {
 		BlkMetaSchema, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
+		ObjectInfoSchema,
 		ObjectInfoSchema,
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
@@ -345,6 +352,7 @@ func init() {
 		BlkMetaSchema, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
+		ObjectInfoSchema,
 		ObjectInfoSchema,
 	}
 
@@ -717,8 +725,10 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayDatabaseBatch(data.GetDBBatchs())
 	ins, colins, tnins, del, tndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, tnins, del, tndel, dataFactory)
-	objectInfo := data.GetObjectBatchs()
-	c.OnReplaySegmentBatch(objectInfo, dataFactory)
+	objectInfo := data.GetTNObjectBatchs()
+	c.OnReplaySegmentBatch(objectInfo)
+	objectInfo = data.GetObjectBatchs()
+	c.OnReplaySegmentBatch(objectInfo)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetBlkBatchs()
@@ -2445,6 +2455,9 @@ func (data *CheckpointData) GetSegBatchs() (
 		data.bats[SEGDeleteTxnIDX],
 		data.bats[ObjectInfoIDX]
 }
+func (data *CheckpointData) GetTNObjectBatchs() *containers.Batch {
+	return data.bats[TNObjectInfoIDX]
+}
 func (data *CheckpointData) GetObjectBatchs() *containers.Batch {
 	return data.bats[ObjectInfoIDX]
 }
@@ -2771,7 +2784,11 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.SegmentEntry,
 		if node.IsAborted() {
 			continue
 		}
-		visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
+		if entry.IsAppendable() && node.BaseNode.IsEmpty() {
+			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, false, types.TS{})
+		} else {
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
+		}
 		segNode := node
 		if segNode.HasDropCommitted() {
 			vector.AppendFixed(

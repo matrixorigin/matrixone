@@ -507,6 +507,9 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
+		if e.IsAppendable() && node.BaseNode.IsEmpty() {
+			continue
+		}
 		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
 	}
 	return nil
