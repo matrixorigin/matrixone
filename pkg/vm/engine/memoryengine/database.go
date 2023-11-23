@@ -126,7 +126,6 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 }
 
 func (d *Database) Relation(ctx context.Context, relName string, _ any) (engine.Relation, error) {
-
 	if relName == "" {
 		return nil, moerr.NewInvalidInput(ctx, "no table name")
 	}

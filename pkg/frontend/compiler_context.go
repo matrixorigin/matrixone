@@ -286,11 +286,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
+
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return nil, nil
 	}
 	tableDef := table.GetTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tableName
+	}
 
 	// convert
 	var subscriptionName string
