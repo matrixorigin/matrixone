@@ -15,8 +15,6 @@
 package gc2
 
 import (
-	"bytes"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sync"
 
@@ -123,37 +121,4 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			t.addObject(deltaLoc.Name().String(), commitTS)
 		}
 	}
-}
-
-// For test
-func (t *GCTable) Compare(table *GCTable) bool {
-	if len(t.dbs) != len(table.dbs) {
-		return false
-	}
-	for id, entry := range t.dbs {
-		db := table.dbs[id]
-		if db == nil {
-			return false
-		}
-		ok := entry.Compare(db)
-		if !ok {
-			return ok
-		}
-
-	}
-	return true
-}
-
-func (t *GCTable) String() string {
-	if len(t.dbs) == 0 {
-		return ""
-	}
-	var w bytes.Buffer
-	_, _ = w.WriteString("dbs:[\n")
-	for id, entry := range t.dbs {
-		_, _ = w.WriteString(fmt.Sprintf("db: %d, isdrop: %t ", id, entry.drop))
-		_, _ = w.WriteString(entry.String())
-	}
-	_, _ = w.WriteString("]\n")
-	return w.String()
 }

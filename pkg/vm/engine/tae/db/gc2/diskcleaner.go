@@ -61,6 +61,8 @@ type DiskCleaner struct {
 	// UT case needs to use
 	minMerged atomic.Pointer[checkpoint.CheckpointEntry]
 
+	maxCompared atomic.Pointer[checkpoint.CheckpointEntry]
+
 	// minMergeCount is the configuration of the merge GC metadata file.
 	// When the GC file is greater than or equal to minMergeCount,
 	// the merge GC metadata file will be triggered and the expired file will be deleted.
@@ -206,7 +208,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			panic(err)
 		}
 		// TODO:
-		cleaner.tryGC()
+		//cleaner.tryGC()
 		if len(items) == 1 {
 			return
 		}
@@ -243,9 +245,18 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	}
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
-	err = cleaner.tryGC()
-	if err != nil {
-		return
+
+	compareTS := cleaner.minMerged.Load().GetEnd()
+	maxGlobalCKP := cleaner.ckpClient.MaxCheckpoint()
+	if compareTS.Less(maxGlobalCKP.GetEnd()) {
+		data, err := cleaner.collectGlobalCkpData(maxGlobalCKP)
+		if err != nil {
+			return
+		}
+		err = cleaner.tryGC(data, maxGlobalCKP.GetEnd())
+		if err != nil {
+			return
+		}
 	}
 	err = cleaner.mergeGCFile()
 	if err != nil {
@@ -286,13 +297,16 @@ func (cleaner *DiskCleaner) getMinMergeCount() int {
 func (cleaner *DiskCleaner) collectCkpData(
 	ckp *checkpoint.CheckpointEntry,
 ) (data *logtail.CheckpointData, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(
-		ckp.GetStart(),
-		ckp.GetEnd(),
-		cleaner.fs.Service,
-		false,
-	)
-	data, err = factory(cleaner.catalog)
+	_, data, err = logtail.LoadCheckpointEntriesFromKey(cleaner.ctx, cleaner.fs.Service,
+		ckp.GetLocation(), ckp.GetVersion(), nil)
+	return
+}
+
+func (cleaner *DiskCleaner) collectGlobalCkpData(
+	ckp *checkpoint.CheckpointEntry,
+) (data *logtail.CheckpointData, err error) {
+	_, data, err = logtail.LoadCheckpointEntriesFromKey(cleaner.ctx, cleaner.fs.Service,
+		ckp.GetLocation(), ckp.GetVersion(), nil)
 	return
 }
 
@@ -310,17 +324,6 @@ func (cleaner *DiskCleaner) createNewInput(
 		defer data.Close()
 		input.UpdateTable(data)
 	}
-	files := cleaner.GetAndClearOutputs()
-	_, err = input.SaveTable(
-		ckps[0].GetStart(),
-		ckps[len(ckps)-1].GetEnd(),
-		cleaner.fs,
-		files,
-	)
-	if err != nil {
-		return
-	}
-
 	return
 }
 
@@ -342,11 +345,13 @@ func (cleaner *DiskCleaner) createDebugInput(
 	return
 }
 
-func (cleaner *DiskCleaner) tryGC() error {
+func (cleaner *DiskCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) error {
 	if !cleaner.delWorker.Start() {
 		return nil
 	}
-	gc := cleaner.softGC()
+	gcTable := NewGCTable()
+	gcTable.UpdateTable(data)
+	gc := cleaner.softGC(gcTable, ts)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err := cleaner.delWorker.ExecDelete(cleaner.ctx, gc)
@@ -356,7 +361,7 @@ func (cleaner *DiskCleaner) tryGC() error {
 	return nil
 }
 
-func (cleaner *DiskCleaner) softGC() []string {
+func (cleaner *DiskCleaner) softGC(t *GCTable, ts types.TS) []string {
 	cleaner.inputs.Lock()
 	defer cleaner.inputs.Unlock()
 	if len(cleaner.inputs.tables) == 0 {
@@ -366,7 +371,7 @@ func (cleaner *DiskCleaner) softGC() []string {
 	for _, table := range cleaner.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC()
+	gc := mergeTable.SoftGC(t)
 	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
