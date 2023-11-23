@@ -422,8 +422,8 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 		b.batches[segMetaDelBatch] = nil
 	}
 
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, segMetaDelBatch, true)
-	if b.batches[segMetaDelBatch] != nil {
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
+	if b.batches[objectInfoBatch] != nil {
 		b.batchToClose = append(b.batchToClose, b.batches[objectInfoBatch])
 		b.batches[objectInfoBatch] = nil
 	}
