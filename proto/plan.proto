@@ -684,6 +684,7 @@ message Node {
 		//
 		TIME_WINDOW = 64;
 		Fill = 65;
+		PARTITION = 66;
 	}
 
 	enum JoinType {
@@ -794,6 +795,8 @@ message Node {
 
 	// sample function related.
 	SampleFuncSpec sample_func = 51;
+
+	int32 window_idx = 52;
 }
 
 message ExternScan {
