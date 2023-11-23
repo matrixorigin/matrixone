@@ -47,7 +47,7 @@ func init() {
 
 type PartitionState struct {
 	// also modify the Copy method if adding fields
-
+	objLock sync.Mutex
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
@@ -82,8 +82,13 @@ type PartitionState struct {
 }
 
 func (p *PartitionState) CheckObjectStats() {
+	p.objLock.Lock()
+
 	statsIter := p.dataObjects.Copy().Iter()
 	shadowCopy := p.dataObjectsShadow.Copy()
+
+	p.objLock.Unlock()
+
 	shadowIter := shadowCopy.Iter()
 
 	statsUnique := ""
@@ -140,7 +145,6 @@ func (p *PartitionState) CheckObjectStats() {
 
 	shadowIter.Release()
 	statsIter.Release()
-
 }
 
 // sharedStates is shared among all PartitionStates
@@ -417,21 +421,29 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
+			p.objLock.Lock()
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
+			p.objLock.Unlock()
 		} else if IsSegTable(entry.TableName) {
 			// TODO
 		} else if IsObjTable(entry.TableName) {
+			p.objLock.Lock()
 			p.HandleObjectInsertShadow(entry.Bat)
+			p.objLock.Unlock()
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
 	case api.Entry_Delete:
 		if IsBlkTable(entry.TableName) {
+			p.objLock.Lock()
 			p.HandleMetadataDelete(ctx, entry.Bat)
+			p.objLock.Unlock()
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
+			p.objLock.Lock()
 			p.HandleObjectDeleteShadow(entry.Bat)
+			p.objLock.Unlock()
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
