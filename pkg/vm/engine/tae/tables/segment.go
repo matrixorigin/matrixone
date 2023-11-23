@@ -82,3 +82,31 @@ func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskF
 	}
 	return
 }
+
+func BuildSegmentCompactionTaskFactory(meta *catalog.SegmentEntry, rt *dbutils.Runtime) (
+	factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error,
+) {
+	if !meta.IsAppendable() {
+		return
+	}
+	meta.RLock()
+	dropped := meta.HasDropCommittedLocked()
+	inTxn := meta.IsCreatingOrAborted()
+	meta.RUnlock()
+	if dropped || inTxn {
+		return
+	}
+	filter := catalog.NewComposedFilter()
+	filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
+	filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
+	blks := meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
+	if len(blks) < int(meta.GetTable().GetLastestSchema().SegmentMaxBlocks) {
+		return
+	}
+	for _, blk := range blks {
+		scopes = append(scopes, *blk.AsCommonID())
+	}
+	factory = jobs.CompactSegmentTaskFactory(blks, rt)
+	taskType = tasks.DataCompactionTask
+	return
+}
