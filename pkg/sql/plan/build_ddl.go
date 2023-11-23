@@ -667,11 +667,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.TableDef.Cols = tableDef.Cols
 		//createTable.TableDef.ViewSql = tableDef.ViewSql
 		//createTable.TableDef.Defs = tableDef.Defs
-	} else {
-		err := buildTableDefs(stmt, ctx, createTable)
-		if err != nil {
-			return nil, err
-		}
+	}
+	err = buildTableDefs(stmt, ctx, createTable)
+	if err != nil {
+		return nil, err
 	}
 
 	v, ok := getAutoIncrementOffsetFromVariables(ctx)

@@ -151,15 +151,15 @@ func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
-	if sql == "" {
-		return
-	}
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
+	if sql == "" {
+		return
+	}
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 

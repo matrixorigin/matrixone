@@ -275,7 +275,7 @@ func (k *KafkaMoConnector) Close() error {
 
 func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
 	res := k.queryResult(k.options["sql"], msgs)
 	if res.RowCount() == 0 || res.ColumnCount() == 0 {

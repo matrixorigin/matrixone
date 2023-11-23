@@ -45,10 +45,6 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	columnCount := int(obj.ColumnCount())
 	rowCount := int(obj.RowCount())
 
-	if columnCount == 0 || rowCount == 0 {
-		return "", nil
-	}
-
 	var fields, values string
 	var colNames []string
 
@@ -70,17 +66,18 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 			if err != nil {
 				return "", err // Handle the error appropriately
 			}
-			rowValues += val
+			// Enclose the value in single quotes if it is a string
+			rowValues += "'" + val + "'"
 			if j < columnCount-1 {
 				rowValues += ", "
 			}
 		}
-		if values != "" {
+		if i > 0 {
 			values += ", "
 		}
 		values += fmt.Sprintf("(%s)", rowValues)
 	}
-	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES(%s)",
+	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES %s ",
 		c.dbName, c.tableName, fields, values)
 	return s, nil
 }
