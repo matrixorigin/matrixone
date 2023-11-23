@@ -56,9 +56,6 @@ func Test_ObjectStats(t *testing.T) {
 	require.Nil(t, SetObjectStatsSortKeyZoneMap(stats, sortKeyZoneMap))
 	require.True(t, bytes.Equal(stats.SortKeyZoneMap(), sortKeyZoneMap))
 
-	// test other methods
-	require.Equal(t, stats.OriginSize(), extent.OriginSize())
-	require.Equal(t, stats.CompSize(), extent.Length())
 	require.True(t, bytes.Equal(stats.ObjectLocation(), BuildLocation(objName, extent, 0, 0)))
 
 	// test set location

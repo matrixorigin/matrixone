@@ -26,25 +26,28 @@ type ObjectDescriber interface {
 	DescribeObject() ([]ObjectStats, error)
 }
 
-const ObjectStatsLen = ObjectNameLen + ExtentLen + rowCntLen + blkCntLen + ZoneMapSize
-
 const (
 	rowCntLen = 4
 	blkCntLen = 4
 
-	objectNameOffset = 0
-	extentOffset     = objectNameOffset + ObjectNameLen
-	rowCntOffset     = extentOffset + ExtentLen
-	blkCntOffset     = rowCntOffset + rowCntLen
-	zoneMapOffset    = blkCntOffset + blkCntLen
+	objectNameOffset       = 0
+	extentOffset           = objectNameOffset + ObjectNameLen
+	rowCntOffset           = extentOffset + ExtentLen
+	blkCntOffset           = rowCntOffset + rowCntLen
+	zoneMapOffset          = blkCntOffset + blkCntLen
+	objectSizeOffset       = zoneMapOffset + ZoneMapSize
+	objectSizeLen          = 4
+	objectOriginSizeOffset = objectSizeOffset + objectSizeLen
+	objectOriginSizeLen    = 4
+	ObjectStatsLen         = objectOriginSizeOffset + objectOriginSizeLen
 )
 
 var ZeroObjectStats ObjectStats
 
 // ObjectStats has format:
-// +--------------------------------------------------------------------+
-// |object_name(60B)|extent(13B)|row_cnt(4B)|block_cnt(4B)|zone_map(64B)|
-// +--------------------------------------------------------------------+
+// +------------------------------------------------------------------------------------------------+
+// |object_name(60B)|extent(13B)|row_cnt(4B)|block_cnt(4B)|zone_map(64B)|objectSize|objectOriginSize|
+// +------------------------------------------------------------------------------------------------+
 type ObjectStats [ObjectStatsLen]byte
 
 func NewObjectStats() *ObjectStats {
@@ -82,12 +85,12 @@ func (des *ObjectStats) ObjectName() ObjectName {
 	return ObjectName(des[objectNameOffset : objectNameOffset+ObjectNameLen])
 }
 
-func (des *ObjectStats) OriginSize() uint32 {
-	return Extent(des[ExtentOff : ExtentOff+ExtentLen]).OriginSize()
+func (des *ObjectStats) Size() uint32 {
+	return types.DecodeUint32(des[objectSizeOffset : objectSizeOffset+objectSizeLen])
 }
 
-func (des *ObjectStats) CompSize() uint32 {
-	return Extent(des[ExtentOff : ExtentOff+ExtentLen]).Length()
+func (des *ObjectStats) OriginSize() uint32 {
+	return types.DecodeUint32(des[objectOriginSizeOffset : objectOriginSizeOffset+objectOriginSizeLen])
 }
 
 func (des *ObjectStats) BlkCnt() uint32 {
@@ -99,7 +102,7 @@ func (des *ObjectStats) SortKeyZoneMap() ZoneMap {
 }
 
 func (des *ObjectStats) Extent() Extent {
-	return Extent(des[extentOffset : extentOffset+ExtentLen])
+	return des[extentOffset : extentOffset+ExtentLen]
 }
 
 func (des *ObjectStats) Rows() uint32 {
@@ -108,9 +111,10 @@ func (des *ObjectStats) Rows() uint32 {
 
 func (des *ObjectStats) String() string {
 	return fmt.Sprintf("[object stats]: objName: %s; extent: %v; "+
-		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v",
+		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v; size: %d; originSize: %d",
 		des.ObjectName().String(), des.Extent().String(),
-		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap())
+		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap(),
+		des.Size(), des.OriginSize())
 }
 
 func setHelper(stats *ObjectStats, offset int, data []byte) error {
@@ -151,6 +155,14 @@ func SetObjectStatsSortKeyZoneMap(stats *ObjectStats, zoneMap ZoneMap) error {
 
 func SetObjectStatsLocation(stats *ObjectStats, location Location) error {
 	return setHelper(stats, objectNameOffset, location[:ObjectNameLen+ExtentLen])
+}
+
+func SetObjectStatsSize(stats *ObjectStats, size uint32) error {
+	return setHelper(stats, objectSizeOffset, types.EncodeUint32(&size))
+}
+
+func SetObjectStatsOriginSize(stats *ObjectStats, size uint32) error {
+	return setHelper(stats, objectOriginSizeOffset, types.EncodeUint32(&size))
 }
 
 // ForeachObjectStats executes onStats on each object stats until onStats returns false
