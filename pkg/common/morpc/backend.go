@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
 )
 
@@ -591,24 +593,28 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		messages[i] = nil
 	}
 	messages = messages[:0]
-	heartbeatFunc := func() {
+
+	doHeartbeat := func() {
+		rb.lastPingTime = time.Now()
+		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
+		// no need wait response, close immediately
+		f.Close()
+		messages = append(messages, f)
+		rb.pingTimer.Reset(rb.getPingTimeout())
+	}
+	handleHeartbeat := func() {
 		select {
 		case <-rb.pingTimer.C:
-			rb.lastPingTime = time.Now()
-			f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
-			// no need wait response, close immediately
-			f.Close()
-			messages = append(messages, f)
-			rb.pingTimer.Reset(rb.getPingTimeout())
+			doHeartbeat()
 		default:
 		}
 	}
 
 	select {
 	case <-rb.pingTimer.C:
-		heartbeatFunc()
+		doHeartbeat()
 	case f := <-rb.writeC:
-		heartbeatFunc()
+		handleHeartbeat()
 		messages = append(messages, f)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
@@ -909,6 +915,8 @@ func (rb *remoteBackend) scheduleResetConn() {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
 	case <-time.After(time.Second * 10):
+		// dump all goroutines to stderr
+		profile.ProfileGoroutine(os.Stderr, 2)
 		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
 	}
 }

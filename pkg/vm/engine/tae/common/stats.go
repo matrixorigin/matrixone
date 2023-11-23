@@ -29,6 +29,9 @@ const (
 	DefaultNotLoadMoreThan  = 4096
 	DefaultMinRowsQualified = 40960
 	DefaultMaxMergeObjN     = 2
+
+	Const1GBytes = 1 << 30
+	Const1MBytes = 1 << 20
 )
 
 var (
@@ -128,10 +131,10 @@ func HumanReadableBytes(bytes int) string {
 	if bytes < 1024 {
 		return fmt.Sprintf("%dB", bytes)
 	}
-	if bytes < 1024*1024 {
+	if bytes < Const1MBytes {
 		return fmt.Sprintf("%.2fKB", float64(bytes)/1024)
 	}
-	if bytes < 1024*1024*1024 {
+	if bytes < Const1GBytes {
 		return fmt.Sprintf("%.2fMB", float64(bytes)/1024/1024)
 	}
 	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
