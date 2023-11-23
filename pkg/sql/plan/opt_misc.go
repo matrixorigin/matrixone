@@ -943,6 +943,10 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		return nodeID
 	}
 
+	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > InFilterCardLimit {
+		return nodeID
+	}
+
 	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
 		fn, ok := expr.Expr.(*plan.Expr_F)
@@ -972,6 +976,22 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		col2filter[col.Col.ColPos] = i
 	}
 
+	if node.TableDef.Pkey != nil {
+		filterOnPK := true
+		for _, part := range node.TableDef.Pkey.Names {
+			colIdx := node.TableDef.Name2ColIndex[part]
+			_, ok := col2filter[colIdx]
+			if !ok {
+				filterOnPK = false
+				break
+			}
+		}
+
+		if filterOnPK {
+			return nodeID
+		}
+	}
+
 	indexes := node.TableDef.Indexes
 	sort.Slice(indexes, func(i, j int) bool {
 		return indexes[i].Unique && !indexes[j].Unique
@@ -979,6 +999,10 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 
 	filterIdx := make([]int, 0, len(col2filter))
 	for _, idxDef := range node.TableDef.Indexes {
+		if !idxDef.TableExist {
+			continue
+		}
+
 		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
 			numParts--
@@ -1101,7 +1125,7 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(nodeID, builder, false, true)
+		ReCalcNodeStats(nodeID, builder, false, true, true)
 		nodeID = joinNodeID
 
 		break

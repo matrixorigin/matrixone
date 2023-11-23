@@ -60,6 +60,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.MergeOffset:    "merge offset",
 	vm.MergeRecursive: "merge recursive",
 	vm.MergeCTE:       "merge cte",
+	vm.Partition:      "partition",
 	vm.Deletion:       "delete",
 	vm.Insert:         "insert",
 	vm.PreInsert:      "pre insert",
