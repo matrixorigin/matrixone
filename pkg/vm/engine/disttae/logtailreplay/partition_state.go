@@ -445,9 +445,9 @@ func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 
-		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-			continue
-		}
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
@@ -472,10 +472,10 @@ func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
 			stateCol[idx], createTSCol[idx].ToString(), deleteTSCol[idx].ToString(), commitTSCol[idx].ToString()))
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
-
-		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-			continue
-		}
+		//
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
