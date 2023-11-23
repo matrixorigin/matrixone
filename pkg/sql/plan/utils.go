@@ -1090,7 +1090,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
-				return e, nil
+				return nil, err
 			}
 			exprList[i] = foldExpr
 		}
@@ -1131,9 +1131,11 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
-			return nil, err
+		foldExpr, errFold := ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst)
+		if errFold != nil {
+			return nil, errFold
 		}
+		ef.F.Args[i] = foldExpr
 	}
 	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil
