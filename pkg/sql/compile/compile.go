@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -124,6 +125,7 @@ func New(
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
+	c.metaTables = make(map[string]struct{})
 	return c
 }
 
@@ -164,6 +166,8 @@ func (c *Compile) clear() {
 	c.cnList = nil
 	c.stmt = nil
 	c.startAt = time.Time{}
+	c.metaTables = nil
+	c.needLockMeta = false
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -224,6 +228,12 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 				zap.String("error", err.Error()))
 		}
 	}()
+
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
+			c.needLockMeta = qry.Query.StmtType != plan.Query_SELECT
+		}
+	}
 
 	// with values
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
@@ -481,6 +491,10 @@ func (c *Compile) ifNeedRerun(err error) bool {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
+	err := c.lockMetaTables()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -622,6 +636,42 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		}
 	}
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
+}
+
+func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if !c.needLockMeta {
+		return
+	}
+
+	if objRes.SchemaName == catalog.MO_CATALOG && (objRes.ObjName == catalog.MO_DATABASE || objRes.ObjName == catalog.MO_TABLES || objRes.ObjName == catalog.MO_COLUMNS) {
+		// do not lock meta table for meta table
+	} else {
+		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
+		c.metaTables[key] = struct{}{}
+	}
+}
+
+func (c *Compile) lockMetaTables() error {
+	lockLen := len(c.metaTables)
+	if lockLen == 0 {
+		return nil
+	}
+
+	tables := make([]string, 0, lockLen)
+	for table := range c.metaTables {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+
+	for _, table := range tables {
+		names := strings.SplitN(table, " ", 2)
+
+		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
+		if err != nil {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
+	return nil
 }
 
 func (c *Compile) cnListStrategy() {
@@ -916,6 +966,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		c.appendMetaTables(n.ObjRef)
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -1062,6 +1113,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
@@ -1179,6 +1231,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
+		c.appendMetaTables(n.ObjRef)
 		curr := c.anal.curr
 		n.NotCacheable = true
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)

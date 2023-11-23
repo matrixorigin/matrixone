@@ -89,11 +89,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	return callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
-	// if ok {
-	// 	result.Status = vm.ExecStop
-	// 	return result, err
-	// }
-	// return result, err
 }
 
 func callNonBlocking(
