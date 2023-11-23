@@ -1019,6 +1019,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
+	case plan.Node_PARTITION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss))), nil
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -2300,6 +2309,31 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", node.JoinType)))
 	}
 	return rs
+}
+
+func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		c.anal.isFirst = currentFirstFlag
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Partition,
+		Idx: c.anal.curr,
+		Arg: constructPartition(n),
+	}
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
@@ -3796,10 +3830,6 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
-	var shuffleRangeUint64 []uint64
-	var shuffleRangeInt64 []int64
-	var init bool
-	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3815,27 +3845,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		if !zm.IsInited() {
-			// a block with all null will send to first CN
-			nodes[0].Data = append(nodes[0].Data, blk)
-			continue
-		}
-		if !init {
-			init = true
-			switch zm.GetType() {
-			case types.T_int64, types.T_int32, types.T_int16:
-				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			}
-		}
-		if shuffleRangeUint64 != nil {
-			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
-		} else if shuffleRangeInt64 != nil {
-			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
-		} else {
-			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
-		}
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil
