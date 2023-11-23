@@ -81,6 +81,61 @@ type PartitionState struct {
 	minTS types.TS
 }
 
+func (p *PartitionState) CheckObjectStats() {
+	statsIter := p.dataObjects.Copy().Iter()
+	shadowIter := p.dataObjectsShadow.Copy().Iter()
+
+	statsUnique := ""
+	shadowUnique := ""
+	notEqual := ""
+
+	var stats, shadow ObjectEntry
+
+	toString := func(entry ObjectEntry) string {
+		return fmt.Sprintf("entryState: %v; createTime: %s; deleteTime: %s",
+			entry.EntryState, entry.CreateTime.ToString(), entry.DeleteTime.ToString())
+	}
+
+	checkEqual := func() {
+		if shadow.EntryState != stats.EntryState ||
+			!shadow.CreateTime.Equal(stats.CreateTime) ||
+			!shadow.DeleteTime.Equal(stats.DeleteTime) {
+			notEqual += fmt.Sprintf("\nstats:  %s\nshadow: %s\n",
+				toString(stats), toString(shadow),
+			)
+		}
+	}
+
+	for statsIter.Next() {
+		stats = statsIter.Item()
+		if !shadowIter.Seek(stats) {
+			statsUnique += fmt.Sprintf("\n %s", stats.String())
+		} else {
+			// both have
+			shadow = shadowIter.Item()
+			checkEqual()
+		}
+	}
+
+	for shadowIter.Next() {
+		shadow = shadowIter.Item()
+		if !statsIter.Seek(shadow) {
+			shadowUnique += fmt.Sprintf("\n %s", shadow.String())
+		} else {
+			// both have
+			stats = statsIter.Item()
+			checkEqual()
+		}
+	}
+
+	if statsUnique != "" || shadowUnique != "" || notEqual != "" {
+		fmt.Println(fmt.Sprintf(
+			"stats unique:  %s \n\nshadow unique: %s \n\nnot equal: %s \n\n",
+			statsUnique, shadowUnique, notEqual,
+		))
+	}
+}
+
 // sharedStates is shared among all PartitionStates
 type sharedStates struct {
 	sync.Mutex
@@ -162,6 +217,14 @@ type ObjectInfo struct {
 	CommitTS    types.TS
 	CreateTime  types.TS
 	DeleteTime  types.TS
+}
+
+func (o ObjectInfo) String() string {
+	return fmt.Sprintf(
+		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %v; createTS: %v; deleteTS: %v",
+		o.ObjectStats.String(), o.EntryState,
+		o.Sorted, o.HasDeltaLoc, o.CommitTS,
+		o.CreateTime, o.DeleteTime)
 }
 
 func (o ObjectInfo) Location() objectio.Location {
@@ -351,9 +414,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsSegTable(entry.TableName) {
 			// TODO
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObject(entry.Bat)
-		} else if IsObjShadowTable(entry.TableName) {
-			p.HandleObjectShadow(entry.Bat)
+			p.HandleObjectInsertShadow(entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -362,6 +423,8 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectDeleteShadow(entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
@@ -370,31 +433,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	}
 }
 
-func (p *PartitionState) HandleObjectShadow(bat *api.Batch) {
-	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
-	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
-	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
-	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
-
-	for idx := 0; idx < len(stateCol); idx++ {
-		var objEntry ObjectEntry
-
-		if stateCol[idx] {
-			continue
-		}
-
-		objEntry.EntryState = stateCol[idx]
-		objEntry.CreateTime = createTSCol[idx]
-		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.CommitTS = commitTSCol[idx]
-
-		p.dataObjects.Set(objEntry)
-		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-
-	}
-}
-
-func (p *PartitionState) HandleObject(bat *api.Batch) {
+func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
@@ -404,31 +443,46 @@ func (p *PartitionState) HandleObject(bat *api.Batch) {
 	for idx := 0; idx < len(statsCol); idx++ {
 		var objEntry ObjectEntry
 
-		if stateCol[idx] {
-			continue
-		}
-
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 
-		if objEntry.ObjectStats.OriginSize() == 0 {
+		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
 			continue
 		}
+
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
 
-		p.dataObjects.Set(objEntry)
-		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+		p.dataObjectsShadow.Set(objEntry)
+	}
+}
 
-		e := ObjectIndexByTSEntry{
-			Time:         createTSCol[idx],
-			ShortObjName: *objEntry.ObjectShortName(),
-			IsDelete:     false,
+func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
 
-			IsAppendable: objEntry.EntryState,
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		fmt.Println(fmt.Sprintf("received shadow: entryState: %v; createTime: %s; deleteTime: %s; commitTS: %s\n",
+			stateCol[idx], createTSCol[idx].ToString(), deleteTSCol[idx].ToString(), commitTSCol[idx].ToString()))
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+			continue
 		}
-		p.objectIndexByTS.Set(e)
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjectsShadow.Set(objEntry)
 	}
 }
 

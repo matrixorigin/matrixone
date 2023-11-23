@@ -309,8 +309,7 @@ type TxnStore interface {
 		visitMetadata func(block any),
 		visitSegment func(seg any),
 		visitAppend func(bat any),
-		visitDelete func(ctx context.Context, deletes DeleteNode),
-		shadowBat *containers.Batch)
+		visitDelete func(ctx context.Context, deletes DeleteNode))
 	GetTransactionType() TxnType
 	UpdateSegmentStats(*common.ID, *objectio.ObjectStats) error
 }

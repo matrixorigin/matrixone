@@ -53,7 +53,6 @@ const (
 	columnInsBatch
 	columnDelBatch
 	objectInfoBatch
-	objectInfoShadowBatch
 	batchTotalNum
 )
 
@@ -94,9 +93,6 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 		v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 
-	if b.batches[objectInfoShadowBatch] == nil {
-		b.batches[objectInfoShadowBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.DefaultAllocator)
-	}
 	b.txn = txn
 	txn.GetStore().ObserveTxn(
 		b.visitDatabase,
@@ -105,8 +101,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 		b.visitMetadata,
 		b.visitSegment,
 		b.visitAppend,
-		b.visitDelete,
-		b.batches[objectInfoShadowBatch])
+		b.visitDelete)
 	b.BuildResp()
 	logtails := b.logtails
 	newlogtails := make([]logtail.TableLogtail, 0)
@@ -457,7 +452,6 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj_shadow", b.currTableID), b.currDBName, objectInfoShadowBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 

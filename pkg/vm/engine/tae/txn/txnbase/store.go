@@ -170,8 +170,7 @@ func (store *NoopTxnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(any),
 	visitAppend func(bat any),
-	visitDelete func(ctx context.Context, deletes txnif.DeleteNode),
-	shadowBat *containers.Batch) {
+	visitDelete func(ctx context.Context, deletes txnif.DeleteNode)) {
 }
 
 func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
