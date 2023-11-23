@@ -101,7 +101,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
-	arg.buf = result.Batch
 
 	// real work starts here.
 	bat := result.Batch
@@ -116,6 +115,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	if !bat.IsEmpty() {
+		// I just do the work like other operators that never keep empty batch in arg.buf.
+		// But this is maybe a bug, and the culprit is the filter operator.
+		// Once I keep empty batch in arg.buf, there will be a bug that:
+		// the empty batch was produced by the filter operator (it was not empty before filter),
+		// and the projection operator just let it pass.
+		// So the memory was kept in filter operator's buf, and also in this operator's buf.
+		// But the reference count of the memory was 1, so it will be freed twice.
+		arg.buf = result.Batch
 		anal.Input(bat, arg.info.IsFirst)
 
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
