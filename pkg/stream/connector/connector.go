@@ -278,12 +278,12 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	res := k.queryResult(k.options["sql"], msgs)
+	if res.RowCount() == 0 || res.ColumnCount() == 0 {
+		return
+	}
 	sql, err := k.converter.Convert(ctx, res)
 	if err != nil {
 		k.logger.Error("failed to get sql", zap.String("SQL", sql), zap.Error(err))
-	}
-	if sql == "" {
-		return
 	}
 	err = k.ie.Exec(ctx, sql, opts)
 	if err != nil {

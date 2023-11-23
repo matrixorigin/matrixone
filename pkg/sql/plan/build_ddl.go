@@ -32,10 +32,9 @@ import (
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 )
 
-func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, []*plan.TableDef, error) {
+func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
-	var streamDefs []*plan.TableDef
 	// check view statement
 	var stmtPlan *Plan
 	var err error
@@ -43,12 +42,12 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	case *tree.ParenSelect:
 		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	default:
 		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 
@@ -68,30 +67,17 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	}
 	tableDef.Cols = cols
 
-	for _, node := range query.Nodes {
-		switch node.NodeType {
-		case plan.Node_STREAM_SCAN:
-			if node != nil {
-				streamDefs = append(streamDefs, node.TableDef)
-			}
-		}
-	}
-
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	tableDef.ViewSql = &plan.ViewDef{
 		View: string(viewData),
 	}
 	properties := []*plan.Property{
-		{
-			Key:   catalog.SystemRelAttr_Kind,
-			Value: catalog.SystemViewRel,
-		},
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
 			Value: ctx.GetRootSql(),
@@ -105,7 +91,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 		},
 	})
 
-	return &tableDef, streamDefs, nil
+	return &tableDef, nil
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -673,14 +659,14 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	// set tableDef
 	var err error
 	if stmt.IsDynamicTable {
-		tableDef, _, err := genDynamicTableDef(ctx, stmt.AsSource)
+		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
 		if err != nil {
 			return nil, err
 		}
 
 		createTable.TableDef.Cols = tableDef.Cols
-		createTable.TableDef.ViewSql = tableDef.ViewSql
-		createTable.TableDef.Defs = tableDef.Defs
+		//createTable.TableDef.ViewSql = tableDef.ViewSql
+		//createTable.TableDef.Defs = tableDef.Defs
 	} else {
 		err := buildTableDefs(stmt, ctx, createTable)
 		if err != nil {
