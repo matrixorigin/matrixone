@@ -102,7 +102,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
-	require.Equal(t, objectWriter.objStats[0].CompSize(), blocks[0].GetExtent().End()+FooterSize)
+	require.Equal(t, objectWriter.objStats[0].Size(), blocks[0].GetExtent().End()+FooterSize)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 3)

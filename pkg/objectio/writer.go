@@ -134,7 +134,7 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
 	}
 	SetObjectStatsSize(ss, w.size)
-	SetObjectOriginSize(ss, w.originSize)
+	SetObjectStatsOriginSize(ss, w.originSize)
 
 	return *ss
 }

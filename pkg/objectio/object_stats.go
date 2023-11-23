@@ -85,7 +85,7 @@ func (des *ObjectStats) ObjectName() ObjectName {
 	return ObjectName(des[objectNameOffset : objectNameOffset+ObjectNameLen])
 }
 
-func (des *ObjectStats) CompSize() uint32 {
+func (des *ObjectStats) Size() uint32 {
 	return types.DecodeUint32(des[objectSizeOffset : objectSizeOffset+objectSizeLen])
 }
 
@@ -102,7 +102,7 @@ func (des *ObjectStats) SortKeyZoneMap() ZoneMap {
 }
 
 func (des *ObjectStats) Extent() Extent {
-	return Extent(des[extentOffset : extentOffset+ExtentLen])
+	return des[extentOffset : extentOffset+ExtentLen]
 }
 
 func (des *ObjectStats) Rows() uint32 {
@@ -114,7 +114,7 @@ func (des *ObjectStats) String() string {
 		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v; size: %d; originSize: %d",
 		des.ObjectName().String(), des.Extent().String(),
 		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap(),
-		des.CompSize(), des.OriginSize())
+		des.Size(), des.OriginSize())
 }
 
 func setHelper(stats *ObjectStats, offset int, data []byte) error {
@@ -161,7 +161,7 @@ func SetObjectStatsSize(stats *ObjectStats, size uint32) error {
 	return setHelper(stats, objectSizeOffset, types.EncodeUint32(&size))
 }
 
-func SetObjectOriginSize(stats *ObjectStats, size uint32) error {
+func SetObjectStatsOriginSize(stats *ObjectStats, size uint32) error {
 	return setHelper(stats, objectOriginSizeOffset, types.EncodeUint32(&size))
 }
 
