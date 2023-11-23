@@ -16,6 +16,7 @@ package window
 
 import (
 	"bytes"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,93 +56,116 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			ctr.aggVecs[i].vec = proc.GetVector(typ)
 		}
 	}
+	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
+	if len(w.PartitionBy) == 0 || w.Name == plan2.NameGroupConcat {
+		ctr.status = receiveAll
+	}
+
 	return nil
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
+	var end bool
 	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
+	var bat *batch.Batch
+
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return result, err
-		}
-
-		if end {
-			break
-		}
-		anal.Input(bat, arg.info.IsFirst)
-
-		if ctr.bat == nil {
-			ctr.bat = bat
-			continue
-		}
-		for i := range bat.Vecs {
-			n := bat.Vecs[i].Length()
-			err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
-			if err != nil {
-				return result, err
-			}
-		}
-		ctr.bat.AddRowCount(bat.RowCount())
-	}
-
-	// init agg frame
-	if ctr.bat == nil {
-		result.Batch = ctr.bat
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	n := ctr.bat.Vecs[0].Length()
-	if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
-		return result, err
-	}
-
-	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
-	for i, ag := range ap.Aggs {
-		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
-			return result, err
-		}
-		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
-			return result, err
-		}
-	}
-
-	// calculate
-	for i, w := range ap.WinSpecList {
-		// sort and partitions
-		if ap.Fs = makeOrderBy(w); ap.Fs != nil {
-			ctr.orderVecs = make([]evalVector, len(ap.Fs))
-			for j := range ctr.orderVecs {
-				ctr.orderVecs[j].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[j].Expr)
+		switch ctr.status {
+		case receiveAll:
+			for {
+				bat, end, err = ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
 					return result, err
 				}
+
+				if end {
+					ctr.status = eval
+					break
+				}
+				if ctr.bat == nil {
+					ctr.bat = bat
+					continue
+				}
+				anal.Input(bat, arg.info.IsFirst)
+				for i := range bat.Vecs {
+					n := bat.Vecs[i].Length()
+					err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
+					if err != nil {
+						return result, err
+					}
+				}
+				ctr.bat.AddRowCount(bat.RowCount())
 			}
-			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
+		case receive:
+			ctr.bat, end, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return result, err
 			}
-		}
-		// evaluate func
-		if err = ctr.processFunc(i, ap, proc, anal); err != nil {
-			return result, err
-		}
+			if end {
+				ctr.status = done
+			} else {
+				ctr.status = eval
+			}
+		case eval:
+			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
+				return result, err
+			}
 
-		// clean
-		ctr.cleanOrderVectors(proc.Mp())
+			ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
+			for i, ag := range ap.Aggs {
+				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+					return result, err
+				}
+				if err = ctr.bat.Aggs[i].Grows(ctr.bat.RowCount(), proc.Mp()); err != nil {
+					return result, err
+				}
+			}
+			// calculate
+			for i, w := range ap.WinSpecList {
+				// sort and partitions
+				if ap.Fs = makeOrderBy(w); ap.Fs != nil {
+					ctr.orderVecs = make([]evalVector, len(ap.Fs))
+					for j := range ctr.orderVecs {
+						ctr.orderVecs[j].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[j].Expr)
+						if err != nil {
+							return result, err
+						}
+					}
+					_, err = ctr.processOrder(i, ap, ctr.bat, proc)
+					if err != nil {
+						return result, err
+					}
+				}
+				// evaluate func
+				if err = ctr.processFunc(i, ap, proc, anal); err != nil {
+					return result, err
+				}
+
+				// clean
+				ctr.cleanOrderVectors(proc.Mp())
+			}
+
+			anal.Output(ctr.bat, arg.info.IsLast)
+			if len(ap.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
+				ctr.status = done
+			} else {
+				ctr.status = receive
+			}
+
+			result.Batch = ctr.bat
+			result.Status = vm.ExecNext
+			return result, nil
+		case done:
+			result.Status = vm.ExecStop
+			return result, nil
+		}
 	}
-
-	anal.Output(ctr.bat, arg.info.IsLast)
-
-	result.Batch = ctr.bat
-	result.Status = vm.ExecStop
-	return result, nil
 }
 
 func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, anal process.Analyze) error {
@@ -236,6 +260,8 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	if vec != nil {
 		anal.Alloc(int64(vec.Size()))
 	}
+	ctr.os = nil
+	ctr.ps = nil
 	return nil
 }
 
@@ -379,15 +405,18 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
 		return nil
 	}
-	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
-	for _, p := range w.PartitionBy {
-		orderBy = append(orderBy, &plan.OrderBySpec{
-			Expr: p,
-			Flag: plan.OrderBySpec_INTERNAL,
-		})
+	if w.Name == plan2.NameGroupConcat {
+		orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
+		for _, p := range w.PartitionBy {
+			orderBy = append(orderBy, &plan.OrderBySpec{
+				Expr: p,
+				Flag: plan.OrderBySpec_INTERNAL,
+			})
+		}
+		orderBy = append(orderBy, w.OrderBy...)
+		return orderBy
 	}
-	orderBy = append(orderBy, w.OrderBy...)
-	return orderBy
+	return w.OrderBy
 }
 
 func makeFlagsOne(n int) []uint8 {
@@ -408,14 +437,18 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		}
 		ctr.orderVecs[i].vec = vec
 	}
+	if bat.RowCount() < 2 {
+		return false, nil
+	}
 
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
 	rowCount := bat.RowCount()
-	if ctr.sels == nil {
-		ctr.sels = make([]int64, rowCount)
-	}
+	//if ctr.sels == nil {
+	//	ctr.sels = make([]int64, rowCount)
+	//}
+	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)
 	}
@@ -436,7 +469,8 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
 
-	n := len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.PartitionBy)
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	n := len(w.PartitionBy)
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
@@ -501,6 +535,10 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		if err := ctr.orderVecs[t].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
 			panic(err)
 		}
+	}
+
+	if w.Name != plan2.NameGroupConcat {
+		ctr.ps = nil
 	}
 
 	return false, nil
@@ -1025,6 +1063,15 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 		}
 	case types.T_datetime:
 		col := vector.MustFixedCol[types.Datetime](vec)
+		i := start
+		for ; i < end; i++ {
+			if !vec.GetNulls().Contains(uint64(i)) {
+				break
+			}
+		}
+		for j := start; j < i; j++ {
+			col[j] = col[i]
+		}
 		if expr == nil {
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[types.Datetime], genericGreater[types.Datetime])
 		} else {
