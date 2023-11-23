@@ -112,6 +112,9 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	seg := iseg.(*catalog.SegmentEntry)
 	node := seg.GetLatestNodeLocked()
+	if seg.IsAppendable() && node.BaseNode.IsEmpty() {
+		return
+	}
 	if !node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[objectInfoBatch] == nil {
 			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
