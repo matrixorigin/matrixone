@@ -83,7 +83,8 @@ type PartitionState struct {
 
 func (p *PartitionState) CheckObjectStats() {
 	statsIter := p.dataObjects.Copy().Iter()
-	shadowIter := p.dataObjectsShadow.Copy().Iter()
+	shadowCopy := p.dataObjectsShadow.Copy()
+	shadowIter := shadowCopy.Iter()
 
 	statsUnique := ""
 	shadowUnique := ""
@@ -117,7 +118,8 @@ func (p *PartitionState) CheckObjectStats() {
 		}
 	}
 
-	shadowIter = p.dataObjectsShadow.Copy().Iter()
+	shadowIter.Release()
+	shadowIter = shadowCopy.Iter()
 	for shadowIter.Next() {
 		shadow = shadowIter.Item()
 		if !statsIter.Seek(shadow) {
@@ -135,6 +137,10 @@ func (p *PartitionState) CheckObjectStats() {
 			statsUnique, shadowUnique, notEqual,
 		))
 	}
+
+	shadowIter.Release()
+	statsIter.Release()
+
 }
 
 // sharedStates is shared among all PartitionStates
@@ -446,9 +452,9 @@ func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 
-		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-		//	continue
-		//}
+		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+			continue
+		}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
@@ -474,9 +480,9 @@ func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 		//
-		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-		//	continue
-		//}
+		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+			continue
+		}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
