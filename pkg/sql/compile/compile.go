@@ -231,7 +231,16 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
-			c.needLockMeta = qry.Query.StmtType != plan.Query_SELECT
+			if qry.Query.StmtType == plan.Query_SELECT {
+				for _, n := range qry.Query.Nodes {
+					if n.NodeType == plan.Node_LOCK_OP {
+						c.needLockMeta = true
+						break
+					}
+				}
+			} else {
+				c.needLockMeta = true
+			}
 		}
 	}
 
