@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"testing"
 	"unsafe"
@@ -27,23 +28,23 @@ import (
 var area = make([]byte, 0, 10000)
 
 func TestRangeShuffle(t *testing.T) {
-	require.Equal(t, GetRangeShuffleIndexUnsignedMinMax(0, 1000000, 299999, 10), uint64(2))
-	require.Equal(t, GetRangeShuffleIndexUnsignedMinMax(0, 1000000, 888, 10), uint64(0))
-	require.Equal(t, GetRangeShuffleIndexUnsignedMinMax(0, 1000000, 100000000, 10), uint64(9))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 299999, 10), uint64(2))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 888, 10), uint64(0))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 100000000, 10), uint64(9))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, -2, 10), uint64(0))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 999000, 10), uint64(9))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 99999, 10), uint64(0))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 100000, 10), uint64(1))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 100001, 10), uint64(1))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 199999, 10), uint64(1))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 200000, 10), uint64(2))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 999999, 10), uint64(9))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 899999, 10), uint64(8))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 900000, 10), uint64(9))
-	require.Equal(t, GetRangeShuffleIndexSignedMinMax(0, 1000000, 1000000, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexUnsigned(0, 1000000, 299999, 10), uint64(2))
+	require.Equal(t, GetRangeShuffleIndexUnsigned(0, 1000000, 888, 10), uint64(0))
+	require.Equal(t, GetRangeShuffleIndexUnsigned(0, 1000000, 100000000, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 299999, 10), uint64(2))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 888, 10), uint64(0))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 100000000, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, -2, 10), uint64(0))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 999000, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 99999, 10), uint64(0))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 100000, 10), uint64(1))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 100001, 10), uint64(1))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 199999, 10), uint64(1))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 200000, 10), uint64(2))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 999999, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 899999, 10), uint64(8))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 900000, 10), uint64(9))
+	require.Equal(t, GetRangeShuffleIndexSigned(0, 1000000, 1000000, 10), uint64(9))
 }
 
 func buildVarlenaFromByteSlice(bs []byte) *types.Varlena {
@@ -123,16 +124,20 @@ func TestStringToUint64(t *testing.T) {
 	require.Equal(t, bytes.Compare(s6, s7), compareUint64(u6, u7))
 }
 
-type ShuffleRangeTestCase struct {
-	min []float64
-	max []float64
+type ShuffleFloatTestCase struct {
+	min           []float64
+	max           []float64
+	expectoverlap float64
+	bucket        int
 }
 
 func TestShuffleRange(t *testing.T) {
-	testcase := make([]ShuffleRangeTestCase, 0)
-	testcase = append(testcase, ShuffleRangeTestCase{
-		min: []float64{},
-		max: []float64{},
+	testcase := make([]ShuffleFloatTestCase, 0)
+	testcase = append(testcase, ShuffleFloatTestCase{
+		min:           []float64{},
+		max:           []float64{},
+		expectoverlap: 0,
+		bucket:        1024,
 	})
 	testcase[0].min = append(testcase[0].min, 0)
 	testcase[0].max = append(testcase[0].max, 10000)
@@ -147,49 +152,15 @@ func TestShuffleRange(t *testing.T) {
 		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000+100))
 	}
 
-	testcase = append(testcase, ShuffleRangeTestCase{
-		min: []float64{},
-		max: []float64{},
-	})
-	for i := 0; i <= 100000; i++ {
-		testcase[1].min = append(testcase[1].min, float64(rand.Int()))
-		testcase[1].max = append(testcase[1].max, testcase[1].min[i]+float64(rand.Int()))
-	}
-
-	testcase = append(testcase, ShuffleRangeTestCase{
-		min: []float64{},
-		max: []float64{},
-	})
-	testcase[2].min = append(testcase[2].min, 0)
-	testcase[2].max = append(testcase[2].max, 10000)
-	for i := 1; i < 100000; i++ {
-		testcase[2].min = append(testcase[2].min, testcase[2].max[i-1]-10)
-		testcase[2].max = append(testcase[2].max, testcase[2].min[i]+10000)
-	}
-
 	leng := len(testcase)
 
 	for i := 0; i < leng; i++ {
-		shufflerange := NewShuffleRange(false)
+		shufflerange := NewShuffleRange()
 		for j := 0; j < len(testcase[i].min); j++ {
 			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000, 1)
 		}
-		shufflerange.Eval()
-	}
-	shufflerange := NewShuffleRange(true)
-	shufflerange.UpdateString([]byte("0000"), []byte("1000"), 1000, 1)
-	shufflerange.UpdateString([]byte("2000"), []byte("3000"), 1000, 1)
-	shufflerange.UpdateString([]byte("4000"), []byte("5000"), 1000, 1)
-	shufflerange.UpdateString([]byte("6000"), []byte("7000"), 1000, 1)
-	shufflerange.UpdateString([]byte("8000"), []byte("9000"), 1000, 1)
-	shufflerange.Eval()
-}
 
-func TestRangeShuffleSlice(t *testing.T) {
-	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{1, 3, 5, 7, 9}, 5), uint64(2))
-	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{1, 2, 3, 100}, 101), uint64(4))
-	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{-20, -1, 0, 1, 5}, -99), uint64(0))
-	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{100, 200, 300}, 150), uint64(1))
-	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{10001, 10002, 10003, 10004, 10005, 10006}, 10006), uint64(5))
-	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{30, 50, 60, 90, 120}, 61), uint64(3))
+		shufflerange.Eval(testcase[i].bucket)
+		fmt.Println(shufflerange.Overlap, shufflerange.Uniform)
+	}
 }

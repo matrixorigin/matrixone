@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -430,13 +431,11 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Shuffle:
 		sourceArg := sourceIns.Arg.(*shuffle.Argument)
 		arg := &shuffle.Argument{
-			ShuffleType:        sourceArg.ShuffleType,
-			ShuffleColIdx:      sourceArg.ShuffleColIdx,
-			ShuffleColMax:      sourceArg.ShuffleColMax,
-			ShuffleColMin:      sourceArg.ShuffleColMin,
-			AliveRegCnt:        sourceArg.AliveRegCnt,
-			ShuffleRangeInt64:  sourceArg.ShuffleRangeInt64,
-			ShuffleRangeUint64: sourceArg.ShuffleRangeUint64,
+			ShuffleType:   sourceArg.ShuffleType,
+			ShuffleColIdx: sourceArg.ShuffleColIdx,
+			ShuffleColMax: sourceArg.ShuffleColMax,
+			ShuffleColMin: sourceArg.ShuffleColMin,
+			AliveRegCnt:   sourceArg.AliveRegCnt,
 		}
 		res.Arg = arg
 	case vm.Dispatch:
@@ -1318,35 +1317,23 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 		}
 	}
 
-	hashCol, typ := plan2.GetHashColumn(expr)
+	hashCol, _ := plan2.GetHashColumn(expr)
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.AliveRegCnt = int32(len(ss))
-	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	}
 	return arg
 }
 
 func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	arg := new(shuffle.Argument)
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
+	hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.AliveRegCnt = int32(len(ss))
-	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	}
 	return arg
 }
 
