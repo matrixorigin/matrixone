@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,7 +53,6 @@ type baseBlock struct {
 	rt   *dbutils.Runtime
 	meta *catalog.BlockEntry
 	mvcc *updates.MVCCHandle
-	ttl  time.Time
 	impl data.Block
 
 	node atomic.Pointer[Node]
@@ -69,7 +67,6 @@ func newBaseBlock(
 		impl: impl,
 		rt:   rt,
 		meta: meta,
-		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -84,16 +81,16 @@ func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
 	return blk.rt
 }
 
-func (blk *baseBlock) EstimateMemSize() int {
+func (blk *baseBlock) EstimateMemSize() (int, int) {
 	node := blk.PinNode()
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	size := blk.mvcc.EstimateMemSizeLocked()
+	asize, dsize := blk.mvcc.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
-		size += node.MustMNode().EstimateMemSize()
+		asize += node.MustMNode().EstimateMemSize()
 	}
-	return size
+	return asize, dsize
 }
 
 func (blk *baseBlock) PinNode() *Node {
@@ -204,25 +201,6 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	vec = containers.ToTNVector(bat.Vecs[0], common.DefaultAllocator)
 	return
 }
-
-// func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
-// 	schema := blk.meta.GetSchema()
-// 	bat = containers.NewBatch()
-// 	defer func() {
-// 		if err != nil {
-// 			bat.Close()
-// 		}
-// 	}()
-// 	var vec containers.Vector
-// 	for i, col := range schema.ColDefs {
-// 		vec, err = blk.LoadPersistedColumnData(i)
-// 		if err != nil {
-// 			return
-// 		}
-// 		bat.AddVector(col.Name, vec)
-// 	}
-// 	return
-// }
 
 func (blk *baseBlock) LoadPersistedColumnData(
 	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool,
@@ -775,55 +753,6 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 		mp,
 	)
 	return bat, nil
-}
-
-func (blk *baseBlock) adjustScore(
-	rawScoreFn func() (int, bool),
-	ttl time.Duration,
-	force bool) int {
-	score, dropped := rawScoreFn()
-	if dropped {
-		return 0
-	}
-	if force {
-		score = 100
-	}
-	if score == 0 || score > 1 {
-		return score
-	}
-	var ratio float32
-	if blk.meta.IsAppendable() {
-		currRows := uint32(blk.Rows())
-		ratio = float32(currRows) / float32(blk.meta.GetSchema().BlockMaxRows)
-		if ratio >= 0 && ratio < 0.2 {
-			ttl = 3*ttl - ttl/2
-		} else if ratio >= 0.2 && ratio < 0.4 {
-			ttl = 2 * ttl
-		} else if ratio >= 0.4 && ratio < 0.6 {
-			ttl = 2*ttl - ttl/2
-		}
-	}
-
-	deleteCnt := blk.mvcc.GetDeleteCnt()
-	ratio = float32(deleteCnt) / float32(blk.meta.GetSchema().BlockMaxRows)
-	if ratio <= 1 && ratio > 0.5 {
-		ttl /= 8
-	} else if ratio <= 0.5 && ratio > 0.3 {
-		ttl /= 4
-	} else if ratio <= 0.3 && ratio > 0.2 {
-		ttl /= 2
-	} else if ratio <= 0.2 && ratio > 0.1 {
-		ttl /= 1
-	} else {
-		factor := 1.25 - ratio
-		factor = factor * factor * factor * factor
-		ttl = time.Duration(float32(ttl) * factor)
-	}
-
-	if time.Now().After(blk.ttl.Add(ttl)) {
-		return 100
-	}
-	return 1
 }
 
 func (blk *baseBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {

@@ -201,8 +201,8 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 func (entry *TableEntry) CreateSegment(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	dataFactory SegmentDataFactory,
-	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
+	opts *objectio.CreateSegOpt,
+) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.ObjectId
@@ -211,7 +211,7 @@ func (entry *TableEntry) CreateSegment(
 	} else {
 		id = objectio.NewObjectid()
 	}
-	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
+	created = NewSegmentEntry(entry, id, txn, state)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -336,7 +336,7 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
 		}
-		if w.Len() > 8*1024*1024 {
+		if w.Len() > 8*common.Const1MBytes {
 			w.WriteString("\n...(truncated for too long, more than 8 MB)")
 			break
 		}

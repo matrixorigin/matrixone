@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -288,14 +289,14 @@ func TestHidden2(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeSegmentIt()
-		segs := make([]data.Segment, 0)
+		segs := make([]*catalog.SegmentEntry, 0)
 		for it.Valid() {
-			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry).GetSegmentData()
+			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
 			segs = append(segs, seg)
 			it.Next()
 		}
 		for _, seg := range segs {
-			factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+			factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(seg, tae.Runtime)
 			assert.NoError(t, err)
 			if factory == nil {
 				continue

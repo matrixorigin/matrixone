@@ -60,7 +60,6 @@ const (
 
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
-	MakeSegmentFactory() SegmentDataFactory
 	MakeBlockFactory() BlockDataFactory
 }
 
@@ -535,7 +534,6 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		seg = NewReplaySegmentEntry()
 		seg.ID = *cmd.ID.ObjectID()
 		seg.table = tbl
-		seg.segData = dataFactory.MakeSegmentFactory()(seg)
 		seg.Insert(un)
 		seg.SegmentNode = cmd.node
 		tbl.AddEntryLocked(seg)

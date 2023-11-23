@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -201,7 +202,7 @@ func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
 	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
-	if s.executor.MemAvailBytes() < 100*1024*1024 {
+	if s.executor.MemAvailBytes() < 100*common.Const1MBytes {
 		return moerr.GetOkStopCurrRecur()
 	}
 	return

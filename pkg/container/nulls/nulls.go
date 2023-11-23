@@ -45,7 +45,7 @@ func (nsp *Nulls) InitWith(n *Nulls) {
 }
 
 func (nsp *Nulls) InitWithSize(size int) {
-	nsp.np.InitWithSize(size)
+	nsp.np.InitWithSize(int64(size))
 }
 
 func NewWithSize(size int) *Nulls {
@@ -215,7 +215,7 @@ func Range(nsp *Nulls, start, end, bias uint64, m *Nulls) {
 		return
 	}
 
-	m.np.InitWithSize(int(end + 1 - bias))
+	m.np.InitWithSize(int64(end + 1 - bias))
 	for ; start < end; start++ {
 		if nsp.np.Contains(start) {
 			m.np.Add(start - bias)
@@ -233,8 +233,8 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 		oldLen := nsp.np.Len()
 		var bm bitmap.Bitmap
 		bm.InitWithSize(oldLen)
-		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < oldLen; oldIdx++ {
-			if oldIdx != int(sel) {
+		for oldIdx, newIdx, selIdx, sel := int64(0), 0, 0, sels[0]; oldIdx < oldLen; oldIdx++ {
+			if oldIdx != sel {
 				if nsp.np.Contains(uint64(oldIdx)) {
 					bm.Add(uint64(newIdx))
 				}
@@ -256,7 +256,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 		nsp.np.InitWith(&bm)
 	} else {
 		var bm bitmap.Bitmap
-		bm.InitWithSize(len(sels))
+		bm.InitWithSize(int64(len(sels)))
 		upperLimit := int64(nsp.np.Len())
 		for i, sel := range sels {
 			if sel >= upperLimit {

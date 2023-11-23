@@ -40,12 +40,6 @@ func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 	}
 }
 
-func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
-	return func(meta *catalog.SegmentEntry) data.Segment {
-		return newSegment(meta, factory.dir, factory.rt)
-	}
-}
-
 func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
 		if meta.IsAppendable() {

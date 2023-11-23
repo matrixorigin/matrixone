@@ -28,13 +28,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
-
-type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 type SegmentEntry struct {
 	ID   types.Objectid
@@ -45,7 +42,6 @@ type SegmentEntry struct {
 	//link.head and tail is nil when new a segmentEntry object.
 	link *common.GenericSortedDList[*BlockEntry]
 	*SegmentNode
-	segData data.Segment
 }
 
 type SegStat struct {
@@ -168,7 +164,7 @@ func (s *SegStat) String(composeSortKey bool) string {
 	)
 }
 
-func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
+func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn, state EntryState) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -182,9 +178,6 @@ func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTx
 		},
 	}
 	e.CreateWithTxn(txn, &ObjectMVCCNode{objectio.NewObjectStats()})
-	if dataFactory != nil {
-		e.segData = dataFactory(e)
-	}
 	return e
 }
 
@@ -203,9 +196,6 @@ func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, en
 		},
 	}
 	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{objectio.NewObjectStats()})
-	if dataFactory != nil {
-		e.segData = dataFactory(e)
-	}
 	return e
 }
 
@@ -663,15 +653,6 @@ func (entry *SegmentEntry) AsCommonID() *common.ID {
 }
 
 func (entry *SegmentEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
-
-func (entry *SegmentEntry) InitData(factory DataFactory) {
-	if factory == nil {
-		return
-	}
-	dataFactory := factory.MakeSegmentFactory()
-	entry.segData = dataFactory(entry)
-}
-func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData }
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	if n, ok := entry.entries[block.ID]; !ok {
