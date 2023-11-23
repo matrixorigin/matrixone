@@ -751,48 +751,6 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
-	if !r.rt.Throttle.CanCompact() {
-		return
-	}
-	db, err := r.catalog.GetDatabaseByID(dbID)
-	if err != nil {
-		panic(err)
-	}
-	table, err := db.GetTableEntryByID(tableID)
-	if err != nil {
-		panic(err)
-	}
-	sid := objectio.ToSegmentId(id)
-	segment, err := table.GetSegmentByID(sid)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := segment.GetBlockEntryByID(id)
-	if err != nil {
-		panic(err)
-	}
-	blkData := blk.GetBlockData()
-	score := blkData.EstimateScore(r.options.maxFlushInterval, force)
-	logutil.Debugf("%s [SCORE=%d]", blk.String(), score)
-	if score < 100 {
-		return
-	}
-
-	factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
-	if err != nil || factory == nil {
-		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
-		return nil
-	}
-
-	if _, err = r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, factory); err != nil {
-		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
-	}
-
-	// always return nil
-	return nil
-}
-
 func (r *runner) onWaitWaitableItems(items ...any) {
 	// TODO: change for more waitable items
 	start := time.Now()
@@ -844,8 +802,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	return nil
 }
 
-func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) int {
-	size := 0
+func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, seg := range tree.Segs {
 		segment, err := table.GetSegmentByID(seg.ID)
 		if err != nil {
@@ -857,10 +814,12 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 			if err != nil {
 				panic(err)
 			}
-			size += block.GetBlockData().EstimateMemSize()
+			a, d := block.GetBlockData().EstimateMemSize()
+			asize += a
+			dsize += d
 		}
 	}
-	return size
+	return
 }
 
 func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
@@ -889,17 +848,18 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		dirtyTree := entry.GetTree().GetTable(tableID)
 		_, endTs := entry.GetTimeRange()
 
-		size := r.EstimateTableMemSize(table, dirtyTree)
+		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 
 		stats := &table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 
 		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && size > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %s(%s)  FlushCountDown %v",
+		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v",
 				table.GetLastestSchema().Name,
-				common.HumanReadableBytes(size),
+				common.HumanReadableBytes(asize+dsize),
+				common.HumanReadableBytes(dsize),
 				time.Until(stats.FlushDeadline))
 		}
 
@@ -918,7 +878,20 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			return moerr.GetOkStopCurrRecur()
 		}
 
-		if stats.FlushDeadline.Before(time.Now()) || size > stats.FlushMemCapacity {
+		flushReady := func() bool {
+			if stats.FlushDeadline.Before(time.Now()) {
+				return true
+			}
+			if asize+dsize > stats.FlushMemCapacity {
+				return true
+			}
+			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
+				return true
+			}
+			return false
+		}
+
+		if flushReady() {
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
@@ -926,13 +899,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		return moerr.GetOkStopCurrRecur()
 	}
-	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
-		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
-			id := objectio.NewBlockid(segmentID, num, seq)
-			return r.tryCompactBlock(dbID, tableID, id, force)
-		}
-	}(force)
-
 	if err := entry.GetTree().Visit(visitor); err != nil {
 		panic(err)
 	}

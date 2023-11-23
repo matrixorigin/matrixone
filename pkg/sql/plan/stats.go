@@ -372,7 +372,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in":
+		case "in", "startswith":
 			// use ndv map,do not need nodeID
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
@@ -470,12 +470,12 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 	}
 }
 
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				ReCalcNodeStats(child, builder, recursive, leafNode)
+				ReCalcNodeStats(child, builder, recursive, leafNode, needResetHashMapStats)
 			}
 		}
 	}
@@ -496,7 +496,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		if ndv < 1 {
@@ -567,7 +569,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_AGG:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
@@ -597,7 +601,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_UNION:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		node.Stats.Outcnt = (leftStats.Outcnt + rightStats.Outcnt) * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
@@ -609,21 +615,27 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Selectivity = 1
 
 	case plan.Node_INTERSECT:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_INTERSECT_ALL:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_MINUS:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		node.Stats.Outcnt = minus * 0.5
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
@@ -631,7 +643,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_MINUS_ALL:
-		resetHashMapStats(node.Stats)
+		if needResetHashMapStats {
+			resetHashMapStats(node.Stats)
+		}
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		node.Stats.Outcnt = minus * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
@@ -675,13 +689,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				builder.tag2Table[node.BindingTags[0]] = node.TableDef
 			}
 			newStats := calcScanStats(node, builder)
-			resetHashMapStats(newStats)
+			if needResetHashMapStats {
+				resetHashMapStats(newStats)
+			}
 			node.Stats = newStats
 		}
 
 	case plan.Node_FILTER:
 		//filters which can not push down to scan nodes. hard to estimate selectivity
 		node.Stats.Outcnt = childStats.Outcnt * 0.05
+		if node.Stats.Outcnt < 1 {
+			node.Stats.Outcnt = 1
+		}
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
 
@@ -721,6 +740,18 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 		}
 	}
 	return nil
+}
+
+func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
+	if node.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	node.Stats.Cost *= runtimeFilterSel
+	node.Stats.Outcnt *= runtimeFilterSel
+	if node.Stats.Cost < 1 {
+		node.Stats.Cost = 1
+	}
+	node.Stats.BlockNum = int32(float64(node.Stats.BlockNum)*runtimeFilterSel) + 1
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -913,7 +944,7 @@ func IsTpQuery(qry *plan.Query) bool {
 
 func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
 	for _, rootID := range builder.qry.Steps {
-		ReCalcNodeStats(rootID, builder, true, false)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 	}
 }
 

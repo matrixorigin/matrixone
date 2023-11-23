@@ -103,6 +103,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Output(true)
+		result.Status = vm.ExecStop
 		return result, lastErr
 	}
 
