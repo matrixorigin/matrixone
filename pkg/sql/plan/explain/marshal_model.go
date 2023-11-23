@@ -212,6 +212,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_JOIN:              "Join",
 	plan2.Node_SAMPLE:            "Sample",
 	plan2.Node_SORT:              "Sort",
+	plan2.Node_PARTITION:         "Partition",
 	plan2.Node_UNION:             "Union",
 	plan2.Node_UNION_ALL:         "Union All",
 	plan2.Node_UNIQUE:            "Unique",
