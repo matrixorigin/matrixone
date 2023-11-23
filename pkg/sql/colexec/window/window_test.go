@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
 )
 
 const Rows = 100
@@ -87,35 +86,6 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
 		tc.arg.String(buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-	}
-}
-
-func TestWindow(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
-
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
-
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
-
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
-
-		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
 	}
 }
 

@@ -87,6 +87,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_PARTITION:
+		pname = "Partition"
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:

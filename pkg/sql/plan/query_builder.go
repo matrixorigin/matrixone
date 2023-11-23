@@ -87,12 +87,12 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 		if err != nil {
 			return err
 		}
-		for _, arg := range ne.W.PartitionBy {
-			err = builder.remapColRefForExpr(arg, colMap)
-			if err != nil {
-				return err
-			}
-		}
+		//for _, arg := range ne.W.PartitionBy {
+		//	err = builder.remapColRefForExpr(arg, colMap)
+		//	if err != nil {
+		//		return err
+		//	}
+		//}
 		for _, order := range ne.W.OrderBy {
 			err = builder.remapColRefForExpr(order.Expr, colMap)
 			if err != nil {
@@ -887,14 +887,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			builder.remapWindowClause(expr, windowTag, int32(l))
 		}
 
-		for idx, expr := range node.WinSpecList {
+		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
 
-			globalRef := [2]int32{windowTag, int32(idx)}
+			globalRef := [2]int32{windowTag, int32(node.GetWindowIdx())}
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -906,7 +906,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(idx + l),
+						ColPos: int32(l),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -952,7 +952,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		//	}
 		//}
 
-	case plan.Node_SORT:
+	case plan.Node_SORT, plan.Node_PARTITION:
 		for _, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
 		}
@@ -2711,12 +2711,32 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if ctx.recSelect {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
 		}
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_WINDOW,
-			Children:    []int32{nodeID},
-			WinSpecList: ctx.windows,
-			BindingTags: []int32{ctx.windowTag},
-		}, ctx)
+
+		for i, w := range ctx.windows {
+			e := w.Expr.(*plan.Expr_W).W
+			if len(e.PartitionBy) > 0 {
+				partitionBy := make([]*plan.OrderBySpec, 0, len(e.PartitionBy))
+				for _, p := range e.PartitionBy {
+					partitionBy = append(partitionBy, &plan.OrderBySpec{
+						Expr: p,
+						Flag: plan.OrderBySpec_INTERNAL,
+					})
+				}
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:    plan.Node_PARTITION,
+					Children:    []int32{nodeID},
+					OrderBy:     partitionBy,
+					BindingTags: []int32{ctx.windowTag},
+				}, ctx)
+			}
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_WINDOW,
+				Children:    []int32{nodeID},
+				WinSpecList: []*Expr{w},
+				WindowIdx:   int32(i),
+				BindingTags: []int32{ctx.windowTag},
+			}, ctx)
+		}
 
 		for name, id := range ctx.windowByAst {
 			builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
