@@ -117,6 +117,7 @@ func (p *PartitionState) CheckObjectStats() {
 		}
 	}
 
+	shadowIter = p.dataObjectsShadow.Copy().Iter()
 	for shadowIter.Next() {
 		shadow = shadowIter.Item()
 		if !statsIter.Seek(shadow) {
