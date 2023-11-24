@@ -119,7 +119,7 @@ type SessionInfo struct {
 	SeqLastValue         []string
 	SqlHelper            sqlHelper
 	Buf                  *buffer.Buffer
-	StreamInMemScanBatch []*kafka.Message
+	SourceInMemScanBatch []*kafka.Message
 }
 
 // AnalyzeInfo  analyze information for query

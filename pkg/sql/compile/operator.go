@@ -78,7 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -412,9 +412,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				},
 			},
 		}
-	case vm.Stream:
-		t := sourceIns.Arg.(*stream.Argument)
-		res.Arg = &stream.Argument{
+	case vm.Source:
+		t := sourceIns.Arg.(*source.Argument)
+		res.Arg = &source.Argument{
 			TblDef:  t.TblDef,
 			Limit:   t.Limit,
 			Offset:  t.Offset,
@@ -722,8 +722,8 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 	}
 }
 
-func constructStream(n *plan.Node, p [2]int64) *stream.Argument {
-	return &stream.Argument{
+func constructStream(n *plan.Node, p [2]int64) *source.Argument {
+	return &source.Argument{
 		TblDef: n.TableDef,
 		Offset: p[0],
 		Limit:  p[1],

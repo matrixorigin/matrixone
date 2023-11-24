@@ -80,7 +80,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -519,7 +518,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			},
 		},
 		{
-			Arg: &stream.Argument{},
+			Arg: &source.Argument{},
 		},
 	}
 	ctx := &scopeContext{
@@ -595,7 +594,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
-		{Op: int32(vm.Stream), StreamScan: &pipeline.StreamScan{}},
+		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmInstruction(instruction, ctx, nil)
