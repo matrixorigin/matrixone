@@ -52,13 +52,7 @@ var (
 			return len(s) > 0
 		},
 	}
-	integerOpt = OptConstraint{
-		Type: OptTypeInteger,
-		Validator: func(s string) bool {
-			_, err := strconv.Atoi(s)
-			return err == nil
-		},
-	}
+
 	addressOpt = OptConstraint{
 		Type: OptTypeAddress,
 		Validator: func(s string) bool {

@@ -17,10 +17,7 @@ package moconnector
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -80,50 +77,4 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES %s ",
 		c.dbName, c.tableName, fields, values)
 	return s, nil
-}
-
-func (c *SQLConverter) fieldValueSQL(ctx context.Context, obj RawObject) (string, string, error) {
-	var field, value strings.Builder
-	first := true
-	writeField := func(s string) {
-		if first {
-			field.WriteString(s)
-		} else {
-			field.WriteString(", ")
-			field.WriteString(s)
-		}
-	}
-	writeValue := func(s string) {
-		if first {
-			value.WriteString(s)
-		} else {
-			value.WriteString(", ")
-			value.WriteString(s)
-		}
-	}
-	for k, v := range obj {
-		writeField(k)
-		switch vv := v.(type) {
-		case int:
-			writeValue(strconv.FormatInt(int64(vv), 10))
-		case int32:
-			writeValue(strconv.FormatInt(int64(vv), 10))
-		case int64:
-			writeValue(strconv.FormatInt(vv, 10))
-		case float64:
-			writeValue(strconv.FormatFloat(vv, 'g', -1, 64))
-		case string:
-			writeValue("'" + vv + "'")
-		case bool:
-			if vv {
-				writeValue("1")
-			} else {
-				writeValue("0")
-			}
-		default:
-			return "", "", moerr.NewErrUnsupportedDataType(ctx, vv)
-		}
-		first = false
-	}
-	return field.String(), value.String(), nil
 }

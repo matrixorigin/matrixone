@@ -53,7 +53,6 @@ type MysqlResultSet struct {
 type internalExecResult struct {
 	affectedRows uint64
 	resultSet    *MysqlResultSet
-	dropped      uint64
 	err          error
 }
 
