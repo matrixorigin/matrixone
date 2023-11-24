@@ -219,7 +219,11 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
-	fuzzy         *fuzzyCheck
+
+	needLockMeta bool
+	metaTables   map[string]struct{}
+
+	fuzzy *fuzzyCheck
 }
 
 type runtimeFilterReceiver struct {
