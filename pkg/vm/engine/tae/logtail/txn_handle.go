@@ -463,4 +463,7 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 			b.batches[i] = nil
 		}
 	}
+	if b.currentLogtail != nil {
+		*b.logtails = append(*b.logtails, *b.currentLogtail)
+	}
 }
