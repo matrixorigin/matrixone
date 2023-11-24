@@ -185,8 +185,8 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 func (entry *TableEntry) CreateSegment(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	dataFactory SegmentDataFactory,
-	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
+	opts *objectio.CreateSegOpt,
+) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.Segmentid
@@ -195,7 +195,7 @@ func (entry *TableEntry) CreateSegment(
 	} else {
 		id = objectio.NewSegmentid()
 	}
-	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
+	created = NewSegmentEntry(entry, id, txn, state)
 	entry.AddEntryLocked(created)
 	return
 }

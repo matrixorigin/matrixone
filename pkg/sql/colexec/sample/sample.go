@@ -88,27 +88,36 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	// duplicate code from other operators.
 	result, lastErr := arg.children[0].Call(proc)
 	if lastErr != nil {
 		return result, lastErr
 	}
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
 		arg.buf = nil
 	}
-	arg.buf = result.Batch
+
+	// real work starts here.
 	bat := result.Batch
 
 	ctr := arg.ctr
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Output(true)
+		anal.Output(result.Batch, arg.info.IsLast)
+		arg.buf = result.Batch
 		result.Status = vm.ExecStop
 		return result, lastErr
 	}
 
 	var err error
 	if !bat.IsEmpty() {
+		anal.Input(bat, arg.info.IsFirst)
+
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
 			return result, err
 		}
@@ -124,6 +133,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	result.Batch, err = ctr.samplePool.Output(false)
+	anal.Output(result.Batch, arg.info.IsLast)
+	arg.buf = result.Batch
 	return result, err
 }
 
@@ -201,7 +212,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 		if err != nil {
 			return err
 		}
-		err = ctr.samplePool.BatchSample(n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
+		err = ctr.samplePool.BatchSample(i, n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
 		if err != nil {
 			return err
 		}

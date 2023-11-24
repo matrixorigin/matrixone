@@ -41,6 +41,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
