@@ -77,7 +77,6 @@ func (replayer *Replayer) PreReplayWal() {
 		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
-		entry.InitData(replayer.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
