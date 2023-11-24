@@ -113,6 +113,7 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	seg := iseg.(*catalog.SegmentEntry)
 	node := seg.GetLatestNodeLocked()
 	if seg.IsAppendable() && node.BaseNode.IsEmpty() {
+		fmt.Println(fmt.Sprintf("visitSegment dropped: %s; %s\n", seg.String(), node.BaseNode.String()))
 		return
 	}
 	if !node.DeletedAt.Equal(txnif.UncommitTS) {
@@ -120,6 +121,9 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 		}
 		visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+
+		fmt.Println(fmt.Sprintf("visitSegment collected create:\n %s\n", seg.String()))
+
 		return
 	}
 
@@ -136,12 +140,15 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
 	visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+
+	fmt.Println(fmt.Sprintf("visitSegment collected both:\n %s", seg.String()))
 }
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	blk := iblk.(*catalog.BlockEntry)
 	node := blk.GetLatestNodeLocked()
 	if node.BaseNode.MetaLoc.IsEmpty() {
+		//fmt.Println(fmt.Sprintf("visitMetadata dropped:\n %s\n %s\n", blk.String(), node.BaseNode.String()))
 		return
 	}
 	if b.batches[blkMetaInsBatch] == nil {

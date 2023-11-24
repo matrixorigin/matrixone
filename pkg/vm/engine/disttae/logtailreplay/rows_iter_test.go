@@ -16,6 +16,8 @@ package logtailreplay
 
 import (
 	"context"
+	"fmt"
+	"github.com/tidwall/btree"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -488,6 +490,35 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		key := EncodePrimaryKey(int64(i), packer)
 		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
+	}
+
+}
+
+func Test_X(t *testing.T) {
+	opts := btree.Options{
+		Degree: 4,
+	}
+
+	tt := btree.NewBTreeGOptions((ObjectEntry).Less, opts)
+	e := ObjectEntry{}
+
+	sids := make([]*objectio.Segmentid, 100)
+	for i := 0; i < 100; i++ {
+		sids[i] = objectio.NewSegmentid()
+		if i%2 == 0 {
+			continue
+		}
+		n := objectio.BuildObjectName(sids[i], uint16(i))
+		objectio.SetObjectStatsObjectName(&e.ObjectStats, n)
+		tt.Set(e)
+	}
+
+	//ii := tt.Copy().Iter()
+	for i := 0; i < 100; i++ {
+		n := objectio.BuildObjectName(sids[i], uint16(i))
+		objectio.SetObjectStatsObjectName(&e.ObjectStats, n)
+		_, ok := tt.Get(e)
+		fmt.Println(i, ok)
 	}
 
 }

@@ -84,12 +84,10 @@ type PartitionState struct {
 func (p *PartitionState) CheckObjectStats() {
 	p.objLock.Lock()
 
-	statsIter := p.dataObjects.Copy().Iter()
+	statsCopy := p.dataObjects.Copy()
 	shadowCopy := p.dataObjectsShadow.Copy()
 
 	p.objLock.Unlock()
-
-	shadowIter := shadowCopy.Iter()
 
 	statsUnique := ""
 	shadowUnique := ""
@@ -98,8 +96,8 @@ func (p *PartitionState) CheckObjectStats() {
 	var stats, shadow ObjectEntry
 
 	toString := func(entry ObjectEntry) string {
-		return fmt.Sprintf("entryState: %v; createTime: %s; deleteTime: %s",
-			entry.EntryState, entry.CreateTime.ToString(), entry.DeleteTime.ToString())
+		return fmt.Sprintf("entryState: %v; createTime: %s; deleteTime: %s; detail: %s",
+			entry.EntryState, entry.CreateTime.ToString(), entry.DeleteTime.ToString(), entry.String())
 	}
 
 	// check some fields whether equal or not between
@@ -114,24 +112,24 @@ func (p *PartitionState) CheckObjectStats() {
 		}
 	}
 
+	statsIter := statsCopy.Iter()
 	for statsIter.Next() {
 		stats = statsIter.Item()
 		// only stats has
-		if !shadowIter.Seek(stats) {
+		if val, exist := shadowCopy.Get(stats); !exist {
 			statsUnique += fmt.Sprintf("\n %s", stats.String())
 		} else {
 			// both have, check whether equal or not
-			shadow = shadowIter.Item()
+			shadow = val
 			checkEqual()
 		}
 	}
 
-	shadowIter.Release()
-	shadowIter = shadowCopy.Iter()
+	shadowIter := shadowCopy.Iter()
 	for shadowIter.Next() {
 		shadow = shadowIter.Item()
 		// only shadow has
-		if !statsIter.Seek(shadow) {
+		if _, exist := statsCopy.Get(shadow); !exist {
 			shadowUnique += fmt.Sprintf("\n %s", shadow.String())
 		} else {
 			// both have, checked already above.
@@ -468,9 +466,9 @@ func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 
-		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-			continue
-		}
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
@@ -478,6 +476,8 @@ func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 		objEntry.CommitTS = commitTSCol[idx]
 
 		p.dataObjectsShadow.Set(objEntry)
+
+		fmt.Println(fmt.Sprintf("received shadow delete: %s\n", objEntry.String()))
 	}
 }
 
@@ -491,13 +491,20 @@ func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
 	for idx := 0; idx < len(statsCol); idx++ {
 		var objEntry ObjectEntry
 
-		fmt.Println(fmt.Sprintf("received shadow: entryState: %v; createTime: %s; deleteTime: %s; commitTS: %s\n",
-			stateCol[idx], createTSCol[idx].ToString(), deleteTSCol[idx].ToString(), commitTSCol[idx].ToString()))
+		//fmt.Println(fmt.Sprintf("received shadow: entryState: %v; createTime: %s; deleteTime: %s; commitTS: %s\n",
+		//	stateCol[idx], createTSCol[idx].ToString(), deleteTSCol[idx].ToString(), commitTSCol[idx].ToString()))
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
 		//
-		if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
-			continue
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
+
+		if old, ok := p.dataObjectsShadow.Get(objEntry); ok {
+			// if overwritten delete
+			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
+				panic("shadow overwritten deleteTS")
+			}
 		}
 
 		objEntry.EntryState = stateCol[idx]
@@ -506,6 +513,8 @@ func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
 		objEntry.CommitTS = commitTSCol[idx]
 
 		p.dataObjectsShadow.Set(objEntry)
+
+		fmt.Println(fmt.Sprintf("received shadow insert: %s\n", objEntry.String()))
 	}
 }
 
