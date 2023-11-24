@@ -222,7 +222,6 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
-
 }
 
 type runtimeFilterReceiver struct {
