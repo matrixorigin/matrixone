@@ -35,13 +35,15 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
+
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
