@@ -102,6 +102,8 @@ func (p *PartitionState) CheckObjectStats() {
 			entry.EntryState, entry.CreateTime.ToString(), entry.DeleteTime.ToString())
 	}
 
+	// check some fields whether equal or not between
+	// stats and shadow.
 	checkEqual := func() {
 		if shadow.EntryState != stats.EntryState ||
 			!shadow.CreateTime.Equal(stats.CreateTime) ||
@@ -114,10 +116,11 @@ func (p *PartitionState) CheckObjectStats() {
 
 	for statsIter.Next() {
 		stats = statsIter.Item()
+		// only stats has
 		if !shadowIter.Seek(stats) {
 			statsUnique += fmt.Sprintf("\n %s", stats.String())
 		} else {
-			// both have
+			// both have, check whether equal or not
 			shadow = shadowIter.Item()
 			checkEqual()
 		}
@@ -127,12 +130,13 @@ func (p *PartitionState) CheckObjectStats() {
 	shadowIter = shadowCopy.Iter()
 	for shadowIter.Next() {
 		shadow = shadowIter.Item()
+		// only shadow has
 		if !statsIter.Seek(shadow) {
 			shadowUnique += fmt.Sprintf("\n %s", shadow.String())
 		} else {
-			// both have
-			stats = statsIter.Item()
-			checkEqual()
+			// both have, checked already above.
+			//stats = statsIter.Item()
+			//checkEqual()
 		}
 	}
 
