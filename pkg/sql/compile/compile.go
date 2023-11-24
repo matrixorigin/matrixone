@@ -168,6 +168,7 @@ func (c *Compile) clear() {
 	c.startAt = time.Time{}
 	c.metaTables = nil
 	c.needLockMeta = false
+	c.fuzzy = nil
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -394,7 +395,7 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -408,13 +409,24 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 	var span trace.Span
 	var cc *Compile // compile structure for rerun.
-	var result = &util2.RunResult{}
-	var err error
+	result = &util2.RunResult{}
+	// var err error
 
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
+		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+		if cc != nil {
+			if cc.fuzzy != nil && cc.fuzzy.cnt > 0 && err == nil {
+				err = cc.fuzzy.backgroundSQLCheck(cc)
+			}
+		} else {
+			if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+				err = c.fuzzy.backgroundSQLCheck(c)
+			}
+		}
+
 		putCompile(c)
 		putCompile(cc)
 
@@ -432,7 +444,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.fatalLog(0, err)
 
 		if !c.ifNeedRerun(err) {
-			return nil, err
+			return
 		}
 		v2.TxnStatementRetryCounter.Inc()
 
@@ -441,12 +453,14 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 		// clear the workspace of the failed statement
 		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-			return nil, e
+			err = e
+			return
 		}
 
 		// increase the statement id
 		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-			return nil, e
+			err = e
+			return
 		}
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
@@ -461,29 +475,30 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		}
 		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 			c.fatalLog(1, err)
-			return nil, err
+			return
 		}
 		if err = cc.runOnce(); err != nil {
 			c.fatalLog(1, err)
-			return nil, err
+			return
 		}
 		err = c.proc.TxnOperator.GetWorkspace().Adjust()
 		if err != nil {
 			c.fatalLog(1, err)
-			return nil, err
+			return
 		}
 		// set affectedRows to old compile to return
 		c.setAffectedRows(cc.getAffectedRows())
 	}
 
 	if c.shouldReturnCtxErr() {
-		return nil, c.proc.Ctx.Err()
+		err = c.proc.Ctx.Err()
+		return
 	}
 	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		err = c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return result, nil
+	return
 }
 
 // if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
@@ -1192,6 +1207,19 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
+	case plan.Node_FUZZY_FILTER:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		ss, err = c.compileFuzzyFilter(n, ss, ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
 	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -2582,6 +2610,48 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Arg: constructMergeLimit(n, c.proc),
 	}
 	return []*Scope{rs}
+}
+
+func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node) ([]*Scope, error) {
+	if len(ss) != 1 {
+		panic("fuzzy filter should have only one prescope")
+	}
+
+	arg := constructFuzzyFilter(ns[n.Children[0]])
+
+	ss[0].appendInstruction(vm.Instruction{
+		Op:  vm.FuzzyFilter,
+		Idx: c.anal.curr,
+		Arg: arg,
+	})
+
+	outData, err := newFuzzyCheck(n)
+	if err != nil {
+		return nil, err
+	}
+
+	// wrap the collision key into c.fuzzy, for more information,
+	// please refer fuzzyCheck.go
+	ss[0].appendInstruction(vm.Instruction{
+		Op: vm.Output,
+		Arg: &output.Argument{
+			Data: outData,
+			Func: func(data any, bat *batch.Batch) error {
+				if bat == nil || bat.IsEmpty() {
+					return nil
+				}
+				c.fuzzy = data.(*fuzzyCheck)
+				// the batch will contain the key that fuzzyCheck
+				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+					return err
+				}
+
+				return nil
+			},
+		},
+	})
+
+	return ss, nil
 }
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
