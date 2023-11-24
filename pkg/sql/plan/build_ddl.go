@@ -18,9 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
+
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
