@@ -437,9 +437,9 @@ func (s *store) initQueryService(inStandalone bool) {
 }
 
 func (s *store) initQueryCommandHandler() {
-	if s.queryService != nil {
-		s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
-	}
+	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion, false)
 }
 
 func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -452,5 +452,31 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 		}
 	})
 
+	return nil
+}
+
+func (s *store) handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	version, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		resp.WrapError(moerr.NewInternalError(ctx, "protocol version not found"))
+		return nil
+	}
+	resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
+		Version: version.(string),
+	}
+	return nil
+}
+
+func (s *store) handleSetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.SetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, req.SetProtocolVersion.Version)
+	resp.SetProtocolVersion = &query.SetProtocolVersionResponse{
+		Version: req.SetProtocolVersion.Version,
+	}
 	return nil
 }
