@@ -2747,7 +2747,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 
 		for idx%batchCnt == 0 && i < idx {
-			seg := collector.segments[blkMetaInsBatch]
+			seg := collector.segments[i]
 			seg.RLock()
 			mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
 			seg.RUnlock()
@@ -2759,6 +2759,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 				seg.SearchNode(node).BaseNode.ObjectStats = stats
 
 			}
+			i++
 		}
 	}
 	for ; i < len(collector.segments); i++ {
