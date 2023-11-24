@@ -1837,7 +1837,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	//var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1847,7 +1846,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		//var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1872,51 +1870,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 			}
 		}
 		tblDef = rel.GetTableDef(ctx)
-		// defs has no rowid
-		//defs, err := rel.TableDefs(ctx)
-		//if err != nil {
-		//	panic(err)
-		//}
-		//i := int32(0)
-		//name2index := make(map[string]int32)
-		//for _, def := range defs {
-		//	if attr, ok := def.(*engine.AttributeDef); ok {
-		//		name2index[attr.Attr.Name] = i
-		//		cols = append(cols, &plan.ColDef{
-		//			ColId: attr.Attr.ID,
-		//			Name:  attr.Attr.Name,
-		//			Typ: &plan.Type{
-		//				Id:         int32(attr.Attr.Type.Oid),
-		//				Width:      attr.Attr.Type.Width,
-		//				Scale:      attr.Attr.Type.Scale,
-		//				AutoIncr:   attr.Attr.AutoIncrement,
-		//				Enumvalues: attr.Attr.EnumVlaues,
-		//			},
-		//			Primary:   attr.Attr.Primary,
-		//			Default:   attr.Attr.Default,
-		//			OnUpdate:  attr.Attr.OnUpdate,
-		//			Comment:   attr.Attr.Comment,
-		//			ClusterBy: attr.Attr.ClusterBy,
-		//			Seqnum:    uint32(attr.Attr.Seqnum),
-		//		})
-		//		i++
-		//	} else if c, ok := def.(*engine.ConstraintDef); ok {
-		//		for _, ct := range c.Cts {
-		//			switch k := ct.(type) {
-		//			case *engine.PrimaryKeyDef:
-		//				pkey = k.Pkey
-		//			}
-		//		}
-		//	}
-		//}
-		//tblDef = &plan.TableDef{
-		//	Cols:          cols,
-		//	Name2ColIndex: name2index,
-		//	Version:       n.TableDef.Version,
-		//	Name:          n.TableDef.Name,
-		//	TableType:     n.TableDef.GetTableType(),
-		//	Pkey:          pkey,
-		//}
 	}
 
 	// prcoess partitioned table
