@@ -176,10 +176,18 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 		map[string]string{"account": tenant}, clusterservice.EQ)
 	sysTenant := isSysTenant(tenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
-			func(s *metadata.CNService) {
-				nodes = append(nodes, s.QueryAddress)
-			})
+		if strings.EqualFold(user, "dump") || strings.EqualFold(user, "root") {
+			clusterservice.GetMOCluster().GetCNService(
+				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
+					nodes = append(nodes, s.QueryAddress)
+					return true
+				})
+		} else {
+			disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
+				func(s *metadata.CNService) {
+					nodes = append(nodes, s.QueryAddress)
+				})
+		}
 	} else {
 		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)

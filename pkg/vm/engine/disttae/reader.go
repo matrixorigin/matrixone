@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -70,8 +71,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
-	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(chit, ctotal)
+	// TAG FOR bug:12797  need remove this tag after bug fixed
+	if ctotal > chit {
+		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+		blockio.RecordColumnSelectivity(chit, ctotal)
+	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -303,6 +307,11 @@ func (r *blockReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -499,11 +508,13 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 		}
 		ts := types.TimestampToTS(r.ts)
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
+		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
 
@@ -536,6 +547,11 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	//prefetch deletes for r.blks
 	if err := r.prefetchDeletes(); err != nil {
 		return nil, err
@@ -568,6 +584,11 @@ func (r *mergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if len(r.rds) == 0 {
 		return nil, nil
 	}

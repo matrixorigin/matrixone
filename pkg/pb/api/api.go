@@ -17,6 +17,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+var (
+	OpMethodName = map[OpCode]string{
+		OpCode_OpPing:          "Ping",
+		OpCode_OpFlush:         "Flush",
+		OpCode_OpCheckpoint:    "Checkpoint",
+		OpCode_OpInspect:       "Inspect",
+		OpCode_OpAddFaultPoint: "AddFaultPoint",
+		OpCode_OpBackup:        "Backup",
+		OpCode_OpTraceSpan:     "TraceSpan",
+	}
+)
+
+func NewUpdatePolicyReq(minRowQ, maxObjOnerune, maxRowsMerged int, hints ...MergeHint) *AlterTableReq {
+	return &AlterTableReq{
+		Kind: AlterKind_UpdatePolicy,
+		Operation: &AlterTableReq_UpdatePolicy{
+			&AlterTablePolicy{
+				MinRowsQuailifed: uint32(minRowQ),
+				MaxObjOnerun:     uint32(maxObjOnerune),
+				MaxRowsMergedObj: uint32(maxRowsMerged),
+				Hints:            hints,
+			},
+		},
+	}
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,

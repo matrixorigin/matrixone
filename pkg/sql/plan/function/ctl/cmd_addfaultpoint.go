@@ -18,7 +18,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
@@ -27,10 +27,8 @@ import (
 
 func handleAddFaultPoint() handleFunc {
 	return GetTNHandlerFunc(
-		pb.CmdMethod_AddFaultPoint,
-		func(_ string) ([]uint64, error) {
-			return nil, nil
-		},
+		api.OpCode_OpAddFaultPoint,
+		func(string) ([]uint64, error) { return nil, nil },
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter like "name.freq.action.iarg.sarg"
 			parameters := strings.Split(parameter, ".")
@@ -69,8 +67,8 @@ func handleAddFaultPoint() handleFunc {
 			}
 			return payload, nil
 		},
-		func(data []byte) (interface{}, error) {
-			resp := pb.TNStringResponse{}
+		func(data []byte) (any, error) {
+			resp := api.TNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -48,14 +47,14 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 	// testing query with wrong serviceType
 	a1.service = serviceType("log")
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
-	require.Equal(t, ret, pb.CtlResult{})
+	require.Equal(t, ret, Result{})
 	require.Equal(t, err, moerr.NewWrongServiceNoCtx("CN or DN", string(a1.service)))
 
 	// testing query with wrong cmd
 	a2.service = cn
 	a2.parameter = "xxx:open:s3:0"
 	ret, err = handleTraceSpan(a2.proc, a2.service, a2.parameter, a2.sender)
-	require.Equal(t, ret, pb.CtlResult{})
+	require.Equal(t, ret, Result{})
 	require.Equal(t, err, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable"))
 }
 
@@ -89,7 +88,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
-	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{}, nil)
+	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{})
 	require.Nil(t, err)
 
 	a1.proc = new(process.Process)
@@ -99,8 +98,8 @@ func TestCanHandleSelfCmd(t *testing.T) {
 
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
-	require.Equal(t, ret, pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
+	require.Equal(t, ret, Result{
+		Method: TraceSpanMethod,
 		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
 
@@ -136,9 +135,9 @@ func TestCanTransferQuery(t *testing.T) {
 	initRuntime(uuids, addrs)
 	trace.InitMOCtledSpan()
 
-	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
+	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{})
 	require.Nil(t, err)
-	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{}, nil)
+	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{})
 	require.Nil(t, err)
 
 	qs1.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -62,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -71,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -107,6 +111,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions: t.Conditions,
 			Result:     t.Result,
 			HashOnPK:   t.HashOnPK,
+			IsShuffle:  t.IsShuffle,
 		}
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
@@ -121,6 +126,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Aggs:         t.Aggs,
 			MultiAggs:    t.MultiAggs,
 		}
+	case vm.Sample:
+		t := sourceIns.Arg.(*sample.Argument)
+		res.Arg = t.SimpleDup()
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
 		res.Arg = &join.Argument{
@@ -132,6 +140,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
@@ -144,6 +153,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Right:
 		t := sourceIns.Arg.(*right.Argument)
@@ -157,6 +167,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightSemi:
 		t := sourceIns.Arg.(*rightsemi.Argument)
@@ -169,6 +180,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightAnti:
 		t := sourceIns.Arg.(*rightanti.Argument)
@@ -181,6 +193,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Limit:
 		t := sourceIns.Arg.(*limit.Argument)
@@ -242,8 +255,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
 		res.Arg = &product.Argument{
-			Result: t.Result,
-			Typs:   t.Typs,
+			Result:    t.Result,
+			Typs:      t.Typs,
+			IsShuffle: t.IsShuffle,
 		}
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
@@ -266,6 +280,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Single:
 		t := sourceIns.Arg.(*single.Argument)
@@ -477,6 +492,11 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := new(lockop.Argument)
 		*arg = *t
 		res.Arg = arg
+	case vm.FuzzyFilter:
+		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		arg := new(fuzzyfilter.Argument)
+		*arg = *t
+		res.Arg = t
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -538,6 +558,12 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		TableDef:        oldCtx.TableDef,
 		IsIgnore:        oldCtx.IsIgnore,
+	}
+}
+
+func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
+	return &fuzzyfilter.Argument{
+		N: n.Stats.Outcnt,
 	}
 }
 
@@ -739,6 +765,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -759,6 +786,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -775,6 +803,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -794,6 +823,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -812,6 +842,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -830,6 +861,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -873,6 +905,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
 		HashOnPK:   n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:  n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -1055,6 +1088,16 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	return &limit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
+}
+
+func constructSample(n *plan.Node) *sample.Argument {
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+	}
+	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
+		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
+	}
+	panic("only support sample by rows / percent now.")
 }
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
@@ -1378,6 +1421,12 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 
 func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
 	return &mergeorder.Argument{
+		OrderBySpecs: n.OrderBy,
+	}
+}
+
+func constructPartition(n *plan.Node) *partition.Argument {
+	return &partition.Argument{
 		OrderBySpecs: n.OrderBy,
 	}
 }
@@ -1753,7 +1802,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1768,7 +1817,7 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}

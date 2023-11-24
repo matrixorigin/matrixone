@@ -53,7 +53,7 @@ func NewTAEStorage(
 	logtailServerCfg *options.LogtailServerCfg,
 	incrementalDedup bool,
 	maxMessageSize uint64,
-) (*taeStorage, error) {
+) (storage.TxnStorage, error) {
 	opt := &options.Options{
 		Clock:            rt.Clock(),
 		Fs:               fs,
@@ -80,8 +80,6 @@ func NewTAEStorage(
 		logtailServer: server,
 	}, nil
 }
-
-var _ storage.TxnStorage = new(taeStorage)
 
 // Start starts logtail push service.
 func (s *taeStorage) Start() error {

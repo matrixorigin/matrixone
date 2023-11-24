@@ -16,14 +16,13 @@ package taestorage
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	moctl "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
@@ -32,86 +31,71 @@ func (s *taeStorage) Debug(ctx context.Context,
 	opCode uint32,
 	data []byte) ([]byte, error) {
 	switch opCode {
-	case uint32(ctl.CmdMethod_Ping):
+	case uint32(api.OpCode_OpPing):
 		return s.handlePing(data), nil
-	case uint32(ctl.CmdMethod_Flush):
-		_, err := handleRead(
-			ctx, s,
-			txnMeta, data,
-			s.taeHandler.HandleFlushTable,
-		)
+	case uint32(api.OpCode_OpFlush):
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFlushTable)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
-	case uint32(ctl.CmdMethod_Checkpoint):
-		_, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleForceCheckpoint,
-		)
+	case uint32(api.OpCode_OpCheckpoint):
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleForceCheckpoint)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
 
-	case uint32(ctl.CmdMethod_Inspect):
-		resp, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleInspectTN,
-		)
+	case uint32(api.OpCode_OpInspect):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInspectTN)
 		if err != nil {
 			return types.Encode(&db.InspectResp{
 				Message: "Failed",
 			})
 		}
 		return resp.Read()
-	case uint32(ctl.CmdMethod_AddFaultPoint):
-		_, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleAddFaultPoint,
-		)
+	case uint32(api.OpCode_OpAddFaultPoint):
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleAddFaultPoint)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
-	case uint32(ctl.CmdMethod_Backup):
-		resp, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleBackup,
-		)
+	case uint32(api.OpCode_OpBackup):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleBackup)
 		if err != nil {
 			return types.Encode(&api.SyncLogTailResp{
 				CkpLocation: "Failed",
 			})
 		}
 		return resp.Read()
-	case uint32(ctl.CmdMethod_TraceSpan):
-		handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleTraceSpan,
-		)
+	case uint32(api.OpCode_OpTraceSpan):
 		req := db.TraceSpan{}
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
 		}
-		ret := moctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
+		ret := ctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
-	case uint32(ctl.CmdMethod_StorageUsage):
-		resp, _ := handleRead(ctx, s, txnMeta, data, s.taeHandler.HandleStorageUsage)
+	case uint32(api.OpCode_OpStorageUsage):
+		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 
 	default:
@@ -120,10 +104,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 }
 
 func (s *taeStorage) handlePing(data []byte) []byte {
-	req := ctl.TNPingRequest{}
+	req := api.TNPingRequest{}
 	protoc.MustUnmarshal(&req, data)
 
-	return protoc.MustMarshal(&ctl.TNPingResponse{
+	return protoc.MustMarshal(&api.TNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,

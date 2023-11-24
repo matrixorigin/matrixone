@@ -18,10 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
-
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -599,6 +598,11 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
+	}
+
+	v, ok := getAutoIncrementOffsetFromVariables(ctx)
+	if ok {
+		createTable.TableDef.AutoIncrOffset = v
 	}
 
 	// set option
@@ -2556,4 +2560,20 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	}
 
 	return &fkData, nil
+}
+
+func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
+	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	v, err = ctx.ResolveVariable("auto_increment_offset", true, true)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	return 0, false
 }

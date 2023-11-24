@@ -448,3 +448,18 @@ Drop table auto_increment15;
 Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 Drop table auto_increment16;
+
+-- global variable: auto_increment_increment
+drop table if exists auto_increment17;
+set global auto_increment_offset= 10;
+create table auto_increment17(col1 int auto_increment);
+insert into auto_increment17 values();
+select * from auto_increment17;
+drop table auto_increment17;
+set auto_increment_offset = 100;
+create table auto_increment17(col1 int auto_increment);
+insert into auto_increment17 values();
+select * from auto_increment17;
+drop table auto_increment17;
+set auto_increment_offset = 1;
+set global auto_increment_offset= 1;

@@ -70,7 +70,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(ap, proc, analyze); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil {
+			if ctr.mp == nil && !arg.IsShuffle {
+				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+				// shuffle join can't stop early for this moment
 				ctr.state = End
 			} else {
 				ctr.state = Probe
@@ -138,7 +140,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.RowCount())
+		ctr.matched.InitWithSize(int64(bat.RowCount()))
 		analyze.Alloc(ctr.mp.Size())
 	}
 	return nil
@@ -168,6 +170,10 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 				}
 			}
 		}
+	}
+
+	if ctr.matched == nil {
+		return false, nil
 	}
 
 	if ctr.rbat != nil {

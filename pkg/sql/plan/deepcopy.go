@@ -209,6 +209,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		IsEnd:           node.IsEnd,
 		ExternScan:      node.ExternScan,
 		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
+		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -352,12 +353,15 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		return nil
 	}
 	newindexDef := &plan.IndexDef{
-		IdxId:          indexDef.IdxId,
-		IndexName:      indexDef.IndexName,
-		Unique:         indexDef.Unique,
-		TableExist:     indexDef.TableExist,
-		IndexTableName: indexDef.IndexTableName,
-		Comment:        indexDef.Comment,
+		IdxId:              indexDef.IdxId,
+		IndexName:          indexDef.IndexName,
+		Unique:             indexDef.Unique,
+		TableExist:         indexDef.TableExist,
+		IndexTableName:     indexDef.IndexTableName,
+		Comment:            indexDef.Comment,
+		IndexAlgo:          indexDef.IndexAlgo,
+		IndexAlgoParams:    indexDef.IndexAlgoParams,
+		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 	}
 
 	newParts := make([]string, len(indexDef.Parts))
@@ -407,6 +411,16 @@ func DeepCopyPartitionPrune(partitionPrune *plan.PartitionPrune) *plan.Partition
 		}
 	}
 	return newPartitionPrune
+}
+
+func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
+	if source == nil {
+		return nil
+	}
+	return &plan.SampleFuncSpec{
+		Rows:    source.Rows,
+		Percent: source.Percent,
+	}
 }
 
 func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {

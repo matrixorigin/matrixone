@@ -19,11 +19,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func ReadExtent(
@@ -204,8 +206,7 @@ func ReadOneBlockWithMeta(
 					meta.BlockHeader().BlockID().String(), filledEntries[i].Size, typs[i])
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
-				err = containers.FillCNConstVector(length, typs[i], nil, m).MarshalBinaryWithBuffer(buf)
-				if err != nil {
+				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
 					return
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator.Alloc(buf.Len())
@@ -296,5 +297,46 @@ func ReadAllBlocksWithMeta(
 
 	err = fs.Read(ctx, ioVec)
 	//TODO when to call ioVec.Release?
+	return
+}
+
+func ReadOneBlockAllColumns(
+	ctx context.Context,
+	meta *ObjectDataMeta,
+	name string,
+	id uint32,
+	cols []uint16,
+	cachePolicy fileservice.Policy,
+	fs fileservice.FileService,
+) (bat *batch.Batch, err error) {
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 0),
+		Policy:   cachePolicy,
+	}
+	for _, seqnum := range cols {
+		blkmeta := meta.GetBlockMeta(id)
+		col := blkmeta.ColumnMeta(seqnum)
+		ext := col.Location()
+		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+			Offset: int64(ext.Offset()),
+			Size:   int64(ext.Length()),
+
+			ToCacheData: constructorFactory(int64(ext.OriginSize()), ext.Alg()),
+		})
+	}
+
+	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
+	bat = batch.NewWithSize(len(cols))
+	var obj any
+	for i := range cols {
+		obj, err = Decode(ioVec.Entries[i].CachedData.Bytes())
+		if err != nil {
+			return nil, err
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
+	}
 	return
 }

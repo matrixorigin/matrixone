@@ -62,6 +62,7 @@ const (
 	MergeOffset
 	MergeRecursive
 	MergeCTE
+	Partition
 
 	Deletion
 	Insert
@@ -84,6 +85,7 @@ const (
 	MergeDelete
 	Right
 	OnDuplicateKey
+	FuzzyFilter
 	PreInsert
 	PreInsertUnique
 	PreInsertSecondaryIndex
@@ -98,6 +100,8 @@ const (
 	LockOp
 
 	Shuffle
+
+	Sample
 )
 
 // Instruction contains relational algebra
@@ -172,13 +176,15 @@ type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {
 	switch ins.Op {
-	case Order, MergeOrder:
+	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
 		return true
 	case Offset, MergeOffset:
 		return true
 	case Group, MergeGroup:
+		return true
+	case Sample:
 		return true
 	case Top, MergeTop:
 		return true

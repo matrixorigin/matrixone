@@ -30,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -131,10 +131,10 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session) (resp interface{}, err error) {
+func requestStorageUsage(ses *Session) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
-	responseUnmarshaler := func(payload []byte) (interface{}, error) {
+	responseUnmarshaler := func(payload []byte) (any, error) {
 		usage := &db.StorageUsageResp{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
@@ -156,15 +156,15 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 		ses.proc.UdfService, ses.proc.Aicm,
 	)
 
-	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
-	result, err := handler(proc, "DN", "", ctl2.MoCtlTNCmdSender)
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
+	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
 	} else if err != nil {
 		return nil, err
 	}
 
-	return result.Data.([]interface{})[0], nil
+	return result.Data.([]any)[0], nil
 }
 
 func handleStorageUsageResponse(
@@ -518,18 +518,33 @@ func getTableStats(ctx context.Context, bh *BackgroundHandler, accountId int32) 
 // mergeOutputResult merges the result set from mo_account and the table status
 // into the final output format
 func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *batch.Batch, rsOfEachAccount []*batch.Batch) error {
-	outputBatch.Vecs[finalIdxOfAccountName] = rsOfMoAccount.Vecs[idxOfAccountName]
+	var err error
+	mp := ses.GetMemPool()
+	outputBatch.Vecs[finalIdxOfAccountName], err = rsOfMoAccount.Vecs[idxOfAccountName].Dup(mp)
+	if err != nil {
+		return err
+	}
 	outputBatch.Vecs[finalIdxOfAdminName] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfAdminName].GetType())
-	outputBatch.Vecs[finalIdxOfCreated] = rsOfMoAccount.Vecs[idxOfCreated]
-	outputBatch.Vecs[finalIdxOfStatus] = rsOfMoAccount.Vecs[idxOfStatus]
-	outputBatch.Vecs[finalIdxOfSuspendedTime] = rsOfMoAccount.Vecs[idxOfSuspendedTime]
+	outputBatch.Vecs[finalIdxOfCreated], err = rsOfMoAccount.Vecs[idxOfCreated].Dup(mp)
+	if err != nil {
+		return err
+	}
+	outputBatch.Vecs[finalIdxOfStatus], err = rsOfMoAccount.Vecs[idxOfStatus].Dup(mp)
+	if err != nil {
+		return err
+	}
+	outputBatch.Vecs[finalIdxOfSuspendedTime], err = rsOfMoAccount.Vecs[idxOfSuspendedTime].Dup(mp)
+	if err != nil {
+		return err
+	}
 	outputBatch.Vecs[finalIdxOfDBCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfDBCount].GetType())
 	outputBatch.Vecs[finalIdxOfTableCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfTableCount].GetType())
 	outputBatch.Vecs[finalIdxOfSize] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfSize].GetType())
-	outputBatch.Vecs[finalIdxOfComment] = rsOfMoAccount.Vecs[idxOfComment]
+	outputBatch.Vecs[finalIdxOfComment], err = rsOfMoAccount.Vecs[idxOfComment].Dup(mp)
+	if err != nil {
+		return err
+	}
 
-	var err error
-	mp := ses.GetMemPool()
 	for _, bat := range rsOfEachAccount {
 		err = outputBatch.Vecs[finalIdxOfAdminName].UnionOne(bat.Vecs[idxOfAdminName], 0, mp)
 		if err != nil {

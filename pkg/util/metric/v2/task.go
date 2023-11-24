@@ -25,7 +25,7 @@ var (
 			Subsystem: "task",
 			Name:      "short_duration_seconds",
 			Help:      "Bucketed histogram of short tn task execute duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 
 	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
@@ -41,7 +41,28 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
 		}, []string{"type"})
 
+	taskBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "hist_bytes",
+			Help:      "Bucketed histogram of task result bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		}, []string{"type"})
+
+	taskCountHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "hist_total",
+			Help:      "Bucketed histogram of task result count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		}, []string{"type"})
+
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
+	TaskLoadMemDeletesPerBlockHistogram  = taskCountHistogram.WithLabelValues("load_mem_deletes_per_block")
+	TaskFlushDeletesCountHistogram       = taskCountHistogram.WithLabelValues("flush_deletes_count")
+	TaskFlushDeletesSizeHistogram        = taskBytesHistogram.WithLabelValues("flush_deletes_size")
 )
 
 var (

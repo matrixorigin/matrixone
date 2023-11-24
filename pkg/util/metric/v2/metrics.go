@@ -16,19 +16,34 @@ package v2
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 var (
-	registry = prometheus.DefaultRegisterer
+	registry = prometheus.NewRegistry()
 )
 
+func GetPrometheusRegistry() prometheus.Registerer {
+	return registry
+}
+
+func GetPrometheusGatherer() prometheus.Gatherer {
+	return registry
+}
+
 func init() {
+	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector(
+		collectors.WithGoCollectorRuntimeMetrics(collectors.MetricsAll),
+	))
+
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
 	initMemMetrics()
+	initTraceMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -45,6 +60,8 @@ func initMemMetrics() {
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
+	registry.MustRegister(taskBytesHistogram)
+	registry.MustRegister(taskCountHistogram)
 
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
@@ -67,6 +84,7 @@ func initFileServiceMetrics() {
 
 func initLogtailMetrics() {
 	registry.MustRegister(LogtailLoadCheckpointCounter)
+	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
 
@@ -103,6 +121,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
+	registry.MustRegister(TxnUnlockTableTotalHistogram)
+	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
@@ -125,4 +145,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcWriteLatencyDurationHistogram)
 	registry.MustRegister(rpcBackendDoneDurationHistogram)
 
+}
+
+func initTraceMetrics() {
+	registry.MustRegister(traceCollectorDurationHistogram)
 }
