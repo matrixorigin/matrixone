@@ -179,7 +179,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-		if ctr.rbat.Vecs[0].Length() >= batch.MaxBatchSize {
+		if rowCountIncrease >= batch.MaxBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
