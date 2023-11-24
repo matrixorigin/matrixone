@@ -186,7 +186,3 @@ type Batch struct {
 
 	AuxData any // hash table, runtime filter, etc.
 }
-
-const (
-	MaxBatchSize int = 8192
-)

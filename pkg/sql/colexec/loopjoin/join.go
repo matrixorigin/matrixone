@@ -179,7 +179,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-		if rowCountIncrease >= batch.MaxBatchSize {
+		if rowCountIncrease >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(rowCountIncrease)
