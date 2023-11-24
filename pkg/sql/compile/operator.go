@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -492,11 +491,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := new(lockop.Argument)
 		*arg = *t
 		res.Arg = arg
-	case vm.FuzzyFilter:
-		t := sourceIns.Arg.(*fuzzyfilter.Argument)
-		arg := new(fuzzyfilter.Argument)
-		*arg = *t
-		res.Arg = t
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -558,12 +552,6 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		TableDef:        oldCtx.TableDef,
 		IsIgnore:        oldCtx.IsIgnore,
-	}
-}
-
-func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
-	return &fuzzyfilter.Argument{
-		N: n.Stats.Outcnt,
 	}
 }
 

@@ -191,10 +191,6 @@ message OnDuplicateKey{
   bool is_ignore                            = 4;
 }
 
-message FuzzyFilter {
-
-}
-
 message Join {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
@@ -424,7 +420,6 @@ message Instruction{
   StreamScan stream_scan = 35;
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
-  FuzzyFilter fuzzy_filter = 38;
 }
 
 message AnalysisList {
