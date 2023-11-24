@@ -821,8 +821,12 @@ func FixProjectionResult(proc *process.Process,
 				newVec = functionExpr.resultVector.GetResultVector()
 				functionExpr.resultVector.SetResultVector(nil)
 			} else {
-				newVec = proc.GetVector(*oldVec.GetType())
-				err = uafs[i](newVec, oldVec)
+				if uafs[i] != nil {
+					newVec = proc.GetVector(*oldVec.GetType())
+					err = uafs[i](newVec, oldVec)
+				} else {
+					newVec, err = oldVec.Dup(proc.Mp())
+				}
 				if err != nil {
 					for j := range finalVectors {
 						finalVectors[j].Free(proc.Mp())
@@ -830,14 +834,7 @@ func FixProjectionResult(proc *process.Process,
 					return 0, err
 				}
 				dupSize += newVec.Size()
-				// newVec, err = oldVec.Dup(proc.Mp())
-				// if err != nil {
-				// 	for j := range finalVectors {
-				// 		finalVectors[j].Free(proc.Mp())
-				// 	}
-				// 	return 0, err
-				// }
-				// dupSize += newVec.Size()
+				dupSize += newVec.Size()
 			}
 
 			finalVectors = append(finalVectors, newVec)

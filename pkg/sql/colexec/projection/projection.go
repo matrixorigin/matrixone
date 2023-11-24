@@ -43,7 +43,9 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
 	ap.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(ap.Es))
 	for i, e := range ap.Es {
-		ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
+		if e.Typ.Id != 0 {
+			ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
+		}
 	}
 	return err
 }
