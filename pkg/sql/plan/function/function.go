@@ -362,7 +362,7 @@ type overload struct {
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
 	// For example,
-	//		args can be `{int64, int64}` of one overload of the `pow` function.
+	//		args can be `{int64, int64}` of one overload for the `pow` function.
 	//		this means the overload can accept {int64, int64} as its input.
 	// but it was not necessarily the type directly required by the overload.
 	// what it is depends on the logic of function's checkFn.

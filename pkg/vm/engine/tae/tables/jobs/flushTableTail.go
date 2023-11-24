@@ -673,7 +673,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		if deletes == nil || deletes.Length() == 0 {
 			if emtpyDelBlkIdx == nil {
 				emtpyDelBlkIdx = &bitmap.Bitmap{}
-				emtpyDelBlkIdx.InitWithSize(len(task.delSrcMetas))
+				emtpyDelBlkIdx.InitWithSize(int64(len(task.delSrcMetas)))
 			}
 			emtpyDelBlkIdx.Add(uint64(i))
 			continue
@@ -710,6 +710,9 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 		subtask.blocks[0].GetExtent(),
 		uint32(subtask.delta.Length()),
 		subtask.blocks[0].GetID())
+
+	v2.TaskFlushDeletesCountHistogram.Observe(float64(task.nblksDeletesCnt))
+	v2.TaskFlushDeletesSizeHistogram.Observe(float64(deltaLoc.Extent().End()))
 	logutil.Infof("[FlushTabletail] task %d update %s for approximate %d blks", task.ID(), deltaLoc, len(task.delSrcHandles))
 	for i, hdl := range task.delSrcHandles {
 		if emtpyDelBlkIdx != nil && emtpyDelBlkIdx.Contains(uint64(i)) {

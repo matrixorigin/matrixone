@@ -87,6 +87,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_PARTITION:
+		pname = "Partition"
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -131,6 +133,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
 		pname = "On Duplicate Key"
+	case plan.Node_FUZZY_FILTER:
+		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	default:

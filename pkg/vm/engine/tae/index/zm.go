@@ -546,6 +546,23 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) HasPrefix(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	if len(zmin) > len(s) {
+		zmin = zmin[:len(s)]
+	}
+	if bytes.Compare(zmin, s) > 0 {
+		return false
+	}
+
+	zmax := zm.GetMaxBuf()
+	if len(s) > len(zmax) {
+		s = s[:len(zmax)]
+	}
+
+	return bytes.Compare(zmax, s) >= 0
+}
+
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	switch vec.GetType().Oid {
 	case types.T_bool:
