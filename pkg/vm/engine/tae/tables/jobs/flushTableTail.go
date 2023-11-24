@@ -673,7 +673,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 		if deletes == nil || deletes.Length() == 0 {
 			if emtpyDelBlkIdx == nil {
 				emtpyDelBlkIdx = &bitmap.Bitmap{}
-				emtpyDelBlkIdx.InitWithSize(int64(len(task.delSrcMetas)))
+				emtpyDelBlkIdx.InitWithSize(len(task.delSrcMetas))
 			}
 			emtpyDelBlkIdx.Add(uint64(i))
 			continue
