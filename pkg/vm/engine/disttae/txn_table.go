@@ -971,7 +971,6 @@ func (tbl *txnTable) tryFastRanges(
 		); err != nil {
 			return
 		}
-
 		// reset bloom filter to nil for each object
 		bf = nil
 		// bfIdx = index.NewEmptyBinaryFuseFilter()
