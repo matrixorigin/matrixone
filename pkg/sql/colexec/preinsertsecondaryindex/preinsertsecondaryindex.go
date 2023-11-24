@@ -86,7 +86,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap = util.SerialWithoutCompacted(vs, proc)
+		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc)
+		if err != nil {
+			return result, err
+		}
 	}
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())

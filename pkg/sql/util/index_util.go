@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/google/uuid"
@@ -320,7 +321,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 	}
 
-	vec := vector.NewVec(vct)
+	vec := proc.GetVector(vct)
 	vector.AppendBytesList(vec, val, nil, proc.Mp())
 
 	return vec, bitMap
@@ -334,27 +335,23 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
-
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {
 	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
-	defer result.Free()
 
 	if len(vs) == 0 {
 		// return empty vector and empty bitmap
-		return vector.NewVec(types.T_varchar.ToType()), new(nulls.Nulls)
+		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
 	}
 
 	rowCount := vs[0].Length()
 	_ = function.BuiltInSerialFull(vs, result, proc, rowCount)
-	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper upon return
-	resultVec, _ := result.GetResultVector().Dup(proc.Mp())
-	return resultVec, new(nulls.Nulls)
-
+	resultVec := result.GetResultVector()
+	return resultVec, new(nulls.Nulls), nil
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
 	nsp := new(nulls.Nulls)
-	var vec *vector.Vector
+	vec := proc.GetVector(*v.GetType())
 	length := v.Length()
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -365,7 +362,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](v)
@@ -375,7 +371,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int16:
 		s := vector.MustFixedCol[int16](v)
@@ -385,7 +380,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int32:
 		s := vector.MustFixedCol[int32](v)
@@ -395,7 +389,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int64:
 		s := vector.MustFixedCol[int64](v)
@@ -405,7 +398,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustFixedCol[uint8](v)
@@ -415,7 +407,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustFixedCol[uint16](v)
@@ -425,7 +416,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustFixedCol[uint32](v)
@@ -445,7 +435,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float32:
 		s := vector.MustFixedCol[float32](v)
@@ -455,7 +444,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float64:
 		s := vector.MustFixedCol[float64](v)
@@ -485,7 +473,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustFixedCol[types.Datetime](v)
@@ -495,7 +482,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustFixedCol[types.Timestamp](v)
@@ -505,7 +491,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_enum:
 		s := vector.MustFixedCol[types.Enum](v)
@@ -515,7 +500,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
@@ -525,7 +509,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustFixedCol[types.Decimal128](v)
@@ -535,7 +518,6 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
@@ -546,14 +528,13 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
 	return vec, v.GetNulls()
 }
 func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) *vector.Vector {
 	//nsp := new(nulls.Nulls)
-	var vec *vector.Vector
+	vec := proc.GetVector(*v.GetType())
 	length := v.Length()
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -564,7 +545,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](v)
@@ -574,7 +554,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int16:
 		s := vector.MustFixedCol[int16](v)
@@ -584,7 +563,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int32:
 		s := vector.MustFixedCol[int32](v)
@@ -594,7 +572,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int64:
 		s := vector.MustFixedCol[int64](v)
@@ -604,7 +581,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustFixedCol[uint8](v)
@@ -614,7 +590,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustFixedCol[uint16](v)
@@ -624,7 +599,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustFixedCol[uint32](v)
@@ -634,7 +608,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustFixedCol[uint64](v)
@@ -644,7 +617,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float32:
 		s := vector.MustFixedCol[float32](v)
@@ -654,7 +626,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float64:
 		s := vector.MustFixedCol[float64](v)
@@ -664,7 +635,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_date:
 		s := vector.MustFixedCol[types.Date](v)
@@ -674,7 +644,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_time:
 		s := vector.MustFixedCol[types.Time](v)
@@ -684,7 +653,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustFixedCol[types.Datetime](v)
@@ -694,7 +662,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustFixedCol[types.Timestamp](v)
@@ -704,7 +671,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_enum:
 		s := vector.MustFixedCol[types.Enum](v)
@@ -714,7 +680,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
@@ -724,7 +689,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustFixedCol[types.Decimal128](v)
@@ -734,7 +698,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
@@ -745,7 +708,6 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vec = vector.NewVec(*v.GetType())
 		vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
 	return vec
