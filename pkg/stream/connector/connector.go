@@ -29,6 +29,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const MSGKey = "msgs"
+
 func KafkaSinkConnectorExecutor(
 	logger *zap.Logger,
 	ts taskservice.TaskService,
@@ -294,8 +296,7 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
-	const msgsKey = "msgs"
-	ctx = context.WithValue(ctx, msgsKey, msgs)
+	ctx = context.WithValue(ctx, MSGKey, msgs)
 	defer cancel()
 	res := k.ie.Query(ctx, sql, opts)
 	return res
