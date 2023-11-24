@@ -465,6 +465,5 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	}
 	if b.currentLogtail != nil {
 		*b.logtails = append(*b.logtails, *b.currentLogtail)
-		b.currentLogtail = nil
 	}
 }
