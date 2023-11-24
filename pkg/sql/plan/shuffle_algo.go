@@ -262,7 +262,7 @@ func (s *ShuffleRange) Eval() {
 	for {
 		if head == nil {
 			for i := 0; i <= k; i++ {
-				s.Result[k-i] = s.min - 0.1*float64((i+1))
+				s.Result[k-i] = s.min
 			}
 			break
 		}
@@ -297,21 +297,21 @@ func (s *ShuffleRange) Eval() {
 					size -= float64(node.size)
 					if last <= 0 {
 						if -last <= last+float64(node.size) {
-							s.Result[k] = now - 0.1
+							s.Result[k] = now
 							last = step
 							k--
 							if k < 0 {
 								break
 							}
 						} else {
-							s.Result[k] = now + 0.1
+							s.Result[k] = now
 							last = step - float64(node.size)
 							k--
 							if k < 0 {
 								break
 							}
 							if last <= 0 {
-								s.Result[k] = now - 0.1
+								s.Result[k] = now
 								last = step
 								k--
 								if k < 0 {
@@ -367,11 +367,12 @@ func (s *ShuffleRange) Eval() {
 	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
 	if s.isStrType {
 		for i := range s.Result {
-			s.Result[i] = math.Floor(s.Result[i])
+			var frac float64
 			str := make([]byte, s.maxlen)
+			s.Result[i], _ = math.Modf(s.Result[i])
 			for j := 0; j < s.maxlen; j++ {
-				str[j] = inttobyte[int((s.Result[i]/lens-math.Floor(s.Result[i]/lens))*lens+0.1)]
-				s.Result[i] = math.Floor(s.Result[i] / lens)
+				s.Result[i], frac = math.Modf(s.Result[i] / lens)
+				str[j] = inttobyte[int(frac*lens+0.01)]
 			}
 			s.Result[i] = 0
 			for j := len(str) - 1; j >= 0; j-- {

@@ -177,11 +177,11 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
-						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
+						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
+						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
