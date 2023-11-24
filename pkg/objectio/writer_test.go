@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"math"
 	"os"
 	"path"
@@ -101,6 +102,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
+	require.Equal(t, objectWriter.objStats[0].Size(), blocks[0].GetExtent().End()+FooterSize)
 
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	extents := make([]Extent, 3)
@@ -114,6 +116,18 @@ func TestNewObjectWriter(t *testing.T) {
 	metaHeader, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
 	meta, _ := metaHeader.DataMeta()
+	oSize := uint32(0)
+	for i := uint32(0); i < 3; i++ {
+		blockMeta := meta.GetBlockMeta(i)
+		for y := uint16(0); y < blockMeta.GetColumnCount(); y++ {
+			oSize += blockMeta.MustGetColumn(y).Location().OriginSize()
+		}
+	}
+	oSize += meta.BlockHeader().BFExtent().OriginSize()
+	oSize += meta.BlockHeader().ZoneMapArea().OriginSize()
+	// 24 is the size of empty bf and zm
+	oSize += HeaderSize + FooterSize + 24 + extents[0].OriginSize()
+	require.Equal(t, objectWriter.objStats[0].OriginSize(), oSize)
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	assert.True(t, meta.BlockHeader().Appendable())
 	assert.Equal(t, uint16(math.MaxUint16), meta.BlockHeader().SortKey())

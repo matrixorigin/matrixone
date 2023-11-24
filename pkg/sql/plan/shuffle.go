@@ -88,50 +88,24 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64) uint64 {
 	switch zm.GetType() {
 	case types.T_int64:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, types.DecodeInt64(zm.GetMinBuf()), upplerLimit)
+		return GetRangeShuffleIndexSigned(minVal, maxVal, types.DecodeInt64(zm.GetMinBuf()), upplerLimit)
 	case types.T_int32:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, int64(types.DecodeInt32(zm.GetMinBuf())), upplerLimit)
+		return GetRangeShuffleIndexSigned(minVal, maxVal, int64(types.DecodeInt32(zm.GetMinBuf())), upplerLimit)
 	case types.T_int16:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, int64(types.DecodeInt16(zm.GetMinBuf())), upplerLimit)
+		return GetRangeShuffleIndexSigned(minVal, maxVal, int64(types.DecodeInt16(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint64:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), types.DecodeUint64(zm.GetMinBuf()), upplerLimit)
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), types.DecodeUint64(zm.GetMinBuf()), upplerLimit)
 	case types.T_uint32:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
 	case types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
 
-func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint64 {
-	switch zm.GetType() {
-	case types.T_int64:
-		return GetRangeShuffleIndexSignedSlice(val, types.DecodeInt64(zm.GetMinBuf()))
-	case types.T_int32:
-		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt32(zm.GetMinBuf())))
-	case types.T_int16:
-		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt16(zm.GetMinBuf())))
-	}
-	panic("unsupported shuffle type!")
-}
-
-func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
-	switch zm.GetType() {
-	case types.T_uint64:
-		return GetRangeShuffleIndexUnsignedSlice(val, types.DecodeUint64(zm.GetMinBuf()))
-	case types.T_uint32:
-		return GetRangeShuffleIndexUnsignedSlice(val, uint64(types.DecodeUint32(zm.GetMinBuf())))
-	case types.T_uint16:
-		return GetRangeShuffleIndexUnsignedSlice(val, uint64(types.DecodeUint16(zm.GetMinBuf())))
-	case types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedSlice(val, ByteSliceToUint64(zm.GetMinBuf()))
-	}
-	panic("unsupported shuffle type!")
-}
-
-func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
+func GetRangeShuffleIndexSigned(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
 	if currentVal <= minVal {
 		return 0
 	} else if currentVal >= maxVal {
@@ -146,7 +120,7 @@ func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLi
 	}
 }
 
-func GetRangeShuffleIndexUnsignedMinMax(minVal, maxVal, currentVal uint64, upplerLimit uint64) uint64 {
+func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit uint64) uint64 {
 	if currentVal <= minVal {
 		return 0
 	} else if currentVal >= maxVal {
@@ -159,46 +133,6 @@ func GetRangeShuffleIndexUnsignedMinMax(minVal, maxVal, currentVal uint64, upple
 		}
 		return ret
 	}
-}
-
-func GetRangeShuffleIndexSignedSlice(val []int64, currentVal int64) uint64 {
-	if currentVal <= val[0] {
-		return 0
-	}
-	left := 0
-	right := len(val) - 1
-	for left < right {
-		mid := (left + right) >> 1
-		if currentVal > val[mid] {
-			left = mid + 1
-		} else {
-			right = mid
-		}
-	}
-	if currentVal > val[right] {
-		right += 1
-	}
-	return uint64(right)
-}
-
-func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
-	if currentVal <= val[0] {
-		return 0
-	}
-	left := 0
-	right := len(val) - 1
-	for left < right {
-		mid := (left + right) >> 1
-		if currentVal > val[mid] {
-			left = mid + 1
-		} else {
-			right = mid
-		}
-	}
-	if currentVal > val[right] {
-		right += 1
-	}
-	return uint64(right)
 }
 
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
@@ -273,8 +207,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[colName])
-	n.Stats.HashmapStats.Nullcnt = s.NullCntMap[colName]
+
 }
 
 // to determine if join need to go shuffle
@@ -442,13 +375,16 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 			return
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
-		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
+		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
 			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
 			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
-			n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[firstColName])
-			n.Stats.HashmapStats.Nullcnt = s.NullCntMap[firstColName]
+		case types.T_char, types.T_varchar, types.T_text:
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
+			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
 		}
 	}
 }
@@ -495,14 +431,4 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 			}
 		}
 	}
-}
-
-func shouldUseShuffleRange(s *ShuffleRange) []float64 {
-	if s == nil {
-		return nil
-	}
-	if s.Uniform > 0.3 {
-		return nil
-	}
-	return s.Result
 }

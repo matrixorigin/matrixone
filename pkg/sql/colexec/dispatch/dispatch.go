@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
@@ -97,7 +98,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 func printShuffleResult(arg *Argument) {
 	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
-		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", arg.ShuffleType, arg.ctr.batchCnt, arg.ctr.rowCnt)
+		logutil.Debugf("shuffle dispatch result: batchcnt %v, rowcnt %v", arg.ctr.batchCnt, arg.ctr.rowCnt)
 	}
 }
 
@@ -108,6 +109,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+
+	analy := proc.GetAnalyze(arg.info.Idx)
+	analy.Start()
+	defer analy.Stop()
+
 	bat := result.Batch
 
 	if result.Batch == nil {
