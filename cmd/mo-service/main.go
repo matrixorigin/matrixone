@@ -157,6 +157,8 @@ func startService(
 	}
 	setupProcessLevelRuntime(cfg, stopper)
 
+	setupStatusServer(runtime.ProcessLevelRuntime())
+
 	st, err := cfg.getServiceType()
 	if err != nil {
 		return err
