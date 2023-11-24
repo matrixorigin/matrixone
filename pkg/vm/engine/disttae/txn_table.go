@@ -582,7 +582,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		return
 	}
 
-	part.CheckObjectStats()
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	part.CheckObjectStats(&ts)
 
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})

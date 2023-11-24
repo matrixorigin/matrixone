@@ -76,12 +76,27 @@ type PartitionState struct {
 	// so just put it here.
 	shared *sharedStates
 
+	ConsumeTS types.TS
+	done      bool
+
+	PId atomic.Int64
 	// blocks deleted before minTS is hard deleted.
 	// partition state can't serve txn with snapshotTS less than minTS
 	minTS types.TS
 }
 
-func (p *PartitionState) CheckObjectStats() {
+var globalPID atomic.Int64
+var pidLock sync.Mutex
+
+func GetPID() int64 {
+	pidLock.Lock()
+	defer pidLock.Unlock()
+	pid := globalPID.Load()
+	globalPID.Add(1)
+	return pid
+}
+
+func (p *PartitionState) CheckObjectStats(ts *types.TS) {
 	p.objLock.Lock()
 
 	statsCopy := p.dataObjects.Copy()
@@ -89,9 +104,16 @@ func (p *PartitionState) CheckObjectStats() {
 
 	p.objLock.Unlock()
 
+	doneCheck := ""
 	statsUnique := ""
 	shadowUnique := ""
 	notEqual := ""
+
+	if !p.done {
+		doneCheck = fmt.Sprintf("partition not done")
+	} else {
+		doneCheck = "partition done"
+	}
 
 	var stats, shadow ObjectEntry
 
@@ -140,8 +162,8 @@ func (p *PartitionState) CheckObjectStats() {
 
 	if statsUnique != "" || shadowUnique != "" || notEqual != "" {
 		fmt.Println(fmt.Sprintf(
-			"stats unique:  %s \n\nshadow unique: %s \n\nnot equal: %s \n\n",
-			statsUnique, shadowUnique, notEqual,
+			"state id: %d, done check: %s, check ts: %s, consume ts: %s\nstats unique:  %s \n\nshadow unique: %s \n\nnot equal: %s \n\n",
+			p.PId.Load(), doneCheck, ts.ToString(), p.ConsumeTS.ToString(), statsUnique, shadowUnique, notEqual,
 		))
 	}
 
@@ -455,6 +477,8 @@ func (p *PartitionState) HandleLogtailEntry(
 }
 
 func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle shadow delete[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
+
 	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
@@ -477,11 +501,13 @@ func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
 
 		p.dataObjectsShadow.Set(objEntry)
 
-		fmt.Println(fmt.Sprintf("received shadow delete: %s\n", objEntry.String()))
+		fmt.Println(fmt.Sprintf("received shadow delete [%s]: %s\n", p.ConsumeTS.ToString(), objEntry.String()))
 	}
 }
 
 func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle shadow insert[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
+
 	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
@@ -514,7 +540,7 @@ func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
 
 		p.dataObjectsShadow.Set(objEntry)
 
-		fmt.Println(fmt.Sprintf("received shadow insert: %s\n", objEntry.String()))
+		fmt.Println(fmt.Sprintf("received shadow insert [%s]: %s\n", p.ConsumeTS.ToString(), objEntry.String()))
 	}
 }
 
@@ -687,6 +713,8 @@ func (p *PartitionState) HandleMetadataInsert(
 	defer func() {
 		partitionStateProfileHandler.AddSample(time.Since(t0))
 	}()
+
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle meta insert[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -863,7 +891,10 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	t0 := time.Now()
 	defer func() {
 		partitionStateProfileHandler.AddSample(time.Since(t0))
+		p.done = true
 	}()
+
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle meta delete[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
 
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
@@ -930,6 +961,9 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 					p.objectIndexByTS.Set(e)
 				}
 			}
+
+			fmt.Println(fmt.Sprintf("metadata delete: \nconsume ts: %s\n block-obj-entry: %s\n",
+				p.ConsumeTS.ToString(), objEntry.String()))
 		})
 	}
 
