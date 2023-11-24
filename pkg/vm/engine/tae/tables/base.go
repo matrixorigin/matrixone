@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,7 +53,6 @@ type baseBlock struct {
 	rt   *dbutils.Runtime
 	meta *catalog.BlockEntry
 	mvcc *updates.MVCCHandle
-	ttl  time.Time
 	impl data.Block
 
 	node atomic.Pointer[Node]
@@ -69,7 +67,6 @@ func newBaseBlock(
 		impl: impl,
 		rt:   rt,
 		meta: meta,
-		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -204,25 +201,6 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	vec = containers.ToTNVector(bat.Vecs[0], common.DefaultAllocator)
 	return
 }
-
-// func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
-// 	schema := blk.meta.GetSchema()
-// 	bat = containers.NewBatch()
-// 	defer func() {
-// 		if err != nil {
-// 			bat.Close()
-// 		}
-// 	}()
-// 	var vec containers.Vector
-// 	for i, col := range schema.ColDefs {
-// 		vec, err = blk.LoadPersistedColumnData(i)
-// 		if err != nil {
-// 			return
-// 		}
-// 		bat.AddVector(col.Name, vec)
-// 	}
-// 	return
-// }
 
 func (blk *baseBlock) LoadPersistedColumnData(
 	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool,

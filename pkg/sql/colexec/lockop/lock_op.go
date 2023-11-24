@@ -105,6 +105,11 @@ func callNonBlocking(
 	if err != nil {
 		return result, err
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil {
 		return result, arg.rt.retryError
 	}

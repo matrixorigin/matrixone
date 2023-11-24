@@ -49,6 +49,8 @@ type objectWriterV1 struct {
 	objStats          []ObjectStats
 	pkColIdx          uint16
 	appendable        bool
+	originSize        uint32
+	size              uint32
 }
 
 type blockData struct {
@@ -131,6 +133,8 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 	if len(colmeta) > int(w.pkColIdx) {
 		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
 	}
+	SetObjectStatsSize(ss, w.size)
+	SetObjectStatsOriginSize(ss, w.originSize)
 
 	return *ss
 }
@@ -402,6 +406,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 	offset := uint32(HeaderSize)
+	w.originSize += HeaderSize
 
 	for i := range w.blocks {
 		if i == int(SchemaData) {
@@ -434,6 +439,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		objectMetas[i].BlockHeader().SetAppendable(w.appendable)
 		objectMetas[i].BlockHeader().SetSortKey(w.pkColIdx)
 		offset += bloomFilterExtents[i].Length()
+		w.originSize += bloomFilterExtents[i].OriginSize()
 
 		// prepare zone map area
 		zoneMapAreaDatas[i], zoneMapAreaExtents[i], err = w.prepareZoneMapArea(w.blocks[i], uint32(len(w.blocks[i])), offset)
@@ -442,6 +448,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		}
 		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaExtents[i])
 		offset += zoneMapAreaExtents[i].Length()
+		w.originSize += zoneMapAreaExtents[i].OriginSize()
 	}
 	subMetaCount := uint16(len(w.blocks) - 2)
 	subMetachIndex := BuildSubMetaIndex(subMetaCount)
@@ -503,11 +510,14 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		version:    Version,
 		magic:      Magic,
 	}
-
-	w.buffer.Write(footer.Marshal())
+	footerBuf := footer.Marshal()
+	w.buffer.Write(footerBuf)
 	if err != nil {
 		return nil, err
 	}
+	w.originSize += objectHeader.Extent().OriginSize()
+	w.originSize += uint32(len(footerBuf))
+	w.size = objectHeader.Extent().End() + uint32(len(footerBuf))
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		for j := range w.blocks[i] {
@@ -520,7 +530,6 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	if err != nil {
 		return nil, err
 	}
-
 	// The buffer needs to be released at the end of WriteEnd
 	// Because the outside may hold this writer
 	// After WriteEnd is called, no more data can be written
@@ -605,6 +614,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			panic("any type batch")
 		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
+		w.originSize += ext.OriginSize()
 	}
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	*blocks = append(*blocks, block)
