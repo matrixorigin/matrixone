@@ -222,23 +222,24 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) BatchSample(length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) (err error) {
+func (s *sPool) BatchSample(offset, length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) (err error) {
 	s.reOrderedInput = s.vectorReOrder(sampleVectors, groupVectors, inputBatch)
 
 	if len(sampleVectors) > 1 {
-		return s.batchSampleFromColumns(length, groupList, sampleVectors, s.reOrderedInput)
+		return s.batchSampleFromColumns(offset, length, groupList, sampleVectors, s.reOrderedInput)
 	}
-	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], s.reOrderedInput)
+	return s.batchSampleFromColumn(offset, length, groupList, sampleVectors[0], s.reOrderedInput)
 }
 
-func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) batchSampleFromColumn(offset, length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused1(sampleVec)
 
 	mp := s.proc.Mp()
+	row := offset
 
 	switch s.typ {
 	case rowSamplePool:
-		for row, v := range groupList[:length] {
+		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
 			}
@@ -251,10 +252,11 @@ func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec 
 			if err != nil {
 				return err
 			}
+			row++
 		}
 
 	case percentSamplePool:
-		for row, v := range groupList[:length] {
+		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
 			}
@@ -267,6 +269,7 @@ func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec 
 			if err != nil {
 				return err
 			}
+			row++
 		}
 	default:
 		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
@@ -274,14 +277,15 @@ func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec 
 	return nil
 }
 
-func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) batchSampleFromColumns(offset, length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused2(sampleVectors)
 
 	mp := s.proc.Mp()
+	row := offset
 
 	switch s.typ {
 	case rowSamplePool:
-		for row, v := range groupList[:length] {
+		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
 			}
@@ -293,10 +297,11 @@ func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVec
 			if err != nil {
 				return err
 			}
+			row++
 		}
 
 	case percentSamplePool:
-		for row, v := range groupList[:length] {
+		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
 			}
@@ -308,6 +313,7 @@ func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVec
 			if err != nil {
 				return err
 			}
+			row++
 		}
 	default:
 		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)

@@ -60,6 +60,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.MergeOffset:    "merge offset",
 	vm.MergeRecursive: "merge recursive",
 	vm.MergeCTE:       "merge cte",
+	vm.Partition:      "partition",
 	vm.Deletion:       "delete",
 	vm.Insert:         "insert",
 	vm.PreInsert:      "pre insert",
@@ -72,6 +73,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.MergeDelete:    "merge delete",
 	vm.LockOp:         "lockop",
 	vm.MergeBlock:     "merge block",
+	vm.FuzzyFilter:    "fuzzy filter",
 }
 
 var debugMagicNames = map[magicType]string{
