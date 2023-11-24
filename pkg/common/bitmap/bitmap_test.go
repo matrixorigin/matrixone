@@ -28,7 +28,7 @@ const (
 
 func newBm(n int) *Bitmap {
 	var bm Bitmap
-	bm.InitWithSize(int64(n))
+	bm.InitWithSize(n)
 	return &bm
 }
 
