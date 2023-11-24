@@ -50,7 +50,7 @@ func TestGetBackupData(t *testing.T) {
 		fileService: fs,
 	}
 	// If the file do not exist, do not return error.
-	restore, err := s.getBackupData(ctx, fs)
+	restore, err := s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
@@ -66,12 +66,12 @@ func TestGetBackupData(t *testing.T) {
 	err = fs.Write(ctx, ioVec)
 	assert.NoError(t, err)
 
-	restore, err = s.getBackupData(ctx, fs)
+	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
 	s.cfg.BootstrapConfig.Restore.FilePath = path.Join(dir, name)
-	restore, err = s.getBackupData(ctx, fs)
+	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.NotNil(t, restore)
 	assert.Equal(t, nextID, restore.NextID)

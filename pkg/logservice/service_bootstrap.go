@@ -51,20 +51,15 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
 
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
-	if err != nil {
-		return err
-	}
-
 	var nextID uint64
 	var nextIDByKey map[string]uint64
-	backup, err := s.getBackupData(ctx, fs)
+	backup, err := s.getBackupData(ctx)
 	if err != nil {
 		return err
 	}
 	if backup != nil { // We are trying to restore from a backup.
 		// If a backup has already been issued, ignore this time.
-		_, err := fs.StatFile(ctx, restoredTagFile)
+		_, err := s.fileService.StatFile(ctx, restoredTagFile)
 		if s.cfg.BootstrapConfig.Restore.Force || // force is true, we do restore whatever.
 			(err != nil && moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
 			// Restored tag file does not exist, we can do backup.
@@ -72,7 +67,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 			nextIDByKey = backup.NextIDByKey
 
 			// After backup, create a restore file.
-			if err := fs.Write(ctx, fileservice.IOVector{
+			if err := s.fileService.Write(ctx, fileservice.IOVector{
 				FilePath: restoredTagFile,
 				Entries: []fileservice.IOEntry{
 					{
@@ -107,7 +102,11 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func (s *Service) getBackupData(ctx context.Context, fs fileservice.FileService) (*pb.BackupData, error) {
+func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	filePath := s.cfg.BootstrapConfig.Restore.FilePath
 	if filePath == "" {
 		return nil, nil
