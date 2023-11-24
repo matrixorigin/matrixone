@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -72,6 +73,11 @@ func NewTAEStorage(
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
 	if err != nil {
 		return nil, err
+	}
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLogtailServer(server)
 	}
 
 	return &taeStorage{
