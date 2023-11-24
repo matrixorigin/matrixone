@@ -150,7 +150,7 @@ func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, 
 }
 
 func (e *ObjectMVCCNode) IsEmpty() bool {
-	return e.OriginSize() == 0
+	return e.Rows() == 0
 }
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {

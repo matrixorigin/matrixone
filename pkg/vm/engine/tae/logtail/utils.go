@@ -1503,7 +1503,11 @@ func (data *CheckpointData) prepareMeta() {
 		}
 	}
 }
-
+func (data *CheckpointData) resetSegmentMeta() {
+	for _, meta := range data.meta {
+		meta.tables[SegmentDelete] = nil
+	}
+}
 func (data *CheckpointData) updateTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
@@ -2488,6 +2492,7 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 		return nil
 	}
 	collector.data.bats[ObjectInfoIDX] = makeRespBatchFromSchema(ObjectInfoSchema, common.CheckpointAllocator)
+	collector.data.bats[TNObjectInfoIDX] = makeRespBatchFromSchema(ObjectInfoSchema, common.CheckpointAllocator)
 	err := collector.loadObjectInfo()
 	if err != nil {
 		return err
@@ -2709,6 +2714,10 @@ func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) e
 			if collector.data.bats[ObjectInfoIDX] != nil {
 				collector.data.bats[ObjectInfoIDX].Close()
 			}
+			if collector.data.bats[TNObjectInfoIDX] != nil {
+				collector.data.bats[TNObjectInfoIDX].Close()
+			}
+			collector.data.resetSegmentMeta()
 			if collector.segments == nil {
 				collector.segments = make([]*catalog.SegmentEntry, 0)
 			}
