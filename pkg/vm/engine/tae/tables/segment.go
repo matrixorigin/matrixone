@@ -15,70 +15,37 @@
 package tables
 
 import (
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type dataSegment struct {
-	meta *catalog.SegmentEntry
-	rt   *dbutils.Runtime
-}
-
-func newSegment(
-	meta *catalog.SegmentEntry, dir string, rt *dbutils.Runtime,
-) *dataSegment {
-	seg := &dataSegment{
-		meta: meta,
-		rt:   rt,
-	}
-	return seg
-}
-
-func (segment *dataSegment) Destroy() (err error) {
-	return
-}
-
-func (segment *dataSegment) GetID() uint64 { panic("not support") }
-
-func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
-	return moerr.GetOkExpectedPossibleDup()
-}
-
-func (segment *dataSegment) MutationInfo() string { return "" }
-
-func (segment *dataSegment) RunCalibration() int                                  { return 0 }
-func (segment *dataSegment) EstimateScore(interval time.Duration, force bool) int { return 0 }
-
-func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
-	if segment.meta.IsAppendable() {
-		segment.meta.RLock()
-		dropped := segment.meta.HasDropCommittedLocked()
-		inTxn := segment.meta.IsCreatingOrAborted()
-		segment.meta.RUnlock()
-		if dropped || inTxn {
-			return
-		}
-		filter := catalog.NewComposedFilter()
-		filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
-		filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
-		blks := segment.meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
-		if len(blks) < int(segment.meta.GetTable().GetLastestSchema().SegmentMaxBlocks) {
-			return
-		}
-		for _, blk := range blks {
-			scopes = append(scopes, *blk.AsCommonID())
-		}
-		factory = jobs.CompactSegmentTaskFactory(blks, segment.rt)
-		taskType = tasks.DataCompactionTask
+func BuildSegmentCompactionTaskFactory(meta *catalog.SegmentEntry, rt *dbutils.Runtime) (
+	factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error,
+) {
+	if !meta.IsAppendable() {
 		return
 	}
+	meta.RLock()
+	dropped := meta.HasDropCommittedLocked()
+	inTxn := meta.IsCreatingOrAborted()
+	meta.RUnlock()
+	if dropped || inTxn {
+		return
+	}
+	filter := catalog.NewComposedFilter()
+	filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
+	filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
+	blks := meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
+	if len(blks) < int(meta.GetTable().GetLastestSchema().SegmentMaxBlocks) {
+		return
+	}
+	for _, blk := range blks {
+		scopes = append(scopes, *blk.AsCommonID())
+	}
+	factory = jobs.CompactSegmentTaskFactory(blks, rt)
+	taskType = tasks.DataCompactionTask
 	return
 }
