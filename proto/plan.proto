@@ -631,7 +631,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
-		STREAM_SCAN = 6;
+		SOURCE_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;

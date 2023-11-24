@@ -177,7 +177,7 @@ func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, err
 	createStream := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
-			TableType: catalog.SystemStreamRel,
+			TableType: catalog.SystemSourceRel,
 			Name:      streamName,
 		},
 	}
@@ -200,7 +200,7 @@ func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, err
 	var properties []*plan.Property
 	properties = append(properties, &plan.Property{
 		Key:   catalog.SystemRelAttr_Kind,
-		Value: catalog.SystemStreamRel,
+		Value: catalog.SystemSourceRel,
 	})
 	configs := make(map[string]interface{})
 	for _, option := range stmt.Options {

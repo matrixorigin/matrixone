@@ -998,7 +998,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
+	case plan.Node_SOURCE_SCAN:
 		ss, err := c.compileStreamScan(ctx, n)
 		if err != nil {
 			return nil, err
@@ -1570,7 +1570,7 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 }
 
 func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
