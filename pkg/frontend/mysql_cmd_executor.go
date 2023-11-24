@@ -3700,7 +3700,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
 
-	if batchValue, ok := requestCtx.Value("msgs").([]*kafka.Message); ok {
+	if batchValue, ok := requestCtx.Value(defines.SourceScanResKey{}).([]*kafka.Message); ok {
 		inMemStreamScan = batchValue
 	}
 

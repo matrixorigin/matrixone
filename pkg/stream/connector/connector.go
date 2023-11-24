@@ -22,14 +22,13 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 )
-
-const MSGKey = "msgs"
 
 func KafkaSinkConnectorExecutor(
 	logger *zap.Logger,
@@ -296,7 +295,7 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
-	ctx = context.WithValue(ctx, MSGKey, msgs)
+	ctx = context.WithValue(ctx, defines.SourceScanResKey{}, msgs)
 	defer cancel()
 	res := k.ie.Query(ctx, sql, opts)
 	return res
