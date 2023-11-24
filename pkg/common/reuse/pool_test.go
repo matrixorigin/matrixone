@@ -34,7 +34,7 @@ func TestGetAndFree(t *testing.T) {
 			for key := range pools {
 				delete(pools, key)
 			}
-			Use(spi)
+			use(spi)
 			CreatePool[person](
 				func() *person { return &person{} },
 				func(p *person) {
@@ -66,7 +66,7 @@ func TestCheckDoubleFree(t *testing.T) {
 			for key := range pools {
 				delete(pools, key)
 			}
-			Use(spi)
+			use(spi)
 			CreatePool[person](
 				func() *person { return &person{} },
 				func(p *person) {
@@ -103,7 +103,7 @@ func TestCheckLeakFree(t *testing.T) {
 			for key := range pools {
 				delete(pools, key)
 			}
-			Use(spi)
+			use(spi)
 			CreatePool[person](
 				func() *person { return &person{} },
 				func(p *person) {
@@ -132,7 +132,7 @@ func BenchmarkGet(b *testing.B) {
 		for key := range pools {
 			delete(pools, key)
 		}
-		Use(SyncBased)
+		use(SyncBased)
 		CreatePool[person](
 			func() *person { return &person{} },
 			func(p *person) {
@@ -166,7 +166,7 @@ func BenchmarkGetParallel(b *testing.B) {
 		for key := range pools {
 			delete(pools, key)
 		}
-		Use(SyncBased)
+		use(SyncBased)
 		CreatePool[person](
 			func() *person { return &person{} },
 			func(p *person) {

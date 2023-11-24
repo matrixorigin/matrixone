@@ -19,14 +19,8 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-)
 
-var (
-	cowSlicePool = sync.Pool{
-		New: func() any {
-			return &cowSlice{}
-		},
-	}
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 // cowSlice is used to store information about all the locks occupied by a
@@ -35,8 +29,8 @@ var (
 // model for a transaction.
 type cowSlice struct {
 	fsp *fixedSlicePool
-	fs  atomic.Value // *fixedSlice
-	v   atomic.Uint64
+	fs  *atomic.Value // *fixedSlice
+	v   *atomic.Uint64
 
 	// just for testing
 	hack struct {
@@ -48,7 +42,7 @@ type cowSlice struct {
 func newCowSlice(
 	fsp *fixedSlicePool,
 	values [][]byte) *cowSlice {
-	cs := cowSlicePool.Get().(*cowSlice)
+	cs := reuse.Alloc[cowSlice]()
 	cs.fsp = fsp
 	fs := fsp.acquire(len(values))
 	fs.append(values)
@@ -108,9 +102,7 @@ func (cs *cowSlice) slice() *fixedSlice {
 }
 
 func (cs *cowSlice) close() {
-	cs.v.Store(0)
-	cs.mustGet().unref()
-	cowSlicePool.Put(cs)
+	reuse.Free(cs)
 }
 
 func (cs *cowSlice) mustGet() *fixedSlice {
@@ -257,4 +249,8 @@ func roundUp(v int) int {
 	v |= v >> 32
 	v++
 	return v
+}
+
+func (cs cowSlice) Name() string {
+	return "lockservice.cowSlice"
 }

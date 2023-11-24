@@ -38,6 +38,10 @@ type checker[T ReusableObject] struct {
 }
 
 func newChecker[T ReusableObject](enable bool) *checker[T] {
+	if !enableChecker {
+		enable = false
+	}
+
 	c := &checker[T]{
 		enable: enable,
 	}
@@ -118,7 +122,7 @@ func (c *checker[T]) gc(v *T) {
 	switch s {
 	// the v is marked in use, but v is release by gc
 	case inUse:
-		panic(fmt.Sprintf("missing free for type: %T", v))
+		panic(fmt.Sprintf("missing free for type: %T, %+v", v, v))
 	}
 
 	delete(c.mu.m, k)

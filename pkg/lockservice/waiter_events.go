@@ -19,16 +19,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
-	lockContextPool = sync.Pool{New: func() any {
-		return &lockContext{}
-	}}
-
 	defaultLazyCheckDuration = time.Second * 5
 )
 
@@ -55,7 +52,7 @@ func (l *localLockTable) newLockContext(
 	opts LockOptions,
 	cb func(pb.Result, error),
 	bind pb.LockTable) *lockContext {
-	c := lockContextPool.Get().(*lockContext)
+	c := reuse.Alloc[lockContext]()
 	c.ctx = ctx
 	c.txn = txn
 	c.rows = rows
@@ -73,8 +70,7 @@ func (c *lockContext) done(err error) {
 }
 
 func (c *lockContext) release() {
-	*c = lockContext{}
-	lockContextPool.Put(c)
+	reuse.Free(c)
 }
 
 func (c *lockContext) doLock() {
@@ -215,4 +211,8 @@ func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
 		}
 	}
 	return nil
+}
+
+func (c lockContext) Name() string {
+	return "lockservice.lockContext"
 }

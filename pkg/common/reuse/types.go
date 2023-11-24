@@ -14,6 +14,11 @@
 
 package reuse
 
+import (
+	"os"
+	"strings"
+)
+
 // Pool is a pool of temporary objects, designed to reduce the creation of
 // temporary objects to reduce GC pressure.
 //
@@ -40,4 +45,24 @@ type ReusableObject interface {
 	// Name returns the name of the object type. We cannot use reflect.TypeOf to get
 	// the name of the object type, to avoid mem allocate.
 	Name() string
+}
+
+func init() {
+	spi, ok := os.LookupEnv("mo_reuse_spi")
+	if ok {
+		switch strings.ToLower(spi) {
+		case "sync-pool":
+			use(SyncBased)
+		case "mpool":
+			use(MpoolBased)
+		}
+	}
+
+	enable, ok := os.LookupEnv("mo_reuse_enable_checker")
+	if ok {
+		switch strings.ToLower(enable) {
+		case "true":
+			enableChecker = true
+		}
+	}
 }

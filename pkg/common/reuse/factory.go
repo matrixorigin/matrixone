@@ -28,14 +28,14 @@ var (
 	SyncBased  = SPI(0)
 	MpoolBased = SPI(1)
 
-	defaultSPI = SyncBased
+	defaultSPI    = SyncBased
+	enableChecker = false
 )
 
 // SPI choose pool implementation
 type SPI int
 
-// Use use specified spi
-func Use(spi SPI) {
+func use(spi SPI) {
 	defaultSPI = spi
 }
 

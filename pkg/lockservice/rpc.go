@@ -16,12 +16,12 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,20 +31,25 @@ import (
 )
 
 var (
-	requestPool = sync.Pool{
-		New: func() any {
-			return &pb.Request{}
-		},
-	}
-	responsePool = &sync.Pool{
-		New: func() any {
-			return &pb.Response{}
-		},
-	}
-
 	defaultRPCTimeout    = time.Second * 10
 	defaultHandleWorkers = 4
 )
+
+func acquireRequest() *pb.Request {
+	return reuse.Alloc[pb.Request]()
+}
+
+func releaseRequest(request *pb.Request) {
+	reuse.Free(request)
+}
+
+func acquireResponse() *pb.Response {
+	return reuse.Alloc[pb.Response]()
+}
+
+func releaseResponse(v morpc.Message) {
+	reuse.Free(v.(*pb.Response))
+}
 
 type client struct {
 	cfg     *morpc.Config
@@ -356,24 +361,6 @@ func writeResponse(
 			zap.Error(err),
 			zap.String("response", detail))
 	}
-}
-
-func acquireRequest() *pb.Request {
-	return requestPool.Get().(*pb.Request)
-}
-
-func releaseRequest(request *pb.Request) {
-	request.Reset()
-	requestPool.Put(request)
-}
-
-func acquireResponse() *pb.Response {
-	return responsePool.Get().(*pb.Response)
-}
-
-func releaseResponse(v morpc.Message) {
-	v.(*pb.Response).Reset()
-	responsePool.Put(v)
 }
 
 type requestCtx struct {

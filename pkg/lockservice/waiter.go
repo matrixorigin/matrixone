@@ -19,26 +19,26 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap"
 )
 
-var (
-	waiterPool = sync.Pool{
-		New: func() any {
-			return newWaiter()
-		},
-	}
+type waiterStatus int32
+
+const (
+	ready waiterStatus = iota
+	blocking
+	notified
+	completed
 )
 
 func acquireWaiter(txn pb.WaitTxn) *waiter {
-	w := waiterPool.Get().(*waiter)
+	w := reuse.Alloc[waiter]()
 	logWaiterContactPool(w, "get")
 	w.txn = txn
 	if w.ref() != 1 {
@@ -50,21 +50,21 @@ func acquireWaiter(txn pb.WaitTxn) *waiter {
 
 func newWaiter() *waiter {
 	w := &waiter{
-		c: make(chan notifyValue, 1),
+		status:   &atomic.Int32{},
+		refCount: &atomic.Int32{},
+		c:        make(chan notifyValue, 1),
 	}
-	w.setFinalizer()
 	w.setStatus(ready)
 	return w
 }
 
-type waiterStatus int32
+func resetWaiter(w *waiter) {
+	w.reset()
+}
 
-const (
-	ready waiterStatus = iota
-	blocking
-	notified
-	completed
-)
+func (w waiter) Name() string {
+	return "lockservice.wait"
+}
 
 // waiter is used to allow locking operations to wait for the previous
 // lock to be released if a conflict is encountered.
@@ -72,8 +72,8 @@ type waiter struct {
 	// belong to which txn
 	txn      pb.WaitTxn
 	waitFor  [][]byte
-	status   atomic.Int32
-	refCount atomic.Int32
+	status   *atomic.Int32
+	refCount *atomic.Int32
 	c        chan notifyValue
 	event    event
 	waitAt   time.Time
@@ -100,13 +100,6 @@ func (w *waiter) isTxn(txnID []byte) bool {
 	return bytes.Equal(w.txn.TxnID, txnID)
 }
 
-func (w *waiter) setFinalizer() {
-	// close the channel if gc
-	runtime.SetFinalizer(w, func(w *waiter) {
-		close(w.c)
-	})
-}
-
 func (w *waiter) ref() int32 {
 	return w.refCount.Add(1)
 }
@@ -118,6 +111,7 @@ func (w *waiter) close() {
 	}
 	if n == 0 {
 		w.reset()
+		reuse.Free(w)
 	}
 }
 
@@ -257,7 +251,6 @@ func (w *waiter) reset() {
 	w.event = event{}
 	w.waitFor = w.waitFor[:0]
 	w.setStatus(ready)
-	waiterPool.Put(w)
 }
 
 type notifyValue struct {

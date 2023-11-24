@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -27,16 +28,12 @@ import (
 )
 
 var (
-	txnPool = sync.Pool{New: func() any {
-		return &activeTxn{holdLocks: make(map[uint64]*cowSlice)}
-	}}
-
 	parallelUnlockTables = 2
 )
 
 // activeTxn one goroutine write, multi goroutine read
 type activeTxn struct {
-	sync.RWMutex
+	*sync.RWMutex
 	txnID          []byte
 	txnKey         string
 	fsp            *fixedSlicePool
@@ -51,7 +48,7 @@ func newActiveTxn(
 	txnKey string,
 	fsp *fixedSlicePool,
 	remoteService string) *activeTxn {
-	txn := txnPool.Get().(*activeTxn)
+	txn := reuse.Alloc[activeTxn]()
 	txn.Lock()
 	defer txn.Unlock()
 	txn.txnID = txnID
@@ -59,6 +56,10 @@ func newActiveTxn(
 	txn.fsp = fsp
 	txn.remoteService = remoteService
 	return txn
+}
+
+func (txn activeTxn) Name() string {
+	return "lockservice.activeTxn"
 }
 
 func (txn *activeTxn) lockRemoved(
@@ -179,13 +180,16 @@ func (txn *activeTxn) close(
 		}
 	}
 
+	reuse.Free(txn)
+	return nil
+}
+
+func (txn *activeTxn) reset() {
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
-	txnPool.Put(txn)
-	return nil
 }
 
 func (txn *activeTxn) abort(
