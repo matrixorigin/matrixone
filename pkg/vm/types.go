@@ -85,7 +85,6 @@ const (
 	MergeDelete
 	Right
 	OnDuplicateKey
-	FuzzyFilter
 	PreInsert
 	PreInsertUnique
 	PreInsertSecondaryIndex
