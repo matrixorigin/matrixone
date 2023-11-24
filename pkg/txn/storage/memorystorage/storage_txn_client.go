@@ -61,6 +61,10 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) GetState() client.TxnState {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
