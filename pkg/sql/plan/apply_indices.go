@@ -256,7 +256,9 @@ func (builder *QueryBuilder) applyIndicesForJoin(nodeID int32, node *plan.Node) 
 		return nodeID
 	}
 
-	if node.Stats.Outcnt > InFilterCardLimit || node.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	rightChild := builder.qry.Nodes[node.Children[1]]
+
+	if rightChild.Stats.Outcnt > InFilterCardLimit || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID
 	}
 
