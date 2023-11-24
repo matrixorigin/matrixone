@@ -236,10 +236,10 @@ type ObjectInfo struct {
 
 func (o ObjectInfo) String() string {
 	return fmt.Sprintf(
-		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %v; createTS: %v; deleteTS: %v",
+		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %s; createTS: %s; deleteTS: %s",
 		o.ObjectStats.String(), o.EntryState,
-		o.Sorted, o.HasDeltaLoc, o.CommitTS,
-		o.CreateTime, o.DeleteTime)
+		o.Sorted, o.HasDeltaLoc, o.CommitTS.ToString(),
+		o.CreateTime.ToString(), o.DeleteTime.ToString())
 }
 
 func (o ObjectInfo) Location() objectio.Location {
