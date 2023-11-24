@@ -1007,6 +1007,9 @@ func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.N
 		if !idxDef.Unique {
 			numParts--
 		}
+		if numParts == 0 {
+			continue
+		}
 
 		filterIdx = filterIdx[:0]
 		for i := 0; i < numParts; i++ {
