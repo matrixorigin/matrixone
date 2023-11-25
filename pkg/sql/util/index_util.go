@@ -336,13 +336,12 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
 func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {
-	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
-
 	if len(vs) == 0 {
 		// return empty vector and empty bitmap
 		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
 	}
 
+	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
 	rowCount := vs[0].Length()
 	_ = function.BuiltInSerialFull(vs, result, proc, rowCount)
 	resultVec := result.GetResultVector()
