@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 func (s *service) initRemote() {
@@ -240,6 +241,15 @@ func (s *service) getLocalLockTable(
 		resp.NewBind = &bind
 		return nil, nil
 	}
+
+	if _, ok := l.(*remoteLockTable); ok {
+		getLogger().Error("get local lock table, but found remote lock table, something wrong",
+			zap.String("request", req.DebugString()),
+			zap.String("serviceID", s.serviceID),
+			zap.String("request-lock-table", req.LockTable.DebugString()),
+			zap.String("current-bind", bind.DebugString()))
+	}
+
 	return l, nil
 }
 
