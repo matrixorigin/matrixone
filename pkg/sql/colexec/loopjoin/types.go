@@ -36,12 +36,14 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 
-	state   int
-	bat     *batch.Batch
-	rbat    *batch.Batch
-	joinBat *batch.Batch
-	expr    colexec.ExpressionExecutor
-	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
+	state    int
+	probeIdx int
+	bat      *batch.Batch
+	rbat     *batch.Batch
+	inBat    *batch.Batch
+	joinBat  *batch.Batch
+	expr     colexec.ExpressionExecutor
+	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
 type Argument struct {
@@ -84,6 +86,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+	if ctr.inBat != nil {
+		ctr.inBat.Clean(mp)
+		ctr.inBat = nil
 	}
 }
 

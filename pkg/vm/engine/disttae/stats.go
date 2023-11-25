@@ -113,7 +113,7 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) error {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(ctx)
 	var (
 		init    bool
 		err     error
@@ -189,7 +189,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 }
 
 func adjustNDV(info *plan2.InfoFromZoneMap, tbl *txnTable) {
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(context.TODO())
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 
 	if info.AccurateObjectNumber > 1 {
@@ -223,7 +223,7 @@ func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap, appr
 		return false
 	}
 	adjustNDV(info, tbl)
-	plan2.UpdateStatsInfoMap(info, tbl.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, tbl.GetTableDef(ctx), s)
 	return true
 }
 
@@ -246,6 +246,6 @@ func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, part
 		return false
 	}
 	adjustNDV(info, baseTable)
-	plan2.UpdateStatsInfoMap(info, baseTable.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, baseTable.GetTableDef(ctx), s)
 	return true
 }
