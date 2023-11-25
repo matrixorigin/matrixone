@@ -670,6 +670,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
+		for _, expr := range node.FilterList {
+			builder.remapHavingClause(expr, groupTag, sampleTag, int32(len(node.GroupBy)))
+		}
+
 		// deal with group col and sample col.
 		for i, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
