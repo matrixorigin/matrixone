@@ -154,6 +154,8 @@ type CreateTable struct {
 	PartitionOption *PartitionOption
 	ClusterByOption *ClusterByOption
 	Param           *ExternParam
+	AsSource        *Select
+	IsDynamicTable  bool
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -167,6 +169,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.Param != nil {
 		ctx.WriteString(" external")
 	}
+	if node.IsDynamicTable {
+		ctx.WriteString(" dynamic")
+	}
 
 	ctx.WriteString(" table")
 
@@ -177,15 +182,21 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteByte(' ')
 	node.Table.Format(ctx)
 
-	ctx.WriteString(" (")
-	for i, def := range node.Defs {
-		if i != 0 {
-			ctx.WriteString(",")
-			ctx.WriteByte(' ')
+	if node.IsDynamicTable {
+		ctx.WriteString(" as ")
+		node.AsSource.Format(ctx)
+	} else {
+
+		ctx.WriteString(" (")
+		for i, def := range node.Defs {
+			if i != 0 {
+				ctx.WriteString(",")
+				ctx.WriteByte(' ')
+			}
+			def.Format(ctx)
 		}
-		def.Format(ctx)
+		ctx.WriteByte(')')
 	}
-	ctx.WriteByte(')')
 
 	if node.Options != nil {
 		prefix := " "
