@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -755,8 +754,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
-	case *fuzzyfilter.Argument:
-		in.FuzzyFilter = &pipeline.FuzzyFilter{}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
@@ -1194,9 +1191,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateExpr: t.OnDuplicateExpr,
 			IsIgnore:        t.IsIgnore,
 		}
-	case vm.FuzzyFilter:
-		// t := opr.GetFuzzyFilter()
-		v.Arg = new(fuzzyfilter.Argument)
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
