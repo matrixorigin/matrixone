@@ -219,7 +219,9 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
-	fuzzy         *fuzzyCheck
+
+	needLockMeta bool
+	metaTables   map[string]struct{}
 }
 
 type runtimeFilterReceiver struct {
@@ -231,18 +233,4 @@ type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
-}
-
-type fuzzyCheck struct {
-	db        string
-	tbl       string
-	attr      string
-	condition string
-
-	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
-	col          *plan.ColDef
-	compoundCols []*plan.ColDef
-
-	cnt int
 }

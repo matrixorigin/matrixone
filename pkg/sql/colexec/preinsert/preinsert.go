@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,14 +36,14 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
-	analy := proc.GetAnalyze(arg.info.Idx)
-	analy.Start()
-	defer analy.Stop()
-
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
+	analy := proc.GetAnalyze(arg.info.Idx)
+	analy.Start()
+	defer analy.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
