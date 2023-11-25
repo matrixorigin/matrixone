@@ -16,11 +16,13 @@ package moconnector
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -56,7 +58,20 @@ func KafkaSinkConnectorExecutor(
 		ss := strings.Split(fullTableName, ".")
 		options["database"] = ss[0]
 		options["table"] = ss[1]
-		c, err := NewKafkaMoConnector(logger, options, ieFactory())
+		bufferLimitString, exists := options["buffer_size"]
+		var bufferLimit int // Declare bufferLimit outside the if/else scope
+		if !exists {
+			bufferLimit = 1 // Assign default value if the key does not exist
+		} else {
+			var err error
+			bufferLimit, err = strconv.Atoi(bufferLimitString) // Convert the string to an integer
+			if err != nil {
+				// Handle the error, perhaps set to default if the conversion fails
+				bufferLimit = 1
+			}
+		}
+
+		c, err := NewKafkaMoConnector(logger, options, ieFactory(), bufferLimit)
 		if err != nil {
 			return err
 		}
@@ -83,6 +98,7 @@ type KafkaMoConnector struct {
 	resumeC      chan struct{}
 	cancelC      chan struct{}
 	pauseC       chan struct{}
+	bufferLimit  int
 }
 
 func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
@@ -106,13 +122,14 @@ func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
 	return kafkaConfigs
 }
 
-func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.InternalExecutor) (*KafkaMoConnector, error) {
+func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.InternalExecutor, buffer_limit int) (*KafkaMoConnector, error) {
 	// Validate options before proceeding
 	kmc := &KafkaMoConnector{
-		logger:  logger,
-		options: options,
-		ie:      ie,
-		decoder: newJsonDecoder(),
+		logger:      logger,
+		options:     options,
+		ie:          ie,
+		decoder:     newJsonDecoder(),
+		bufferLimit: buffer_limit,
 	}
 	if err := kmc.validateParams(); err != nil {
 		return nil, err
@@ -135,7 +152,7 @@ func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.In
 func (k *KafkaMoConnector) validateParams() error {
 	// 1. Check mandatory fields
 	mandatoryFields := []string{
-		"type", "topic", "database", "table", "value",
+		"type", "topic", "value",
 		"bootstrap.servers",
 	}
 
@@ -177,6 +194,8 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
 	}
 	// Continuously listen for messages
+
+	var buffered_messages []*kafka.Message
 	for {
 		select {
 		case <-ctx.Done():
@@ -205,31 +224,14 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 
 			switch e := ev.(type) {
 			case *kafka.Message:
-				var insertSQL string
-				switch k.options["value"] {
-				case "json":
-					obj, err := k.decoder.Decode(e.Value)
-					if err != nil {
-						k.logger.Error("failed to decode from json data", zap.Error(err))
-						continue
-					}
-					insertSQL, err = k.converter.Convert(ctx, obj)
-					if err != nil {
-						k.logger.Error("failed to convert to insert SQL", zap.Error(err))
-						continue
-					}
-				case "avro":
-					// Handle Avro decoding and conversion to SQL here
-					// For now, we'll skip it since you mentioned not to use SchemaRegistry
-				case "protobuf":
-					// Handle Protobuf decoding and conversion to SQL here
-					// For now, we'll skip it since you mentioned not to use SchemaRegistry
-				default:
-					return moerr.NewInternalError(ctx, "Unsupported value format")
+				if e.Value == nil {
+					continue
 				}
-
-				// Insert the row data to table.
-				k.insertRow(insertSQL)
+				buffered_messages = append(buffered_messages, e)
+				if len(buffered_messages) >= k.bufferLimit {
+					k.insertRow(buffered_messages)
+					buffered_messages = buffered_messages[:0]
+				}
 
 			case kafka.Error:
 				// Handle the error accordingly.
@@ -272,12 +274,29 @@ func (k *KafkaMoConnector) Close() error {
 	return nil
 }
 
-func (k *KafkaMoConnector) insertRow(sql string) {
+func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
-	err := k.ie.Exec(ctx, sql, opts)
+	res := k.queryResult(k.options["sql"], msgs)
+	if res.RowCount() == 0 || res.ColumnCount() == 0 {
+		return
+	}
+	sql, err := k.converter.Convert(ctx, res)
+	if err != nil {
+		k.logger.Error("failed to get sql", zap.String("SQL", sql), zap.Error(err))
+	}
+	err = k.ie.Exec(ctx, sql, opts)
 	if err != nil {
 		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
 	}
+}
+
+func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
+	opts := ie.SessionOverrideOptions{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
+	ctx = context.WithValue(ctx, defines.SourceScanResKey{}, msgs)
+	defer cancel()
+	res := k.ie.Query(ctx, sql, opts)
+	return res
 }
