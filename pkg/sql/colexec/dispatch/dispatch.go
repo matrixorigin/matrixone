@@ -121,7 +121,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat = makeEndBatch(proc)
 			defer func() {
 				if bat != nil {
-					bat.Clean(proc.Mp())
+					proc.PutBatch(bat)
 				}
 			}()
 		} else {

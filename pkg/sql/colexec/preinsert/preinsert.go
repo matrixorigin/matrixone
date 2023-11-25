@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -61,12 +62,11 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 	for idx := range arg.Attrs {
 		arg.buf.Attrs = append(arg.buf.Attrs, arg.Attrs[idx])
 		srcVec := bat.Vecs[idx]
-		bat.ReplaceVector(srcVec, nil)
-		// vec := proc.GetVector(*srcVec.GetType())
-		// if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-		// 	return result, err
-		// }
-		arg.buf.SetVector(int32(idx), srcVec)
+		vec := proc.GetVector(*srcVec.GetType())
+		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			return result, err
+		}
+		arg.buf.SetVector(int32(idx), vec)
 	}
 	arg.buf.AddRowCount(bat.RowCount())
 

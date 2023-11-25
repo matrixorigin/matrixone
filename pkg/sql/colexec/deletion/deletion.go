@@ -188,7 +188,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 					delBatch.Clean(proc.Mp())
 					return result, err
 				}
-				delBatch.Clean(proc.Mp())
+				proc.PutBatch(delBatch)
 			}
 		}
 	} else {
@@ -205,7 +205,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 		}
-		delBatch.Clean(proc.GetMPool())
+		proc.PutBatch(delBatch)
 	}
 	// result.Batch = batch.EmptyBatch
 

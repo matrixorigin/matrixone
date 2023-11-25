@@ -806,7 +806,7 @@ func FixProjectionResult(proc *process.Process,
 					}
 					sbat.ReplaceVector(oldVec, nil)
 				} else {
-					newVec = proc.GetVector(*oldVec.GetType())
+					newVec = proc.GetVectorWithLen(*oldVec.GetType(), len(oldVec.GetArea()))
 					err = uafs[i](newVec, oldVec)
 					if err != nil {
 						for j := range finalVectors {
