@@ -49,6 +49,8 @@ select sample(c3, 1 rows) from s_t1 where c1 = 3;
 select sample(c3, 2 rows) from s_t1 where c1 = 3;
 select c1, sample(c3, 3 rows) from s_t1 where c1 = 3 group by c1;
 select c1, sample(c3, 3 rows) from s_t1 group by c1 order by c1, c3;
+/* 12. sample as and outer filter */
+select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) where k < 2 order by c1, k;
 
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
