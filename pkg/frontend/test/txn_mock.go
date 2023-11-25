@@ -93,6 +93,20 @@ func (mr *MockTxnClientMockRecorder) GetLatestCommitTS() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestCommitTS", reflect.TypeOf((*MockTxnClient)(nil).GetLatestCommitTS))
 }
 
+// GetState mocks base method.
+func (m *MockTxnClient) GetState() client.TxnState {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetState")
+	ret0, _ := ret[0].(client.TxnState)
+	return ret0
+}
+
+// GetState indicates an expected call of GetState.
+func (mr *MockTxnClientMockRecorder) GetState() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetState", reflect.TypeOf((*MockTxnClient)(nil).GetState))
+}
+
 // GetSyncLatestCommitTSTimes mocks base method.
 func (m *MockTxnClient) GetSyncLatestCommitTSTimes() uint64 {
 	m.ctrl.T.Helper()
@@ -665,6 +679,20 @@ func (m *MockTimestampWaiter) GetTimestamp(arg0 context.Context, arg1 timestamp.
 func (mr *MockTimestampWaiterMockRecorder) GetTimestamp(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTimestamp", reflect.TypeOf((*MockTimestampWaiter)(nil).GetTimestamp), arg0, arg1)
+}
+
+// LatestTS mocks base method.
+func (m *MockTimestampWaiter) LatestTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LatestTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// LatestTS indicates an expected call of LatestTS.
+func (mr *MockTimestampWaiterMockRecorder) LatestTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LatestTS", reflect.TypeOf((*MockTimestampWaiter)(nil).LatestTS))
 }
 
 // NotifyLatestCommitTS mocks base method.
