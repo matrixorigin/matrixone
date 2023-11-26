@@ -25,16 +25,15 @@ var _ vm.Operator = new(Argument)
 const shuffleBatchSize = 8192 * 3 / 4
 
 type Argument struct {
-	ctr                *container
-	ShuffleColIdx      int32
-	ShuffleType        int32
-	AliveRegCnt        int32
-	ShuffleColMin      int64
-	ShuffleColMax      int64
-	info               *vm.OperatorInfo
-	children           []vm.Operator
-	ShuffleRangeUint64 []uint64
-	ShuffleRangeInt64  []int64
+	ctr           *container
+	ShuffleColIdx int32
+	ShuffleType   int32
+	ShuffleColMin int64
+	ShuffleColMax int64
+	AliveRegCnt   int32
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

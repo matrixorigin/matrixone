@@ -33,6 +33,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+	var tableDef plan.TableDef
+
+	// check view statement
+	var stmtPlan *Plan
+	var err error
+	switch s := stmt.Select.(type) {
+	case *tree.ParenSelect:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: strings.ToLower(query.Headings[idx]),
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  !expr.Typ.NotNullable,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	tableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql = &plan.ViewDef{
+		View: string(viewData),
+	}
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+
+	return &tableDef, nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
@@ -596,7 +658,18 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt, ctx, createTable)
+	var err error
+	if stmt.IsDynamicTable {
+		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
+		if err != nil {
+			return nil, err
+		}
+
+		createTable.TableDef.Cols = tableDef.Cols
+		//createTable.TableDef.ViewSql = tableDef.ViewSql
+		//createTable.TableDef.Defs = tableDef.Defs
+	}
+	err = buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}

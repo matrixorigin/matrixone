@@ -245,7 +245,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 	limit := int64(50)
 
 	// Call RetrieveData
-	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
+	batch, err := RetrieveData(context.Background(), nil, configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
 	if err != nil {
 		t.Fatalf("RetrieveData failed: %s", err)
 	}
@@ -308,7 +308,7 @@ func TestRetrieveDataWIthProtobuf(t *testing.T) {
 	limit := int64(50)
 
 	// Call RetrieveData
-	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
+	batch, err := RetrieveData(context.Background(), nil, configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
 	if err != nil {
 		t.Fatalf("RetrieveData failed: %s", err)
 	}

@@ -272,6 +272,10 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 			//return err
 		}
 
+		if currentSchema == nil {
+			continue
+		}
+
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
