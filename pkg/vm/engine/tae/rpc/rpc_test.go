@@ -86,6 +86,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 
 	var objNames []objectio.ObjectName
 	var blkMetas []string
+	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -109,6 +110,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 				blk.GetID())
 			assert.Nil(t, err)
 			blkMetas = append(blkMetas, metaLoc.String())
+			stats = append(stats, writer.GetObjectStats()[objectio.SchemaData])
 		}
 	}
 
@@ -169,8 +171,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	entries = append(entries, createTbEntries...)
 
 	//add 100 * 50 blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	offset = 0
@@ -178,6 +180,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
+			metaLocBat.Vecs[1].Append([]byte(stats[offset+i][:]), false)
 		}
 		offset += 50
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
