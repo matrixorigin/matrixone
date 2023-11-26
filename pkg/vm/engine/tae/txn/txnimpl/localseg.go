@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -295,6 +296,7 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewSeg() {
+		logutil.Infof("lalala create segment for table %v", seg.table.schema.Name)
 		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
@@ -306,6 +308,7 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
 	blkMaxRows := seg.table.schema.BlockMaxRows
+	logutil.Infof("lalala create %d blks for table %v", blkCount, seg.table.schema.Name)
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
 		if totalRow > blkMaxRows {
