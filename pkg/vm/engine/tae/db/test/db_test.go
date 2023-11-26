@@ -8030,7 +8030,6 @@ func TestDeduplication(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(blocks))
 
-	
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer statsVec.Close()
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)

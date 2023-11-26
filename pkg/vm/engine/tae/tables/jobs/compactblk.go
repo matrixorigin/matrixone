@@ -71,9 +71,9 @@ func NewCompactBlockTask(
 	rt *dbutils.Runtime,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:  txn,
-		meta: meta,
-		rt:   rt,
+		txn:   txn,
+		meta:  meta,
+		rt:    rt,
 		Stats: make([]objectio.ObjectStats, 0),
 	}
 	dbId := meta.GetSegment().GetTable().GetDB().ID

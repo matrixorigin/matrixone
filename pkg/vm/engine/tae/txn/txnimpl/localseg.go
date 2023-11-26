@@ -392,7 +392,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 	stats objectio.ObjectStats,
 ) (err error) {
 	seg.registerStats(stats)
-	for i, _ := range pkVecs {
+	for i := range pkVecs {
 		dedupType := seg.table.store.txn.GetDedupType()
 		//insert primary keys into seg.index
 		if pkVecs != nil && dedupType == txnif.FullDedup {

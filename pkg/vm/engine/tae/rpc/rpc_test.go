@@ -349,6 +349,34 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	entries = append(entries, createTbEntries...)
+	err = handle.HandlePreCommit(
+		context.TODO(),
+		txn,
+		&api.PrecommitWriteCmd{
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
+			EntryList: entries,
+		},
+		new(api.SyncLogTailResp),
+	)
+	assert.Nil(t, err)
+	//t.FailNow()
+	_, err = handle.HandleCommit(context.TODO(), txn)
+	assert.Nil(t, err)
+	entries = entries[:0]
+
+	// set blockmaxrow as 10
+	p := &catalog.LoopProcessor{}
+	p.TableFn = func(te *catalog.TableEntry) error {
+		schema := te.GetLastestSchema()
+		if schema.Name == "tbtest" {
+			schema.BlockMaxRows = 10
+		}
+		return nil
+	}
+	handle.db.Catalog.RecurLoop(p)
+	txn = mock1PCTxn(handle.db)
 	//append data into "tbtest" table
 	insertEntry, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, "", moBats[2])
