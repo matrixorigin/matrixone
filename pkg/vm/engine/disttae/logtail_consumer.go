@@ -1254,10 +1254,9 @@ func updatePartitionOfPush(
 	defer partition.Unlock()
 
 	state, doneMutate := partition.MutateState()
-	state.ConsumeTS = types.TimestampToTS(*tl.Ts)
+	state.ConsumeTS = types.TimestampToTS(*tails[0].Ts)
 
 	state.PId.Store(logtailreplay.GetPID())
-	fmt.Println(fmt.Sprintf("mutate state with pid: %d\n", state.PId.Load()))
 
 	key := e.catalog.GetTableById(dbId, tblId)
 

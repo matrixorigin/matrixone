@@ -916,9 +916,9 @@ func LoadCheckpointEntries(
 		}
 		if segDel != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
+				EntryType:    api.Entry_Insert,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_seg", tableID),
+				TableName:    fmt.Sprintf("_%d_obj", tableID),
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          segDel,
