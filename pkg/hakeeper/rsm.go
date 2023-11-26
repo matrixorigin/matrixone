@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
@@ -520,7 +521,29 @@ func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
-	delete(s.state.CNState.Stores, uuid)
+	deletedTimeout := time.Hour * 24 * 7
+	var pos int
+	for _, store := range s.state.DeletedStores {
+		if time.Now().UnixNano()-store.DownTime > int64(deletedTimeout) {
+			pos++
+		}
+	}
+	s.state.DeletedStores = s.state.DeletedStores[pos:]
+	if store, ok := s.state.CNState.Stores[uuid]; ok {
+		delete(s.state.CNState.Stores, uuid)
+		var addr string
+		addrItems := strings.Split(store.SQLAddress, ":")
+		if len(addrItems) > 1 {
+			addr = addrItems[0]
+		}
+		s.state.DeletedStores = append(s.state.DeletedStores, pb.DeletedStore{
+			UUID:      uuid,
+			StoreType: "CN",
+			Address:   addr,
+			UpTime:    store.UpTime,
+			DownTime:  time.Now().UnixNano(),
+		})
+	}
 	return sm.Result{}
 }
 
@@ -703,6 +726,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			QueryAddress:       info.QueryAddress,
 			ConfigData:         info.ConfigData,
 			Resource:           info.Resource,
+			UpTime:             info.UpTime,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -745,6 +769,15 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Tick:          info.Tick,
 			ListenAddress: info.ListenAddress,
 			ConfigData:    info.ConfigData,
+		})
+	}
+	for _, store := range s.state.DeletedStores {
+		cd.DeletedStores = append(cd.DeletedStores, pb.DeletedStore{
+			UUID:      store.UUID,
+			StoreType: store.StoreType,
+			Address:   store.Address,
+			UpTime:    store.UpTime,
+			DownTime:  store.DownTime,
 		})
 	}
 	return cd
