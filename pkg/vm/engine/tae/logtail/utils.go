@@ -567,7 +567,7 @@ const (
 	BlockInsert = iota
 	BlockDelete
 	CNBlockInsert
-	SegmentDelete
+	ObjectInfo
 )
 
 func (m *TableMeta) String() string {
@@ -577,7 +577,7 @@ func (m *TableMeta) String() string {
 	return fmt.Sprintf("interval:%v, locations:%v", m.ClosedInterval, m.locations)
 }
 
-const MetaMaxIdx = SegmentDelete + 1
+const MetaMaxIdx = ObjectInfo + 1
 
 type CheckpointMeta struct {
 	tables [MetaMaxIdx]*TableMeta
@@ -756,7 +756,7 @@ func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 		idx = BLKMetaDeleteIDX
 	} else if i == CNBlockInsert {
 		idx = BLKCNMetaInsertIDX
-	} else if i == SegmentDelete {
+	} else if i == ObjectInfo {
 		idx = ObjectInfoIDX
 	}
 	switch tableID {
@@ -1018,7 +1018,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 	if len(segDelStr) > 0 {
 		segDeleteTableMeta := NewTableMeta()
 		segDeleteTableMeta.locations = segDelStr
-		tableMeta.tables[SegmentDelete] = segDeleteTableMeta
+		tableMeta.tables[ObjectInfo] = segDeleteTableMeta
 	}
 
 	data.meta[tid] = tableMeta
@@ -1304,8 +1304,8 @@ func (data *CNCheckpointData) ReadFromData(
 	return
 }
 
-func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Batch) (ins, del, cnIns, segDel *api.Batch, err error) {
-	var insTaeBat, delTaeBat, cnInsTaeBat, segDelTaeBat *batch.Batch
+func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Batch) (ins, del, cnIns, objInfo *api.Batch, err error) {
+	var insTaeBat, delTaeBat, cnInsTaeBat, objInfoTaeBat *batch.Batch
 	if len(bats) == 0 {
 		return
 	}
@@ -1348,9 +1348,9 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 			return
 		}
 	}
-	segDelTaeBat = bats[SegmentDelete]
-	if segDelTaeBat != nil {
-		segDel, err = batch.BatchToProtoBatch(segDelTaeBat)
+	objInfoTaeBat = bats[ObjectInfo]
+	if objInfoTaeBat != nil {
+		objInfo, err = batch.BatchToProtoBatch(objInfoTaeBat)
 		if err != nil {
 			return
 		}
@@ -1496,16 +1496,16 @@ func (data *CheckpointData) prepareMeta() {
 		} else {
 			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].locations), false, data.allocator)
 		}
-		if data.meta[uint64(tid)].tables[SegmentDelete] == nil {
+		if data.meta[uint64(tid)].tables[ObjectInfo] == nil {
 			vector.AppendBytes(segDelLoc, nil, true, data.allocator)
 		} else {
-			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].locations), false, data.allocator)
+			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[ObjectInfo].locations), false, data.allocator)
 		}
 	}
 }
 func (data *CheckpointData) resetSegmentMeta() {
 	for _, meta := range data.meta {
-		meta.tables[SegmentDelete] = nil
+		meta.tables[ObjectInfo] = nil
 	}
 }
 func (data *CheckpointData) updateTableMeta(tid uint64, metaIdx int, start, end int32) {
@@ -1546,7 +1546,7 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	if delEnd <= delStart {
 		return
 	}
-	data.updateTableMeta(tid, SegmentDelete, delStart, delEnd)
+	data.updateTableMeta(tid, ObjectInfo, delStart, delEnd)
 }
 
 func (data *CheckpointData) resetTableMeta(tid uint64, metaIdx int, start, end int32) {
