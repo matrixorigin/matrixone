@@ -348,7 +348,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsSegTable(entry.TableName) {
 			// TODO
 		}else if IsObjTable(entry.TableName) {
-			p.HandleObject(ctx, entry.Bat)
+			// p.HandleObject(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
