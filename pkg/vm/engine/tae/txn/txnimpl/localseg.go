@@ -56,6 +56,8 @@ type localSegment struct {
 	appends     []*appendCtx
 	tableHandle data.TableHandle
 	nseg        handle.Segment
+
+	stats *objectio.ObjectStats
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -272,6 +274,41 @@ func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
 	_, err = seg.nseg.CreateNonAppendableBlock(opts)
 	if err != nil {
 		return
+	}
+	return
+}
+
+func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (err error) {
+	sid := stats.ObjectName().SegmentId()
+	shouldCreateNewSeg := func() bool {
+		if seg.nseg == nil {
+			return true
+		}
+		entry := seg.nseg.GetMeta().(*catalog.SegmentEntry)
+		return entry.ID != sid
+	}
+
+	if shouldCreateNewSeg() {
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
+		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
+		if err != nil {
+			return
+		}
+	}
+
+	num := stats.ObjectName().Num()
+	blkCount := stats.BlkCnt()
+	for i := uint16(0); i < uint16(blkCount); i++ {
+		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), stats.Rows(), i)
+
+		opts := new(objectio.CreateBlockOpt).
+			WithMetaloc(metaloc).
+			WithFileIdx(num).
+			WithBlkIdx(i)
+		_, err = seg.nseg.CreateNonAppendableBlock(opts)
+		if err != nil {
+			return
+		}
 	}
 	return
 }
