@@ -73,6 +73,11 @@ func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
 }
 
+func (des *ObjectStats) ZMIsEmpty() bool {
+	return bytes.Equal(des[zoneMapOffset:zoneMapOffset+zoneMapLen],
+		ZeroObjectStats[zoneMapOffset:zoneMapOffset+zoneMapLen])
+}
+
 func (des *ObjectStats) ObjectShortName() *ObjectNameShort {
 	return des.ObjectName().Short()
 }
