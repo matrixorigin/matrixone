@@ -1020,10 +1020,6 @@ func (h *Handle) HandleWrite(
 		if req.FileName != "" {
 			statsCNVec := req.Batch.Vecs[1]
 			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
-			for i := 0; i < statsVec.Length(); i++ {
-				s:=objectio.ObjectStats(statsVec.Get(i).([]byte))
-				logutil.Infof("lalala tbl %v, attr1 %v stats %v", req.TableName,req.Batch.Attrs[1], s.String())
-			}
 			err = tb.AddBlksWithMetaLoc(ctx, statsVec)
 			return
 		}

@@ -658,7 +658,6 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
 	return stats.Foreach(func(v any, isNull bool, row int) error {
 		s := objectio.ObjectStats(v.([]byte))
-		logutil.Infof("lalala table %v, stats blk cnt %d, %v",tbl.schema.Name,s.BlkCnt(),stats.String())
 		return tbl.addBlksWithMetaLoc(ctx, s)
 	}, nil)
 }
