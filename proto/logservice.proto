@@ -49,6 +49,7 @@ message CNStore {
   string          QueryAddress       = 11;
   ConfigData ConfigData = 12;
   Resource Resource = 13 [(gogoproto.nullable) = false];
+  int64 UpTime = 14;
 }
 
 message TNStore {
@@ -496,6 +497,7 @@ message CNStoreInfo {
   bool            GossipJoined       = 12;
   ConfigData      ConfigData         = 13;
   Resource        Resource           = 14 [(gogoproto.nullable) = false];
+  int64           UpTime             = 15;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -551,6 +553,7 @@ message ClusterDetails {
   repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
+  repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -610,6 +613,15 @@ message CheckerState {
   Resource Resource = 12 [(gogoproto.nullable) = false];
 }
 
+message DeletedStore {
+  string UUID = 1;
+  // StoreType indicates the type of the store: CN, TN or proxy.
+  string StoreType = 2;
+  string Address = 3;
+  int64 UpTime = 4;
+  int64 DownTime = 5;
+}
+
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
 message HAKeeperRSMState {
   uint64 Index                               = 1;
@@ -629,6 +641,7 @@ message HAKeeperRSMState {
   ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
   TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
   ProxyState ProxyState         = 15 [(gogoproto.nullable) = false];
+  repeated DeletedStore DeletedStores = 16 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

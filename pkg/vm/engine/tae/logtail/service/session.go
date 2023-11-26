@@ -52,7 +52,8 @@ var (
 // SessionManager manages all client sessions.
 type SessionManager struct {
 	sync.RWMutex
-	clients map[morpcStream]*Session
+	clients        map[morpcStream]*Session
+	deletedClients []*Session
 }
 
 // NewSessionManager constructs a session manager.
@@ -89,7 +90,12 @@ func (sm *SessionManager) GetSession(
 func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	sm.Lock()
 	defer sm.Unlock()
-	delete(sm.clients, stream)
+	ss, ok := sm.clients[stream]
+	if ok {
+		delete(sm.clients, stream)
+		ss.deletedAt = time.Now()
+		sm.deletedClients = append(sm.deletedClients, ss)
+	}
 }
 
 func (sm *SessionManager) HasSession(stream morpcStream) bool {
@@ -108,6 +114,38 @@ func (sm *SessionManager) ListSession() []*Session {
 	for _, ss := range sm.clients {
 		sessions = append(sessions, ss)
 	}
+	return sessions
+}
+
+// AddSession is only for test.
+func (sm *SessionManager) AddSession(id uint64) {
+	sm.Lock()
+	defer sm.Unlock()
+	stream := morpcStream{
+		streamID: id,
+	}
+	if _, ok := sm.clients[stream]; !ok {
+		sm.clients[stream] = &Session{
+			stream: stream,
+		}
+	}
+}
+
+// AddDeletedSession is only for test.
+func (sm *SessionManager) AddDeletedSession(id uint64) {
+	sm.Lock()
+	defer sm.Unlock()
+	stream := morpcStream{streamID: id}
+	sm.deletedClients = append(sm.deletedClients, &Session{
+		stream: stream,
+	})
+}
+
+func (sm *SessionManager) DeletedSessions() []*Session {
+	sm.RLock()
+	defer sm.RUnlock()
+	sessions := make([]*Session, 0, len(sm.deletedClients))
+	sessions = append(sessions, sm.deletedClients...)
 	return sessions
 }
 
@@ -197,6 +235,13 @@ type Session struct {
 	heartbeatTimer    *time.Timer
 	exactFrom         timestamp.Timestamp
 	publishInit       sync.Once
+
+	deletedAt time.Time
+	sendMu    struct {
+		sync.Mutex
+		lastBeforeSend time.Time
+		lastAfterSend  time.Time
+	}
 }
 
 type SessionErrorNotifier interface {
@@ -267,14 +312,14 @@ func NewSession(
 						v2.LogtailSendTotalHistogram.Observe(time.Since(now).Seconds())
 					}()
 
+					ss.OnBeforeSend(now)
 					err := ss.stream.write(ctx, msg.response)
-					if sendCost := time.Since(now); sendCost > 10*time.Second {
-						ss.logger.Info("send logtail too much", zap.Int64("sendRound", cnt), zap.Duration("duration", sendCost))
-					}
+					ss.OnAfterSend(now, cnt)
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
 							zap.String("timeout", msg.timeout.String()),
+							zap.String("remote address", ss.RemoteAddress()),
 						)
 						return err
 					}
@@ -529,6 +574,59 @@ func (ss *Session) SendResponse(
 	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response, createAt: time.Now()}:
 		return nil
 	}
+}
+
+func (ss *Session) Active() int {
+	return int(atomic.LoadInt32(&ss.active))
+}
+
+func (ss *Session) Tables() map[TableID]TableState {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.tables
+}
+
+func (ss *Session) OnBeforeSend(t time.Time) {
+	ss.sendMu.Lock()
+	defer ss.sendMu.Unlock()
+	ss.sendMu.lastBeforeSend = t
+}
+
+func (ss *Session) OnAfterSend(before time.Time, count int64) {
+	ss.sendMu.Lock()
+	defer ss.sendMu.Unlock()
+	now := time.Now()
+	cost := now.Sub(before)
+	if cost > 10*time.Second {
+		ss.logger.Info("send logtail too much",
+			zap.Int64("sendRound", count),
+			zap.Duration("duration", cost))
+	}
+	ss.sendMu.lastAfterSend = now
+}
+
+func (ss *Session) LastBeforeSend() time.Time {
+	ss.sendMu.Lock()
+	defer ss.sendMu.Unlock()
+	return ss.sendMu.lastBeforeSend
+}
+
+func (ss *Session) LastAfterSend() time.Time {
+	ss.sendMu.Lock()
+	defer ss.sendMu.Unlock()
+	return ss.sendMu.lastAfterSend
+}
+
+func (ss *Session) RemoteAddress() string {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.stream.remote
+}
+
+func (ss *Session) DeletedAt() time.Time {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return ss.deletedAt
 }
 
 // newUnsubscriptionResponse constructs response for unsubscription.

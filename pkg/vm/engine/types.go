@@ -576,6 +576,9 @@ type Relation interface {
 
 	TableDefs(context.Context) ([]TableDef, error)
 
+	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
+	GetTableDef(context.Context) *plan.TableDef
+
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
 	GetHideKeys(context.Context) ([]*Attribute, error)
