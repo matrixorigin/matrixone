@@ -561,9 +561,24 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	}
 }
 
-func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(n, left, right *plan.Node) *fuzzyfilter.Argument {
+	var typ types.T
+	pkName := n.TableDef.Pkey.PkeyColName
+	if  pkName == catalog.CPrimaryKeyColName {
+		typ = types.T(n.TableDef.Pkey.CompPkeyCol.Typ.GetId())
+	} else {
+		cols := n.TableDef.Cols
+		for _, c := range cols {
+			if c.Name == pkName {
+				typ = types.T(c.Typ.GetId())
+			}
+		}
+	}
+
 	return &fuzzyfilter.Argument{
-		N: n.Stats.Outcnt,
+		T: typ,	
+		N: left.Stats.Cost + right.Stats.Cost,
+		PkName: pkName,
 	}
 }
 

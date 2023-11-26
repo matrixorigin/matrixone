@@ -1009,7 +1009,7 @@ func makeInsertPlan(
 
 	isUpdate := updateColLength > 0
 	// ifGoFuzzyFilter := !hasOnDup && !isInsertWithoutAutoPkCol && !isUpdate && updatePkCol && !builder.qry.LoadTag
-	// sink_scan -> union_all -> Fuzzyfilter
+	// sink_scan -> Fuzzyfilter
 	// table_scan -----^
 
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
@@ -1151,24 +1151,17 @@ func makeInsertPlan(
 				scanNode.BlockFilterList = blockFilterList
 			}
 
-			// table_scan -> union_all
-			// sink_scan  ---^
-			unionAllNode := &plan.Node{
-				NodeType: plan.Node_UNION_ALL,
-				Children: []int32{lastNodeId, tableScanId},
-			}
-			lastNodeId = builder.appendNode(unionAllNode, bindCtx)
-
-			// union_all -> fuzzy_filter
+			// fuzzy_filter
 			fuzzyFilterNode := &Node{
 				NodeType: plan.Node_FUZZY_FILTER,
-				Children: []int32{lastNodeId},
+				Children: []int32{lastNodeId, tableScanId},
 				TableDef: tableDef,
 				ObjRef:   objRef,
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
 			builder.appendStep(lastNodeId)
+			ReCalcNodeStats(lastNodeId, builder, true, true, true)
 		}
 	}
 

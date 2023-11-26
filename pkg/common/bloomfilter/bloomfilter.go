@@ -59,24 +59,24 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 
 func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 	valLength := len(bf.hashSeed) * 3
-	var exits bool
+	var exist bool
 	var vals []uint64
 	var contains bool
 	bf.getValue(v, func(idx int, beginIdx int) {
-		exits = true
+		exist = true
 		vals = bf.vals[idx]
 		for j := 0; j < valLength; j++ {
-			if exits {
+			if exist {
 				contains = bf.bitmap.Contains(vals[j])
 				if !contains {
 					bf.bitmap.Add(vals[j])
-					exits = false
+					exist = false
 				}
 			} else {
 				bf.bitmap.Add(vals[j])
 			}
 		}
-		callBack(exits, beginIdx+idx)
+		callBack(exist, beginIdx+idx)
 	})
 }
 

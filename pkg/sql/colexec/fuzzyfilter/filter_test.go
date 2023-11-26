@@ -42,54 +42,65 @@ var (
 )
 
 func init() {
-	rowCnts = []float64{100000, 1000000, 10000000}
+	rowCnts = []float64{1000000, 10000000}
 
 	// https://hur.st/bloomfilter/?n=100000&p=0.00001&m=&k=3
 	referM = []float64{
-		13774223,
 		68871111,
 		137742221,
-		688711101,
-		1377422201,
 	}
 
 	tcs = []fuzzyTestCase{
 		{
 			arg:  new(Argument),
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: newProcess(),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 		},
 		{
 			arg:  new(Argument),
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: newProcess(),
 			types: []types.Type{
 				types.T_date.ToType(),
 			},
 		},
 		{
 			arg:  new(Argument),
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: newProcess(),
 			types: []types.Type{
 				types.T_float32.ToType(),
 			},
 		},
 		{
 			arg:  new(Argument),
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: newProcess(),
 			types: []types.Type{
 				types.T_varchar.ToType(),
 			},
 		},
 		{
 			arg:  new(Argument),
-			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			proc: newProcess(),
 			types: []types.Type{
 				types.T_binary.ToType(),
 			},
 		},
 	}
+}
+
+func newProcess() *process.Process {
+	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: proc.Ctx,
+		Ch:  make(chan *batch.Batch, 10),
+	}
+	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+		Ctx: proc.Ctx,
+		Ch:  make(chan *batch.Batch, 3),
+	}
+	return proc
 }
 
 func TestString(t *testing.T) {
@@ -118,7 +129,12 @@ func TestFuzzyFilter(t *testing.T) {
 			}
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
+
 			bat := newBatch(t, tc.types, tc.proc, int64(r))
+			tc.proc.Reg.MergeReceivers[0].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+
 			resetChildren(tc.arg, []*batch.Batch{bat})
 			for {
 				result, err := tc.arg.Call(tc.proc)

@@ -16,22 +16,43 @@ package fuzzyfilter
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
 
+const (
+	Build = iota
+	Probe
+	End
+)
+
 type Argument struct {
+	ctr *container
+
 	// Number of items in the filter
 	N float64
+	T types.T
+	PkName string
+
+	useRoaring bool
+
+	bloomFilter   *bloomfilter.BloomFilter
+	roaringFilter *roaringFilter
 
 	collisionCnt int
-	filter       *bloomfilter.BloomFilter
 	rbat         *batch.Batch
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+type container struct {
+	colexec.ReceiverOperator
+	state int
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -43,11 +64,29 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.filter != nil {
-		arg.filter.Clean()
+	if arg.bloomFilter != nil {
+		arg.bloomFilter.Clean()
+	}
+	if arg.roaringFilter != nil {
+		arg.roaringFilter = nil
 	}
 	if arg.rbat != nil {
 		arg.rbat.Clean(proc.GetMPool())
 		arg.rbat = nil
+	}
+	ctr := arg.ctr
+	if ctr != nil {
+		ctr.FreeAllReg()
+	}
+}
+
+func IfCanUseRoaringFilter(t types.T) bool {
+	switch t {
+	case types.T_int8, types.T_int16, types.T_int32:
+		return true
+	case types.T_uint8, types.T_uint16, types.T_uint32:
+		return true
+	default:
+		return false
 	}
 }

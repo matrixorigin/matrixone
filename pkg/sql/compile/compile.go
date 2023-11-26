@@ -1210,16 +1210,17 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_FUZZY_FILTER:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
-		ss, err = c.compileFuzzyFilter(n, ss, ns)
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
+		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		c.setAnalyzeCurrent(right, curr)
+		return c.compileFuzzyFilter(n, ns, left, right)
 	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -2566,14 +2567,14 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node) ([]*Scope, error) {
-	if len(ss) != 1 {
-		panic("fuzzy filter should have only one prescope")
-	}
+func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
+	left = append(left, right...)
+	rs := c.newMergeScope(left)
+	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(ns[n.Children[0]])
+	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
 
-	ss[0].appendInstruction(vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
 		Idx: c.anal.curr,
 		Arg: arg,
@@ -2586,7 +2587,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node)
 
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
-	ss[0].appendInstruction(vm.Instruction{
+	rs.appendInstruction(vm.Instruction{
 		Op: vm.Output,
 		Arg: &output.Argument{
 			Data: outData,
@@ -2605,7 +2606,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		},
 	})
 
-	return ss, nil
+	return []*Scope{rs}, nil
 }
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {

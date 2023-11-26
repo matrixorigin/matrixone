@@ -52,6 +52,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
 	rowCount := int64(arg.N)
 	if rowCount < 10000 {
 		rowCount = 10000
@@ -82,56 +84,80 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+	result := vm.NewCallResult()
+	for {
+		switch arg.ctr.state {
+		case Build:
 
-	result, err := arg.children[0].Call(proc)
-	if err != nil {
-		result.Status = vm.ExecStop
-		return result, err
-	}
-	bat := result.Batch
+			bat, _, err := arg.ctr.ReceiveFromSingleReg(1, anal)
+			if err != nil {
+				return result, err
+			}
 
-	if bat == nil {
-		// this will happen in such case:create unique index from a table that unique col have no data
-		if arg.rbat == nil || arg.collisionCnt == 0 {
+			if bat == nil {
+				arg.ctr.state = Probe
+				continue
+			}
+			rowCnt := bat.RowCount()
+			if rowCnt == 0 {
+				return result, nil
+			}
+
+		pkCol := bat.GetVector(0)
+			arg.filter.Add(pkCol)
+			continue
+
+		case Probe:
+
+			bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return result, err
+			}
+
+			if bat == nil {
+				// this will happen in such case:create unique index from a table that unique col have no data
+				if arg.rbat == nil || arg.collisionCnt == 0 {
+					result.Status = vm.ExecStop
+					return result, nil
+				}
+
+				// send collisionKeys to output operator to run background SQL
+				arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
+				result.Batch = arg.rbat
+				result.Status = vm.ExecStop
+				arg.ctr.state = End
+				return result, nil
+			}
+
+			rowCnt := bat.RowCount()
+			if rowCnt == 0 {
+				return result, nil
+			}
+
+			if arg.rbat == nil {
+				if err := generateRbat(proc, arg, bat); err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+			}
+
+			pkCol := bat.GetVector(0)
+			arg.filter.TestAndAdd(pkCol, func(exist bool, i int) {
+				if exist {
+					if arg.collisionCnt < maxCheckDupCount {
+						appendCollisionKey(proc, arg, i, bat)
+						arg.collisionCnt++
+					}
+				}
+			})
+			result.Batch = batch.EmptyBatch
+			continue
+
+		case End:
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-
-		// fmt.Printf("Estimated row count is %f, collisionCnt is %d, fp is %f\n", ap.N, ap.collisionCnt, float64(ap.collisionCnt)/float64(ap.N))
-		// send collisionKeys to output operator to run background SQL
-		arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
-		result.Batch = arg.rbat
-		arg.collisionCnt = 0
-		result.Status = vm.ExecStop
-		return result, nil
 	}
-
-	anal.Input(bat, arg.info.IsFirst)
-
-	rowCnt := bat.RowCount()
-	if rowCnt == 0 {
-		return result, nil
-	}
-
-	if arg.rbat == nil {
-		if err := generateRbat(proc, arg, bat); err != nil {
-			result.Status = vm.ExecStop
-			return result, err
-		}
-	}
-
-	pkCol := bat.GetVector(0)
-	arg.filter.TestAndAdd(pkCol, func(exist bool, i int) {
-		if exist {
-			if arg.collisionCnt < maxCheckDupCount {
-				appendCollisionKey(proc, arg, i, bat)
-				arg.collisionCnt++
-			}
-		}
-	})
-
-	result.Batch = batch.EmptyBatch
-	return result, nil
 }
 
 // appendCollisionKey will append collision key into rbat
