@@ -18,6 +18,7 @@ import (
 	// "fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -58,24 +59,31 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if rowCount < 10000 {
 		rowCount = 10000
 	}
-	//@see https://hur.st/bloomfilter/
-	var probability float64
-	if rowCount < 10001 {
-		probability = 0.0001
-	} else if rowCount < 100001 {
-		probability = 0.00001
-	} else if rowCount < 1000001 {
-		probability = 0.000005
-	} else if rowCount < 10000001 {
-		probability = 0.000001
-	} else if rowCount < 100000001 {
-		probability = 0.0000005
-	} else if rowCount < 1000000001 {
-		probability = 0.0000002
+
+	arg.useRoaring = IfCanUseRoaringFilter(arg.T)
+
+	if arg.useRoaring {
+		arg.roaringFilter = newroaringFilter(arg.T)
 	} else {
-		probability = 0.0000001
+		//@see https://hur.st/bloomfilter/
+		var probability float64
+		if rowCount < 10001 {
+			probability = 0.0001
+		} else if rowCount < 100001 {
+			probability = 0.00001
+		} else if rowCount < 1000001 {
+			probability = 0.000003
+		} else if rowCount < 10000001 {
+			probability = 0.000001
+		} else if rowCount < 100000001 {
+			probability = 0.0000005
+		} else if rowCount < 1000000001 {
+			probability = 0.0000002
+		} else {
+			probability = 0.0000001
+		}
+		arg.bloomFilter = bloomfilter.New(rowCount, probability)
 	}
-	arg.filter = bloomfilter.New(rowCount, probability)
 
 	return nil
 }
@@ -84,6 +92,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+
+	if arg.useRoaring {
+		return arg.filterByRoaring(proc, anal)
+	} else {
+		return arg.filterByBloom(proc, anal)
+	}
+}
+
+func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	for {
 		switch arg.ctr.state {
@@ -103,8 +120,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-		pkCol := bat.GetVector(0)
-			arg.filter.Add(pkCol)
+			pkCol := bat.GetVector(0)
+			arg.bloomFilter.Add(pkCol)
 			continue
 
 		case Probe:
@@ -142,7 +159,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			pkCol := bat.GetVector(0)
-			arg.filter.TestAndAdd(pkCol, func(exist bool, i int) {
+
+			arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
 				if exist {
 					if arg.collisionCnt < maxCheckDupCount {
 						appendCollisionKey(proc, arg, i, bat)
@@ -150,9 +168,83 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			})
+
 			result.Batch = batch.EmptyBatch
 			continue
+		case End:
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+	}
+}
 
+func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+	result := vm.NewCallResult()
+	for {
+		switch arg.ctr.state {
+		case Build:
+
+			bat, _, err := arg.ctr.ReceiveFromSingleReg(1, anal)
+			if err != nil {
+				return result, err
+			}
+
+			if bat == nil {
+				arg.ctr.state = Probe
+				continue
+			}
+			rowCnt := bat.RowCount()
+			if rowCnt == 0 {
+				return result, nil
+			}
+
+			pkCol := bat.GetVector(0)
+			arg.roaringFilter.addFunc(arg.roaringFilter, pkCol)
+			continue
+
+		case Probe:
+
+			bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return result, err
+			}
+
+			if bat == nil {
+				// this will happen in such case:create unique index from a table that unique col have no data
+				if arg.rbat == nil || arg.collisionCnt == 0 {
+					result.Status = vm.ExecStop
+					return result, nil
+				}
+
+				// send collisionKeys to output operator to run background SQL
+				arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
+				result.Batch = arg.rbat
+				result.Status = vm.ExecStop
+				arg.ctr.state = End
+				return result, nil
+			}
+
+			rowCnt := bat.RowCount()
+			if rowCnt == 0 {
+				return result, nil
+			}
+
+			if arg.rbat == nil {
+				if err := generateRbat(proc, arg, bat); err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+			}
+
+			pkCol := bat.GetVector(0)
+
+			idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
+
+			if idx == -1 {
+				continue
+			} else {
+				return result, moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+			}
 		case End:
 			result.Status = vm.ExecStop
 			return result, nil
