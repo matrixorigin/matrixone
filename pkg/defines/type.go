@@ -188,6 +188,8 @@ type TemporaryTN struct{}
 
 type IsMoLogger struct{}
 
+type SourceScanResKey struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 
