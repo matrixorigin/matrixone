@@ -41,7 +41,6 @@
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
-MO_DUMP := mo-dump
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
@@ -108,10 +107,6 @@ cgo:
 build: config cgo
 	$(info [Build binary])
 	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
-
-.PHONY: modump
-modump:
-	$(CGO_OPTS) go build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -206,7 +201,7 @@ install-static-check-tools:
 
 .PHONY: static-check
 static-check: config cgo err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` $(shell go list ./... | grep -v github.com/matrixorigin/matrixone/cmd/mo-dump)
+	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
