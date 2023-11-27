@@ -1337,19 +1337,19 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.Bloc
 	return blks
 }
 
-// ForeachBlkInObjStatsList receives an object stats list,
-// and visits each blk of these object stats by OnBlock,
+// ForeachBlkInObjStatsList receives an object info list,
+// and visits each blk of these object info by OnBlock,
 // until the onBlock returns false or all blks have been enumerated.
 // when onBlock returns a false,
-// the nextStats argument decides whether continue onBlock on the next stats or exit foreach completely.
+// the next argument decides whether continue onBlock on the next stats or exit foreach completely.
 func ForeachBlkInObjStatsList(
-	nextStats bool,
-	onBlock func(blk *catalog.BlockInfo) bool, statsList ...objectio.ObjectStats) {
+	next bool,
+	onBlock func(blk *catalog.BlockInfo) bool, objects ...objectio.ObjectStats) {
 	stop := false
-	statsCnt := len(statsList)
+	objCnt := len(objects)
 
-	for idx := 0; idx < statsCnt && !stop; idx++ {
-		iter := NewStatsBlkIter(&statsList[idx])
+	for idx := 0; idx < objCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&objects[idx])
 		for iter.Next() {
 			blk := iter.Entry()
 			if !onBlock(blk) {
@@ -1358,7 +1358,7 @@ func ForeachBlkInObjStatsList(
 			}
 		}
 
-		if stop && nextStats {
+		if stop && next {
 			stop = false
 		}
 	}
@@ -1415,32 +1415,32 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 
 func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
-	onObject func(obj logtailreplay.ObjectInfo, committed bool) bool,
-	committedObjs *logtailreplay.PartitionState,
-	uncommittedObjs ...objectio.ObjectStats,
+	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	tableSnapshot *logtailreplay.PartitionState,
+	uncommitted ...objectio.ObjectStats,
 ) (err error) {
 	// process all uncommitted objects first
-	for _, obj := range uncommittedObjs {
+	for _, obj := range uncommitted {
 		info := logtailreplay.ObjectInfo{
 			ObjectStats: obj,
 		}
-		if !onObject(info, false) {
+		if err = onObject(info, false); err != nil {
 			return
 		}
 	}
 
 	// process all committed objects
-	if committedObjs == nil {
+	if tableSnapshot == nil {
 		return
 	}
 
-	iter, err := committedObjs.NewObjectsIter(types.TimestampToTS(ts))
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
 	if err != nil {
 		return
 	}
 	for iter.Next() {
 		obj := iter.Entry()
-		if !onObject(obj.ObjectInfo, true) {
+		if err = onObject(obj.ObjectInfo, true); err != nil {
 			return
 		}
 	}
