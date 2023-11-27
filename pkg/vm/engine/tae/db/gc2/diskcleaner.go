@@ -201,7 +201,18 @@ func (cleaner *DiskCleaner) process(items ...any) {
 			panic(err)
 		}
 		// TODO:
-		//cleaner.tryGC()
+		maxGlobalCKP := cleaner.ckpClient.MaxGlobalCheckpoint()
+		if maxGlobalCKP != nil {
+			logutil.Infof("maxGlobalCKP is %v", maxGlobalCKP.String())
+			data, err := cleaner.collectGlobalCkpData(maxGlobalCKP)
+			if err != nil {
+				return
+			}
+			err = cleaner.tryGC(data, maxGlobalCKP.GetEnd())
+			if err != nil {
+				return
+			}
+		}
 		if len(items) == 1 {
 			return
 		}
