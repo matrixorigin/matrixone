@@ -667,18 +667,20 @@ func (tbl *txnTable) rangesOnePart(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	objectStatsList, err := tbl.db.txn.getInsertedObjectListForTable(tbl.db.databaseId, tbl.tableId)
-	if err != nil {
+	var uncommittedObjects []objectio.ObjectStats
+	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
+		tbl.db.databaseId, tbl.tableId,
+	); err != nil {
 		return err
 	}
 
-	if !tbl.db.txn.deletedBlocks.isEmpty() {
+	if !tbl.db.txn.hasDeletesOnUncommitedObject() {
 		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
-			if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
+			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
 			return true
-		}, objectStatsList...)
+		}, uncommittedObjects...)
 	}
 
 	for _, entry := range tbl.writes {
@@ -717,13 +719,15 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
+	var fs fileservice.FileService
+	if fs, err = fileservice.Get[fileservice.FileService](
+		proc.FileService, defines.SharedFileServiceName,
+	); err != nil {
+		return
 	}
 
 	if done, err := tbl.tryFastRanges(
-		state, exprs, objectStatsList, dirtyBlks, ranges, fs,
+		state, exprs, uncommittedObjects, dirtyBlks, ranges, fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -746,7 +750,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	hasDeletes := len(dirtyBlks) > 0
 
-	for _, objStats := range objectStatsList {
+	for _, objStats := range uncommittedObjects {
 		s3BlkCnt += objStats.BlkCnt()
 		// for a new object :
 		//     1. load object meta
