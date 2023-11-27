@@ -481,6 +481,7 @@ func (s *store) handleSetProtocolVersion(ctx context.Context, req *query.Request
 		Version: req.SetProtocolVersion.Version,
 	}
 	return nil
+}
 
 func (s *store) setupStatusServer() {
 	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
