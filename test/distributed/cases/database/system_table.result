@@ -291,9 +291,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null
 table_schema    VARCHAR(5000)    YES        null
 table_name    VARCHAR(5000)    YES        null
-partition_name    VARCHAR(64)    NO        null
+partition_name    VARCHAR(64)    YES        null
 subpartition_name    TEXT(4)    YES        null
-partition_ordinal_position    SMALLINT UNSIGNED(16)    NO        null
+partition_ordinal_position    SMALLINT UNSIGNED(16)    YES        null
 subpartition_ordinal_position    TEXT(4)    YES        null
 partition_method    VARCHAR(13)    YES        null
 subpartition_method    TEXT(4)    YES        null
