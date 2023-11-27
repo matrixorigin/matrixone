@@ -353,8 +353,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
-		} else if IsSegTable(entry.TableName) {
-			// TODO
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectInsert(entry.Bat)
 		} else {
@@ -363,8 +361,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Delete:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataDelete(ctx, entry.Bat)
-		} else if IsSegTable(entry.TableName) {
-			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectDelete(entry.Bat)
 		} else {

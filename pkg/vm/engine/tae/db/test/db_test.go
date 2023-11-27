@@ -666,6 +666,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	var stats1 objectio.ObjectStats
 	var newBlockFp2 *common.ID
 	var stats2 objectio.ObjectStats
+	var metaLoc1 objectio.Location
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
 		it := rel.MakeBlockIt()
@@ -679,9 +680,10 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = task1.WaitDone()
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetCreatedBlocks()[0].Fingerprint()
-		stats1 = task1.Stats[0]
+		stats1 = *task1.GetCreatedBlocks()[0].GetSegment().GetMeta().(*catalog.SegmentEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		metaLoc1 = task1.GetCreatedBlocks()[0].GetMetaLoc()
 		newBlockFp2 = task1.GetCreatedBlocks()[1].Fingerprint()
-		stats2 = task2.Stats[0]
+		stats2 = *task1.GetCreatedBlocks()[1].GetSegment().GetMeta().(*catalog.SegmentEntry).GetLatestNodeLocked().BaseNode.ObjectStats
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
