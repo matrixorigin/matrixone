@@ -160,7 +160,7 @@ func (cleaner *DiskCleaner) replay() error {
 	if !minMergedStart.IsEmpty() {
 		readDirs = append(readDirs, fullGCFile)
 	}
-	logutil.Debugf("minMergedEnd is %v", minMergedEnd.ToString())
+	logutil.Debugf("minMergedEnd is %v, maxConsumedEnd is %v, minMergedStart is %v", minMergedEnd.ToString(), maxConsumedEnd.ToString(), minMergedStart.ToString())
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
@@ -192,6 +192,7 @@ func (cleaner *DiskCleaner) replay() error {
 		}
 		cleaner.updateInputs(table)
 	}
+	logutil.Infof("replay gc metadata success, maxConsumedStart is %v, maxConsumedEnd is %v", maxConsumedStart.ToString(), maxConsumedEnd.ToString())
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
 	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)

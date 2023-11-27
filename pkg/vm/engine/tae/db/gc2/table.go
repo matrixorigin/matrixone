@@ -196,6 +196,66 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	return blocks, err
 }
 
+func (t *GCTable) rebuildTable(bats []*containers.Batch) {
+	for i := 0; i < bats[CreateBlock].Length(); i++ {
+		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
+		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		if t.objects[name] != nil {
+			continue
+		}
+		t.addObject(name, commitTS)
+	}
+}
+
+func (t *GCTable) replayData(ctx context.Context,
+	typ BatchType,
+	attrs []string,
+	types []types.Type,
+	bats []*containers.Batch,
+	bs []objectio.BlockObject,
+	reader *blockio.BlockReader) error {
+	idxes := make([]uint16, len(attrs))
+	for i := range attrs {
+		idxes[i] = uint16(i)
+	}
+	mobat, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	for i := range attrs {
+		pkgVec := mobat.Vecs[i]
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(types[i], common.CheckpointAllocator)
+		} else {
+			vec = containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+		}
+		bats[typ].AddVector(attrs[i], vec)
+	}
+	return nil
+}
+
+// ReadTable reads an s3 file and replays a GCTable in memory
+func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
+	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	bats := t.makeBatchWithGCTable()
+	defer t.closeBatch(bats)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+	if err != nil {
+		return err
+	}
+
+	t.rebuildTable(bats)
+	return nil
+}
+
 // For test
 func (t *GCTable) Compare(table *GCTable) bool {
 	if len(t.objects) != len(table.objects) {

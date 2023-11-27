@@ -162,7 +162,7 @@ func (cleaner *DiskCleaner) replay() error {
 	if !minMergedStart.IsEmpty() {
 		readDirs = append(readDirs, fullGCFile)
 	}
-	logutil.Debugf("minMergedEnd is %v", minMergedEnd.ToString())
+	logutil.Infof("minMergedEnd is %v, maxConsumedEnd is %v, minMergedStart is %v", minMergedEnd.ToString(), maxConsumedEnd.ToString(), minMergedStart.ToString())
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
@@ -178,7 +178,15 @@ func (cleaner *DiskCleaner) replay() error {
 	if len(readDirs) == 0 {
 		return nil
 	}
-
+	for _, dir := range readDirs {
+		table := NewGCTable()
+		err = table.ReadTable(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		if err != nil {
+			return err
+		}
+		cleaner.updateInputs(table)
+	}
+	logutil.Infof("replay gc metadata success, maxConsumedStart is %v, maxConsumedEnd is %v", maxConsumedStart.ToString(), maxConsumedEnd.ToString())
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
 	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
@@ -454,11 +462,6 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), cleaner.fs, nil)
 	if err != nil {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
-		return err
-	}
-	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
-	if err != nil {
-		logutil.Errorf("DelFiles failed: %v", err.Error())
 		return err
 	}
 	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
