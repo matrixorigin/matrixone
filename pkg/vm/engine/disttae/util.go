@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1334,19 +1337,19 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.Bloc
 	return blks
 }
 
-// ForeachBlkInObjStatsList receives an object stats list,
-// and visits each blk of these object stats by OnBlock,
+// ForeachBlkInObjStatsList receives an object info list,
+// and visits each blk of these object info by OnBlock,
 // until the onBlock returns false or all blks have been enumerated.
 // when onBlock returns a false,
-// the nextStats argument decides whether continue onBlock on the next stats or exit foreach completely.
+// the next argument decides whether continue onBlock on the next stats or exit foreach completely.
 func ForeachBlkInObjStatsList(
-	nextStats bool,
-	onBlock func(blk *catalog.BlockInfo) bool, statsList ...objectio.ObjectStats) {
+	next bool,
+	onBlock func(blk *catalog.BlockInfo) bool, objects ...objectio.ObjectStats) {
 	stop := false
-	statsCnt := len(statsList)
+	objCnt := len(objects)
 
-	for idx := 0; idx < statsCnt && !stop; idx++ {
-		iter := NewStatsBlkIter(&statsList[idx])
+	for idx := 0; idx < objCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&objects[idx])
 		for iter.Next() {
 			blk := iter.Entry()
 			if !onBlock(blk) {
@@ -1355,7 +1358,7 @@ func ForeachBlkInObjStatsList(
 			}
 		}
 
-		if stop && nextStats {
+		if stop && next {
 			stop = false
 		}
 	}
@@ -1408,4 +1411,38 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 		MetaLoc:   catalog.ObjectLocation(loc),
 	}
 	return blk
+}
+
+func ForeachSnapshotObjects(
+	ts timestamp.Timestamp,
+	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	tableSnapshot *logtailreplay.PartitionState,
+	uncommitted ...objectio.ObjectStats,
+) (err error) {
+	// process all uncommitted objects first
+	for _, obj := range uncommitted {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if err = onObject(info, false); err != nil {
+			return
+		}
+	}
+
+	// process all committed objects
+	if tableSnapshot == nil {
+		return
+	}
+
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
+	if err != nil {
+		return
+	}
+	for iter.Next() {
+		obj := iter.Entry()
+		if err = onObject(obj.ObjectInfo, true); err != nil {
+			return
+		}
+	}
+	return
 }
