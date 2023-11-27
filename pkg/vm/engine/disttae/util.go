@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1408,4 +1411,38 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 		MetaLoc:   catalog.ObjectLocation(loc),
 	}
 	return blk
+}
+
+func ForeachSnapshotObjects(
+	ts timestamp.Timestamp,
+	onObject func(obj logtailreplay.ObjectInfo, committed bool) bool,
+	committedObjs *logtailreplay.PartitionState,
+	uncommittedObjs ...objectio.ObjectStats,
+) (err error) {
+	// process all uncommitted objects first
+	for _, obj := range uncommittedObjs {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if !onObject(info, false) {
+			return
+		}
+	}
+
+	// process all committed objects
+	if committedObjs == nil {
+		return
+	}
+
+	iter, err := committedObjs.NewObjectsIter(types.TimestampToTS(ts))
+	if err != nil {
+		return
+	}
+	for iter.Next() {
+		obj := iter.Entry()
+		if !onObject(obj.ObjectInfo, true) {
+			return
+		}
+	}
+	return
 }
