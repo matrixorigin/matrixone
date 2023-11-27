@@ -33,10 +33,7 @@ select sample (col3, 3 rows) from sample01 where col3 is null;
 col3
 null
 select sample (col2, 2 rows) from sample01 where col3 is null group by col1;
-col2
-4
-1
-2
+
 select col1, sample(col2, 20 rows) from sample01 group by col1 order by col1;
 col1    col2
 1    -321
@@ -98,9 +95,18 @@ col2
 2021-10-10 00:00:00
 2020-10-13 10:10:10
 select sample (col2, 5 rows) from sample02 group by col1 order by col2;
-
+col2
+null
+2020-10-13 10:10:10
+2021-10-10 00:00:00
+2023-01-01 12:12:12
+2023-11-27 01:02:03
 select sample (col2, 100 percent) from sample02 group by col1 order by col2;
-
+col2
+2020-10-13 10:10:10
+2021-10-10 00:00:00
+2023-01-01 12:12:12
+2023-11-27 01:02:03
 select sample (col2, 0 percent) from sample02 group by col1 order by col2 desc;
 col2
 select col1, sample (col2, 5 rows) as newColumn from sample02 group by col1 order by col2;
