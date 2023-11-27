@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"sync"
 	"time"
@@ -149,6 +150,7 @@ func (r *rebalancer) doRebalance() {
 func (r *rebalancer) rebalanceByHash(hash LabelHash) {
 	// Collect the tunnels that need to migrate.
 	tuns := r.collectTunnels(hash)
+	v2.ProxyConnectionsNeedToTransferGauge.Set(float64(len(tuns)))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -242,10 +244,16 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 	for {
 		select {
 		case tun := <-r.queue:
+			v2.ProxyTransferQueueSizeGauge.Set(float64(len(r.queue)))
 			if err := tun.transfer(ctx); err != nil {
 				if !moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
 					r.logger.Error("failed to do transfer", zap.Error(err))
+					v2.ProxyTransferFailCounter.Inc()
+				} else {
+					v2.ProxyTransferAbortCounter.Inc()
 				}
+			} else {
+				v2.ProxyTransferSuccessCounter.Inc()
 			}
 
 			// After transfer the tunnel, remove it from the inflight map.
