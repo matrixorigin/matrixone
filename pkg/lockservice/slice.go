@@ -42,7 +42,7 @@ type cowSlice struct {
 func newCowSlice(
 	fsp *fixedSlicePool,
 	values [][]byte) *cowSlice {
-	cs := reuse.Alloc[cowSlice]()
+	cs := reuse.Alloc[cowSlice](nil)
 	cs.fsp = fsp
 	fs := fsp.acquire(len(values))
 	fs.append(values)
@@ -102,7 +102,7 @@ func (cs *cowSlice) slice() *fixedSlice {
 }
 
 func (cs *cowSlice) close() {
-	reuse.Free(cs)
+	reuse.Free(cs, nil)
 }
 
 func (cs *cowSlice) mustGet() *fixedSlice {

@@ -45,17 +45,17 @@ func TestGetAndFree(t *testing.T) {
 				DefaultOptions[person](),
 			)
 
-			p := Alloc[person]()
+			p := Alloc[person](nil)
 			assert.Empty(t, p.names)
 			assert.Equal(t, 0, p.age)
 			p.names = append(p.names, "hello")
 			p.age = 10
-			Free(p)
+			Free(p, nil)
 
-			p2 := Alloc[person]()
+			p2 := Alloc[person](nil)
 			assert.Empty(t, p2.names)
 			assert.Equal(t, 0, p2.age)
-			Free(p2)
+			Free(p2, nil)
 		})
 	}
 }
@@ -77,17 +77,17 @@ func TestCheckDoubleFree(t *testing.T) {
 				DefaultOptions[person]().WithEnableChecker(),
 			)
 
-			p := Alloc[person]()
+			p := Alloc[person](nil)
 			assert.Empty(t, p.names)
 			assert.Equal(t, 0, p.age)
 			p.names = append(p.names, "hello")
 			p.age = 10
-			Free(p)
+			Free(p, nil)
 
 			defer func() {
 				assert.NotNil(t, recover())
 			}()
-			Free(p)
+			Free(p, nil)
 		})
 	}
 }
@@ -118,7 +118,7 @@ func TestCheckLeakFree(t *testing.T) {
 					}),
 			)
 
-			p := Alloc[person]()
+			p := Alloc[person](nil)
 			assert.Empty(t, p.names)
 			assert.Equal(t, 0, p.age)
 			p = nil
@@ -146,8 +146,8 @@ func BenchmarkGet(b *testing.B) {
 
 		sum := uint64(0)
 		for i := 0; i < b.N; i++ {
-			p := Alloc[person]()
-			Free(p)
+			p := Alloc[person](nil)
+			Free(p, nil)
 			sum++
 		}
 		_ = sum
@@ -182,8 +182,8 @@ func BenchmarkGetParallel(b *testing.B) {
 			sum := uint64(0)
 			for {
 				if pb.Next() {
-					p := Alloc[person]()
-					Free(p)
+					p := Alloc[person](nil)
+					Free(p, nil)
 					sum++
 				} else {
 					break

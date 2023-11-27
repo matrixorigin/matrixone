@@ -90,19 +90,23 @@ func CreatePool[T ReusableObject](
 }
 
 // Alloc allocates a pooled object.
-func Alloc[T ReusableObject]() *T {
-	var v T
-	p := get(v)
+func Alloc[T ReusableObject](p Pool[T]) *T {
 	if p == nil {
-		panic(fmt.Sprintf("%T pool not created", v))
+		var v T
+		p = get(v)
+		if p == nil {
+			panic(fmt.Sprintf("%T pool not created", v))
+		}
 	}
 	return p.Alloc()
 }
 
 // Free free a pooled object.
-func Free[T ReusableObject](v *T) {
-	var ev T
-	p := get(ev)
+func Free[T ReusableObject](v *T, p Pool[T]) {
+	if p == nil {
+		var ev T
+		p = get(ev)
+	}
 	if p == nil {
 		panic(fmt.Sprintf("%T pool not created", v))
 	}

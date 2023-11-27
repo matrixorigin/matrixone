@@ -36,19 +36,19 @@ var (
 )
 
 func acquireRequest() *pb.Request {
-	return reuse.Alloc[pb.Request]()
+	return reuse.Alloc[pb.Request](nil)
 }
 
 func releaseRequest(request *pb.Request) {
-	reuse.Free(request)
+	reuse.Free(request, nil)
 }
 
 func acquireResponse() *pb.Response {
-	return reuse.Alloc[pb.Response]()
+	return reuse.Alloc[pb.Response](nil)
 }
 
 func releaseResponse(v morpc.Message) {
-	reuse.Free(v.(*pb.Response))
+	reuse.Free(v.(*pb.Response), nil)
 }
 
 type client struct {

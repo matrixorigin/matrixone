@@ -48,7 +48,7 @@ func newActiveTxn(
 	txnKey string,
 	fsp *fixedSlicePool,
 	remoteService string) *activeTxn {
-	txn := reuse.Alloc[activeTxn]()
+	txn := reuse.Alloc[activeTxn](nil)
 	txn.Lock()
 	defer txn.Unlock()
 	txn.txnID = txnID
@@ -180,7 +180,7 @@ func (txn *activeTxn) close(
 		}
 	}
 
-	reuse.Free(txn)
+	reuse.Free(txn, nil)
 	return nil
 }
 

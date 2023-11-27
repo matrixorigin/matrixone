@@ -52,7 +52,7 @@ func (l *localLockTable) newLockContext(
 	opts LockOptions,
 	cb func(pb.Result, error),
 	bind pb.LockTable) *lockContext {
-	c := reuse.Alloc[lockContext]()
+	c := reuse.Alloc[lockContext](nil)
 	c.ctx = ctx
 	c.txn = txn
 	c.rows = rows
@@ -70,7 +70,7 @@ func (c *lockContext) done(err error) {
 }
 
 func (c *lockContext) release() {
-	reuse.Free(c)
+	reuse.Free(c, nil)
 }
 
 func (c *lockContext) doLock() {

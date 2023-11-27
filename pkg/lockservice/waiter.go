@@ -38,7 +38,7 @@ const (
 )
 
 func acquireWaiter(txn pb.WaitTxn) *waiter {
-	w := reuse.Alloc[waiter]()
+	w := reuse.Alloc[waiter](nil)
 	logWaiterContactPool(w, "get")
 	w.txn = txn
 	if w.ref() != 1 {
@@ -111,7 +111,7 @@ func (w *waiter) close() {
 	}
 	if n == 0 {
 		w.reset()
-		reuse.Free(w)
+		reuse.Free(w, nil)
 	}
 }
 
