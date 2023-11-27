@@ -199,7 +199,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	var inited bool
-	cols := tbl.getTableDef().GetCols()
+	cols := tbl.GetTableDef(ctx).GetCols()
 	dataLength := len(cols) - 1
 
 	tableVal := make([][2]any, dataLength)
@@ -264,7 +264,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 	ret := int64(0)
 	neededCols := make(map[string]*plan.ColDef)
-	cols := tbl.getTableDef().Cols
+	cols := tbl.GetTableDef(ctx).Cols
 	found := false
 
 	for i := range cols {
@@ -374,7 +374,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 
-	cols := tbl.getTableDef().GetCols()
+	cols := tbl.GetTableDef(ctx).GetCols()
 	found := false
 	n := 0
 	for _, c := range cols {
@@ -600,7 +600,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
-		tbl.getTableDef(),
+		tbl.GetTableDef(ctx),
 		newExprs,
 		&ranges,
 		tbl.proc.Load(),
@@ -956,6 +956,13 @@ func (tbl *txnTable) tryFastRanges(
 	for _, stats := range objStatsList {
 		s3BlkCnt += stats.BlkCnt()
 
+		if !stats.ZMIsEmpty() {
+			pkZM := stats.SortKeyZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
+		}
+
 		location := stats.ObjectLocation()
 		var objMeta objectio.ObjectMeta
 		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
@@ -964,7 +971,6 @@ func (tbl *txnTable) tryFastRanges(
 		); err != nil {
 			return
 		}
-
 		// reset bloom filter to nil for each object
 		bf = nil
 		// bfIdx = index.NewEmptyBinaryFuseFilter()
@@ -972,9 +978,11 @@ func (tbl *txnTable) tryFastRanges(
 		// check whether the object is skipped by zone map
 		// If object zone map doesn't contains the pk value, we need to check bloom filter
 		meta = objMeta.MustDataMeta()
-		pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-		if skipObj = !pkZM.ContainsKey(val); skipObj {
-			continue
+		if stats.ZMIsEmpty() {
+			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
 		}
 
 		// check whether the object is skipped by bloom filter
@@ -1044,6 +1052,14 @@ func (tbl *txnTable) tryFastRanges(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
+
+		if !obj.ZMIsEmpty() {
+			pkZM := obj.SortKeyZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
+		}
+
 		location := obj.Location()
 		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -1053,10 +1069,13 @@ func (tbl *txnTable) tryFastRanges(
 		}
 		objDataMeta = objMeta.MustDataMeta()
 		cnt += objDataMeta.BlockCount()
-		pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-		if !pkZM.ContainsKey(val) {
-			continue
+		if obj.ZMIsEmpty() {
+			pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
 		}
+
 		if bf, err = objectio.LoadBFWithMeta(
 			tbl.proc.Load().Ctx, objDataMeta, location, fs,
 		); err != nil {
@@ -1127,60 +1146,7 @@ func (tbl *txnTable) tryFastRanges(
 	return
 }
 
-// getTableDef only return all cols and their index.
-func (tbl *txnTable) getTableDef() *plan.TableDef {
-	if tbl.tableDef == nil {
-		var cols []*plan.ColDef
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range tbl.defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					Name:  attr.Attr.Name,
-					ColId: attr.Attr.ID,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			}
-		}
-		tbl.tableDef = &plan.TableDef{
-			Name:          tbl.tableName,
-			Cols:          cols,
-			Name2ColIndex: name2index,
-		}
-		tbl.tableDef.Version = tbl.version
-		// add Constraint
-		if len(tbl.constraint) != 0 {
-			c := new(engine.ConstraintDef)
-			err := c.UnmarshalBinary(tbl.constraint)
-			if err != nil {
-				return nil
-			}
-			for _, ct := range c.Cts {
-				switch k := ct.(type) {
-				case *engine.PrimaryKeyDef:
-					tbl.tableDef.Pkey = k.Pkey
-				}
-			}
-		}
-	}
-
-	return tbl.tableDef
-}
-
+// the return defs has no rowid column
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
@@ -1232,7 +1198,163 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	defs = append(defs, pro)
 	return defs, nil
+}
 
+func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
+	if tbl.tableDef == nil {
+		var clusterByDef *plan.ClusterByDef
+		var cols []*plan.ColDef
+		var defs []*plan.TableDef_DefType
+		var properties []*plan.Property
+		var TableType string
+		var Createsql string
+		var partitionInfo *plan.PartitionByDef
+		var viewSql *plan.ViewDef
+		var foreignKeys []*plan.ForeignKeyDef
+		var primarykey *plan.PrimaryKeyDef
+		var indexes []*plan.IndexDef
+		var refChildTbls []uint64
+		var hasRowId bool
+
+		i := int32(0)
+		name2index := make(map[string]int32)
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				name2index[attr.Attr.Name] = i
+				cols = append(cols, &plan.ColDef{
+					ColId: attr.Attr.ID,
+					Name:  attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:          int32(attr.Attr.Type.Oid),
+						Width:       attr.Attr.Type.Width,
+						Scale:       attr.Attr.Type.Scale,
+						AutoIncr:    attr.Attr.AutoIncrement,
+						Table:       tbl.tableName,
+						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:  attr.Attr.EnumVlaues,
+					},
+					Primary:   attr.Attr.Primary,
+					Default:   attr.Attr.Default,
+					OnUpdate:  attr.Attr.OnUpdate,
+					Comment:   attr.Attr.Comment,
+					ClusterBy: attr.Attr.ClusterBy,
+					Hidden:    attr.Attr.IsHidden,
+					Seqnum:    uint32(attr.Attr.Seqnum),
+				})
+				if attr.Attr.ClusterBy {
+					clusterByDef = &plan.ClusterByDef{
+						Name: attr.Attr.Name,
+					}
+				}
+				if attr.Attr.Name == catalog.Row_ID {
+					hasRowId = true
+				}
+				i++
+			}
+		}
+
+		if tbl.comment != "" {
+			properties = append(properties, &plan.Property{
+				Key:   catalog.SystemRelAttr_Comment,
+				Value: tbl.comment,
+			})
+		}
+
+		if tbl.partitioned > 0 {
+			p := &plan.PartitionByDef{}
+			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
+			partitionInfo = p
+		}
+
+		if tbl.viewdef != "" {
+			viewSql = &plan.ViewDef{
+				View: tbl.viewdef,
+			}
+		}
+
+		if len(tbl.constraint) > 0 {
+			c := &engine.ConstraintDef{}
+			err := c.UnmarshalBinary(tbl.constraint)
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+				return nil
+			}
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.IndexDef:
+					indexes = k.Indexes
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
+				case *engine.PrimaryKeyDef:
+					primarykey = k.Pkey
+				case *engine.StreamConfigsDef:
+					properties = append(properties, k.Configs...)
+				}
+			}
+		}
+
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: tbl.relKind,
+		})
+		TableType = tbl.relKind
+
+		if tbl.createSql != "" {
+			properties = append(properties, &plan.Property{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: tbl.createSql,
+			})
+			Createsql = tbl.createSql
+		}
+
+		if len(properties) > 0 {
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
+					},
+				},
+			})
+		}
+
+		if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+			primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
+		}
+		if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
+			clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+		}
+		if !hasRowId {
+			rowIdCol := plan2.MakeRowIdColDef()
+			cols = append(cols, rowIdCol)
+		}
+
+		tbl.tableDef = &plan.TableDef{
+			TblId:         tbl.tableId,
+			Name:          tbl.tableName,
+			Cols:          cols,
+			Name2ColIndex: name2index,
+			Defs:          defs,
+			TableType:     TableType,
+			Createsql:     Createsql,
+			Pkey:          primarykey,
+			ViewSql:       viewSql,
+			Partition:     partitionInfo,
+			Fkeys:         foreignKeys,
+			RefChildTbls:  refChildTbls,
+			ClusterBy:     clusterByDef,
+			Indexes:       indexes,
+			Version:       tbl.version,
+		}
+	}
+	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
+	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
+	return tableDef
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1249,6 +1371,8 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
@@ -1266,6 +1390,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
@@ -1629,7 +1755,7 @@ func (tbl *txnTable) newBlockReader(
 	proc *process.Process) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.op.SnapshotTS()
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(ctx)
 
 	if len(blkInfos) < num || len(blkInfos) == 1 {
 		for i, blk := range blkInfos {
@@ -1987,7 +2113,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
 			typ = col.Typ

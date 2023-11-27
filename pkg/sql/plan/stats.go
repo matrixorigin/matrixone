@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sort"
 	"strings"
@@ -36,6 +37,8 @@ const BlockNumForceOneCN = 200
 const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
+const statsCacheInitSize = 128
+const statsCacheMaxSize = 8192
 
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
@@ -44,7 +47,7 @@ type StatsCache struct {
 
 func NewStatsCache() *StatsCache {
 	return &StatsCache{
-		cachePool: make(map[uint64]*StatsInfoMap, 100),
+		cachePool: make(map[uint64]*StatsInfoMap, statsCacheInitSize),
 	}
 }
 
@@ -96,6 +99,10 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64, create bool) *StatsInfoMap
 	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
 	} else if create {
+		if len(sc.cachePool) > statsCacheMaxSize {
+			sc.cachePool = make(map[uint64]*StatsInfoMap, statsCacheInitSize)
+			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
+		}
 		s = NewStatsInfoMap()
 		(sc.cachePool)[tableID] = s
 		return s
@@ -181,7 +188,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 
 		if info.ShuffleRanges[i] != nil {
 			if s.MinValMap[colName] != s.MaxValMap[colName] && s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
-				info.ShuffleRanges[i].Eval()
+				info.ShuffleRanges[i].Eval(1024)
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
 			info.ShuffleRanges[i] = nil

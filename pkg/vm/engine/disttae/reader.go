@@ -426,7 +426,7 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
-			txnTable.getTableDef(),
+			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
 			filterExpr,

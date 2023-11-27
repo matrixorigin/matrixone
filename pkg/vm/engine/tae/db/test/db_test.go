@@ -8053,7 +8053,6 @@ func TestDeduplication(t *testing.T) {
 	seg, err := tbl.CreateSegment(
 		txn,
 		catalog.ES_Appendable,
-		dataFactory.MakeSegmentFactory(),
 		new(objectio.CreateSegOpt).WithId(segmentIDs[0]))
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)
