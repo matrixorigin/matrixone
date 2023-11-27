@@ -99,6 +99,13 @@ c1    c3
 2    0
 2    0
 3    null
+/* 12. sample as and outer filter */
+select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) where k < 2 order by c1, k;
+c1    k
+1    0
+1    1
+2    0
+2    0
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
 create table s_t2 (cc1 int, cc2 int);
