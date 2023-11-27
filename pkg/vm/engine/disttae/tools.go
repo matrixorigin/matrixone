@@ -582,6 +582,222 @@ func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, datab
 	return bat, nil
 }
 
+/*
+func genDropColumnsTuple(name string) *batch.Batch {
+	return &batch.Batch{}
+}
+*/
+
+// genDatabaseIdExpr generate an expression to find database info
+// by database name and accountId
+/*
+func genDatabaseIdExpr(ctx context.Context, accountId uint32, name string) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_DATABASE_ID_NAME_IDX, types.T_varchar,
+			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr(ctx, "=", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_DATABASE_ID_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(accountId))
+		right = plantool.MakeExpr(ctx, "=", args)
+	}
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+}
+*/
+
+/*
+// genDatabaseIdExpr generate an expression to find database list
+// by accountId
+func genDatabaseListExpr(ctx context.Context, accountId uint32) *plan.Expr {
+	var args []*plan.Expr
+
+	args = append(args, newColumnExpr(MO_DATABASE_LIST_ACCOUNT_IDX, types.T_uint32,
+		catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
+	args = append(args, newIntConstVal(accountId))
+	return plantool.MakeExpr(ctx, "=", args)
+}
+
+// genTableInfoExpr generate an expression to find table info
+// by database id and table name and accountId
+func genTableInfoExpr(ctx context.Context, accountId uint32, databaseId uint64, name string) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_REL_NAME_IDX, types.T_varchar,
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr(ctx, "=", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_RELDATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(databaseId))
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_ACCOUNT_ID_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(accountId))
+		right = plantool.MakeExpr(ctx, "=", args)
+	}
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+}
+
+// genTableIdExpr generate an expression to find table info
+// by database id and table name and accountId
+func genTableIdExpr(ctx context.Context, accountId uint32, databaseId uint64, name string) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_NAME_IDX, types.T_varchar,
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr(ctx, "=", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_DATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(databaseId))
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(accountId))
+		right = plantool.MakeExpr(ctx, "=", args)
+	}
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+}
+
+// genTableListExpr generate an expression to find table list
+// by database id and accountId
+func genTableListExpr(ctx context.Context, accountId uint32, databaseId uint64) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_LIST_DATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(databaseId))
+		left = plantool.MakeExpr(ctx, "=", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_LIST_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(accountId))
+		right = plantool.MakeExpr(ctx, "=", args)
+	}
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+}
+
+// genColumnInfoExpr generate an expression to find column info list
+// by database id and table id and accountId
+func genColumnInfoExpr(ctx context.Context, accountId uint32, databaseId, tableId uint64) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_uint64,
+			catalog.MoColumnsSchema[catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(databaseId))
+		left = plantool.MakeExpr(ctx, "=", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX]))
+		args = append(args, newIntConstVal(tableId))
+		right = plantool.MakeExpr(ctx, "=", args)
+		left = plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ACCOUNT_ID_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_COLUMNS_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(accountId))
+		right = plantool.MakeExpr(ctx, "=", args)
+	}
+	return plantool.MakeExpr(ctx, "and", []*plan.Expr{left, right})
+}
+
+// genInsertExpr used to generate an expression to partition table data
+func genInsertExpr(ctx context.Context, defs []engine.TableDef, dnNum int) *plan.Expr {
+	var args []*plan.Expr
+
+	i := 0
+	for _, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
+			}
+			i++
+		}
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return plantool.MakeExpr(ctx, "hash_value", args)
+}
+*/
+
+/*
+func newIntConstVal(v any) *plan.Expr {
+	var val int64
+
+	switch x := v.(type) {
+	case int32:
+		val = int64(x)
+	case int64:
+		val = int64(x)
+	case uint32:
+		val = int64(x)
+	case uint64:
+		val = int64(x)
+	}
+	return plantool.MakePlan2Int64ConstExprWithType(val)
+}
+
+func newStringConstVal(v string) *plan.Expr {
+	return &plan.Expr{
+		Typ: types.NewProtoType(types.T_varchar),
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Sval{Sval: v},
+			},
+		},
+	}
+}
+*/
+
 func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
 		Typ: typ,
@@ -742,6 +958,67 @@ func getTableComment(defs []engine.TableDef) string {
 	return ""
 }
 
+/*
+func genTableDefOfComment(comment string) engine.TableDef {
+	return &engine.CommentDef{
+		Comment: comment,
+	}
+}
+
+func getColumnsFromRows(rows [][]any) []column {
+	cols := make([]column, len(rows))
+	for i, row := range rows {
+		cols[i].name = string(row[catalog.MO_COLUMNS_ATTNAME_IDX].([]byte))
+		cols[i].comment = string(row[catalog.MO_COLUMNS_ATT_COMMENT_IDX].([]byte))
+		cols[i].isHidden = row[catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX].(int8)
+		cols[i].isAutoIncrement = row[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8)
+		cols[i].constraintType = string(row[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte))
+		cols[i].typ = row[catalog.MO_COLUMNS_ATTTYP_IDX].([]byte)
+		cols[i].hasDef = row[catalog.MO_COLUMNS_ATTHASDEF_IDX].(int8)
+		cols[i].defaultExpr = row[catalog.MO_COLUMNS_ATT_DEFAULT_IDX].([]byte)
+		cols[i].hasUpdate = row[catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8)
+		cols[i].updateExpr = row[catalog.MO_COLUMNS_ATT_UPDATE_IDX].([]byte)
+		cols[i].num = row[catalog.MO_COLUMNS_ATTNUM_IDX].(int32)
+		cols[i].isClusterBy = row[catalog.MO_COLUMNS_ATT_IS_CLUSTERBY].(int8)
+	}
+	sort.Sort(Columns(cols))
+	return cols
+}
+
+func genTableDefOfColumn(col column) engine.TableDef {
+	var attr engine.Attribute
+
+	attr.ID = uint64(col.num)
+	attr.Name = col.name
+	attr.Alg = compress.Lz4
+	attr.Comment = col.comment
+	attr.IsHidden = col.isHidden == 1
+	attr.AutoIncrement = col.isAutoIncrement == 1
+	if err := types.Decode(col.typ, &attr.Type); err != nil {
+		panic(err)
+	}
+	if col.hasDef == 1 {
+		attr.Default = new(plan.Default)
+		if err := types.Decode(col.defaultExpr, attr.Default); err != nil {
+			panic(err)
+		}
+	}
+	if col.hasUpdate == 1 {
+		attr.OnUpdate = new(plan.OnUpdate)
+		if err := types.Decode(col.updateExpr, attr.OnUpdate); err != nil {
+			panic(err)
+		}
+	}
+	if col.constraintType == catalog.SystemColPKConstraint {
+		attr.Primary = true
+	}
+	if col.isClusterBy == 1 {
+		attr.ClusterBy = true
+	}
+	return &engine.AttributeDef{Attr: attr}
+}
+*/
+
 func genColumns(accountId uint32, tableName, databaseName string,
 	tableId, databaseId uint64, defs []engine.TableDef) ([]column, error) {
 	{ // XXX Why not store PrimaryIndexDef and
@@ -865,6 +1142,76 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	}
 	return accountId, userId, roleId
 }
+
+/*
+func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dnNum int) ([]*batch.Batch, error) {
+	pvec, err := colexec.EvalExpr(bat, proc, expr)
+	if err != nil {
+		return nil, err
+	}
+	defer pvec.Free(proc.Mp())
+	bats := make([]*batch.Batch, dnNum)
+	for i := range bats {
+		bats[i] = batch.New(true, bat.Attrs)
+		for j := range bats[i].Vecs {
+			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+		}
+	}
+	vs := vector.MustFixedCol[int64](pvec)
+	for i := range bat.Vecs {
+		vec := bat.GetVector(int32(i))
+		for j, v := range vs {
+			idx := uint64(v) % uint64(dnNum)
+			if err := bats[idx].GetVector(int32(i)).UnionOne(vec, int64(j), proc.Mp()); err != nil {
+				for _, bat := range bats {
+					bat.Clean(proc.Mp())
+				}
+				return nil, err
+			}
+		}
+	}
+	for i := range bats {
+		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
+	}
+	return bats, nil
+}
+*/
+
+// func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
+// 	txn := tbl.db.txn
+// 	parts := tbl.getParts()
+// 	bats := make([]*batch.Batch, len(parts))
+// 	for i := range bats {
+// 		bats[i] = batch.New(true, bat.Attrs)
+// 		for j := range bats[i].Vecs {
+// 			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+// 		}
+// 	}
+// 	vec := bat.GetVector(0)
+// 	vs := vector.MustFixedCol[types.Rowid](vec)
+// 	for i, v := range vs {
+// 		for j, part := range parts {
+// 			var blks []BlockMeta
+
+// 			if tbl.meta != nil {
+// 				blks = tbl.meta.blocks[j]
+// 			}
+// 			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
+// 				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
+// 					for _, bat := range bats {
+// 						bat.Clean(txn.proc.Mp())
+// 					}
+// 					return nil, err
+// 				}
+// 				break
+// 			}
+// 		}
+// 	}
+// 	for i := range bats {
+// 		bats[i].SetZs(bats[i].GetVector(0).RowCount(), txn.proc.Mp())
+// 	}
+// 	return bats, nil
+// }
 
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
