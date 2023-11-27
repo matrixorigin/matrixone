@@ -60,7 +60,7 @@ col1    newCol
 select sample (reverse(col3), 4 rows) as newcol3 from sample01;
 newcol3
 esabatad
- esabatad
+esabatad
 metsys tnemeganam esabatad
 select col1, sample (startswith(col3, 'database'), 3 rows) from sample01;
 col1    startswith(col3, database)
