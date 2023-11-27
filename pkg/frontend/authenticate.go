@@ -5626,12 +5626,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
-	case *tree.CreateStream:
+	case *tree.CreateSource:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-		if st.StreamName != nil {
-			dbName = string(st.StreamName.SchemaName)
+		if st.SourceName != nil {
+			dbName = string(st.SourceName.SchemaName)
 		}
 	case *tree.CreateConnector:
 		objType = objectTypeDatabase

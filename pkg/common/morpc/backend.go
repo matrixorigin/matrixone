@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
 )
 
@@ -193,7 +191,7 @@ func NewRemoteBackend(
 		readStopper: stopper.NewStopper(fmt.Sprintf("backend-read-%s", remote)),
 		remote:      remote,
 		codec:       codec,
-		resetConnC:  make(chan struct{}),
+		resetConnC:  make(chan struct{}, 1),
 		stopWriteC:  make(chan struct{}),
 	}
 
@@ -914,10 +912,7 @@ func (rb *remoteBackend) scheduleResetConn() {
 	select {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
-	case <-time.After(time.Second * 10):
-		// dump all goroutines to stderr
-		profile.ProfileGoroutine(os.Stderr, 2)
-		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
+	default:
 	}
 }
 

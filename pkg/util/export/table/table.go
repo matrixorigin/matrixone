@@ -62,6 +62,7 @@ const (
 	TBool
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
+	TFloat32
 )
 
 func (c *ColType) ToType() types.Type {
@@ -78,6 +79,8 @@ func (c *ColType) ToType() types.Type {
 		return types.T_uint64.ToType()
 	case TInt64:
 		return types.T_int64.ToType()
+	case TFloat32:
+		return types.T_float32.ToType()
 	case TFloat64:
 		return types.T_float64.ToType()
 	case TJson:

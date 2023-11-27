@@ -163,6 +163,14 @@ type ObjectInfo struct {
 	DeleteTime  types.TS
 }
 
+func (o ObjectInfo) String() string {
+	return fmt.Sprintf(
+		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %s; createTS: %s; deleteTS: %s",
+		o.ObjectStats.String(), o.EntryState,
+		o.Sorted, o.HasDeltaLoc, o.CommitTS.ToString(),
+		o.CreateTime.ToString(), o.DeleteTime.ToString())
+}
+
 func (o ObjectInfo) Location() objectio.Location {
 	return o.ObjectLocation()
 }
@@ -347,8 +355,8 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO
-		}else if IsObjTable(entry.TableName) {
-			// p.HandleObject(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectInsert(entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -357,6 +365,8 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectDelete(entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
@@ -365,25 +375,53 @@ func (p *PartitionState) HandleLogtailEntry(
 	}
 }
 
-func (p *PartitionState) HandleObject(
-	ctx context.Context,
-	input *api.Batch) {
-	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[2]))
-	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
-	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[4]))
-	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[5]))
-	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[6]))
-	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
-	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[8]))
-	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
-	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
-	for i, name := range nameVector {
-		stats := objectio.ObjectStats(name)
-		logutil.Infof("lalala blk %v, state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
-			stats.String(),
-			stateVector[i], dbIDVector[i], tIDVector[i],
-			createAtVector[i].ToString(), deleteAtVector[i].ToString(),
-			startVector[i].ToString(), prepareVector[i].ToString(), commitVector[i].ToString())
+func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjects.Set(objEntry)
+	}
+}
+
+func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		if old, ok := p.dataObjects.Get(objEntry); ok {
+			// if overwritten delete
+			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
+				logutil.Errorf("overwritten data objects delete time to 0-0:\n old: %s\n new: %s",
+					old.String(), objEntry.String())
+			}
+		}
+
+		p.dataObjects.Set(objEntry)
 	}
 }
 

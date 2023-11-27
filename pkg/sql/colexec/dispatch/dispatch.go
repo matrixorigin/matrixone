@@ -98,7 +98,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 func printShuffleResult(arg *Argument) {
 	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
-		logutil.Debugf("shuffle dispatch result: batchcnt %v, rowcnt %v", arg.ctr.batchCnt, arg.ctr.rowCnt)
+		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", arg.ShuffleType, arg.ctr.batchCnt, arg.ctr.rowCnt)
 	}
 }
 
@@ -121,7 +121,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat = makeEndBatch(proc)
 			defer func() {
 				if bat != nil {
-					bat.Clean(proc.Mp())
+					proc.PutBatch(bat)
 				}
 			}()
 		} else {

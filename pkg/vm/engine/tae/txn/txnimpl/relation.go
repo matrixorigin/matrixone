@@ -160,12 +160,12 @@ func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error 
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		ctx,
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		metaLocs,
+		stats,
 	)
 }
 

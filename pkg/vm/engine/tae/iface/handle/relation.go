@@ -52,7 +52,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(ctx context.Context, data *containers.Batch) error
-	AddBlksWithMetaLoc(ctx context.Context, metaLcos []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

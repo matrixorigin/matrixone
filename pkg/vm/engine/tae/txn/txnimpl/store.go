@@ -185,14 +185,14 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 func (store *txnStore) AddBlksWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
-	metaLoc []objectio.Location,
+	stats containers.Vector,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, metaLoc)
+	return db.AddBlksWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
