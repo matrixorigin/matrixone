@@ -88,3 +88,4 @@ select sample(max(c1), 1 rows) from s_t3;
 /* expected succeed case */
 /* 1. expression (not only simple column) should be OK */
 select c1, sample(c1+1, 100 percent) from s_t3 order by c1;
+
