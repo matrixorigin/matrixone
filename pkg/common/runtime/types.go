@@ -42,6 +42,8 @@ const (
 
 	// EnableCheckInvalidRCErrors enable check rc errors
 	EnableCheckInvalidRCErrors = "enable-check-rc-invalid-error"
+
+	MOProtocolVersion = "protocol-version"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
