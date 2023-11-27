@@ -55,6 +55,7 @@
 /pkg/common/stopper @zhangxu19830126
 /pkg/common/runtime @zhangxu19830126
 /pkg/common/log @zhangxu19830126
+/pkg/common/reuse @zhangxu19830126
 
 # pkg/compare
 /pkg/compare @nnsgmsone
