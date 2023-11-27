@@ -992,17 +992,6 @@ func (tbl *txnTable) tryFastRanges(
 			return
 		}
 
-		// TODO: use object bf first
-		// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
-		// 	return
-		// }
-		// var exist bool
-		// if exist, err = bfIdx.MayContainsKey(val); err != nil {
-		// 	return
-		// } else {
-		// 	skipObj = !exist
-		// }
-
 		ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
 			blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 			blkBfIdx := index.NewEmptyBinaryFuseFilter()
