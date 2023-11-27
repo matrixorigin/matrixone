@@ -35,7 +35,7 @@ func TestCompactBlockCmd(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
 
 	controller := NewMVCCHandle(blk)
@@ -67,12 +67,13 @@ func TestDeleteNodeCmd(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
 
 	controller := NewMVCCHandle(blk)
 
-	node := NewDeleteNode(nil, handle.DT_Normal)
+	node := NewDeleteNode(nil, handle.DT_Normal,
+		IOET_WALTxnCommand_DeleteNode_CurrVer)
 	node.mask = roaring.NewBitmap()
 	node.mask.Add(35)
 	node.chain.Store(controller.deletes.Load())

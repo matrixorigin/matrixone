@@ -33,6 +33,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+	var tableDef plan.TableDef
+
+	// check view statement
+	var stmtPlan *Plan
+	var err error
+	switch s := stmt.Select.(type) {
+	case *tree.ParenSelect:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: strings.ToLower(query.Headings[idx]),
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  !expr.Typ.NotNullable,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	tableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql = &plan.ViewDef{
+		View: string(viewData),
+	}
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+
+	return &tableDef, nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
@@ -126,9 +188,6 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
@@ -253,9 +312,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		createTable.Database = ctx.DefaultDatabase()
 	}
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -498,6 +554,10 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 }
 
 func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
+	if stmt.Type == nil && stmt.IncrementBy == nil && stmt.MaxValue == nil && stmt.MinValue == nil && stmt.StartWith == nil && stmt.Cycle == nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "synatx error, %s has nothing to alter", string(stmt.Name.ObjectName))
+	}
+
 	alterSequence := &plan.AlterSequence{
 		IfExists: stmt.IfExists,
 		TableDef: &TableDef{
@@ -512,12 +572,9 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter sequence in subscription database")
 	}
 
 	err := buildAlterSequenceTableDef(stmt, ctx, alterSequence)
@@ -552,9 +609,6 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -598,18 +652,31 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt, ctx, createTable)
+	var err error
+	if stmt.IsDynamicTable {
+		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
+		if err != nil {
+			return nil, err
+		}
+
+		createTable.TableDef.Cols = tableDef.Cols
+		//createTable.TableDef.ViewSql = tableDef.ViewSql
+		//createTable.TableDef.Defs = tableDef.Defs
+	}
+	err = buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
+	}
+
+	v, ok := getAutoIncrementOffsetFromVariables(ctx)
+	if ok {
+		createTable.TableDef.AutoIncrOffset = v
 	}
 
 	// set option
@@ -1207,7 +1274,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1340,15 +1407,28 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, ctx CompilerContext) error {
+func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	nameCount := make(map[string]int)
+
+	if len(pkeyName) == 0 {
+		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
+	}
 
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+
+		if err != nil {
+			return err
+		}
+		tableDef := &TableDef{
+			Name: indexTableName,
+		}
 		indexParts := make([]string, 0)
 
+		isPkAlreadyPresentInIndexParts := false
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1363,7 +1443,72 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
+			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
+			}
+
+			if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
+				isPkAlreadyPresentInIndexParts = true
+			}
 			indexParts = append(indexParts, name)
+		}
+
+		if !isPkAlreadyPresentInIndexParts {
+			indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
+		}
+
+		var keyName string
+		if len(indexParts) == 1 {
+			// This means indexParts only contains the primary key column
+			keyName = catalog.IndexTableIndexColName
+			colDef := &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
+		} else {
+			keyName = catalog.IndexTableIndexColName
+			colDef := &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
+		}
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 
 		if indexInfo.Name == "" {
@@ -1378,14 +1523,26 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		} else {
 			indexDef.IndexName = indexInfo.Name
 		}
-		indexDef.IndexTableName = ""
+
+		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
-		indexDef.TableExist = false
+		indexDef.TableExist = true
+		indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+		indexDef.IndexAlgoTableType = ""
+
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
+
+			params, err := indexParamsToJsonString(indexInfo)
+			if err != nil {
+				return err
+			}
+			indexDef.IndexAlgoParams = params
 		} else {
 			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
+		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
@@ -1691,6 +1848,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+			KeyType:     stmt.IndexOption.IType,
 		}
 	default:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
@@ -1718,10 +1876,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, ctx); err != nil {
+		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
-		createIndex.TableExist = false
+		createIndex.TableExist = true
 	}
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
@@ -2044,7 +2202,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, ctx); err != nil {
+				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
@@ -2055,7 +2213,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							TableName:             tableName,
 							OriginTablePrimaryKey: oriPriKeyName,
 							IndexInfo:             indexInfo,
-							IndexTableExist:       false,
+							IndexTableExist:       true,
 						},
 					},
 				}
@@ -2476,4 +2634,20 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	}
 
 	return &fkData, nil
+}
+
+func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
+	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	v, err = ctx.ResolveVariable("auto_increment_offset", true, true)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	return 0, false
 }

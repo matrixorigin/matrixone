@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -847,8 +849,7 @@ func TestSelectForSuperTenant_C0(t *testing.T) {
 
 		cnLabels2 := map[string]metadata.LabelList{}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -880,8 +881,7 @@ func TestSelectForSuperTenant_C1(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -912,8 +912,7 @@ func TestSelectForSuperTenant_C2(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -944,8 +943,7 @@ func TestSelectForSuperTenant_C3(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -975,8 +973,7 @@ func TestSelectForSuperTenant_C4(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1001,8 +998,7 @@ func TestSelectForSuperTenant_C5(t *testing.T) {
 
 		cnLabels2 := map[string]metadata.LabelList{}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1028,8 +1024,7 @@ func TestSelectForSuperTenant_C6(t *testing.T) {
 
 		cnLabels2 := map[string]metadata.LabelList{}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1062,8 +1057,7 @@ func TestSelectForSuperTenant_C7(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1094,8 +1088,7 @@ func TestSelectForSuperTenant_C8(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1121,8 +1114,7 @@ func TestSelectForCommonTenant_C1(t *testing.T) {
 
 		cnLabels2 := map[string]metadata.LabelList{}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1158,8 +1150,7 @@ func TestSelectForCommonTenant_C2(t *testing.T) {
 			},
 		}
 		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh()
-		time.Sleep(time.Millisecond * 100)
+		c.ForceRefresh(true)
 
 		var cns []*metadata.CNService
 
@@ -1172,4 +1163,85 @@ func TestSelectForCommonTenant_C2(t *testing.T) {
 		assert.Equal(t, 1, len(cns))
 		assert.Equal(t, "cn1", cns[0].ServiceID)
 	})
+}
+
+func mockStatsList(t *testing.T, statsCnt int) (statsList []objectio.ObjectStats) {
+	for idx := 0; idx < statsCnt; idx++ {
+		stats := objectio.NewObjectStats()
+		blkCnt := rand.Uint32()%100 + 1
+		require.Nil(t, objectio.SetObjectStatsBlkCnt(stats, blkCnt))
+		require.Nil(t, objectio.SetObjectStatsRowCnt(stats, options.DefaultBlockMaxRows*(blkCnt-1)+options.DefaultBlockMaxRows*6/10))
+		require.Nil(t, objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectName(objectio.NewSegmentid(), uint16(blkCnt))))
+		require.Nil(t, objectio.SetObjectStatsExtent(stats, objectio.NewExtent(0, 0, 0, 0)))
+		require.Nil(t, objectio.SetObjectStatsSortKeyZoneMap(stats, index.NewZM(types.T_bool, 1)))
+
+		statsList = append(statsList, *stats)
+	}
+
+	return
+}
+
+func TestNewStatsBlkIter(t *testing.T) {
+	stats := mockStatsList(t, 1)[0]
+	blks := UnfoldBlkInfoFromObjStats(&stats)
+
+	iter := NewStatsBlkIter(&stats)
+	for iter.Next() {
+		actual := iter.Entry()
+		id := actual.BlockID.Sequence()
+		require.Equal(t, blks[id].BlockID, actual.BlockID)
+
+		loc1 := objectio.Location(blks[id].MetaLoc[:])
+		loc2 := objectio.Location(actual.MetaLoc[:])
+		require.Equal(t, loc1.Name(), loc2.Name())
+		require.Equal(t, loc1.Extent(), loc2.Extent())
+		require.Equal(t, loc1.ID(), loc2.ID())
+		require.Equal(t, loc1.Rows(), loc2.Rows())
+	}
+}
+
+func TestForeachBlkInObjStatsList(t *testing.T) {
+	statsList := mockStatsList(t, 100)
+
+	count := 0
+	ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+		count++
+		return false
+	}, statsList...)
+
+	require.Equal(t, count, 1)
+
+	count = 0
+	ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		count++
+		return false
+	}, statsList...)
+
+	require.Equal(t, count, len(statsList))
+
+	count = 0
+	ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		count++
+		return true
+	}, statsList...)
+
+	objectio.ForeachObjectStats(func(stats *objectio.ObjectStats) bool {
+		count -= int(stats.BlkCnt())
+		return true
+	}, statsList...)
+
+	require.Equal(t, count, 0)
+
+	count = 0
+	ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+		count++
+		return true
+	}, statsList...)
+
+	objectio.ForeachObjectStats(func(stats *objectio.ObjectStats) bool {
+		count -= int(stats.BlkCnt())
+		return true
+	}, statsList...)
+
+	require.Equal(t, count, 0)
 }

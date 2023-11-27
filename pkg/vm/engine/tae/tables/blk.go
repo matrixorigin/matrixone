@@ -16,11 +16,10 @@ package tables
 
 import (
 	"context"
-	"math/rand"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -81,12 +80,13 @@ func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
+	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
-		ctx, txn, schema, colIdxes, false,
+		ctx, txn, schema, colIdxes, false, mp,
 	)
 }
 
@@ -98,6 +98,7 @@ func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
+	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
@@ -105,12 +106,14 @@ func (blk *block) GetColumnDataById(
 		txn,
 		schema,
 		col,
-		false)
+		false,
+		mp,
+	)
 }
 func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
-	return blk.meta.GetCreatedAt().Less(ts)
+	return blk.meta.GetCreatedAtLocked().Less(ts)
 }
 
 func (blk *block) BatchDedup(
@@ -121,6 +124,7 @@ func (blk *block) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	bf objectio.BloomFilter,
+	mp *mpool.MPool,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
@@ -136,6 +140,7 @@ func (blk *block) BatchDedup(
 		rowmask,
 		false,
 		bf,
+		mp,
 	)
 }
 
@@ -143,12 +148,14 @@ func (blk *block) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	row, col int) (v any, isNull bool, err error) {
+	row, col int,
+	mp *mpool.MPool,
+) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
-		ctx, txn, schema, row, col, false,
+		ctx, txn, schema, row, col, false, mp,
 	)
 }
 
@@ -180,15 +187,12 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 	return
 }
 
-func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
-	ttl = time.Duration(float64(ttl) * float64(rand.Intn(5)+10) / float64(10))
-	return blk.adjustScore(blk.estimateRawScore, ttl, force)
-}
-
 func (blk *block) GetByFilter(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	filter *handle.Filter) (offset uint32, err error) {
+	filter *handle.Filter,
+	mp *mpool.MPool,
+) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
@@ -200,14 +204,16 @@ func (blk *block) GetByFilter(
 
 	node := blk.PinNode()
 	defer node.Unref()
-	return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
+	return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter, mp)
 }
 
 func (blk *block) getPersistedRowByFilter(
 	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
-	filter *handle.Filter) (offset uint32, err error) {
+	filter *handle.Filter,
+	mp *mpool.MPool,
+) (offset uint32, err error) {
 	ok, err := pnode.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
@@ -219,7 +225,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	schema := blk.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
-	if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx); err != nil {
+	if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx, mp); err != nil {
 		return
 	}
 	defer sortKey.Close()
@@ -240,7 +246,7 @@ func (blk *block) getPersistedRowByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	deletes, err := blk.persistedCollectDeleteMaskInRange(ctx, types.TS{}, txn.GetStartTS())
+	deletes, err := blk.persistedCollectDeleteMaskInRange(ctx, types.TS{}, txn.GetStartTS(), mp)
 	if err != nil {
 		return
 	}

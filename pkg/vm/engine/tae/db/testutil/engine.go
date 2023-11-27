@@ -123,14 +123,14 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 func (e *TestEngine) ForceCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(e.t, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(e.t, err)
 }
 
@@ -208,15 +208,21 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
+	pkName := schema.GetPrimaryKey().Name
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
 		defer blk.Close()
-		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
+		pkView, err := blk.GetColumnDataByName(context.Background(), pkName, common.DefaultAllocator)
+		assert.NoError(e.t, err)
+		defer pkView.Close()
+		pkView.ApplyDeletes()
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 		assert.NoError(e.t, err)
 		it.Next()
 	}
@@ -277,7 +283,7 @@ func (e *TestEngine) IncrementalCheckpoint(
 		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
 		assert.True(e.t, flushed)
 	}
-	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
 	assert.NoError(e.t, err)
 	if truncate {
 		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
@@ -378,13 +384,14 @@ func writeIncrementalCheckpoint(
 	start, end types.TS,
 	c *catalog.Catalog,
 	checkpointBlockRows int,
+	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(fs, checkpointBlockRows)
+	cnLocation, tnLocation, _, err := data.WriteTo(fs, checkpointBlockRows, checkpointSize)
 	assert.NoError(t, err)
 	return cnLocation, tnLocation
 }
@@ -392,14 +399,13 @@ func writeIncrementalCheckpoint(
 func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
 	reader, err := blockio.NewObjectReader(fs, location)
 	assert.NoError(t, err)
-	data := logtail.NewCheckpointData()
+	data := logtail.NewCheckpointData(common.CheckpointAllocator)
 	err = data.ReadFrom(
 		context.Background(),
 		logtail.CheckpointCurrentVersion,
 		location,
 		reader,
 		fs,
-		common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
 	return data
@@ -420,7 +426,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 		"tbl",
 		0,
 		"db",
-		common.DefaultAllocator,
+		common.CheckpointAllocator,
 		fs,
 	)
 	assert.NoError(t, err)
@@ -438,11 +444,15 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 			ins = e.Bat
 		}
 	}
+	for _, c := range cb {
+		c()
+	}
 	return
 }
 
-func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData, start, end types.TS, c *catalog.Catalog) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
+	start, end types.TS, c *catalog.Catalog, fs fileservice.FileService) {
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()
@@ -509,7 +519,7 @@ func isProtoTNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat
 	} else {
 		moIns, err := batch.ProtoBatchToBatch(bat1)
 		assert.NoError(t, err)
-		tnIns := containers.ToTNBatch(moIns)
+		tnIns := containers.ToTNBatch(moIns, common.DefaultAllocator)
 		isBatchEqual(ctx, t, tnIns, bat2)
 	}
 }
@@ -610,12 +620,13 @@ func CheckCheckpointReadWrite(
 	start, end types.TS,
 	c *catalog.Catalog,
 	checkpointBlockRows int,
+	checkpointSize int,
 	fs fileservice.FileService,
 ) {
-	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, fs)
+	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
+	checkTNCheckpointData(context.Background(), t, tnData, start, end, c, fs)
 	p := &catalog.LoopProcessor{}
 
 	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
@@ -681,14 +692,16 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
 	ForEachBlock(rel, func(blk handle.Block) error {
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), false)
+		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(
+			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,
+		)
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
 		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
-		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx)
+		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
-		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx)
+		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		for i := 0; i < deleteBat.Length(); i++ {
 			rowID := deleteRowIDs.Get(i).(types.Rowid)

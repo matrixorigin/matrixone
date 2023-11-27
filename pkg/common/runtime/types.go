@@ -26,12 +26,12 @@ const (
 	ClusterService = "cluster-service"
 	// ClusterService cluster service
 	LockService = "lock-service"
-	// CtlService ctl service
-	CtlService = "ctl-service"
 	// InternalSQLExecutor attr name for internal sql executor
 	InternalSQLExecutor = "internal-sql-executor"
 	// AutoIncrmentService attr name for AutoIncrmentService
 	AutoIncrmentService = "auto-incrment-service"
+	// StatusServer is the global server of status of cluster.
+	StatusServer = "status-server"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"

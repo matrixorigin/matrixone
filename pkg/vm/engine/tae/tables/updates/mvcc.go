@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -51,8 +52,7 @@ func init() {
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	deletes atomic.Pointer[DeleteChain]
-	// deletes         *DeleteChain
+	deletes         atomic.Pointer[DeleteChain]
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
@@ -90,21 +90,17 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
-func (n *MVCCHandle) EstimateMemSizeLocked() int {
-	size := n.deletes.Load().EstimateMemSizeLocked()
+func (n *MVCCHandle) EstimateMemSizeLocked() (asize int, dsize int) {
+	dsize += n.deletes.Load().EstimateMemSizeLocked()
 	if n.appends != nil {
-		size += len(n.appends.MVCC) * AppendNodeApproxSize
+		asize += len(n.appends.MVCC) * AppendNodeApproxSize
 	}
-	return size + MVCCHandleApproxSize
+	return asize, dsize + MVCCHandleApproxSize
 }
 
 // ==========================================================
 // *************** All deletes related APIs *****************
 // ==========================================================
-
-func (n *MVCCHandle) GetDeletesPersistedTSInMVCCChain() types.TS {
-	return n.persistedTS
-}
 
 func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.Lock()
@@ -176,10 +172,9 @@ func (n *MVCCHandle) IsDeletedLocked(
 
 // it collects all deletes in the range [start, end)
 func (n *MVCCHandle) CollectDeleteLocked(
-	start, end types.TS,
-) (
-	rowIDVec, commitTSVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap, deletes []uint32,
+	start, end types.TS, pkType types.Type, mp *mpool.MPool,
+) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
+	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -193,11 +188,15 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		if rowIDVec != nil {
 			rowIDVec.Close()
 		}
-		rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
+		rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), mp)
 		if commitTSVec != nil {
 			commitTSVec.Close()
 		}
-		commitTSVec = containers.MakeVector(types.T_TS.ToType())
+		commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
+		if pkVec != nil {
+			pkVec.Close()
+		}
+		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
 		id := n.meta.ID
 
@@ -226,12 +225,24 @@ func (n *MVCCHandle) CollectDeleteLocked(
 					}
 					for it.HasNext() {
 						row := it.Next()
-						if deletes == nil {
-							deletes = make([]uint32, 0)
-						}
-						deletes = append(deletes, row)
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
+						// for deleteNode V1，rowid2PK is nil after restart
+						if node.version < IOET_WALTxnCommand_DeleteNode_V2 {
+							if deletes == nil {
+								deletes = make([]uint32, 0)
+							}
+							deletes = append(deletes, row)
+						} else {
+							pkVec.Append(node.rowid2PK[row].Get(0), false)
+						}
+						if minTS.IsEmpty() {
+							minTS = node.GetEnd()
+						} else {
+							if minTS.Greater(node.GetEnd()) {
+								minTS = node.GetEnd()
+							}
+						}
 					}
 				}
 				return !before
@@ -240,7 +251,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			break
 		}
 	}
-	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length())
+	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length(), containers.Options{Allocator: mp})
 	return
 }
 
@@ -314,7 +325,7 @@ func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 // abortVec: is the abort vector
 // aborts: is the aborted bitmap
 func (n *MVCCHandle) CollectAppendLocked(
-	start, end types.TS,
+	start, end types.TS, mp *mpool.MPool,
 ) (
 	minRow, maxRow uint32,
 	commitTSVec, abortVec containers.Vector,
@@ -332,8 +343,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 	maxRow = node.maxRow
 
 	aborts = &nulls.Bitmap{}
-	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	abortVec = containers.MakeVector(types.T_bool.ToType())
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,

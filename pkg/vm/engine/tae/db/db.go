@@ -16,10 +16,11 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"io"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -59,6 +60,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
+	MergeHandle        *MergeTaskBuilder
 
 	DiskCleaner *gc2.DiskCleaner
 
@@ -92,13 +94,33 @@ func (db *DB) ForceCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts); err != nil {
+	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
 		return err
 	}
-	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = db.Wal.RangeCheckpoint(1, lsn)
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
+}
+
+func (db *DB) ForceCheckpointForBackup(
+	ctx context.Context,
+	ts types.TS,
+	flushDuration time.Duration,
+) (location string, err error) {
+	// FIXME: cannot disable with a running job
+	db.BGCheckpointRunner.DisableCheckpoint()
+	defer db.BGCheckpointRunner.EnableCheckpoint()
+	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
+	logutil.Infof("[Force Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	if err != nil {
+		return
+	}
+	if location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts); err != nil {
+		return
+	}
+	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	return
 }
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {

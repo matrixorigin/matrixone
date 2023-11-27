@@ -22,12 +22,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
 	txnPool = sync.Pool{New: func() any {
 		return &activeTxn{holdLocks: make(map[uint64]*cowSlice)}
 	}}
+
+	parallelUnlockTables = 2
 )
 
 // activeTxn one goroutine write, multi goroutine read
@@ -117,7 +121,9 @@ func (txn *activeTxn) close(
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
-	// TODO(fagongzi): parallel unlock
+	n := len(txn.holdLocks)
+	var wg sync.WaitGroup
+	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
 		if err != nil {
@@ -128,20 +134,51 @@ func (txn *activeTxn) close(
 			// LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
 
-		logTxnUnlockTable(
-			serviceID,
-			txn,
-			table)
-		l.unlock(txn, cs, commitTS)
-		logTxnUnlockTableCompleted(
-			serviceID,
-			txn,
-			table,
-			cs)
-		cs.close()
-		delete(txn.holdLocks, table)
+		fn := func(table uint64, cs *cowSlice) func() {
+			return func() {
+				logTxnUnlockTable(
+					serviceID,
+					txn,
+					table)
+				l.unlock(txn, cs, commitTS)
+				if n > parallelUnlockTables {
+					wg.Done()
+				}
+			}
+		}
+
+		if n > parallelUnlockTables {
+			wg.Add(1)
+			ants.Submit(fn(table, cs))
+		} else {
+			fn(table, cs)()
+			logTxnUnlockTableCompleted(
+				serviceID,
+				txn,
+				table,
+				cs)
+			cs.close()
+			delete(txn.holdLocks, table)
+		}
 	}
+
+	if n > parallelUnlockTables {
+		wg.Wait()
+		for table, cs := range txn.holdLocks {
+			logTxnUnlockTableCompleted(
+				serviceID,
+				txn,
+				table,
+				cs)
+			cs.close()
+			delete(txn.holdLocks, table)
+		}
+	}
+
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]
@@ -178,20 +215,30 @@ func (txn *activeTxn) abort(
 func (txn *activeTxn) cancelBlocks() {
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrTxnNotFound})
+		w.close()
 	}
 }
 
-func (txn *activeTxn) clearBlocked(txnID []byte) {
-	txn.blockedWaiters = txn.blockedWaiters[:0]
+func (txn *activeTxn) clearBlocked(w *waiter) {
+	newBlockedWaiters := txn.blockedWaiters[:0]
+	for _, v := range txn.blockedWaiters {
+		if v != w {
+			newBlockedWaiters = append(newBlockedWaiters, v)
+		} else {
+			w.close()
+		}
+	}
+	txn.blockedWaiters = newBlockedWaiters
 }
 
-func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
+func (txn *activeTxn) setBlocked(w *waiter) {
 	if w == nil {
 		panic("invalid waiter")
 	}
 	if !w.casStatus(ready, blocking) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
+	w.ref()
 	txn.blockedWaiters = append(txn.blockedWaiters, w)
 }
 
@@ -247,6 +294,10 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 			// the remote LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
+
 		locks := lockKeys[idx]
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {

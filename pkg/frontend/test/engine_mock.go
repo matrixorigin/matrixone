@@ -336,6 +336,20 @@ func (mr *MockRelationMockRecorder) GetPrimaryKeys(arg0 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrimaryKeys", reflect.TypeOf((*MockRelation)(nil).GetPrimaryKeys), arg0)
 }
 
+// GetTableDef mocks base method.
+func (m *MockRelation) GetTableDef(arg0 context.Context) *plan.TableDef {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTableDef", arg0)
+	ret0, _ := ret[0].(*plan.TableDef)
+	return ret0
+}
+
+// GetTableDef indicates an expected call of GetTableDef.
+func (mr *MockRelationMockRecorder) GetTableDef(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableDef", reflect.TypeOf((*MockRelation)(nil).GetTableDef), arg0)
+}
+
 // GetTableID mocks base method.
 func (m *MockRelation) GetTableID(arg0 context.Context) uint64 {
 	m.ctrl.T.Helper()
@@ -513,20 +527,6 @@ func (mr *MockRelationMockRecorder) Update(arg0, arg1 interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockRelation)(nil).Update), arg0, arg1)
 }
 
-// UpdateBlockInfos mocks base method.
-func (m *MockRelation) UpdateBlockInfos(arg0 context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateBlockInfos", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UpdateBlockInfos indicates an expected call of UpdateBlockInfos.
-func (mr *MockRelationMockRecorder) UpdateBlockInfos(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateBlockInfos", reflect.TypeOf((*MockRelation)(nil).UpdateBlockInfos), arg0)
-}
-
 // UpdateConstraint mocks base method.
 func (m *MockRelation) UpdateConstraint(arg0 context.Context, arg1 *engine.ConstraintDef) error {
 	m.ctrl.T.Helper()
@@ -539,6 +539,20 @@ func (m *MockRelation) UpdateConstraint(arg0 context.Context, arg1 *engine.Const
 func (mr *MockRelationMockRecorder) UpdateConstraint(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateConstraint", reflect.TypeOf((*MockRelation)(nil).UpdateConstraint), arg0, arg1)
+}
+
+// UpdateObjectInfos mocks base method.
+func (m *MockRelation) UpdateObjectInfos(arg0 context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateObjectInfos", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateObjectInfos indicates an expected call of UpdateObjectInfos.
+func (mr *MockRelationMockRecorder) UpdateObjectInfos(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateObjectInfos", reflect.TypeOf((*MockRelation)(nil).UpdateObjectInfos), arg0)
 }
 
 // Write mocks base method.

@@ -114,6 +114,27 @@ func TestArrayToString(t *testing.T) {
 			argsF64: []float64{1, 2, 3},
 			want:    "[1, 2, 3]",
 		},
+		{
+			// Ref issue: https://github.com/matrixorigin/matrixone/issues/12420
+			name:    "Test3.1 - Float32 with precision issue on Add",
+			argsF32: []float32{0.66616553 + 0.66616553, 2, 3},
+			want:    "[1.3323311, 2, 3]",
+		},
+		{
+			name:    "Test3.2 - Float32 with precision issue on Multiply",
+			argsF32: []float32{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491514, 0.44377652, 2, 3]",
+		},
+		{
+			name:    "Test4.1 - Float64 with precision issue on Add",
+			argsF64: []float64{0.66616553 + 0.66616553, 2, 3},
+			want:    "[1.33233106, 2, 3]",
+		},
+		{
+			name:    "Test4.2 - Float64 with precision issue on Multiply",
+			argsF64: []float64{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491513.179236, 0.4437765133601809, 2, 3]",
+		},
 	}
 
 	for _, tt := range tests {
@@ -155,13 +176,13 @@ func TestArraysToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArraysToString[float32](tt.argsF32); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString[float32](tt.argsF32, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArraysToString[float64](tt.argsF64); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString[float64](tt.argsF64, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}

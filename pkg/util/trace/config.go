@@ -28,7 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,6 +169,67 @@ const (
 	FlagProfileCpu
 )
 
+type MoCtledState struct {
+	Enable    bool
+	Threshold time.Duration
+}
+
+var MOCtledSpanEnableConfig struct {
+	sync.Mutex
+	NameToKind  map[string]SpanKind
+	KindToState map[SpanKind]*MoCtledState
+}
+
+// InitMOCtledSpan registers all mo_ctl controlled span
+func InitMOCtledSpan() {
+	MOCtledSpanEnableConfig.NameToKind = make(map[string]SpanKind)
+	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]*MoCtledState)
+
+	// enable or disable the span with time threshold for remote file service operation
+	MOCtledSpanEnableConfig.NameToKind["s3"] = SpanKindRemoteFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = &MoCtledState{false, 0}
+
+	// enable or disable the span with time threshold for Local file service operation
+	MOCtledSpanEnableConfig.NameToKind["local"] = SpanKindLocalFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = &MoCtledState{false, 0}
+
+	// enable or disable the span with time threshold for sql statement operation
+	MOCtledSpanEnableConfig.NameToKind["statement"] = SpanKindStatement
+	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = &MoCtledState{false, 0}
+
+	// enable or disable the span with time threshold for recording some debug log when tn
+	// handles RPC operation, like handleCommit
+	MOCtledSpanEnableConfig.NameToKind["tnrpc"] = SpanKindTNRPCHandle
+	MOCtledSpanEnableConfig.KindToState[SpanKindTNRPCHandle] = &MoCtledState{false, 0}
+}
+
+// IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
+// if it is, return it's current state, or return not exist
+func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
+		return true, state.Enable, state.Threshold
+	}
+	return false, false, 0
+}
+
+// SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
+// if it is, reset it's state to the specified and return succeed, or return not succeed
+func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
+		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
+		// convert threshold to ms in time.Duration format
+		MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
+		return true
+	}
+	return false
+}
+
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
 	SpanContext
@@ -213,25 +274,6 @@ func (c *SpanConfig) Reset() {
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
 	c.Extra = nil
-}
-
-var MOCtledSpanEnableConfig struct {
-	EnableS3FSSpan    atomic.Bool
-	EnableLocalFSSpan atomic.Bool
-}
-
-func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
-	// if span kind in [SpanKindS3FSVis, SpanKindLocalFSVis], we
-	// hope it does record in every invoke and ignores the
-	// long time threshold restriction.
-	switch c.Kind {
-	case SpanKindS3FSVis:
-		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
-	case SpanKindLocalFSVis:
-		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	default:
-		return duration >= c.LongTimeThreshold
-	}
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
@@ -413,6 +455,16 @@ func WithFSReadWriteExtra(fileName string, status error, size int64) SpanEndOpti
 	})
 }
 
+func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.Extra = append(cfg.Extra,
+			zap.String("txn_id", txnID.String()),
+			zap.String("statement_id", stmID.String()),
+			zap.String("statement", stm),
+		)
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
@@ -460,12 +512,17 @@ const (
 	// SpanKindSession is a SpanKind for a Span that represents the operation
 	// start from session
 	SpanKindSession SpanKind = 3
-	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
-	// S3 object operation
-	SpanKindS3FSVis SpanKind = 4
+	// SpanKindRemoteFSVis is a SpanKind for a Span that needs to collect info of
+	// remote object operation
+	SpanKindRemoteFSVis SpanKind = 4
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
 	SpanKindLocalFSVis SpanKind = 5
+
+	// SpanKindTNRPCHandle is a SpanKind for TN service to control
+	// the enable or disable of debug logs recording when it handles the RPC requests, like HandleCommit.
+	// not for trace or span for now
+	SpanKindTNRPCHandle SpanKind = 6
 )
 
 func (k SpanKind) String() string {
@@ -478,10 +535,12 @@ func (k SpanKind) String() string {
 		return "remote"
 	case SpanKindSession:
 		return "session"
-	case SpanKindS3FSVis:
-		return "s3FSOperation"
+	case SpanKindRemoteFSVis:
+		return "remoteFSOperation"
 	case SpanKindLocalFSVis:
 		return "localFSOperation"
+	case SpanKindTNRPCHandle:
+		return "tnRPCHandle"
 	default:
 		return "unknown"
 	}

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -115,7 +116,7 @@ func (b *bufferHolder) getBuffer() batchpipe.ItemBuffer[batchpipe.HasName, any] 
 	b.c.allocBuffer()
 	b.bufferCnt.Add(1)
 	buffer := b.bufferPool.Get().(batchpipe.ItemBuffer[batchpipe.HasName, any])
-	logutil.Debugf("new buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
+	b.logStatus("new buffer")
 	return buffer
 }
 
@@ -124,7 +125,17 @@ func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, 
 	b.bufferPool.Put(buffer)
 	b.bufferCnt.Add(-1)
 	b.c.releaseBuffer()
-	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
+	b.logStatus("release buffer")
+}
+
+func (b *bufferHolder) logStatus(msg string) {
+	if b.c.logger.Enabled(zap.DebugLevel) {
+		b.c.logger.Debug(msg,
+			zap.String("item", b.name),
+			zap.Int32("cnt", b.bufferCnt.Load()),
+			zap.Int32("using", b.c.bufferTotal.Load()),
+		)
+	}
 }
 
 func (b *bufferHolder) discardBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
@@ -183,7 +194,7 @@ func (r *bufferExportReq) handle() error {
 		var flush = r.b.impl.NewItemBatchHandler(context.Background())
 		flush(r.batch)
 	} else {
-		logutil.Debugf("batch is nil, item: %s", r.b.name)
+		r.b.c.logger.Debug("batch is nil", zap.String("item", r.b.name))
 	}
 	return nil
 }
@@ -243,6 +254,10 @@ type MOCollector struct {
 	collectorCnt int // WithCollectorCnt
 	generatorCnt int // WithGeneratorCnt
 	exporterCnt  int // WithExporterCnt
+	// num % of (#cpu * 0.1)
+	collectorCntP int // default: 10
+	generatorCntP int // default: 20
+	exporterCntP  int // default: 80
 	// pipeImplHolder hold implement
 	pipeImplHolder *PipeImplHolder
 
@@ -265,15 +280,15 @@ type MOCollectorOption func(*MOCollector)
 func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector {
 	c := &MOCollector{
 		ctx:            ctx,
-		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector),
+		logger:         morun.ProcessLevelRuntime().Logger().Named(LoggerNameMOCollector).With(logutil.Discardable()),
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
-		collectorCnt:   runtime.NumCPU(),
-		generatorCnt:   runtime.NumCPU(),
-		exporterCnt:    runtime.NumCPU(),
+		collectorCntP:  10,
+		generatorCntP:  20,
+		exporterCntP:   80,
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
@@ -282,17 +297,73 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 	for _, opt := range opts {
 		opt(c)
 	}
+	// calculate collectorCnt, generatorCnt, exporterCnt
+	c.calculateDefaultWorker(runtime.NumCPU())
 	return c
 }
 
-func WithCollectorCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = cnt })
+const maxPercentValue = 1000
+
+// calculateDefaultWorker
+// totalNum = int( #cpu * 0.1 + 0.5 )
+// default collectorCntP : generatorCntP : exporterCntP = 10 : 20 : 80.
+// It means collectorCnt = int( $totalNum * $collectorCntP / 100 + 0.5 )
+//
+// For example
+// | #cpu | #totalNum | collectorCnt | generatorCnt | exporterCnt |
+// | --   | --        | --           | --           | --          |
+// | 6    | 0.6 =~ 1  | 1            | 1            | 3           |
+// | 30   | 3.0       | 1            | 1            | 2           |
+// | 50   | 5.0       | 1            | 1            | 4           |
+// | 60   | 6.0       | 1            | 2            | 5           |
+func (c *MOCollector) calculateDefaultWorker(numCpu int) {
+	var totalNum = math.Ceil(float64(numCpu) * 0.1)
+	unit := float64(totalNum) / (100.0)
+	// set default value if non-set
+	c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
+	c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
+	c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
+	if c.collectorCnt <= 0 {
+		c.collectorCnt = 1
+	}
+	if c.generatorCnt <= 0 {
+		c.generatorCnt = 1
+	}
+	if c.exporterCnt <= 0 {
+		c.exporterCnt = 1
+	}
+
+	// check max value < numCpu
+	if c.collectorCnt > numCpu {
+		c.collectorCnt = numCpu
+	}
+	if c.generatorCnt > numCpu {
+		c.generatorCnt = numCpu
+	}
+	if c.exporterCnt > numCpu {
+		c.exporterCnt = numCpu
+	}
+
+	// last check: disable calculation
+	if c.collectorCnt >= maxPercentValue {
+		c.collectorCnt = numCpu
+	}
+	if c.generatorCntP >= maxPercentValue {
+		c.generatorCnt = numCpu
+	}
+	if c.exporterCnt >= maxPercentValue {
+		c.generatorCnt = numCpu
+	}
 }
-func WithGeneratorCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = cnt })
+
+func WithCollectorCntP(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.collectorCntP = p })
 }
-func WithExporterCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = cnt })
+func WithGeneratorCnt(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.generatorCntP = p })
+}
+func WithExporterCnt(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
 }
 
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
@@ -304,6 +375,9 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		} else if c.maxBufferCnt == 0 {
 			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
+		c.collectorCntP = cfg.CollectorCntPercent
+		c.generatorCntP = cfg.GeneratorCntPercent
+		c.exporterCntP = cfg.ExporterCntPercent
 	})
 }
 
@@ -362,7 +436,7 @@ func (c *MOCollector) Start() bool {
 
 	c.initCnt()
 
-	logutil.Info("MOCollector Start")
+	c.logger.Info("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
 		c.stopWait.Add(1)
 		go c.doCollect(i)
@@ -402,20 +476,21 @@ func (c *MOCollector) doCollect(idx int) {
 	defer c.stopWait.Done()
 	ctx, span := trace.Start(c.ctx, "MOCollector.doCollect")
 	defer span.End()
-	logutil.Debugf("doCollect %dth: start", idx)
+	c.logger.Debug("doCollect %dth: start", zap.Int("idx", idx))
 loop:
 	for {
 		select {
 		case i := <-c.awakeCollect:
+			start := time.Now()
 			c.mux.RLock()
 			if buf, has := c.buffers[i.GetName()]; !has {
-				logutil.Debugf("doCollect %dth: init buffer for %s", idx, i.GetName())
+				c.logger.Debug("doCollect: init buffer", zap.Int("idx", idx), zap.String("item", i.GetName()))
 				c.mux.RUnlock()
 				c.mux.Lock()
 				if _, has := c.buffers[i.GetName()]; !has {
-					logutil.Debugf("doCollect %dth: init buffer done.", idx)
+					c.logger.Debug("doCollect: init buffer done.", zap.Int("idx", idx))
 					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
-						panic(moerr.NewInternalError(ctx, "unknown item type: %s", i.GetName()))
+						c.logger.Panic("unknown item type", zap.String("item", i.GetName()))
 					} else {
 						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
 						c.buffers[i.GetName()] = buf
@@ -428,11 +503,12 @@ loop:
 				buf.Add(i)
 				c.mux.RUnlock()
 			}
+			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			break loop
 		}
 	}
-	logutil.Debugf("doCollect %dth: Done.", idx)
+	c.logger.Debug("doCollect: Done.", zap.Int("idx", idx))
 }
 
 type generateReq interface {
@@ -448,6 +524,10 @@ type exportReq interface {
 // awakeBufferFactory frozen buffer, send GenRequest to awake
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
+		start := time.Now()
+		defer func() {
+			v2.TraceCollectorGenerateAwareDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
 		req := holder.getGenerateReq()
 		if req == nil {
 			return
@@ -456,14 +536,14 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 			select {
 			case c.awakeGenerate <- req:
 			case <-time.After(time.Second * 3):
-				logutil.Warn("awakeBufferFactory: timeout after 3 seconds")
+				c.logger.Warn("awakeBufferFactory: timeout after 3 seconds")
 				goto discardL
 			}
 		} else {
 			select {
 			case c.awakeGenerate <- req:
 			default:
-				logutil.Warn("awakeBufferFactory: awakeGenerate chan is full")
+				c.logger.Warn("awakeBufferFactory: awakeGenerate chan is full")
 				goto discardL
 			}
 		}
@@ -472,6 +552,7 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		if r, ok := req.(*bufferGenerateReq); ok {
 			r.b.discardBuffer(r.buffer)
 		}
+		v2.TraceCollectorGenerateAwareDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 	}
 }
 
@@ -480,43 +561,52 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 func (c *MOCollector) doGenerate(idx int) {
 	defer c.stopWait.Done()
 	var buf = new(bytes.Buffer)
-	logutil.Debugf("doGenerate %dth: start", idx)
+	c.logger.Debug("doGenerate start", zap.Int("idx", idx))
 loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
+			start := time.Now()
 			if req == nil {
-				logutil.Warn("generate req is nil")
+				c.logger.Warn("generate req is nil")
 			} else if exportReq, err := req.handle(buf); err != nil {
 				req.callback(err)
+				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
 			} else {
+				startDelay := time.Now()
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
 				case <-time.After(time.Second * 10):
-					logutil.Info("awakeBatch: timeout after 10 seconds")
+					c.logger.Info("awakeBatch: timeout after 10 seconds")
+					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 				}
+				end := time.Now()
+				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
+				v2.TraceCollectorGenerateDurationHistogram.Observe(end.Sub(start).Seconds())
 			}
 		case <-c.stopCh:
 			break loop
 		}
 	}
-	logutil.Debugf("doGenerate %dth: Done.", idx)
+	c.logger.Debug("doGenerate: Done.", zap.Int("idx", idx))
 }
 
 // doExport handle BatchRequest
 func (c *MOCollector) doExport(idx int) {
 	defer c.stopWait.Done()
-	logutil.Debugf("doExport %dth: start", idx)
+	c.logger.Debug("doExport %dth: start", zap.Int("idx", idx))
 loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
+			start := time.Now()
 			if req == nil {
-				logutil.Warn("export req is nil")
+				c.logger.Warn("export req is nil")
 			} else if err := req.handle(); err != nil {
 				req.callback(err)
 			}
+			v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			c.mux.Lock()
 			for len(c.awakeBatch) > 0 {
@@ -526,7 +616,7 @@ loop:
 			break loop
 		}
 	}
-	logutil.Debugf("doExport %dth: Done.", idx)
+	c.logger.Debug("doExport Done.", zap.Int("idx", idx))
 }
 
 func (c *MOCollector) showStats() {

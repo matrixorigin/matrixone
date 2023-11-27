@@ -302,6 +302,9 @@ message IndexDef {
 	bool visible          = 8;
 	// currently not used
 	IndexOption option		  = 9;
+	string index_algo = 10;
+	string index_algo_table_type = 11;
+	string index_algo_params=12;
 }
 
 
@@ -419,14 +422,12 @@ message TableDef {
 	string createsql 		= 6;
 	TableFunction tbl_func	= 7;
 	uint32 version 			= 8;
-	string parent_tbl_name  = 9;
 
 	PrimaryKeyDef pkey				= 11;
 	repeated IndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
-	repeated ColDef parent_unique_cols  = 16;
 
 	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
@@ -441,6 +442,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+	bool is_dynamic = 31;
+
 }
 
 message TableFunction{
@@ -480,6 +483,8 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
+	int64 nullcnt=10;
+	repeated double ranges	= 11;
 }
 
 message Stats {
@@ -537,6 +542,11 @@ message WindowSpec {
 	string name = 5;
 }
 
+message SampleFuncSpec {
+	int32 Rows = 1;
+	double Percent = 2;
+}
+
 message FrameClause {
 	enum FrameType {
 		ROWS = 0;
@@ -562,6 +572,7 @@ message OnDuplicateKeyCtx {
 	TableDef table_def					= 1;
 	repeated int32 on_duplicate_idx		= 2;
 	map<string, Expr> on_duplicate_expr	= 3;
+	bool is_ignore 						= 4;
 }
 
 message InsertCtx {
@@ -669,12 +680,15 @@ message Node {
 
 		//
 		ON_DUPLICATE_KEY = 59;
-		FUZZY_FILTER = 60;
-
-		PRE_INSERT = 61;
-		PRE_DELETE = 62;
+		PRE_INSERT = 60;
+		PRE_DELETE = 61;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 63;
+		PRE_INSERT_UK = 62;
+		PRE_INSERT_SK = 63;
+		//
+		TIME_WINDOW = 64;
+		Fill = 65;
+		PARTITION = 66;
 	}
 
 	enum JoinType {
@@ -693,6 +707,15 @@ message Node {
 		FULL = 0;
 		BOTTOM = 1;
 		TOP = 2;
+	}
+
+	enum FillType {
+		NONE = 0;
+		PREV = 1;
+		NEXT = 2;
+		NULL = 3;
+		VALUE = 4;
+		LINEAR = 5;
 	}
 
 	NodeType node_type = 1;
@@ -766,6 +789,18 @@ message Node {
 	bool recursive_sink = 43;
 	ExternScan extern_scan = 44;
 	PartitionPrune partition_prune = 45;
+
+	PreInsertUkCtx pre_insert_sk_ctx = 46;
+	Expr interval = 47;
+	Expr sliding = 48;
+
+	FillType fill_type = 49;
+	repeated Expr fill_val = 50;
+
+	// sample function related.
+	SampleFuncSpec sample_func = 51;
+
+	int32 window_idx = 52;
 }
 
 message ExternScan {
@@ -775,6 +810,7 @@ message ExternScan {
     uint64 ignored_lines = 4;
     bytes  enclosed_by = 5;
     string terminated = 6;
+	string json_type = 7;
 }
 
 message LockTarget {
@@ -1279,40 +1315,28 @@ message UnLockTables{}
 message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
-		BLOCK_ID      = 1;
-		OBJECT_NAME   = 2;
-		ENTRY_STATE   = 3;
-		SORTED        = 4;
-		IS_HIDDEN     = 5;
-		META_LOC      = 6;
-		DELTA_LOC     = 7;
-		COMMIT_TS     = 8;
-		CREATE_TS     = 9;
-		DELETE_TS     = 10;
-		SEG_ID        = 11;
-		ROWS_CNT      = 12;
-		NULL_CNT      = 13;
-		COMPRESS_SIZE = 14;
-		ORIGIN_SIZE   = 15;
-		MIN           = 16;
-		MAX           = 17;
-		SUM           = 18;
+		OBJECT_NAME   = 1;
+		IS_HIDDEN     = 2;
+		OBJ_LOC       = 3;
+		CREATE_TS     = 4;
+		DELETE_TS     = 5;
+		ROWS_CNT      = 6;
+		NULL_CNT      = 7;
+		COMPRESS_SIZE = 8;
+		ORIGIN_SIZE   = 9;
+		MIN           = 10;
+		MAX           = 11;
+		SUM           = 12;
 	}
 	string col_name     = 1;
-	bytes block_id      = 2;
-	string object_name  = 3;
-	bool entry_state    = 4;
-	bool sorted         = 5;
-	bool is_hidden      = 6;
-	bytes meta_loc      = 7;
-	bytes del_loc       = 8;
-	bytes commit_ts     = 9;
-	bytes create_ts     = 10;
-	bytes delete_ts     = 11;
-	bytes seg_id        = 12;
-	int64 row_cnt       = 13;
-	int64 null_cnt      = 14;
-	int64 compress_size = 15;
-	int64 origin_size   = 16;
-	bytes zone_map      = 17;
+	string object_name  = 2;
+	bool is_hidden      = 3;
+	bytes obj_loc       = 4;
+	bytes create_ts     = 5;
+	bytes delete_ts     = 6;
+	int64 row_cnt       = 7;
+	int64 null_cnt      = 8;
+	int64 compress_size = 9;
+	int64 origin_size   = 10;
+	bytes zone_map      = 11;
 }

@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -25,51 +24,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (txn *Transaction) getBlockInfos(
-	ctx context.Context,
-	tbl *txnTable,
-) (blocks []catalog.BlockInfo, err error) {
-	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var objectName objectio.ObjectNameShort
-	iter, err := state.NewBlocksIter(ts)
-	if err != nil {
-		return nil, err
-	}
-	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	for iter.Next() {
-		entry := iter.Entry()
-		location := entry.MetaLocation()
-		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
-			// Prefetch object meta
-			if err = blockio.PrefetchMeta(fs, location); err != nil {
-				iter.Close()
-				return
-			}
-			objectName = *location.Name().Short()
-		}
-		blocks = append(blocks, entry.BlockInfo)
-	}
-	iter.Close()
-	return
-}
+//func (txn *Transaction) getObjInfos(
+//	ctx context.Context,
+//	tbl *txnTable,
+//) (objs []logtailreplay.ObjectEntry, err error) {
+//	ts := types.TimestampToTS(txn.op.SnapshotTS())
+//	state, err := tbl.getPartitionState(ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//	iter, err := state.NewObjectsIter(ts)
+//	if err != nil {
+//		return nil, err
+//	}
+//	for iter.Next() {
+//		entry := iter.Entry()
+//		objs = append(objs, entry)
+//	}
+//	iter.Close()
+//	return
+//}
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
@@ -190,7 +172,10 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		s3Writer, err := colexec.AllocS3Writer(txn.proc, tbl.(*txnTable).getTableDef())
+
+		tableDef := tbl.GetTableDef(txn.proc.Ctx)
+
+		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
 		if err != nil {
 			return err
 		}
@@ -208,9 +193,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		blockInfo := s3Writer.GetBlockInfoBat()
 
 		lenVecs := len(blockInfo.Attrs)
-		// only remain the metaLoc col
-		blockInfo.Vecs = blockInfo.Vecs[lenVecs-1:]
-		blockInfo.Attrs = blockInfo.Attrs[lenVecs-1:]
+		// only remain the metaLoc col and object stats
+		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
+		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
 
 		table := tbl.(*txnTable)
@@ -293,19 +278,32 @@ func (txn *Transaction) WriteFileLocked(
 	txn.hasS3Op.Store(true)
 	newBat := bat
 	if typ == INSERT {
-		//bat.Attrs = {catalog.BlockMeta_BlockInfo}
-		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc})
-		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		vecs := []*vector.Vector{vector.NewVec(types.T_text.ToType())}
+		attrs := []string{catalog.BlockMeta_MetaLoc}
 
-		for _, blk := range vector.MustBytesCol(bat.GetVector(0)) {
+		blkInfos := vector.MustBytesCol(bat.GetVector(0))
+		for _, blk := range blkInfos {
 			blkInfo := *catalog.DecodeBlockInfo(blk)
-			vector.AppendBytes(
-				newBat.GetVector(0),
-				[]byte(blkInfo.MetaLocation().String()),
-				false,
-				txn.proc.Mp())
+			vector.AppendBytes(vecs[0], []byte(blkInfo.MetaLocation().String()),
+				false, txn.proc.Mp())
 		}
+
+		if len(bat.Attrs) == 2 && bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
+			// append the object stats.
+			vec := vector.NewConstBytes(types.T_binary.ToType(),
+				bat.GetVector(1).GetBytesAt(0), 1, txn.proc.Mp())
+			vecs = append(vecs, vec)
+			attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
+
+		}
+
+		newBat = batch.NewWithSize(len(bat.Vecs))
+		newBat.SetAttributes(attrs)
+
+		for idx := range vecs {
+			newBat.SetVector(int32(idx), vecs[idx])
+		}
+
 		newBat.SetRowCount(bat.Vecs[0].Length())
 	}
 	txn.readOnly.Store(false)
@@ -526,14 +524,16 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, err := tbl.mergeCompaction(blks)
+		createdBlks, stats, err := tbl.mergeCompaction(blks)
 		if err != nil {
 			return err
 		}
 		if len(createdBlks) > 0 {
-			bat := batch.NewWithSize(1)
-			bat.Attrs = []string{catalog.BlockMeta_BlockInfo}
+			bat := batch.NewWithSize(2)
+			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			bat.SetVector(1, vector.NewConstBytes(types.T_binary.ToType(),
+				objectio.ZeroObjectStats.Marshal(), 1, tbl.db.txn.proc.GetMPool()))
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
@@ -541,6 +541,18 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					false,
 					tbl.db.txn.proc.GetMPool())
 			}
+
+			// append the object stats to bat
+			for idx := 0; idx < len(stats); idx++ {
+				if stats[idx].IsZero() {
+					continue
+				}
+				if err = vector.SetConstBytes(bat.Vecs[1], stats[idx].Marshal(),
+					1, tbl.db.txn.proc.GetMPool()); err != nil {
+					return err
+				}
+			}
+
 			bat.SetRowCount(len(createdBlks))
 			defer func() {
 				bat.Clean(tbl.db.txn.proc.GetMPool())
@@ -580,11 +592,11 @@ func (txn *Transaction) mergeCompactionLocked() error {
 	return nil
 }
 
-func (txn *Transaction) getInsertedBlocksForTable(
-	databaseId uint64,
-	tableId uint64) (blks []catalog.BlockInfo, err error) {
+func (txn *Transaction) getInsertedObjectListForTable(
+	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
 	txn.Lock()
 	defer txn.Unlock()
+	var stats objectio.ObjectStats
 	for _, entry := range txn.writes {
 		if entry.databaseId != databaseId ||
 			entry.tableId != tableId {
@@ -593,30 +605,15 @@ func (txn *Transaction) getInsertedBlocksForTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT ||
-			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-		for _, metaLoc := range metaLocs {
-			location, err := blockio.EncodeLocationFromString(metaLoc)
-			if err != nil {
-				return nil, err
-			}
-			sid := location.Name().SegmentId()
-			blkid := objectio.NewBlockid(
-				&sid,
-				location.Name().Num(),
-				location.ID())
-			pos, ok := txn.cnBlkId_Pos[*blkid]
-			if !ok {
-				panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-			}
-			blks = append(blks, pos.blkInfo)
-		}
+		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
+		statsList = append(statsList, stats)
 
 	}
-	return blks, nil
+	return statsList, nil
 
 }
 
@@ -678,7 +675,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
-	reqs, err := genWriteReqs(ctx, txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes, txn.op.Txn().DebugString())
 	if err != nil {
 		return nil, err
 	}

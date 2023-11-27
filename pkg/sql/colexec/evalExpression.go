@@ -171,7 +171,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			executor.SetParameter(0, subExecutor)
 
 			if vecData, ok := rightArg.Expr.(*plan.Expr_Bin); ok {
-				vec := vector.NewVec(types.T_any.ToType())
+				vec := proc.GetVector(types.T_any.ToType())
 				err := vec.UnmarshalBinary(vecData.Bin.Data)
 				if err != nil {
 					executor.parameterExecutor[0].Free()
@@ -212,6 +212,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			}
 
 			if err = executor.resultVector.PreExtendAndReset(1); err != nil {
+				executor.Free()
 				return nil, err
 			}
 
@@ -1011,6 +1012,14 @@ func EvaluateFilterByZoneMap(
 	} else {
 		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
+
+	// clean the vector.
+	for i := range vecs {
+		if vecs[i] != nil {
+			vecs[i].Free(proc.Mp())
+			vecs[i] = nil
+		}
+	}
 	return
 }
 
@@ -1042,17 +1051,19 @@ func GetExprZoneMap(
 
 		} else {
 			args := t.F.Args
-			// `in` is special.
-			if t.F.Func.ObjName == "in" {
+
+			// Some expressions need to be handled specifically
+			switch t.F.Func.ObjName {
+			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
-						vec := vector.NewVec(types.T_any.ToType())
+						vec := proc.GetVector(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Bin.Data)
-						vecs[args[1].AuxId] = vec
+						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
-						vecs[args[1].AuxId] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
 				}
@@ -1069,6 +1080,18 @@ func GetExprZoneMap(
 				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
+				return zms[expr.AuxId]
+
+			case "startswith":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				s := []byte(args[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval)
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.HasPrefix(s))
 				return zms[expr.AuxId]
 			}
 
@@ -1177,6 +1200,9 @@ func GetExprZoneMap(
 				ivecs := make([]*vector.Vector, len(args))
 				if isAllConst(args) { // constant fold
 					for i, arg := range args {
+						if vecs[arg.AuxId] != nil {
+							vecs[arg.AuxId].Free(proc.Mp())
+						}
 						if vecs[arg.AuxId], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
@@ -1188,6 +1214,9 @@ func GetExprZoneMap(
 						return zms[expr.AuxId]
 					}
 					for i, arg := range args {
+						if vecs[arg.AuxId] != nil {
+							vecs[arg.AuxId].Free(proc.Mp())
+						}
 						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
 							zms[expr.AuxId].Reset()
 							return zms[expr.AuxId]
@@ -1207,9 +1236,8 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-				defer result.GetResultVector().Free(proc.Mp())
 				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-
+				result.GetResultVector().Free(proc.Mp())
 			}
 		}
 

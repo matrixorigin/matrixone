@@ -1,9 +1,9 @@
 select * from metadata_scan('table_func_metadata_scan.no_exist_table', '*') g;
 SQL parser error: table "no_exist_table" does not exist
 drop table if exists t;
-create table t(a int, b varchar);
-insert into t values(1, null);
-insert into t values(2, "abc");
+create table t(a int, b varchar, c float, d decimal(10, 8), e float(5, 2));
+insert into t values(1, null, 1.1, 1, 1.11);
+insert into t values(2, "abc", 2.0, 2, 2.22);
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
@@ -24,12 +24,12 @@ mo_ctl(dn, flush, table_func_metadata_scan.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 count(*)
-2
+5
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 count(*)
 1
-select count(*) from metadata_scan('table_func_metadata_scan.t', 'c') g;
-invalid input: bad input column name c
+select count(*) from metadata_scan('table_func_metadata_scan.t', 'f') g;
+invalid input: bad input column name f
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
 col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32806
@@ -37,12 +37,33 @@ select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_
 col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32806
 b    8192    4096    197690
+c    8192    0    32806
+d    8192    0    65574
+e    8192    0    32806
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
-230496
-select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as int)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as int))
-1    2    0
+361682
+select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as bigint)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as bigint))
+1    2    12288
+select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'c') g;
+sum(bit_cast(sum as double))
+12697.60009765625
+select sum(c) from t;
+sum(c)
+12697.60009765625
+select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'd') g;
+sum(bit_cast(sum as decimal(10, 8)))
+12288
+select sum(d) from t;
+sum(d)
+12288
+select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'e') g;
+sum(bit_cast(sum as double))
+13639.68017578125
+select sum(e) from t;
+sum(e)
+13639.68017578125
 select approx_count(*) from t;
 approx_count(*)
 8192
@@ -54,4 +75,26 @@ mo_ctl(dn, flush, table_func_metadata_scan.t)
 select approx_count(*) from t;
 approx_count(*)
 32768
+drop table if exists t;
+create table t(a int, b bigint);
+insert into t values(2147483647, 9223372036854775807);
+insert into t values(1, 1);
+select count(*) from t;
+count(*)
+2
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+mo_ctl(dn, flush, table_func_metadata_scan.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+bit_cast(sum as bigint)
+2147483648
+select sum(a) from t;
+sum(a)
+2147483648
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'b') g;
+bit_cast(sum as bigint)
+0
+select sum(b) from t;
+sum(b)
+-9223372036854775808
 drop table if exists t;

@@ -34,7 +34,7 @@ import (
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 20
+const maxRowThenUnusePkFilterExpr = 1024
 
 type dmlSelectInfo struct {
 	typ string
@@ -45,9 +45,10 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onDuplicateIdx     []int32
-	onDuplicateExpr    map[string]*Expr
-	onDuplicateNeedAgg bool //if table have pk & unique key, that will be true.
+	onDuplicateIdx      []int32
+	onDuplicateExpr     map[string]*Expr
+	onDuplicateNeedAgg  bool //if table have pk & unique key, that will be true.
+	onDuplicateIsIgnore bool
 }
 
 type dmlTableInfo struct {
@@ -560,7 +561,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
-		rightTableDef := DeepCopyTableDef(tableDef)
+		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+		if isIgnore {
+			stmt.OnDuplicateUpdate = nil
+		}
+
+		rightTableDef := DeepCopyTableDef(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -660,14 +666,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							},
 						},
 					}
-					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
 						return false, nil, false, err
 					}
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
+						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return false, nil, false, err
 						}
@@ -678,7 +684,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				if joinIdx == 0 {
 					joinConds = condExpr
 				} else {
-					joinConds, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
+					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
 					if err != nil {
 						return false, nil, false, err
 					}
@@ -703,6 +709,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
 			info.onDuplicateNeedAgg = len(uniqueCols) > 1
+			info.onDuplicateIsIgnore = isIgnore
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{

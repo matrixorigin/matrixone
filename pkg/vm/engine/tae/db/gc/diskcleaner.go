@@ -289,6 +289,8 @@ func (cleaner *DiskCleaner) collectCkpData(
 	factory := logtail.IncrementalCheckpointDataFactory(
 		ckp.GetStart(),
 		ckp.GetEnd(),
+		cleaner.fs.Service,
+		false,
 	)
 	data, err = factory(cleaner.catalog)
 	return

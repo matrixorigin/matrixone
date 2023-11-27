@@ -16,11 +16,13 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,9 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -45,8 +47,10 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD = 512
-	PREFETCH_ROUNDS    = 32
+	PREFETCH_THRESHOLD  = 256
+	PREFETCH_ROUNDS     = 24
+	SMALLSCAN_THRESHOLD = 100
+	LARGESCAN_THRESHOLD = 1500
 )
 
 const (
@@ -55,6 +59,12 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+)
+
+const (
+	SMALL = iota
+	NORMAL
+	LARGE
 )
 
 const (
@@ -95,6 +105,7 @@ type Engine struct {
 	ls         lockservice.LockService
 	qs         queryservice.QueryService
 	hakeeper   logservice.CNHAKeeperClient
+	us         udf.Service
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -119,7 +130,7 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta     *txn.TxnMeta
+	//meta     *txn.TxnMeta
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
@@ -216,6 +227,12 @@ func (b *deletedBlocks) isDeleted(blockID *types.Blockid) bool {
 	defer b.RUnlock()
 	_, ok := b.offsets[*blockID]
 	return ok
+}
+
+func (b *deletedBlocks) isEmpty() bool {
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets) == 0
 }
 
 func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
@@ -363,7 +380,8 @@ func (txn *Transaction) resetSnapshot() error {
 }
 
 func (txn *Transaction) IncrSQLCount() {
-	txn.sqlCount.Add(1)
+	n := txn.sqlCount.Add(1)
+	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
 func (txn *Transaction) GetSQLCount() uint64 {
@@ -381,7 +399,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
-	if !commit && txn.meta.IsRCIsolation() &&
+	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 1 || needResetSnapshot) {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
@@ -459,13 +477,14 @@ type txnTable struct {
 	typs       []types.Type
 	_partState *logtailreplay.PartitionState
 
-	// blockInfos stores all the block infos for this table of this transaction
+	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
-	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
-	blockInfos []catalog.BlockInfo
+	// it is initialized by updateObjectInfos and once it is initialized, it will not be updated
+	//objInfos []logtailreplay.ObjectEntry
 
-	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
-	blockInfosUpdated bool
+	// specify whether the objInfos is updated. once it is updated, it will not be updated again
+	//TODO::remove it in next PR.
+	objInfosUpdated bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
 	logtailUpdated bool
 
@@ -498,7 +517,8 @@ type txnTable struct {
 	oldTableId uint64
 
 	// process for statement
-	proc *process.Process
+	//proc *process.Process
+	proc atomic.Pointer[process.Process]
 }
 
 type column struct {
@@ -568,6 +588,7 @@ type blockReader struct {
 	steps       []int
 	currentStep int
 
+	scanType int
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes

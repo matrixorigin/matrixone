@@ -209,6 +209,7 @@ alter table product_order change product_category product_kind int;
 desc product_order;
 select * from product_order;
 
+-- @pattern
 INSERT INTO product_order VALUES (4, 30, 4, 3, '2016-12-31 15:43:26');
 --ERROR 1062 (23000): Duplicate entry '4' for key 'product_order.PRIMARY'
 INSERT INTO product_order VALUES (5, 30, 5, 3, '2016-12-31 15:43:26');

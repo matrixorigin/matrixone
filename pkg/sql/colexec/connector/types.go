@@ -15,20 +15,35 @@
 package connector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var _ vm.Operator = new(Argument)
+
 // Argument pipe connector
 type Argument struct {
-	Reg *process.WaitRegister
+	Reg      *process.WaitRegister
+	info     *vm.OperatorInfo
+	Children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.Children = append(arg.Children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
 		select {
 		case arg.Reg.Ch <- nil:
 		case <-arg.Reg.Ctx.Done():
 		}
+	} else {
+		arg.Reg.CleanChannel(proc.Mp())
 	}
 	close(arg.Reg.Ch)
 }

@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	Build = iota
@@ -33,11 +36,14 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 
-	state   int
-	bat     *batch.Batch
-	joinBat *batch.Batch
-	expr    colexec.ExpressionExecutor
-	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
+	state    int
+	probeIdx int
+	bat      *batch.Batch
+	rbat     *batch.Batch
+	inBat    *batch.Batch
+	joinBat  *batch.Batch
+	expr     colexec.ExpressionExecutor
+	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 }
 
 type Argument struct {
@@ -45,15 +51,26 @@ type Argument struct {
 	Cond   *plan.Expr
 	Result []colexec.ResultPos
 	Typs   []types.Type
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := ap.ctr
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ap.ctr = nil
+		arg.ctr = nil
 	}
 }
 
@@ -62,9 +79,17 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
 	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(mp)
+		ctr.rbat = nil
+	}
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
+	}
+	if ctr.inBat != nil {
+		ctr.inBat.Clean(mp)
+		ctr.inBat = nil
 	}
 }
 

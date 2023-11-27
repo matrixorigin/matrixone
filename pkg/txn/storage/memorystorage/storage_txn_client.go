@@ -61,6 +61,10 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) GetState() client.TxnState {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
@@ -195,6 +199,14 @@ func (*StorageTxnOperator) Snapshot() ([]byte, error) {
 
 func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
+}
+
+func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Status() txn.TxnStatus {
+	panic("unimplemented")
 }
 
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {

@@ -16,11 +16,13 @@ package disttae
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -67,7 +69,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	// record the column selectivity
-	blockio.RecordColumnSelectivity(len(cols), len(mixin.tableDef.Cols))
+	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
+	v2.TaskSelColumnTotal.Add(float64(ctotal))
+	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	blockio.RecordColumnSelectivity(chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -299,6 +304,11 @@ func (r *blockReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -328,10 +338,11 @@ func (r *blockReader) Read(
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -412,7 +423,7 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
-			txnTable.getTableDef(),
+			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
 			filterExpr,
@@ -495,11 +506,13 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 		}
 		ts := types.TimestampToTS(r.ts)
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
+		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
 
@@ -532,6 +545,11 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	//prefetch deletes for r.blks
 	if err := r.prefetchDeletes(); err != nil {
 		return nil, err
@@ -564,6 +582,11 @@ func (r *mergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if len(r.rds) == 0 {
 		return nil, nil
 	}

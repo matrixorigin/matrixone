@@ -491,3 +491,18 @@ select max(distinct a),max(distinct grp) from t1;
 max(distinct a)	    max(distinct grp)
 6	3
 drop table t1;
+
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
+SELECT MAX(a) FROM t1;
+max(a)
+100000
+DELETE FROM t1 WHERE a>50000;
+SELECT MAX(a) FROM t1;
+max(a)
+50000
+DELETE FROM t1 WHERE a%2=0;
+SELECT MAX(a) FROM t1;
+max(a)
+49999
+DROP TABLE t1;

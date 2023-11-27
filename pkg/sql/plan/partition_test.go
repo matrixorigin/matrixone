@@ -916,7 +916,7 @@ func Test_checkDuplicatePartitionName(t *testing.T) {
 			},
 		}
 
-		err := checkDuplicatePartitionName(context.TODO(), nil, partDef1)
+		err := checkPartitionNameUnique(context.TODO(), partDef1)
 		require.Nil(t, err)
 	}
 	{
@@ -927,18 +927,18 @@ func Test_checkDuplicatePartitionName(t *testing.T) {
 			},
 		}
 
-		err := checkDuplicatePartitionName(context.TODO(), nil, partDef1)
+		err := checkPartitionNameUnique(context.TODO(), partDef1)
 		require.NotNil(t, err)
 	}
 }
 
 func Test_checkPartitionCount(t *testing.T) {
 	{
-		err := checkPartitionCount(context.TODO(), nil, PartitionCountLimit-10)
+		err := checkPartitionCount(context.TODO(), PartitionCountLimit-10)
 		require.Nil(t, err)
 	}
 	{
-		err := checkPartitionCount(context.TODO(), nil, PartitionCountLimit+10)
+		err := checkPartitionCount(context.TODO(), PartitionCountLimit+10)
 		require.NotNil(t, err)
 	}
 }
@@ -950,12 +950,12 @@ func Test_checkDuplicatePartitionColumns(t *testing.T) {
 				PartitionColumns: []string{},
 			},
 		}
-		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		err := checkPartitionColumnsUnique(context.TODO(), partDef)
 		require.Nil(t, err)
 	}
 	{
 		partDef := &PartitionByDef{}
-		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		err := checkPartitionColumnsUnique(context.TODO(), partDef)
 		require.Nil(t, err)
 	}
 	{
@@ -964,7 +964,7 @@ func Test_checkDuplicatePartitionColumns(t *testing.T) {
 				PartitionColumns: []string{"a"},
 			},
 		}
-		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		err := checkPartitionColumnsUnique(context.TODO(), partDef)
 		require.Nil(t, err)
 	}
 	{
@@ -973,7 +973,7 @@ func Test_checkDuplicatePartitionColumns(t *testing.T) {
 				PartitionColumns: []string{"a", "a"},
 			},
 		}
-		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		err := checkPartitionColumnsUnique(context.TODO(), partDef)
 		require.NotNil(t, err)
 	}
 	{
@@ -982,7 +982,7 @@ func Test_checkDuplicatePartitionColumns(t *testing.T) {
 				PartitionColumns: []string{"a", "b"},
 			},
 		}
-		err := checkDuplicatePartitionColumns(context.TODO(), nil, partDef)
+		err := checkPartitionColumnsUnique(context.TODO(), partDef)
 		require.Nil(t, err)
 	}
 }

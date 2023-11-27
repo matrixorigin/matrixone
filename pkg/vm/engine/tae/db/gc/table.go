@@ -237,17 +237,17 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 func (t *GCTable) collectData(files []string) []*containers.Batch {
 	bats := t.makeBatchWithGCTable()
 	for i, attr := range BlockSchemaAttr {
-		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
-		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i]))
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], common.CheckpointAllocator))
+		bats[DeleteBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], common.CheckpointAllocator))
 	}
 	for i, attr := range DropTableSchemaAttr {
-		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i]))
+		bats[DropTable].AddVector(attr, containers.MakeVector(DropTableSchemaTypes[i], common.CheckpointAllocator))
 	}
 	for i, attr := range DropDBSchemaAtt {
-		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i]))
+		bats[DropDB].AddVector(attr, containers.MakeVector(DropDBSchemaTypes[i], common.CheckpointAllocator))
 	}
 	for i, attr := range DeleteFileSchemaAtt {
-		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i]))
+		bats[DeleteFile].AddVector(attr, containers.MakeVector(DeleteFileSchemaTypes[i], common.CheckpointAllocator))
 	}
 	for did, entry := range t.dbs {
 		if entry.drop {
@@ -301,9 +301,9 @@ func (t *GCTable) replayData(ctx context.Context,
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(types[i])
+			vec = containers.MakeVector(types[i], common.CheckpointAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec)
+			vec = containers.ToTNVector(pkgVec, common.CheckpointAllocator)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
@@ -356,7 +356,7 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	reader, err := blockio.NewFileReader(fs.Service, name)
+	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
 	}

@@ -162,6 +162,12 @@ func (s *Schema) Clone() *Schema {
 // recommended to close schema first and then apply alter table.
 func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	switch req.Kind {
+	case apipb.AlterKind_UpdatePolicy:
+		p := req.GetUpdatePolicy()
+		s.Extra.MaxRowsMergedObj = p.GetMaxObjOnerun()
+		s.Extra.MinRowsQuailifed = p.GetMinRowsQuailifed()
+		s.Extra.MaxObjOnerun = p.GetMaxObjOnerun()
+		s.Extra.Hints = p.GetHints()
 	case apipb.AlterKind_UpdateConstraint:
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
@@ -572,6 +578,9 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		def.Hidden = i82bool(isHidden)
 		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
 		def.ClusterBy = i82bool(isClusterBy)
+		if def.ClusterBy {
+			def.SortKey = true
+		}
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))

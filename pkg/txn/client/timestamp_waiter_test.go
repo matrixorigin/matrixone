@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -83,12 +84,28 @@ func TestGetTimestampWithNotified(t *testing.T) {
 
 func TestNotifyWaiters(t *testing.T) {
 	tw := &timestampWaiter{}
+	tw.mu.cancelC = make(chan struct{}, 1)
 	var values []*waiter
-	values = append(values, tw.addToWait(newTestTimestamp(1)))
-	values = append(values, tw.addToWait(newTestTimestamp(6)))
-	values = append(values, tw.addToWait(newTestTimestamp(3)))
-	values = append(values, tw.addToWait(newTestTimestamp(2)))
-	values = append(values, tw.addToWait(newTestTimestamp(5)))
+
+	w, err := tw.addToWait(newTestTimestamp(1))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(6))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(3))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(2))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(5))
+	assert.NoError(t, err)
+	values = append(values, w)
 
 	var wg sync.WaitGroup
 	for _, w := range values {
@@ -106,6 +123,57 @@ func TestNotifyWaiters(t *testing.T) {
 	tw.notifyWaiters(newTestTimestamp(7))
 	wg.Wait()
 	assert.Equal(t, 0, len(tw.mu.waiters))
+}
+
+func TestRemoveWaiters(t *testing.T) {
+	tw := &timestampWaiter{}
+	tw.mu.cancelC = make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		w, err := tw.addToWait(newTestTimestamp(int64(i)))
+		assert.NoError(t, err)
+		wg.Add(1)
+		go func(w *waiter) {
+			defer wg.Done()
+			// return waiter canceled error
+			assert.Error(t, w.wait(context.Background()))
+		}(w)
+	}
+	tw.Pause()
+	wg.Wait()
+	assert.Equal(t, 0, len(tw.mu.waiters))
+}
+
+func TestGetTimestampWithCanceled(t *testing.T) {
+	runTimestampWaiterTests(
+		t,
+		func(tw *timestampWaiter) {
+			timeout := time.Second * 5
+			ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+			defer cancel()
+
+			c := make(chan struct{})
+			go func() {
+				// If it is not canceled, it will hang here util context timeout.
+				_, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
+				require.Equal(t, moerr.NewWaiterPausedNoCtx(), err)
+				c <- struct{}{}
+			}()
+			// we could only cancel the waiters that are already in the queue.
+			// The waiters after cancel, will wait for notify channel.
+			for {
+				tw.mu.Lock()
+				if len(tw.mu.waiters) > 0 {
+					tw.mu.Unlock()
+					break
+				}
+				tw.mu.Unlock()
+				time.Sleep(time.Millisecond * 10)
+			}
+			tw.Pause()
+			<-c
+		},
+	)
 }
 
 func BenchmarkGetTimestampWithWaitNotify(b *testing.B) {

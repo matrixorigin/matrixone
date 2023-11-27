@@ -40,7 +40,7 @@ type Vector struct {
 	typ types.Type
 
 	// data of fixed length element, in case of varlen, the Varlena
-	col  any
+	col  typedSlice
 	data []byte
 
 	// area for holding large strings.
@@ -58,6 +58,28 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+}
+
+type typedSlice struct {
+	Ptr unsafe.Pointer
+	Cap int
+}
+
+func (t *typedSlice) setFromVector(v *Vector) {
+	sz := int(v.typ.TypeSize())
+	if cap(v.data) >= sz {
+		t.Ptr = unsafe.Pointer(&v.data[0])
+		t.Cap = cap(v.data) / sz
+	}
+}
+
+func ToSlice[T any](vec *Vector, ret *[]T) {
+	if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
+		if !typeCompatible[T](vec.typ) {
+			panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
+		}
+	}
+	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
 func (v *Vector) GetSorted() bool {
@@ -141,6 +163,10 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
+func (v *Vector) SetTypeScale(scale int32) {
+	v.typ.Scale = scale
+}
+
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
@@ -177,14 +203,17 @@ func GetFixedAt[T any](v *Vector, idx int) T {
 	if v.IsConst() {
 		idx = 0
 	}
-	return v.col.([]T)[idx]
+	var slice []T
+	ToSlice(v, &slice)
+	return slice[idx]
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	var bs []types.Varlena
+	ToSlice(v, &bs)
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -216,7 +245,8 @@ func (v *Vector) GetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	var bs []types.Varlena
+	ToSlice(v, &bs)
 	return bs[i].GetString(v.area)
 }
 
@@ -225,7 +255,8 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	var bs []types.Varlena
+	ToSlice(v, &bs)
 	return types.GetArray[T](&bs[i], v.area)
 }
 
@@ -378,7 +409,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
-	v.col = nil
+	v.col = typedSlice{}
 	v.data = nil
 	v.area = nil
 	v.capacity = 0
@@ -1451,7 +1482,8 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			vs := v.col.([]types.Varlena)
+			var vs []types.Varlena
+			ToSlice(v, &vs)
 			var err error
 			for i := range ws {
 				if nulls.Contains(&w.nsp, uint64(i)) {
@@ -2056,7 +2088,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &w.col.([]types.Varlena)[sel], &w.area, mp)
+		var vs, ws []types.Varlena
+		ToSlice(v, &vs)
+		ToSlice(w, &ws)
+		err := BuildVarlenaFromValena(v, &vs[oldLen], &ws[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2111,11 +2146,14 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[sel], &w.area, mp)
+		var ws []types.Varlena
+		ToSlice(w, &ws)
+		err = BuildVarlenaFromValena(v, &va, &ws[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
-		col := v.col.([]types.Varlena)
+		var col []types.Varlena
+		ToSlice(v, &col)
 		for i := oldLen; i < v.length; i++ {
 			col[i] = va
 		}
@@ -2163,11 +2201,14 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
+			var ws []types.Varlena
+			ToSlice(w, &ws)
+			err = BuildVarlenaFromValena(v, &va, &ws[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
-			col := v.col.([]types.Varlena)
+			var col []types.Varlena
+			ToSlice(v, &col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2183,8 +2224,9 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var err error
-		vCol := v.col.([]types.Varlena)
-		wCol := w.col.([]types.Varlena)
+		var vCol, wCol []types.Varlena
+		ToSlice(v, &vCol)
+		ToSlice(w, &wCol)
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
@@ -2276,11 +2318,14 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
+			var ws []types.Varlena
+			ToSlice(w, &ws)
+			err = BuildVarlenaFromValena(v, &va, &ws[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
-			col := v.col.([]types.Varlena)
+			var col []types.Varlena
+			ToSlice(v, &col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2296,8 +2341,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 	if v.GetType().IsVarlen() {
 		var err error
-		vCol := v.col.([]types.Varlena)
-		wCol := w.col.([]types.Varlena)
+		var vCol, wCol []types.Varlena
+		ToSlice(v, &vCol)
+		ToSlice(w, &wCol)
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2467,7 +2513,7 @@ func (v *Vector) String() string {
 			}
 		}
 
-		str := types.ArraysToString[float32](col)
+		str := types.ArraysToString[float32](col, types.DefaultArraysToStringSep)
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}
@@ -2482,7 +2528,7 @@ func (v *Vector) String() string {
 				return types.ArrayToString[float64](col[0])
 			}
 		}
-		str := types.ArraysToString[float64](col)
+		str := types.ArraysToString[float64](col, types.DefaultArraysToStringSep)
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}
@@ -2508,7 +2554,8 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]T)
+	var col []T
+	ToSlice(vec, &col)
 	col[0] = val
 	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
@@ -2523,7 +2570,8 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]types.Varlena)
+	var col []types.Varlena
+	ToSlice(vec, &col)
 	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -2543,7 +2591,8 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]types.Varlena)
+	var col []types.Varlena
+	ToSlice(vec, &col)
 	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -2730,7 +2779,8 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if isNull {
 		nulls.Add(&vec.nsp, uint64(length))
 	} else {
-		col := vec.col.([]T)
+		var col []T
+		ToSlice(vec, &col)
 		col[length] = val
 	}
 	return nil
@@ -2776,7 +2826,8 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
-		col := vec.col.([]T)
+		var col []T
+		ToSlice(vec, &col)
 		for i := 0; i < cnt; i++ {
 			col[length+i] = val
 		}
@@ -2795,7 +2846,8 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
-		col := vec.col.([]types.Varlena)
+		var col []types.Varlena
+		ToSlice(vec, &col)
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
@@ -2933,7 +2985,9 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	}
 	v.data = data
 	v.setupColFromData()
-	ws := v.col.([]T)[:ns]
+	var ws []T
+	ToSlice(v, &ws)
+	ws = ws[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.nsp, sels, false)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
@@ -3000,10 +3054,32 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
-	w := NewVec(v.typ)
 	if start == end {
-		return w, nil
+		return NewVec(v.typ), nil
 	}
+	if end > v.Length() {
+		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
+	}
+	if v.IsConstNull() {
+		return NewConstNull(v.typ, end-start, mp), nil
+	} else if v.IsConst() {
+		if v.typ.IsVarlen() {
+			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp), nil
+		} else {
+			vec := NewVec(v.typ)
+			vec.class = v.class
+			vec.col = v.col
+			vec.data = make([]byte, len(v.data))
+			copy(vec.data, v.data)
+			vec.capacity = v.capacity
+			vec.length = end - start
+			vec.cantFreeArea = true
+			vec.cantFreeData = true
+			vec.sorted = v.sorted
+			return vec, nil
+		}
+	}
+	w := NewVec(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
 		return nil, err
 	}
@@ -3034,8 +3110,9 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
-			vCol := v.col.([]types.Varlena)
-			wCol := w.col.([]types.Varlena)
+			var vCol, wCol []types.Varlena
+			ToSlice(v, &vCol)
+			ToSlice(w, &wCol)
 			for i := start; i < end; i++ {
 				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
@@ -3052,6 +3129,56 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	}
 
 	return nil
+}
+
+// GetSumValue returns the sum value of the vector.
+// if the length is 0 or all null or the vector is not numeric, return false
+func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
+	if v.Length() == 0 || v.AllNull() || !v.typ.IsNumeric() {
+		return
+	}
+	if v.typ.IsDecimal() && v.typ.Oid != types.T_decimal64 {
+		return
+	}
+	ok = true
+	switch v.typ.Oid {
+	case types.T_int8:
+		sumVal := IntegerGetSum[int8, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
+	case types.T_int16:
+		sumVal := IntegerGetSum[int16, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
+	case types.T_int32:
+		sumVal := IntegerGetSum[int32, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
+	case types.T_int64:
+		sumVal := IntegerGetSum[int64, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
+	case types.T_uint8:
+		sumVal := IntegerGetSum[uint8, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
+	case types.T_uint16:
+		sumVal := IntegerGetSum[uint16, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
+	case types.T_uint32:
+		sumVal := IntegerGetSum[uint32, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
+	case types.T_uint64:
+		sumVal := IntegerGetSum[uint64, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
+	case types.T_float32:
+		sumVal := FloatGetSum[float32](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float64:
+		sumVal := FloatGetSum[float64](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_decimal64:
+		sumVal := Decimal64GetSum(v)
+		sumv = types.EncodeDecimal64(&sumVal)
+	default:
+		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
+	}
+	return
 }
 
 // GetMinMaxValue returns the min and max value of the vector.

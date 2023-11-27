@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -48,14 +47,14 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 	// testing query with wrong serviceType
 	a1.service = serviceType("log")
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
-	require.Equal(t, ret, pb.CtlResult{})
+	require.Equal(t, ret, Result{})
 	require.Equal(t, err, moerr.NewWrongServiceNoCtx("CN or DN", string(a1.service)))
 
 	// testing query with wrong cmd
 	a2.service = cn
-	a2.parameter = "xxx:open:s3"
+	a2.parameter = "xxx:open:s3:0"
 	ret, err = handleTraceSpan(a2.proc, a2.service, a2.parameter, a2.sender)
-	require.Equal(t, ret, pb.CtlResult{})
+	require.Equal(t, ret, Result{})
 	require.Equal(t, err, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable"))
 }
 
@@ -84,29 +83,33 @@ func TestCanHandleSelfCmd(t *testing.T) {
 		sender    requestSender
 	}
 
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(false)
+	trace.InitMOCtledSpan()
 
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
-	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{}, nil)
+	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{})
 	require.Nil(t, err)
 
 	a1.proc = new(process.Process)
 	a1.proc.QueryService = service
 	a1.service = cn
-	a1.parameter = fmt.Sprintf("%s:enable:s3,local", uuid)
+	a1.parameter = fmt.Sprintf("%s:enable:s3,local:10", uuid)
 
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
-	require.Equal(t, ret, pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
+	require.Equal(t, ret, Result{
+		Method: TraceSpanMethod,
 		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load())
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load())
+	k1 := trace.MOCtledSpanEnableConfig.NameToKind["s3"]
+	k2 := trace.MOCtledSpanEnableConfig.NameToKind["local"]
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k1].Enable)
+	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k1].Threshold.Milliseconds())
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k2].Enable)
+	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k2].Threshold.Milliseconds())
+
 }
 
 func TestCanTransferQuery(t *testing.T) {
@@ -127,13 +130,14 @@ func TestCanTransferQuery(t *testing.T) {
 
 	a1.proc = new(process.Process)
 	a1.service = cn
-	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local", uuids[0], uuids[1])
+	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local:0", uuids[0], uuids[1])
 
 	initRuntime(uuids, addrs)
+	trace.InitMOCtledSpan()
 
-	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
+	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{})
 	require.Nil(t, err)
-	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{}, nil)
+	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{})
 	require.Nil(t, err)
 
 	qs1.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)
@@ -182,6 +186,7 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 
 func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = SelfProcess(req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans)
+	resp.TraceSpanResponse.Resp = SelfProcess(
+		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
 	return nil
 }

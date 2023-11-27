@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -39,7 +38,6 @@ var (
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
 	defaultLockListenAddress     = "0.0.0.0:22002"
 	defaultLockServiceAddress    = "127.0.0.1:22002"
-	defaultCtlListenAddress      = "127.0.0.1:29958"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
@@ -49,7 +47,7 @@ var (
 	defaultFlushInterval         = time.Second * 60
 	defaultScanInterval          = time.Second * 5
 	defaultIncrementalInterval   = time.Minute
-	defaultGlobalMinCount        = int64(60)
+	defaultGlobalMinCount        = int64(40)
 	defaultMinCount              = int64(100)
 	defaultReservedWALEntryCount = uint64(5000)
 
@@ -68,9 +66,9 @@ var (
 // Config tn store configuration
 type Config struct {
 	// DataDir data dir
-	DataDir string `toml:"-"`
+	DataDir string `toml:"-" user_setting:"basic"`
 	// UUID tn store uuid
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -83,10 +81,10 @@ type Config struct {
 	// TODO(volgariver6): The value of this field is also used to determine the version
 	// of MO. If it is not set, we use the old listen-address/service-address fields, and
 	// if it is set, we use the new policy to distribute the ports to all services.
-	PortBase int `toml:"port-base"`
+	PortBase int `toml:"port-base" user_setting:"basic"`
 	// ServiceHost is the host name/IP for the service address of RPC request. There is
 	// no port value in it.
-	ServiceHost string `toml:"service-host"`
+	ServiceHost string `toml:"service-host" user_setting:"basic"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -122,7 +120,7 @@ type Config struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
-		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
+		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum" user_setting:"advanced"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
 	}
@@ -161,11 +159,15 @@ type Config struct {
 	// LockService lockservice config
 	LockService lockservice.Config `toml:"lockservice"`
 
-	Ctl ctlservice.Config `toml:"ctl"`
+	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
+	// For the tn does not boost an independent queryservice in standalone mode.
+	// cn,tn shares the same queryservice in standalone mode.
+	// Under distributed deploy mode, cn,tn are independent os process.
+	// they have their own queryservice.
+	InStandalone bool
 }
 
 func (c *Config) Validate() error {
-	foundMachineHost := ""
 	if c.UUID == "" {
 		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
 	}
@@ -178,8 +180,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = defaultServiceAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
 	}
 	if c.LockService.ListenAddress == "" {
 		c.LockService.ListenAddress = defaultLockListenAddress
@@ -267,7 +267,6 @@ func (c *Config) Validate() error {
 	}
 
 	c.RPC.Adjust()
-	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -280,7 +279,6 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) SetDefaultValue() {
-	foundMachineHost := ""
 	if c.DataDir == "" {
 		c.DataDir = defaultDataDir
 	}
@@ -290,8 +288,6 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = defaultServiceAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
 	}
 	if c.LockService.ListenAddress == "" {
 		c.LockService.ListenAddress = defaultLockListenAddress
@@ -367,7 +363,6 @@ func (c *Config) SetDefaultValue() {
 	}
 
 	c.RPC.Adjust()
-	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = "tmp"
 	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID

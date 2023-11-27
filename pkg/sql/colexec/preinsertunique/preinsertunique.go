@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,48 +33,45 @@ const (
 	rowIdColPos
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert unique key")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatus, error) {
-	argument := arg.(*Argument)
-
-	analy := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	analy := proc.GetAnalyze(arg.info.Idx)
 	analy.Start()
 	defer analy.Stop()
 
-	inputBat := proc.InputBatch()
-	if inputBat == nil {
-		return process.ExecStop, nil
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+		return result, nil
 	}
-
-	if inputBat.IsEmpty() {
-		proc.PutBatch(inputBat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
-	}
-	defer proc.PutBatch(inputBat)
-
+	inputBat := result.Batch
 	var vec *vector.Vector
 	var bitMap *nulls.Nulls
 
-	uniqueColumnPos := argument.PreInsertCtx.Columns
-	pkPos := int(argument.PreInsertCtx.PkColumn)
+	uniqueColumnPos := arg.PreInsertCtx.Columns
+	pkPos := int(arg.PreInsertCtx.PkColumn)
 	// tableDef := argument.PreInsertCtx.TableDef
 
-	var insertUniqueBat *batch.Batch
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
 	if isUpdate {
-		insertUniqueBat = batch.NewWithSize(3)
-		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
+		arg.buf = batch.NewWithSize(3)
+		arg.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 	} else {
-		insertUniqueBat = batch.NewWithSize(2)
-		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		arg.buf = batch.NewWithSize(2)
+		arg.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	colCount := len(uniqueColumnPos)
@@ -88,21 +86,20 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 		}
 		vec, bitMap = util.SerialWithCompacted(vs, proc)
 	}
-	insertUniqueBat.SetVector(indexColPos, vec)
-	insertUniqueBat.SetRowCount(vec.Length())
+	arg.buf.SetVector(indexColPos, vec)
+	arg.buf.SetRowCount(vec.Length())
 
 	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
-	insertUniqueBat.SetVector(pkColPos, vec)
+	arg.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		insertUniqueBat.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(rowIdInBat)).GetType()))
-		err := insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
+		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(rowIdInBat)).GetType()))
+		err := arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
-			insertUniqueBat.Clean(proc.GetMPool())
-			return process.ExecNext, err
+			return result, err
 		}
 	}
-	proc.SetInputBatch(insertUniqueBat)
-	return process.ExecNext, nil
+	result.Batch = arg.buf
+	return result, nil
 }

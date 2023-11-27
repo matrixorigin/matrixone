@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -56,6 +57,7 @@ type DeleteNode struct {
 	nt       NodeType
 	id       *common.ID
 	dt       handle.DeleteType
+	version  uint16
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -74,16 +76,18 @@ func NewEmptyDeleteNode() *DeleteNode {
 		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		id:          &common.ID{},
+		version:     IOET_WALTxnCommand_DeleteNode_CurrVer,
 	}
 	return n
 }
-func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
+func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType, version uint16) *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
 		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		dt:          dt,
+		version:     version,
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()
@@ -129,7 +133,11 @@ func (node *DeleteNode) GetID() *common.ID {
 func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
 	node.mask = mask
 }
-
+func (node *DeleteNode) Close() {
+	for _, vec := range node.rowid2PK {
+		vec.Close()
+	}
+}
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
 	node.chain.Store(chain)
@@ -167,7 +175,9 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
-func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vector) {
+func (node *DeleteNode) RangeDeleteLocked(
+	start, end uint32, pk containers.Vector, mp *mpool.MPool,
+) {
 	// logutil.Debugf("RangeDelete BLK-%d Start=%d End=%d",
 	// 	node.chain.mvcc.meta.ID,
 	// 	start,
@@ -176,8 +186,10 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 	if pk != nil && pk.Length() > 0 {
 		begin := start
 		for ; begin < end+1; begin++ {
-			node.rowid2PK[begin] = pk.Window(int(begin-start), 1)
+			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1, mp)
 		}
+	} else {
+		panic("pk vector is empty")
 	}
 	node.chain.Load().insertInMaskByRange(start, end)
 	for i := start; i < end+1; i++ {
@@ -234,7 +246,6 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 	case NT_Normal, NT_Merge:
 		node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	}
-	node.rowid2PK = nil
 	return node.OnApply()
 }
 
@@ -243,7 +254,6 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback()
 	node.chain.Load().mvcc.DecChangeIntentionCnt()
-	node.rowid2PK = nil
 	return
 }
 
@@ -276,7 +286,8 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0])
+	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
+	defer rowids.Close()
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		node.mask.Add(offset)
@@ -363,19 +374,40 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
+
 	switch node.nt {
 	case NT_Merge, NT_Normal:
+		var sn2 int
+		length := uint32(len(node.rowid2PK))
+		if sn2, err = w.Write(types.EncodeUint32(&length)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		for row, pk := range node.rowid2PK {
+			if sn2, err = w.Write(types.EncodeUint32(&row)); err != nil {
+				return
+			}
+			n += int64(sn2)
+			if sn2, err = w.Write(types.EncodeType(pk.GetType())); err != nil {
+				return
+			}
+			n += int64(sn2)
+			if sn, err = pk.WriteTo(w); err != nil {
+				return
+			}
+			n += int64(sn)
+		}
 	case NT_Persisted:
 		if sn, err = objectio.WriteBytes(node.deltaloc, w); err != nil {
 			return
 		}
 		n += int64(sn)
 	}
-	var sn2 int64
-	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
+	var sn3 int64
+	if sn3, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
 	}
-	n += sn2
+	n += sn3
 	return
 }
 
@@ -401,6 +433,33 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	switch node.nt {
 	case NT_Merge, NT_Normal:
+		if node.version >= IOET_WALTxnCommand_DeleteNode_V2 {
+			var sn3 int
+			length := uint32(0)
+			if sn3, err = r.Read(types.EncodeUint32(&length)); err != nil {
+				return
+			}
+			n += int64(sn3)
+			node.rowid2PK = make(map[uint32]containers.Vector)
+			for i := 0; i < int(length); i++ {
+				row := uint32(0)
+				if sn3, err = r.Read(types.EncodeUint32(&row)); err != nil {
+					return
+				}
+				n += int64(sn3)
+				typ := &types.Type{}
+				if sn3, err = r.Read(types.EncodeType(typ)); err != nil {
+					return
+				}
+				n += int64(sn3)
+				pk := containers.MakeVector(*typ, common.MutMemAllocator)
+				if sn2, err = pk.ReadFrom(r); err != nil {
+					return
+				}
+				node.rowid2PK[row] = pk
+				n += int64(sn2)
+			}
+		}
 	case NT_Persisted:
 		if buf, sn2, err = objectio.ReadBytes(r); err != nil {
 			return

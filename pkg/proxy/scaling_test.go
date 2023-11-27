@@ -70,8 +70,7 @@ func TestDoScalingIn(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn12())
 	}()
-	tp.mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	tp.mc.ForceRefresh(true)
 
 	ctx, cancel := context.WithTimeout(tp.ctx, 10*time.Second)
 	defer cancel()
@@ -92,6 +91,7 @@ func TestDoScalingIn(t *testing.T) {
 		State: metadata.WorkState_Draining,
 	})
 	require.NoError(t, err)
+	tp.mc.ForceRefresh(true)
 
 	tick := time.NewTicker(time.Millisecond * 200)
 	for {

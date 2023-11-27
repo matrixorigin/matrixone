@@ -19,34 +19,30 @@ import (
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handleCheckpoint() handleFunc {
-	return getTNHandlerFunc(
-		pb.CmdMethod_Checkpoint,
-		func(_ string) ([]uint64, error) {
-			return nil, nil
-		},
+	return GetTNHandlerFunc(
+		api.OpCode_OpCheckpoint,
+		func(string) ([]uint64, error) { return nil, nil },
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			flushDuration := time.Duration(0)
-			var err error
 			if parameter != "" {
+				var err error
 				flushDuration, err = time.ParseDuration(parameter)
 				if err != nil {
 					return nil, err
 				}
 			}
-			payload, err := types.Encode((&db.Checkpoint{
-				FlushDuration: flushDuration,
-			}))
-			return payload, err
+			return types.Encode(&db.Checkpoint{FlushDuration: flushDuration})
 		},
-		func(data []byte) (interface{}, error) {
-			resp := pb.TNStringResponse{}
+		func(data []byte) (any, error) {
+			resp := api.TNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
-		})
+		},
+	)
 }

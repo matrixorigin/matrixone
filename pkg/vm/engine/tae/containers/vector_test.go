@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,7 @@ func TestTnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
-	tnv := ToTNVector(v)
+	tnv := ToTNVector(v, m)
 	require.True(t, tnv.IsNull(2))
 }
 
@@ -44,9 +45,8 @@ func withAllocator(opt Options) Options {
 
 func TestVectorShallowForeach(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	opt := withAllocator(Options{})
 	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
-		vec := MakeVector(typ, opt)
+		vec := MakeVector(typ, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
 			if i%2 == 0 {
 				vec.Append(nil, true)
@@ -72,7 +72,7 @@ func TestVectorShallowForeach(t *testing.T) {
 func TestVector1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int32.ToType(), opt)
+	vec := NewVector(types.T_int32.ToType(), opt)
 	vec.Append(int32(12), false)
 	vec.Append(int32(32), false)
 	vec.AppendMany([]any{int32(1), int32(100)}, []bool{false, false})
@@ -98,7 +98,7 @@ func TestVector1(t *testing.T) {
 func TestVector2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
-	vec := MakeVector(types.T_int64.ToType(), opt)
+	vec := NewVector(types.T_int64.ToType(), opt)
 	t.Log(vec.String())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
@@ -154,7 +154,7 @@ func TestVector2(t *testing.T) {
 func TestVector3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec1 := MakeVector(types.T_int32.ToType(), opts)
+	vec1 := NewVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
 		vec1.Append(int32(i), false)
 	}
@@ -165,7 +165,7 @@ func TestVector3(t *testing.T) {
 
 	r := bytes.NewBuffer(w.Bytes())
 
-	vec2 := MakeVector(types.T_int32.ToType(), opts)
+	vec2 := NewVector(types.T_int32.ToType(), opts)
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 
@@ -316,7 +316,7 @@ func TestVector7(t *testing.T) {
 			vec.Append(nil, true)
 		}
 		vec2 := MockVector(typ, 10, false, nil)
-		vec3 := MakeVector(typ)
+		vec3 := MakeVector(typ, common.DefaultAllocator)
 		vec3.Extend(vec)
 		assert.Equal(t, vec.Length(), vec3.Length())
 		vec3.Extend(vec2)
@@ -333,7 +333,7 @@ func TestVector7(t *testing.T) {
 			}
 		}
 
-		vec4 := MakeVector(typ)
+		vec4 := MakeVector(typ, common.DefaultAllocator)
 		cnt := 5
 		if nullable {
 			cnt = 6
@@ -358,7 +358,7 @@ func TestVector7(t *testing.T) {
 
 func TestVector8(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vec := MakeVector(types.T_int32.ToType())
+	vec := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer vec.Close()
 	vec.Append(int32(0), false)
 	vec.Append(int32(1), false)
@@ -388,7 +388,7 @@ func TestVector8(t *testing.T) {
 func TestVector9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), opts)
+	vec := NewVector(types.T_varchar.ToType(), opts)
 	vec.Append([]byte("h1"), false)
 	vec.Append([]byte("h22"), false)
 	vec.Append([]byte("h333"), false)
@@ -407,7 +407,7 @@ func TestVector9(t *testing.T) {
 func TestCompact(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
-	vec := MakeVector(types.T_varchar.ToType(), opts)
+	vec := NewVector(types.T_varchar.ToType(), opts)
 
 	vec.Append(nil, true)
 	t.Log(vec.String())
@@ -756,7 +756,7 @@ func TestVectorPool3(t *testing.T) {
 }
 
 func TestConstNullVector(t *testing.T) {
-	vec := NewConstNullVector(types.T_int32.ToType(), 10)
+	vec := NewConstNullVector(types.T_int32.ToType(), 10, common.DefaultAllocator)
 	defer vec.Close()
 	assert.Equal(t, 10, vec.Length())
 	assert.True(t, vec.IsConstNull())
@@ -769,7 +769,7 @@ func TestConstNullVector(t *testing.T) {
 	_, err := vec.WriteTo(&w)
 	assert.NoError(t, err)
 
-	vec2 := MakeVector(types.T_int32.ToType())
+	vec2 := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer vec2.Close()
 	_, err = vec2.ReadFrom(&w)
 	assert.NoError(t, err)
@@ -814,7 +814,7 @@ func TestConstVector(t *testing.T) {
 	_, err := vec.WriteTo(&w)
 	assert.NoError(t, err)
 
-	vec3 := MakeVector(types.T_int32.ToType())
+	vec3 := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer vec3.Close()
 	_, err = vec3.ReadFrom(&w)
 	assert.NoError(t, err)
@@ -829,7 +829,7 @@ func TestConstVector(t *testing.T) {
 	_, err = vec2.WriteTo(&w)
 	assert.NoError(t, err)
 
-	vec4 := MakeVector(types.T_char.ToType())
+	vec4 := MakeVector(types.T_char.ToType(), common.DefaultAllocator)
 	defer vec4.Close()
 	_, err = vec4.ReadFrom(&w)
 	assert.NoError(t, err)

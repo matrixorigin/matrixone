@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	H8 = iota
@@ -69,22 +72,36 @@ type container struct {
 	hasAggResult bool
 
 	tmpVecs []*vector.Vector // for reuse
+
+	state vm.CtrState
 }
 
 type Argument struct {
-	ctr          *container
-	IsShuffle    bool // is shuffle group
-	PreAllocSize uint64
-	NeedEval     bool // need to projection the aggregate column
-	Ibucket      uint64
-	Nbucket      uint64
-	Exprs        []*plan.Expr // group Expressions
-	Types        []types.Type
-	Aggs         []agg.Aggregate         // aggregations
-	MultiAggs    []group_concat.Argument // multiAggs, for now it's group_concat
+	ctr            *container
+	IsShuffle      bool // is shuffle group
+	PreAllocSize   uint64
+	NeedEval       bool // need to projection the aggregate column
+	Ibucket        uint64
+	Nbucket        uint64
+	Exprs          []*plan.Expr // group Expressions
+	Types          []types.Type
+	Aggs           []agg.Aggregate         // aggregations
+	MultiAggs      []group_concat.Argument // multiAggs, for now it's group_concat
+	PartialResults []any
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

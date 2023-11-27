@@ -1,17 +1,24 @@
-name: Enhancement
-description: As a developer, I want to make an enhancement for MatrixOne.
-title: "[Enhancement]: "
-# labels: [kind/enhancement, needs-triage]
-labels: [kind/enhancement]
+name: Tech request
+description: As a developer, I would like to suggest a tech idea for MatrixOne.
+title: "[Tech Request]: "
+# labels: [kind/tech-request, needs-triage]
+labels: [kind/tech-request]
 # assignees:
 #   - m-schen
 body:
   - type: checkboxes
     attributes:
-      label: Is there an existing issue for enhancement?
-      description: Please check if an issue already exists for the enhancement issue.
+      label: Is there an existing issue for the same tech request?
+      description: Please check if an issue already exists for the tech request issue.
       options:
         - label: I have checked the existing issues.
+          required: true
+  - type: checkboxes
+    attributes:
+      label: Does this tech request not affect user experience?
+      description: If yes, please submit a feature request issue.
+      options:
+        - label: This tech request doesn't affect user experience.
           required: true
   - type: textarea
     attributes:

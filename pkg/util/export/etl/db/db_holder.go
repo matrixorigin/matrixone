@@ -18,19 +18,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"go.uber.org/zap"
 )
 
 var (
@@ -47,48 +44,12 @@ var (
 	dbMux sync.Mutex
 
 	DBConnErrCount atomic.Uint32
-
-	prepareSQLMap sync.Map
-
-	moLogger   *log.MOLogger
-	loggerInit sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
 const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
-
-const MaxInsertLen = 200
-const MiddleInsertLen = 10
-
-var maxRowBufPool sync.Pool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-var middleRowBufPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-var oneRowBufPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-type prepareSQLs struct {
-	maxRowNum int
-	maxRows   string
-
-	middleRowNum int
-	middleRows   string
-
-	oneRow  string
-	columns int
-}
 
 type DBUser struct {
 	UserName string
@@ -124,7 +85,6 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-	logger := getLogger()
 	initFunc := func() error {
 		dbMux.Lock()
 		defer dbMux.Unlock()
@@ -159,10 +119,8 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	if forceNewConn || db.Load() == nil {
 		err := initFunc()
 		if err != nil {
-			logger.Error("sqlWriter db init failed", zap.Error(err))
 			return nil, err
 		}
-		logger.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
@@ -176,10 +134,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	var dbConn *sql.DB
 
-	var logger = getLogger()
-
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logger.Error("sqlWriter WriteRowRecords failed above threshold")
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -189,260 +144,135 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		dbConn, err = InitOrRefreshDBConn(false, false)
 	}
 	if err != nil {
-		logger.Debug("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
 		DBConnErrCount.Add(1)
-		return 0, moerr.NewInternalError(ctx, err.Error())
+		return 0, err
 	}
 
-	logger.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
 	return len(records), nil
 }
 
-func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
-	columnNames := make([]string, len(tbl.Columns))
+const initedSize = 4 * mpool.MB
 
-	for i, column := range tbl.Columns {
-		columnNames[i] = fmt.Sprintf("`%s`", column.Name)
-	}
+var bufPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, initedSize))
+}}
 
-	columnStr := strings.Join(columnNames, ",")
-
-	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) VALUES ", tbl.Database, tbl.Table, columnStr)
-
-	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
-	for i := 0; i < columns; i++ {
-		if i == 0 {
-			oneRowBuf.WriteByte('?')
-		} else {
-			oneRowBuf.WriteString(",?")
-		}
-	}
-	oneRow := fmt.Sprintf("%s (%s)", prefix, oneRowBuf.String())
-
-	maxRowBuf := maxRowBufPool.Get().(*bytes.Buffer)
-	maxRowBuf.WriteString(prefix)
-	for i := 0; i < batchLen; i++ {
-		if i == 0 {
-			maxRowBuf.WriteByte('(')
-		} else {
-			maxRowBuf.WriteString(",(")
-		}
-		maxRowBuf.Write(oneRowBuf.Bytes())
-		maxRowBuf.WriteByte(')')
-	}
-
-	middleRowBuf := middleRowBufPool.Get().(*bytes.Buffer)
-	middleRowBuf.WriteString(prefix)
-	for i := 0; i < middleBatchLen; i++ {
-		if i == 0 {
-			middleRowBuf.WriteByte('(')
-		} else {
-			middleRowBuf.WriteString(",(")
-		}
-		middleRowBuf.Write(oneRowBuf.Bytes())
-		middleRowBuf.WriteByte(')')
-	}
-
-	prepareSQLS := &prepareSQLs{
-		maxRowNum: batchLen,
-		maxRows:   maxRowBuf.String(),
-
-		middleRowNum: middleBatchLen,
-		middleRows:   middleRowBuf.String(),
-
-		oneRow:  oneRow,
-		columns: columns,
-	}
-	oneRowBuf.Reset()
-	maxRowBuf.Reset()
-	middleRowBuf.Reset()
-	oneRowBufPool.Put(oneRowBuf)
-	maxRowBufPool.Put(maxRowBuf)
-	middleRowBufPool.Put(middleRowBuf)
-	return prepareSQLS
+func getBuffer() *bytes.Buffer {
+	return bufPool.Get().(*bytes.Buffer)
 }
 
-func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
-	if len(records) == 0 {
-		return nil
+func putBuffer(buf *bytes.Buffer) {
+	if buf != nil {
+		buf.Reset()
+		bufPool.Put(buf)
 	}
-	var logger = getLogger()
-	var sqls *prepareSQLs
-	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
-	if val, ok := prepareSQLMap.Load(key); ok {
-		sqls = val.(*prepareSQLs)
-		if sqls.columns != len(records[0]) {
-			sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
-			prepareSQLMap.Store(key, sqls)
-		}
-	} else {
-		sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
-		prepareSQLMap.Store(key, sqls)
+}
+
+type CSVWriter struct {
+	ctx       context.Context
+	formatter *csv.Writer
+	buf       *bytes.Buffer
+}
+
+func NewCSVWriter(ctx context.Context) *CSVWriter {
+	buf := getBuffer()
+	buf.Reset()
+	writer := csv.NewWriter(buf)
+
+	w := &CSVWriter{
+		ctx:       ctx,
+		buf:       buf,
+		formatter: writer,
 	}
+	return w
+}
 
-	tx, err := sqlDb.BeginTx(ctx, nil)
-	if err != nil {
-		return moerr.ConvertGoError(ctx, err)
-	}
-
-	var maxStmt *sql.Stmt
-	var middleStmt *sql.Stmt
-	var oneStmt *sql.Stmt
-
-	for {
-		if len(records) == 0 {
-			break
-		} else if len(records) >= batchLen {
-			if maxStmt == nil {
-				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns*batchLen)
-			idx := 0
-			for _, row := range records[:batchLen] {
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[idx] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[idx] = field
-					}
-					idx++
-				}
-			}
-			_, err := maxStmt.ExecContext(ctx, vals...)
-			if err != nil {
-				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
-				tx.Rollback()
-				return err
-			}
-			if ctx.Err() != nil {
-				tx.Rollback()
-				return ctx.Err()
-			}
-
-			records = records[batchLen:]
-		} else if len(records) >= middleBatchLen {
-			if maxStmt != nil {
-				err = maxStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				maxStmt = nil
-			}
-			if middleStmt == nil {
-				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns*middleBatchLen)
-			idx := 0
-			for _, row := range records[:middleBatchLen] {
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[idx] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[idx] = field
-					}
-					idx++
-				}
-			}
-			_, err := middleStmt.ExecContext(ctx, vals...)
-			if err != nil {
-				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
-				tx.Rollback()
-				return err
-			}
-			if ctx.Err() != nil {
-				tx.Rollback()
-				return ctx.Err()
-			}
-
-			records = records[middleBatchLen:]
-		} else {
-			if maxStmt != nil {
-				err = maxStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				maxStmt = nil
-			}
-			if middleStmt != nil {
-				err = middleStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				middleStmt = nil
-			}
-			if oneStmt == nil {
-				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns)
-			for _, row := range records {
-				if err != nil {
-					return moerr.ConvertGoError(ctx, err)
-				}
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[i] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[i] = field
-					}
-				}
-				_, err = oneStmt.ExecContext(ctx, vals...)
-				if err != nil {
-					tx.Rollback()
-					return moerr.ConvertGoError(ctx, err)
-				}
-			}
-			err = oneStmt.Close()
-			if err != nil {
-				tx.Rollback()
-				return moerr.ConvertGoError(ctx, err)
-			}
-			break
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		logger.Error("sqlWriter commit failed", zap.Error(err))
-		tx.Rollback()
-		return moerr.ConvertGoError(ctx, err)
+func (w *CSVWriter) WriteStrings(record []string) error {
+	if err := w.formatter.Write(record); err != nil {
+		return err
 	}
 	return nil
 }
 
-func getLogger() *log.MOLogger {
-	loggerInit.Do(func() {
-		rt := runtime.ProcessLevelRuntime()
-		if rt == nil {
-			moLogger = log.GetServiceLogger(logutil.Adjust(logutil.GetGlobalLogger()), metadata.ServiceType_CN, "uuid")
-		} else {
-			moLogger = rt.Logger()
+func (w *CSVWriter) GetContent() string {
+	w.formatter.Flush() // Ensure all data is written to buffer
+	return w.buf.String()
+}
+
+func (w *CSVWriter) Release() {
+	if w.buf != nil {
+		w.buf.Reset()
+		w.buf = nil
+		w.formatter = nil
+	}
+	putBuffer(w.buf)
+}
+
+func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	csvWriter := NewCSVWriter(ctx)
+	defer csvWriter.Release() // Ensures that the buffer is returned to the pool
+
+	// Write each record of the chunk to the CSVWriter
+	for _, record := range records {
+		for i, col := range record {
+			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
 		}
-		moLogger = moLogger.Named("etl/db_holder").With(logutil.Discardable())
-	})
-	return moLogger
+		if err := csvWriter.WriteStrings(record); err != nil {
+			return err
+		}
+	}
+
+	csvData := csvWriter.GetContent()
+
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", csvData, tbl.Database, tbl.Table)
+
+	// Use the transaction to execute the SQL command
+
+	_, execErr := sqlDb.Exec(loadSQL)
+
+	return execErr
+
+}
+
+type DBConnProvider func(forceNewConn bool, randomCN bool) (*sql.DB, error)
+
+func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, getDBConn DBConnProvider) (bool, error) {
+	dbConn, err := getDBConn(false, false)
+	if err != nil {
+		return false, err
+	}
+
+	if tbl.Table == "statement_info" {
+		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
+		const statusIndex = 15          // Replace with actual index for status
+		const requestAtIndex = 12       // Replace with actual index for request_at
+		if len(record) <= statusIndex { // Use the largest index you will access
+			return false, nil
+		}
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex])
+	}
+
+	return false, nil
+}
+
+func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at string) (bool, error) {
+	var exists bool
+	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ?)"
+	err := db.QueryRowContext(ctx, query, stmtId, status, request_at).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }

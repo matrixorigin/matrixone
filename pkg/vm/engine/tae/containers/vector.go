@@ -79,21 +79,12 @@ func NewConstBytes(typ types.Type, val []byte, length int, opts ...Options) *vec
 func NewConstNullVector(
 	typ types.Type,
 	length int,
-	opts ...Options,
+	mp *mpool.MPool,
 ) *vectorWrapper {
 	vec := &vectorWrapper{
-		wrapped: vector.NewConstNull(typ, length, nil),
+		wrapped: vector.NewConstNull(typ, length, mp),
 	}
-	var (
-		alloc *mpool.MPool
-	)
-	if len(opts) > 0 {
-		alloc = opts[0].Allocator
-	}
-	if alloc == nil {
-		alloc = common.DefaultAllocator
-	}
-	vec.mpool = alloc
+	vec.mpool = mp
 	return vec
 }
 
@@ -205,7 +196,7 @@ func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
 		panic(moerr.NewInternalErrorNoCtx("update to const vectorWrapper"))
 	}
 	vec.tryCOW()
-	UpdateValue(vec.wrapped, uint32(i), v, isNull)
+	UpdateValue(vec.wrapped, uint32(i), v, isNull, vec.mpool)
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
@@ -385,9 +376,11 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	}
 
 	cloned := NewVector(*vec.GetType(), opts)
-	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
+	v, err := vec.wrapped.CloneWindow(offset, offset+length, cloned.GetAllocator())
+	if err != nil {
 		panic(err)
 	}
+	cloned.setDownstreamVector(v)
 	return cloned
 }
 

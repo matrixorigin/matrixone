@@ -15,13 +15,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"os"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,11 +54,13 @@ func TestConvertValue(t *testing.T) {
 		{"2021-01-01", "date"},
 		{"2021-01-01 00:00:00", "datetime"},
 		{"2021-01-01 00:00:00", "timestamp"},
+		{"[1,2,3]", "vecf32"},
+		{"[4,5,6]", "vecf64"},
 	}
 	for _, v := range kase {
 		s := convertValue(makeValue(v.val), v.typ)
 		switch v.typ {
-		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double", "vecf32", "vecf64":
 			require.Equal(t, v.val, s)
 		default:
 
@@ -192,4 +198,206 @@ func Test_toCsvLine(t *testing.T) {
 	want := "\\10\\36\\86\\"
 	assert.Equal(t, want, line[0])
 	assert.Equal(t, bb.Bytes()[:len(bys1)], bys1)
+}
+
+func Test_checkFieldDelimiter(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		s   string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    rune
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx: nil,
+				s:   "",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "csv field delimiter is invalid utf8 character"))
+				return false
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx: nil,
+				s:   "fdaf",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "there are multiple utf8 characters for csv field delimiter."))
+				return false
+			},
+		},
+		{
+			name: "t3",
+			args: args{
+				ctx: nil,
+				s:   string([]rune{utf8.RuneError}),
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "csv field delimiter is invalid utf8 character"))
+				return false
+			},
+		},
+		{
+			name: "t4",
+			args: args{
+				ctx: nil,
+				s:   " ",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				return false
+			},
+		},
+		{
+			name: "t5",
+			args: args{
+				ctx: nil,
+				s:   "中文",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "there are multiple utf8 characters for csv field delimiter."))
+				return false
+			},
+		},
+		{
+			name: "t6",
+			args: args{
+				ctx: nil,
+				s:   "中",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := checkFieldDelimiter(tt.args.ctx, tt.args.s)
+			if !tt.wantErr(t, err, fmt.Sprintf("checkFieldDelimiter(%v, %v)", tt.args.ctx, tt.args.s)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "checkFieldDelimiter(%v, %v)", tt.args.ctx, tt.args.s)
+		})
+	}
+}
+
+func TestGetDatabases(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	rows := sqlmock.NewRows([]string{"Database"}).
+		AddRow("db1").
+		AddRow("db2").
+		AddRow("db3")
+
+	mock.ExpectQuery("show databases").WillReturnRows(rows)
+
+	conn = db
+	databases, err := getDatabases(ctx)
+
+	// check the results
+	assert.NoError(t, err)
+	expected := []string{"db1", "db2", "db3"}
+	if len(databases) != len(expected) {
+		t.Errorf("Unexpected number of databases. Expected: %d, Got: %d", len(expected), len(databases))
+	}
+
+	for i, db := range databases {
+		if db != expected[i] {
+			t.Errorf("Unexpected database name at index %d. Expected: %s, Got: %s", i, expected[i], db)
+		}
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetCreateDB(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	rows := sqlmock.NewRows([]string{"Database", "Create"}).
+		AddRow("db1", "CREATE DATABASE db1").
+		AddRow("db2", "CREATE DATABASE db2").
+		AddRow("db3", "CREATE DATABASE db3")
+
+	mock.ExpectQuery("show create database").WillReturnRows(rows)
+	conn = db
+
+	// check the results
+	createDB, err := getCreateDB(ctx, "db1")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	expectedCreateDB := "CREATE DATABASE db1"
+	if createDB != expectedCreateDB {
+		t.Errorf("Unexpected create database statement. Expected: %s, Got: %s", expectedCreateDB, createDB)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetCreateTable(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"Table", "Create"}).
+		AddRow("table1", "CREATE TABLE table1 (id INT, name VARCHAR(255))").
+		AddRow("table2", "CREATE TABLE table2 (id INT, age INT)")
+
+	mock.ExpectQuery("show create table").WillReturnRows(rows)
+	conn = db
+
+	// check the results
+	createTable, err := getCreateTable("db1", "table1")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	expectedCreateTable := "CREATE TABLE table1 (id INT, name VARCHAR(255))"
+	if createTable != expectedCreateTable {
+		t.Errorf("Unexpected create table statement. Expected: %s, Got: %s", expectedCreateTable, createTable)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
+	}
 }

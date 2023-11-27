@@ -55,6 +55,13 @@ const (
 	CheckpointMetaAttr_BlockLocation            = "checkpoint_meta_block_location"
 	CheckpointMetaAttr_SchemaType               = "checkpoint_meta_schema_type"
 
+	AccountIDDbNameTblName = catalog.AccountIDDbNameTblName
+	AccountIDDbName        = catalog.AccountIDDbName
+
+	// supporting `show accounts` in checkpoint
+	CheckpointMetaAttr_ObjectSize = "checkpoint_meta_object_size"
+	CheckpointMetaAttr_ObjectID   = "checkpoint_meta_object_id"
+
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
 
@@ -75,9 +82,30 @@ var (
 	TblDelSchema     *catalog.Schema
 	ColumnDelSchema  *catalog.Schema
 	TNMetaSchema     *catalog.Schema
+
+	DBSpecialDeleteSchema  *catalog.Schema
+	TBLSpecialDeleteSchema *catalog.Schema
+
+	StorageUsageSchema *catalog.Schema
 )
 
 var (
+	DBSpecialDeleteAttr = []string{
+		pkgcatalog.SystemDBAttr_ID,
+		AccountIDDbName,
+	}
+	DBSpecialDeleteTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, 0, 0),
+	}
+	TBLSpecialDeleteAttr = []string{
+		pkgcatalog.SystemRelAttr_ID,
+		AccountIDDbNameTblName,
+	}
+	TBLSpecialDeleteTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, 0, 0),
+	}
 	SegmentSchemaAttr = []string{
 		SegmentAttr_ID,
 		SegmentAttr_CreateAt,
@@ -261,6 +289,22 @@ var (
 		types.T_Rowid.ToType(),
 		types.T_TS.ToType(),
 	}
+
+	StorageUsageSchemaAttrs = []string{
+		pkgcatalog.SystemColAttr_AccID,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		CheckpointMetaAttr_ObjectID,
+		CheckpointMetaAttr_ObjectSize,
+	}
+
+	StorageUsageSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uuid, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+	}
 )
 
 var (
@@ -284,6 +328,41 @@ func shouldIgnoreTblInLogtail(id uint64) bool {
 }
 
 func init() {
+
+	DBSpecialDeleteSchema = catalog.NewEmptySchema("db_special_delete")
+
+	for i, colname := range DBSpecialDeleteAttr {
+		if i == 0 {
+			if err := DBSpecialDeleteSchema.AppendPKCol(colname, DBSpecialDeleteTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := DBSpecialDeleteSchema.AppendCol(colname, DBSpecialDeleteTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := DBSpecialDeleteSchema.Finalize(true); err != nil { // no phyaddr column
+		panic(err)
+	}
+
+	TBLSpecialDeleteSchema = catalog.NewEmptySchema("tbl_special_delete")
+
+	for i, colname := range TBLSpecialDeleteAttr {
+		if i == 0 {
+			if err := TBLSpecialDeleteSchema.AppendPKCol(colname, TBLSpecialDeleteTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := TBLSpecialDeleteSchema.AppendCol(colname, TBLSpecialDeleteTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := TBLSpecialDeleteSchema.Finalize(true); err != nil { // no phyaddr column
+		panic(err)
+	}
+
 	BlkMetaSchema = catalog.NewEmptySchema("blkMeta")
 
 	for i, colname := range pkgcatalog.MoTableMetaSchema {
@@ -472,6 +551,19 @@ func init() {
 			}
 		} else {
 			if err := TNMetaSchema.AppendCol(colname, TNMetaShcemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	StorageUsageSchema = catalog.NewEmptySchema("storage_usage")
+	for i, colname := range StorageUsageSchemaAttrs {
+		if i == 0 {
+			if err := StorageUsageSchema.AppendPKCol(colname, StorageUsageSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := StorageUsageSchema.AppendCol(colname, StorageUsageSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

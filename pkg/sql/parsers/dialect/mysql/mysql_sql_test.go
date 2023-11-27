@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+		input:  "select (col + col) / 2",
+		output: "select (col + col) / 2",
 	}
 )
 
@@ -78,8 +78,29 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
+		input:  "select cluster_centers(a) from t1;",
+		output: "select cluster_centers(a, 1,vector_cosine_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
+		output: "select cluster_centers(a, 5) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_l2_ops') from t1;",
+		output: "select cluster_centers(a, 5,vector_l2_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops) from t1",
+	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+	}, {
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
+		input:  "create connector for s with (\"type\"='kafkamo', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create connector for s with (type = kafkamo, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {
 		input:  "create stream s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create stream s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
@@ -126,6 +147,9 @@ var (
 		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
 		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
 	}, {
+		input:  "load data url stageoption my_stage into table hx3.t2 fields terminated by ',' enclosed by '' lines terminated by '\\n';\n",
+		output: "load data url from stage my_stage into table hx3.t2 fields terminated by , lines terminated by \n",
+	}, {
 		input:  "SHOW CREATE TABLE information_schema.PROCESSLIST;",
 		output: "show create table information_schema.processlist",
 	}, {
@@ -148,7 +172,7 @@ var (
 		output: "show variables like sql_mode",
 	}, {
 		input:  "show index from t1 from db",
-		output: "show index from db.t1",
+		output: "show index from t1 from db",
 	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
@@ -649,7 +673,7 @@ var (
 		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
 	}, {
-		input: "create index idx1 using bsi on a (a) ",
+		input: "create index idx1 using bsi on a (a)",
 	}, {
 		input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
 		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
@@ -710,6 +734,9 @@ var (
 		output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
+	}, {
+		input:  "create dynamic table t as select a from t1",
+		output: "create dynamic table t as select a from t1",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
@@ -850,6 +877,9 @@ var (
 		},
 		{
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
 		},
 		{
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
@@ -1377,6 +1407,12 @@ var (
 		}, {
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
@@ -2609,6 +2645,26 @@ var (
 		{
 			input:  "show connectors",
 			output: "show connectors",
+		},
+		{
+			input:  "show index from t1 from db",
+			output: "show index from t1 from db",
+		},
+		{
+			input:  "show index from t1",
+			output: "show index from t1",
+		},
+		{
+			input:  "show index from db.t1",
+			output: "show index from db.t1",
+		},
+		{
+			input:  "show index from db.t1 from db",
+			output: "show index from db.t1 from db",
+		},
+		{
+			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
+			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
 		},
 	}
 )

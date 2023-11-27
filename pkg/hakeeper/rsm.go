@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
@@ -240,6 +241,10 @@ func GetTNStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.TNHeartbeatUpdate)
 }
 
+func GetProxyHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.ProxyHeartbeatUpdate)
+}
+
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	cmd := make([]byte, headerSize+len(data))
 	binaryEnc.PutUint32(cmd, uint32(tag))
@@ -346,6 +351,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		}
 		if c.DeleteCNStore != nil {
 			s.handleDeleteCNCmd(c.UUID)
+			continue
+		}
+		if c.DeleteProxyStore != nil {
+			s.handleDeleteProxyCmd(c.UUID)
 			continue
 		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
@@ -512,8 +521,45 @@ func (s *stateMachine) handleTaskTableUserCmd(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
-	delete(s.state.CNState.Stores, uuid)
+	deletedTimeout := time.Hour * 24 * 7
+	var pos int
+	for _, store := range s.state.DeletedStores {
+		if time.Now().UnixNano()-store.DownTime > int64(deletedTimeout) {
+			pos++
+		}
+	}
+	s.state.DeletedStores = s.state.DeletedStores[pos:]
+	if store, ok := s.state.CNState.Stores[uuid]; ok {
+		delete(s.state.CNState.Stores, uuid)
+		var addr string
+		addrItems := strings.Split(store.SQLAddress, ":")
+		if len(addrItems) > 1 {
+			addr = addrItems[0]
+		}
+		s.state.DeletedStores = append(s.state.DeletedStores, pb.DeletedStore{
+			UUID:      uuid,
+			StoreType: "CN",
+			Address:   addr,
+			UpTime:    store.UpTime,
+			DownTime:  time.Now().UnixNano(),
+		})
+	}
 	return sm.Result{}
+}
+
+func (s *stateMachine) handleDeleteProxyCmd(uuid string) sm.Result {
+	delete(s.state.ProxyState.Stores, uuid)
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
+	data := parseHeartbeatCmd(cmd)
+	var hb pb.ProxyHeartbeat
+	if err := hb.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	s.state.ProxyState.Update(hb, s.state.Tick)
+	return s.getCommandBatch(hb.UUID)
 }
 
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
@@ -619,6 +665,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handlePatchCNStore(cmd), nil
 	case pb.RemoveCNStore:
 		return s.handleDeleteCNCmd(parseDeleteCNStoreCmd(cmd).StoreID), nil
+	case pb.ProxyHeartbeatUpdate:
+		return s.handleProxyHeartbeat(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtx("unknown haKeeper cmd '%v'", cmd))
 	}
@@ -631,6 +679,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		TNState:            s.state.TNState,
 		LogState:           s.state.LogState,
 		CNState:            s.state.CNState,
+		ProxyState:         s.state.ProxyState,
 		State:              s.state.State,
 		TaskSchedulerState: s.state.TaskSchedulerState,
 		TaskTableUser:      s.state.TaskTableUser,
@@ -655,9 +704,10 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNStores:  make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:  make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
-		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		CNStores:    make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		TNStores:    make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		state := pb.NormalState
@@ -670,12 +720,13 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ServiceAddress:     info.ServiceAddress,
 			SQLAddress:         info.SQLAddress,
 			LockServiceAddress: info.LockServiceAddress,
-			CtlAddress:         info.CtlAddress,
 			State:              state,
 			WorkState:          info.WorkState,
 			Labels:             info.Labels,
 			QueryAddress:       info.QueryAddress,
 			ConfigData:         info.ConfigData,
+			Resource:           info.Resource,
+			UpTime:             info.UpTime,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -692,8 +743,8 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Shards:               info.Shards,
 			LogtailServerAddress: info.LogtailServerAddress,
 			LockServiceAddress:   info.LockServiceAddress,
-			CtlAddress:           info.CtlAddress,
 			ConfigData:           info.ConfigData,
+			QueryAddress:         info.QueryAddress,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}
@@ -711,6 +762,23 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ConfigData:     info.ConfigData,
 		}
 		cd.LogStores = append(cd.LogStores, n)
+	}
+	for uuid, info := range s.state.ProxyState.Stores {
+		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
+			UUID:          uuid,
+			Tick:          info.Tick,
+			ListenAddress: info.ListenAddress,
+			ConfigData:    info.ConfigData,
+		})
+	}
+	for _, store := range s.state.DeletedStores {
+		cd.DeletedStores = append(cd.DeletedStores, pb.DeletedStore{
+			UUID:      store.UUID,
+			StoreType: store.StoreType,
+			Address:   store.Address,
+			UpTime:    store.UpTime,
+			DownTime:  store.DownTime,
+		})
 	}
 	return cd
 }

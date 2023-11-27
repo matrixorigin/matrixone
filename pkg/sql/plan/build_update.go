@@ -65,7 +65,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
 			return nil, err
 		}

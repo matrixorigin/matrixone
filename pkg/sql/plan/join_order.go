@@ -28,7 +28,7 @@ type joinEdge struct {
 
 type joinVertex struct {
 	node     *plan.Node
-	children map[int32]any
+	children map[int32]emptyType
 	parent   int32
 	joined   bool
 }
@@ -57,14 +57,14 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 			break
 		}
 
-		leftTags := make(map[int32]any)
+		leftTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
-			leftTags[tag] = nil
+			leftTags[tag] = emptyStruct
 		}
 
-		rightTags := make(map[int32]any)
+		rightTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
-			rightTags[tag] = nil
+			rightTags[tag] = emptyStruct
 		}
 
 		var joinSide int8
@@ -111,14 +111,14 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 		return false
 	}
 
-	leftTags := make(map[int32]any)
+	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
+		leftTags[tag] = emptyStruct
 	}
 
-	rightTags := make(map[int32]any)
+	rightTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
+		rightTags[tag] = emptyStruct
 	}
 
 	for _, expr := range node.OnList {
@@ -129,9 +129,9 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	return false
 }
 
-func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
+func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]emptyType) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		if !SupportedJoinCondition(e.F.Func.GetObj()) {
+		if !IsEqualFunc(e.F.Func.GetObj()) {
 			return false
 		}
 
@@ -153,7 +153,7 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !SupportedJoinCondition(e.F.Func.GetObj()) {
+			if !IsEqualFunc(e.F.Func.GetObj()) {
 				continue
 			}
 			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
@@ -166,10 +166,11 @@ func IsEquiJoin2(exprs []*plan.Expr) bool {
 	return false
 }
 
-func SupportedJoinCondition(id int64) bool {
+func IsEqualFunc(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
 }
+
 func HasColExpr(expr *plan.Expr, pos int32) int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -251,7 +252,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	visited := make([]bool, nLeaf)
 
 	for _, cond := range conds {
-		hyperEdge := make(map[int32]any)
+		hyperEdge := make(map[int32]emptyType)
 		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
 
 		for i := range hyperEdge {
@@ -332,7 +333,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
-	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER || joinNode.Limit != nil {
 		nodeID := builder.determineJoinOrder(joinNode.NodeId)
 		leaves = append(leaves, builder.qry.Nodes[nodeID])
 		return leaves, conds
@@ -354,7 +355,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
 			node:     node,
-			children: make(map[int32]any),
+			children: make(map[int32]emptyType),
 			parent:   -1,
 		}
 
@@ -427,7 +428,7 @@ func setParent(child, parent int32, vertices []*joinVertex) {
 	}
 	unsetParent(child, vertices[child].parent, vertices)
 	vertices[child].parent = parent
-	vertices[parent].children[child] = nil
+	vertices[parent].children[child] = emptyStruct
 }
 func unsetParent(child, parent int32, vertices []*joinVertex) {
 	if child == -1 || parent == -1 {

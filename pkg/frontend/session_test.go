@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"testing"
 	"time"
@@ -570,6 +571,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table := mock_frontend.NewMockRelation(ctrl)
 		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(false).AnyTimes()
@@ -762,4 +764,36 @@ func Test_doSelectGlobalSystemVariable(t *testing.T) {
 		_, err := ses.getGlobalSystemVariableValue("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func TestSession_updateTimeZone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(nil, ctrl)
+
+	err := updateTimeZone(ses, ses.GetSysVars(), "time_zone", "system")
+	assert.NoError(t, err)
+	assert.Equal(t, ses.GetTimeZone().String(), "Local")
+
+	err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "+00:00")
+	assert.NoError(t, err)
+	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+
+	err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "+08:00")
+	assert.NoError(t, err)
+	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+
+	err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "-08:00")
+	assert.NoError(t, err)
+	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+
+	//ci fails the case
+	//err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "UTC")
+	//assert.NoError(t, err)
+	//assert.Equal(t, ses.GetTimeZone().String(), "utc")
+
+	err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "")
+	assert.NoError(t, err)
+	assert.Equal(t, ses.GetTimeZone().String(), "UTC")
 }

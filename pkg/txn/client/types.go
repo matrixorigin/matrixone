@@ -66,6 +66,21 @@ type TxnClient interface {
 
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+
+	// GetState returns the current state of txn client.
+	GetState() TxnState
+}
+
+type TxnState struct {
+	State int
+	// user active txns
+	Users int
+	// all active txns
+	ActiveTxns []string
+	// FIFO queue for ready to active txn
+	WaitActiveTxns []string
+	// LatestTS is the latest timestamp of the txn client.
+	LatestTS timestamp.Timestamp
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -94,6 +109,10 @@ type TxnOperator interface {
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
+	// SnapshotTS returns the snapshot timestamp of the transaction.
+	SnapshotTS() timestamp.Timestamp
+	// Status returns the current transaction status.
+	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error
@@ -174,8 +193,20 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
+	// Pause pauses the timestamp waiter and cancel all waiters in timestamp waiter.
+	// They will not wait for the newer timestamp anymore.
+	Pause()
+	// Resume resumes the cancel channel in the timestamp waiter after all transactions are
+	// aborted.
+	Resume()
+	// CancelC returns the cancel channel of timestamp waiter. If it is nil, means that
+	// the logtail consumer is reconnecting to logtail server and is aborting all transaction.
+	// At this time, we cannot open new transactions.
+	CancelC() chan struct{}
 	// Close close the timestamp waiter
 	Close()
+	// LatestTS returns the latest timestamp of the waiter.
+	LatestTS() timestamp.Timestamp
 }
 
 type Workspace interface {

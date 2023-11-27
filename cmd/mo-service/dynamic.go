@@ -25,9 +25,9 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/util/format"
+	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 var (
@@ -46,20 +46,19 @@ func startDynamicCluster(
 	ctx context.Context,
 	cfg *LaunchConfig,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
-	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
 	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
 	if *withProxy {
-		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
 		}
 	} else {
@@ -95,7 +94,13 @@ func startDynamicCNServices(
 			return err
 		}
 	}
-	return nil
+	if !cfg.Chaos.Enable {
+		return nil
+	}
+	cfg.Chaos.Restart.KillFunc = stopDynamicCNByIndex
+	cfg.Chaos.Restart.RestartFunc = startDynamicCNByIndex
+	chaosTester := chaos.NewChaosTester(cfg.Chaos)
+	return chaosTester.Start()
 }
 
 func genDynamicCNConfigs(
@@ -216,6 +221,10 @@ func startDynamicCtlHTTPServer(addr string) error {
 		http.ListenAndServe(*httpListenAddr, nil)
 	}()
 	return nil
+}
+
+func stopDynamicCNByIndex(index int) error {
+	return syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL)
 }
 
 func startDynamicCNByIndex(index int) error {

@@ -15,10 +15,14 @@
 package mergeoffset
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type container struct {
 	colexec.ReceiverOperator
@@ -29,11 +33,26 @@ type Argument struct {
 	// Offset records the offset number of mergeOffset operator
 	Offset uint64
 	// ctr contains the attributes needn't do serialization work
-	ctr *container
+	ctr      *container
+	info     *vm.OperatorInfo
+	children []vm.Operator
+	buf      *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }

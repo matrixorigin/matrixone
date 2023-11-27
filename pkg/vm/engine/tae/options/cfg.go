@@ -27,10 +27,6 @@ const (
 	defaultResponseSendTimeout    = 10 * time.Second
 )
 
-type CacheCfg struct {
-	IndexCapacity uint64 `toml:"index-cache-size"`
-}
-
 type StorageCfg struct {
 	BlockMaxRows     uint32 `toml:"block-max-rows"`
 	SegmentMaxBlocks uint16 `toml:"segment-max-blocks"`
@@ -51,6 +47,7 @@ type CheckpointCfg struct {
 	// only for test
 	// it is used to control the block rows of the checkpoint
 	BlockRows int
+	Size      int
 }
 
 type GCCfg struct {

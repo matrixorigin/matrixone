@@ -50,10 +50,14 @@ var _errorLogger atomic.Value
 // init initializes a default zap logger before set up logger.
 func init() {
 	SetLogReporter(&TraceReporter{noopReportZap, noopContextField})
-	conf := &LogConfig{Level: "info", Format: "console", StacktraceLevel: "panic"}
-	setGlobalLogConfig(conf)
-	logger, _ := initMOLogger(conf)
+	conf := GetDefaultConfig()
+	setGlobalLogConfig(&conf)
+	logger, _ := initMOLogger(&conf)
 	replaceGlobalLogger(logger)
+}
+
+func GetDefaultConfig() LogConfig {
+	return LogConfig{Level: "info", Format: "console", StacktraceLevel: "panic"}
 }
 
 // GetGlobalLogger returns the current global zap Logger.
@@ -77,9 +81,9 @@ func replaceGlobalLogger(logger *zap.Logger) {
 }
 
 type LogConfig struct {
-	Level      string `toml:"level"`
-	Format     string `toml:"format"`
-	Filename   string `toml:"filename"`
+	Level      string `toml:"level" user_setting:"basic"`
+	Format     string `toml:"format" user_setting:"basic"`
+	Filename   string `toml:"filename" user_setting:"advanced"`
 	MaxSize    int    `toml:"max-size"`
 	MaxDays    int    `toml:"max-days"`
 	MaxBackups int    `toml:"max-backups"`

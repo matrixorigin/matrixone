@@ -15,10 +15,11 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
@@ -77,21 +78,9 @@ func (r *ReceiverOperator) FreeAllReg() {
 	}
 }
 
-// clean up the batch left in channel
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	ch := r.proc.Reg.MergeReceivers[regIdx].Ch
-	for len(ch) > 0 {
-		bat := <-ch
-		if bat != nil {
-			bat.Clean(r.proc.GetMPool())
-		}
-	}
-}
-
-func (r *ReceiverOperator) CloseAllReg() {
-	for _, c := range r.proc.Reg.MergeReceivers {
-		close(c.Ch)
-	}
+	w := r.proc.Reg.MergeReceivers[regIdx]
+	w.CleanChannel(r.proc.GetMPool())
 }
 
 // You MUST Init ReceiverOperator with Merge-Type

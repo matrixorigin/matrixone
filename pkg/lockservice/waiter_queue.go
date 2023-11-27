@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type waiterQueue interface {
@@ -29,6 +30,7 @@ type waiterQueue interface {
 	moveTo(to waiterQueue)
 	put(...*waiter)
 	notify(value notifyValue)
+	notifyAll(value notifyValue)
 	first() *waiter
 	removeByTxnID(txnID []byte)
 	beginChange()
@@ -66,6 +68,34 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 		w.ref()
 	}
 	q.waiters = append(q.waiters, ws...)
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
+}
+
+func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
+	q.Lock()
+	defer q.Unlock()
+
+	// save the max committed ts
+	if value.ts.Less(q.keyCommittedAt) {
+		value.ts = q.keyCommittedAt
+	} else {
+		q.keyCommittedAt = value.ts
+	}
+
+	if len(q.waiters) == 0 {
+		return
+	}
+
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
+	}
+
+	for _, w := range q.waiters {
+		w.notify(value)
+		w.close()
+	}
+	q.resetWaitersLocked()
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
@@ -95,8 +125,10 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 		// already completed
 		w.close()
 		skipAt = i
+		q.waiters[i] = nil
 	}
 	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) resetCommittedAt(ts timestamp.Timestamp) {
@@ -123,6 +155,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 		newWaiters = append(newWaiters, w)
 	}
 	q.waiters = newWaiters
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) first() *waiter {
@@ -172,6 +205,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]
 	q.beginChangeIdx = -1
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) getCommittedIdx() int {
@@ -219,10 +253,14 @@ func (q *sliceBasedWaiterQueue) close(value notifyValue) {
 }
 
 func (q *sliceBasedWaiterQueue) doResetLocked() {
+	q.resetWaitersLocked()
+	q.beginChangeIdx = -1
+	q.keyCommittedAt = timestamp.Timestamp{}
+}
+
+func (q *sliceBasedWaiterQueue) resetWaitersLocked() {
 	for i := range q.waiters {
 		q.waiters[i] = nil
 	}
 	q.waiters = q.waiters[:0]
-	q.beginChangeIdx = -1
-	q.keyCommittedAt = timestamp.Timestamp{}
 }

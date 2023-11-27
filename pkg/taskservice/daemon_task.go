@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,7 +59,7 @@ func (t *startTask) Handle(_ context.Context) error {
 
 		// Start the go-routine to execute the task. It hangs here until
 		// the task encounters some error or be canceled.
-		if err := t.task.executor(ctx, t.task.task); err != nil {
+		if err := t.task.executor(ctx, &t.task.task); err != nil {
 			// set the record of this task error message.
 			t.runner.setDaemonTaskError(ctx, t.task, err)
 		}
@@ -107,11 +108,12 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return err
 	}
 
-	if t.task.activeRoutine == nil {
+	ar := t.task.activeRoutine.Load()
+	if ar == nil || *ar == nil {
 		return moerr.NewInternalError(ctx, "cannot handle resume operation, "+
 			"active routine not set for task %d", t.task.task.ID)
 	}
-	return t.task.activeRoutine.Resume()
+	return (*ar).Resume()
 }
 
 type pauseTask struct {
@@ -145,11 +147,12 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	}
 
 	if t.runner.exists(tk.ID) {
-		if t.task.activeRoutine == nil {
+		ar := t.task.activeRoutine.Load()
+		if ar == nil || *ar == nil {
 			return moerr.NewInternalError(ctx, "cannot handle pause operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
-		if err := t.task.activeRoutine.Pause(); err != nil {
+		if err := (*ar).Pause(); err != nil {
 			return err
 		}
 	}
@@ -187,11 +190,12 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return err
 	}
 	if t.runner.exists(tk.ID) {
-		if t.task.activeRoutine == nil {
+		ar := t.task.activeRoutine.Load()
+		if ar == nil || *ar == nil {
 			return moerr.NewInternalError(ctx, "cannot handle cancel operation, "+
 				"active routine not set for task %d", t.task.task.ID)
 		}
-		return t.task.activeRoutine.Cancel()
+		return (*ar).Cancel()
 	}
 	return nil
 }
@@ -208,14 +212,14 @@ type ActiveRoutine interface {
 }
 
 type daemonTask struct {
-	task     *task.DaemonTask
+	task     task.DaemonTask
 	executor TaskExecutor
 	// activeRoutine is the go-routine runs in background to execute
 	// the daemon task.
-	activeRoutine ActiveRoutine
+	activeRoutine atomic.Pointer[ActiveRoutine]
 }
 
-func (r *taskRunner) newDaemonTask(t *task.DaemonTask) (*daemonTask, error) {
+func (r *taskRunner) newDaemonTask(t task.DaemonTask) (*daemonTask, error) {
 	executor, err := r.getExecutor(t.Metadata.Executor)
 	if err != nil {
 		return nil, err
@@ -263,7 +267,7 @@ func (r *taskRunner) enqueue(handler TaskHandler) {
 	r.pendingTaskHandle <- handler
 }
 
-func (r *taskRunner) newStartTask(t *task.DaemonTask) {
+func (r *taskRunner) newStartTask(t task.DaemonTask) {
 	dt, err := r.newDaemonTask(t)
 	if err != nil {
 		r.logger.Error("failed to dispatch daemon task",
@@ -277,14 +281,14 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()
 	for _, t := range r.startTasks(ctx) {
-		r.newStartTask(&t)
+		r.newStartTask(t)
 	}
 	for _, t := range r.resumeTasks(ctx) {
 		dt, ok := r.daemonTasks.m[t.ID]
 		if ok {
 			r.enqueue(newResumeTask(r, dt))
 		} else {
-			r.newStartTask(&t)
+			r.newStartTask(t)
 		}
 	}
 	for _, t := range r.pauseTasks(ctx) {
@@ -292,7 +296,7 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 		if ok {
 			r.enqueue(newPauseTask(r, dt))
 		} else {
-			dt, err := r.newDaemonTask(&t)
+			dt, err := r.newDaemonTask(t)
 			if err != nil {
 				r.logger.Error("failed to dispatch daemon task",
 					zap.Uint64("task ID", t.ID), zap.Error(err))
@@ -306,7 +310,7 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 		if ok {
 			r.enqueue(newCancelTask(r, dt))
 		} else {
-			dt, err := r.newDaemonTask(&t)
+			dt, err := r.newDaemonTask(t)
 			if err != nil {
 				r.logger.Error("failed to dispatch daemon task",
 					zap.Uint64("task ID", t.ID), zap.Error(err))
@@ -452,7 +456,7 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	r.daemonTasks.Unlock()
 
 	for _, dt := range tasks {
-		if err := r.service.HeartbeatDaemonTask(ctx, *dt.task); err != nil {
+		if err := r.service.HeartbeatDaemonTask(ctx, dt.task); err != nil {
 			r.logger.Error("task heartbeat failed",
 				zap.Uint64("task ID", dt.task.ID),
 				zap.Error(err))
@@ -480,7 +484,7 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 	// When update the daemon task, add the condition that last heartbeat of
 	// the task must be timeout or be null, which means that other runners does
 	// NOT try to start this task.
-	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{*t},
+	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t},
 		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()))
 	if err != nil {
 		return false, err
@@ -504,7 +508,7 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 	t.Details.Error = errMsg.Error()
 	// TODO(volgariver6): if it is a retryable error, do not update the status,
 	// otherwise, set the status to Error.
-	_, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{*t})
+	_, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t})
 	if err != nil {
 		r.logger.Error("failed to set error message to task",
 			zap.Uint64("task ID", t.ID),

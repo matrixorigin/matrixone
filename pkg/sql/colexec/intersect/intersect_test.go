@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -73,27 +74,21 @@ func TestIntersect(t *testing.T) {
 		},
 	)
 
-	err := Prepare(c.proc, c.arg)
+	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end process.ExecStatus
-	for {
-		end, err = Call(0, c.proc, c.arg, false, false)
-		if end == process.ExecStop {
-			break
-		}
-		require.NoError(t, err)
-		result := c.proc.InputBatch()
-		if result != nil && !result.IsEmpty() {
-			cnt += result.RowCount()
-			require.Equal(t, 3, len(result.Vecs)) // 3 column
-			c.proc.InputBatch().Clean(c.proc.Mp())
-		}
+	var end vm.CallResult
+	end, err = c.arg.Call(c.proc)
+	require.NoError(t, err)
+	result := end.Batch
+	if result != nil && !result.IsEmpty() {
+		cnt += result.RowCount()
+		require.Equal(t, 3, len(result.Vecs)) // 3 column
 	}
 	require.Equal(t, 1, cnt) // 1 row
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
-	c.arg.Free(c.proc, false)
+	c.arg.Free(c.proc, false, nil)
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
@@ -123,6 +118,11 @@ func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*ba
 		}
 	}
 	arg := new(Argument)
+	arg.info = &vm.OperatorInfo{
+		Idx:     0,
+		IsFirst: false,
+		IsLast:  false,
+	}
 	return intersectTestCase{
 		proc:   proc,
 		arg:    arg,

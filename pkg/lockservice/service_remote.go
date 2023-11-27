@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 func (s *service) initRemote() {
@@ -39,7 +40,7 @@ func (s *service) initRemote() {
 	s.remote.client = rpcClient
 	s.remote.server = rpcServer
 	s.remote.keeper = NewLockTableKeeper(
-		s.cfg.ServiceID,
+		s.serviceID,
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
@@ -240,6 +241,15 @@ func (s *service) getLocalLockTable(
 		resp.NewBind = &bind
 		return nil, nil
 	}
+
+	if _, ok := l.(*remoteLockTable); ok {
+		getLogger().Error("get local lock table, but found remote lock table, something wrong",
+			zap.String("request", req.DebugString()),
+			zap.String("serviceID", s.serviceID),
+			zap.String("request-lock-table", req.LockTable.DebugString()),
+			zap.String("current-bind", bind.DebugString()))
+	}
+
 	return l, nil
 }
 
@@ -341,7 +351,7 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 				continue
 			}
 			txn.fetchWhoWaitingMe(
-				s.cfg.ServiceID,
+				s.serviceID,
 				w.txnID,
 				s.activeTxnHolder,
 				func(wt pb.WaitTxn) bool {

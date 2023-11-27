@@ -21,11 +21,13 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -123,7 +125,7 @@ func NewTxnServer(
 		morpc.WithCodecPayloadCopyBufferSize(16*1024),
 		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
 	if s.options.enableCompress {
-		mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
+		mp, err := mpool.NewMPool("txn-server", 0, mpool.NoFixed)
 		if err != nil {
 			return nil, err
 		}
@@ -192,8 +194,7 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		s.rt.Logger().Fatal("missing txn request handler",
-			zap.String("method", m.Method.String()))
+		return moerr.NewNotSupported(ctx, "unknown txn request method: %s", m.Method.String())
 	}
 
 	select {
@@ -215,6 +216,7 @@ func (s *server) onMessage(
 		s:       s,
 	}
 	n := len(s.queue)
+	v2.TxnCommitQueueSizeGauge.Set(float64(n))
 	if n > s.options.maxChannelBufferSize/2 {
 		s.rt.Logger().Warn("txn request handle channel is busy",
 			zap.Int("size", n),

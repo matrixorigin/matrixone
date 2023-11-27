@@ -19,50 +19,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"reflect"
+	"strings"
 	"sync/atomic"
 )
 
+type item struct {
+	v       string
+	userSet string
+}
+
+func (i *item) value() string {
+	return i.v
+}
+
+func (i *item) internal() string {
+	if len(i.userSet) != 0 {
+		return i.userSet
+	} else {
+		return "internal"
+	}
+}
+
 type exporter struct {
-	kvs map[string]string
+	kvs map[string]item
 }
 
 func newExporter() *exporter {
 	return &exporter{
-		kvs: make(map[string]string),
+		kvs: make(map[string]item),
 	}
 }
 
-func (et *exporter) Export(k, v string) {
-	et.kvs[k] = v
+func (et *exporter) Export(k, v, userSet string) {
+	k = strings.ToLower(k)
+	et.kvs[k] = item{
+		v:       v,
+		userSet: userSet,
+	}
 }
 
 func (et *exporter) Print() {
 	//for k, v := range et.kvs {
-	//    //fmt.Println(k, v)
+	//	fmt.Println(k, v.v, v.userSet)
 	//}
 }
 
-func (et *exporter) Dump() map[string]string {
+func (et *exporter) Dump() map[string]item {
 	return et.kvs
 }
 
 func (et *exporter) Clear() {
-	et.kvs = make(map[string]string)
+	et.kvs = make(map[string]item)
 }
 
 // flatten is a recursive function to flatten a struct.
 // in: the struct object to be flattened. reference or pointer
 // name: the name of the struct object. empty if it is the top level struct.
 // prefix: the path to the name. empty if it is the top level struct.
+// userSet: the user_setting tag of the field. empty if it is not set in definition.
 // exp: the exporter to export the key-value pairs.
-func flatten(in any, name string, prefix string, exp *exporter) error {
+func flatten(in any, name string, prefix string, userSet string, exp *exporter) error {
 	if exp == nil {
 		return moerr.NewInternalErrorNoCtx("invalid exporter")
 	}
 	var err error
 	if in == nil {
 		//fmt.Printf("%s + %v\n", prefix+name, "nil")
-		exp.Export(prefix+name, "nil")
+		exp.Export(prefix+name, "nil", userSet)
 		return nil
 	}
 
@@ -110,20 +133,18 @@ func flatten(in any, name string, prefix string, exp *exporter) error {
 	case reflect.Complex128:
 		fallthrough
 	case reflect.String:
-		//fmt.Printf("%s + %v\n", prefix, value)
-		exp.Export(prefix, fmt.Sprintf("%v", value))
+		exp.Export(prefix, fmt.Sprintf("%v", value), userSet)
 	case reflect.Uintptr:
 		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
 	case reflect.Slice:
 		fallthrough
 	case reflect.Array:
 		if value.Len() == 0 {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "empty")
-			exp.Export(prefix+typ.Name(), "")
+			exp.Export(prefix+typ.Name(), "", userSet)
 		} else {
 			for k := 0; k < value.Len(); k++ {
 				elemVal := value.Index(k)
-				err = flatten(elemVal.Interface(), typ.Name(), oldPrefix+name+"["+fmt.Sprintf("%d", k)+"].", exp)
+				err = flatten(elemVal.Interface(), typ.Name(), oldPrefix+name+"["+fmt.Sprintf("%d", k)+"].", userSet, exp)
 				if err != nil {
 					return err
 				}
@@ -133,18 +154,17 @@ func flatten(in any, name string, prefix string, exp *exporter) error {
 	case reflect.Chan:
 		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
 	case reflect.Func:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		exp.Export(prefix+typ.Name(), "", userSet)
 	case reflect.Interface:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		exp.Export(prefix+typ.Name(), "", userSet)
 	case reflect.Map:
 		if value.Len() == 0 {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "empty")
-			exp.Export(prefix+typ.Name(), "")
+			exp.Export(prefix+typ.Name(), "", userSet)
 		} else {
 			keys := value.MapKeys()
 			for _, key := range keys {
 				keyVal := value.MapIndex(key)
-				err = flatten(keyVal.Interface(), typ.Name(), oldPrefix+name+"<"+fmt.Sprintf("%v", key.Interface())+">.", exp)
+				err = flatten(keyVal.Interface(), typ.Name(), oldPrefix+name+"<"+fmt.Sprintf("%v", key.Interface())+">.", userSet, exp)
 				if err != nil {
 					return err
 				}
@@ -153,8 +173,7 @@ func flatten(in any, name string, prefix string, exp *exporter) error {
 
 	case reflect.Pointer:
 		if value.IsNil() {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "nil")
-			exp.Export(prefix+typ.Name(), "nil")
+			exp.Export(prefix+typ.Name(), "nil", userSet)
 		} else {
 			nextPrefix := ""
 			if oldPrefix == "" {
@@ -162,7 +181,7 @@ func flatten(in any, name string, prefix string, exp *exporter) error {
 			} else {
 				nextPrefix = prefix
 			}
-			err = flatten(value.Elem().Interface(), typ.Name(), nextPrefix+".", exp)
+			err = flatten(value.Elem().Interface(), typ.Name(), nextPrefix+".", userSet, exp)
 			if err != nil {
 				return err
 			}
@@ -177,7 +196,13 @@ func flatten(in any, name string, prefix string, exp *exporter) error {
 			} else {
 				continue
 			}
-			err = flatten(fieldVal.Interface(), field.Name, prefix+".", exp)
+
+			tagValue := userSet
+			if v, ok := field.Tag.Lookup("user_setting"); ok {
+				tagValue = v
+			}
+
+			err = flatten(fieldVal.Interface(), field.Name, prefix+".", tagValue, exp)
 			if err != nil {
 				return err
 			}
@@ -198,33 +223,44 @@ func DumpConfig(cfg any, defCfg any) (map[string]*logservicepb.ConfigItem, error
 
 	//dump current
 	curExp := newExporter()
-	err := flatten(cfg, "", "", curExp)
+	err := flatten(cfg, "", "", "", curExp)
 	if err != nil {
 		return nil, err
 	}
 
 	//dump default
 	defExp := newExporter()
-	err = flatten(defCfg, "", "", defExp)
+	err = flatten(defCfg, "", "", "", defExp)
 	if err != nil {
 		return nil, err
 	}
 
 	//make new map
 	for name, value := range curExp.Dump() {
-		item := &logservicepb.ConfigItem{
+		citem := &logservicepb.ConfigItem{
 			Name:         name,
-			CurrentValue: value,
+			CurrentValue: value.value(),
+			Internal:     value.internal(),
 		}
 
 		//set default value
 		if v, ok := defExp.Dump()[name]; ok {
-			item.DefaultValue = v
+			citem.DefaultValue = v.value()
 		}
 
-		ret[name] = item
+		ret[name] = citem
 	}
 	return ret, err
+}
+
+// MergeConfig copy all items from src to dst and overwrite the existed item.
+func MergeConfig(dst *ConfigData, src map[string]*logservicepb.ConfigItem) {
+	if dst == nil || dst.configData == nil || src == nil {
+		return
+	}
+	for s, item := range src {
+		dst.configData[s] = item
+	}
 }
 
 const (

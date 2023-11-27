@@ -252,3 +252,28 @@ select * from pri01;
 show create table pri01;
 
 drop table pri01;
+
+--insert duplicate data to null table
+CREATE TABLE IF NOT EXISTS indup_07(
+    col1 INT primary key,
+    col2 VARCHAR(20) NOT NULL,
+    col3 VARCHAR(30) NOT NULL,
+    col4 BIGINT default 30
+);
+insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
+select * from indup_07;
+
+--update out of date range
+insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
+
+--transaction
+begin;
+insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
+select * from indup_07;
+rollback ;
+select * from indup_07;
+start transaction ;
+insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
+select * from indup_07;
+commit;
+select * from indup_07;

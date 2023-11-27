@@ -15,16 +15,15 @@
 package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handlePing() handleFunc {
-	return getTNHandlerFunc(
-		pb.CmdMethod_Ping,
+	return GetTNHandlerFunc(
+		api.OpCode_OpPing,
 		func(parameter string) ([]uint64, error) {
 			if len(parameter) > 0 {
 				id, err := format.ParseStringUint64(parameter)
@@ -36,10 +35,10 @@ func handlePing() handleFunc {
 			return nil, nil
 		},
 		func(tnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
-			return protoc.MustMarshal(&pb.TNPingRequest{Parameter: parameter}), nil
+			return protoc.MustMarshal(&api.TNPingRequest{Parameter: parameter}), nil
 		},
-		func(data []byte) (interface{}, error) {
-			pong := pb.TNPingResponse{}
+		func(data []byte) (any, error) {
+			pong := api.TNPingResponse{}
 			protoc.MustUnmarshal(&pong, data)
 			return pong, nil
 		})

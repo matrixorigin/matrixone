@@ -275,6 +275,7 @@ message TxnCommitRequest {
 
 // TxnCommitResponse response of TxnCommitRequest. 
 message TxnCommitResponse {
+    repeated uint64 InvalidLockTables = 1;
 }
 
 // TxnCommitRequest CN sent the rollback request to coordinator TN.

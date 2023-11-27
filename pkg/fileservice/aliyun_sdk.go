@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	gotrace "runtime/trace"
 	"strconv"
 	"time"
@@ -52,6 +53,23 @@ func NewAliyunSDK(
 		return nil, err
 	}
 
+	// env vars
+	if args.OIDCRoleARN == "" {
+		if v := os.Getenv("ALIBABA_CLOUD_ROLE_ARN"); v != "" {
+			args.OIDCRoleARN = v
+		}
+	}
+	if args.OIDCProviderARN == "" {
+		if v := os.Getenv("ALIBABA_CLOUD_OIDC_PROVIDER_ARN"); v != "" {
+			args.OIDCProviderARN = v
+		}
+	}
+	if args.OIDCTokenFilePath == "" {
+		if v := os.Getenv("ALIBABA_CLOUD_OIDC_TOKEN_FILE"); v != "" {
+			args.OIDCTokenFilePath = v
+		}
+	}
+
 	opts := []oss.ClientOption{}
 	if args.Region != "" {
 		opts = append(opts, oss.Region(args.Region))
@@ -59,7 +77,11 @@ func NewAliyunSDK(
 	if args.SecurityToken != "" {
 		opts = append(opts, oss.SecurityToken(args.SecurityToken))
 	}
-	if credentialsProvider := args.credentialProviderForAliyunSDK(ctx); credentialsProvider != nil {
+	credentialsProvider, err := args.credentialProviderForAliyunSDK(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if credentialsProvider != nil {
 		opts = append(opts, oss.SetCredentialsProvider(credentialsProvider))
 	}
 
@@ -207,7 +229,7 @@ func (a *AliyunSDK) Write(
 	err error,
 ) {
 
-	_, err = a.putObject(
+	err = a.putObject(
 		ctx,
 		key,
 		r,
@@ -374,7 +396,7 @@ func (a *AliyunSDK) putObject(
 	r io.Reader,
 	size int64,
 	expire *time.Time,
-) (any, error) {
+) error {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
 	t0 := time.Now()
@@ -395,7 +417,7 @@ func (a *AliyunSDK) putObject(
 		key,
 		r,
 		opts...,
-	), nil
+	)
 }
 
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -446,7 +468,7 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 	return r, nil
 }
 
-func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (any, error) {
+func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
 	t0 := time.Now()
@@ -456,23 +478,23 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return doWithRetry[bool](
 		"s3 delete object",
-		func() (any, error) {
+		func() (bool, error) {
 			if err := a.bucket.DeleteObject(
 				key,
 				oss.WithContext(ctx),
 			); err != nil {
-				return nil, err
+				return false, err
 			}
-			return nil, nil
+			return true, nil
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
+func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
 	t0 := time.Now()
@@ -482,17 +504,17 @@ func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (any, err
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return doWithRetry[bool](
 		"s3 delete objects",
-		func() (any, error) {
+		func() (bool, error) {
 			_, err := a.bucket.DeleteObjects(
 				keys,
 				oss.WithContext(ctx),
 			)
 			if err != nil {
-				return nil, err
+				return false, err
 			}
-			return nil, nil
+			return true, nil
 		},
 		maxRetryAttemps,
 		isRetryableError,
@@ -514,83 +536,154 @@ func (a *AliyunSDK) is404(err error) bool {
 
 func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 	ctx context.Context,
-) (ret oss.CredentialsProvider) {
+) (ret oss.CredentialsProvider, err error) {
 
-	// role arn
 	defer func() {
-		if o.RoleARN != "" {
-			creds := ret.GetCredentials()
-			provider := &credentials.RAMRoleArnCredential{
-				AccessKeyId:     creds.GetAccessKeyID(),
-				AccessKeySecret: creds.GetAccessKeySecret(),
-				RoleArn:         o.RoleARN,
-				RoleSessionName: o.RoleSessionName,
-				ExternalId:      o.ExternalID,
+		if err != nil {
+			return
+		}
+		if o.AssumeRoleARN != "" {
+			// assume ram role
+			logutil.Info("aliyun sdk credential", zap.Any("using", "assume ram role"))
+			if ret == nil {
+				err = moerr.NewBadConfig(ctx, "assume ram role without credential")
+				return
 			}
-			v, err := provider.GetCredential()
-			if err == nil {
-				logutil.Info("aliyun sdk credential", zap.Any("using", "role arn"))
-				ret = aliyunCredentialsProviderFunc(func() (string, string, string) {
-					return *v.AccessKeyId, *v.AccessKeySecret, *v.SecurityToken
-				})
-			}
+			usingProvider := ret
+
+			ret = aliyunCredentialsProviderFunc(func() (string, string, string) {
+				creds := usingProvider.GetCredentials()
+				conf := &credentials.Config{
+					Type:            ptrTo("ram_role_arn"),
+					AccessKeyId:     ptrTo(creds.GetAccessKeyID()),
+					AccessKeySecret: ptrTo(creds.GetAccessKeySecret()),
+					SecurityToken:   ptrTo(creds.GetSecurityToken()),
+					RoleArn:         ptrTo(o.AssumeRoleARN),
+				}
+
+				if o.RoleSessionName != "" {
+					conf.RoleSessionName = &o.RoleSessionName
+				}
+				if o.ExternalID != "" {
+					conf.ExternalId = &o.ExternalID
+				}
+
+				var provider credentials.Credential
+				provider, err = credentials.NewCredential(conf)
+				if err != nil {
+					logutil.Error("aliyun credential error", zap.Error(err))
+					return "", "", ""
+				}
+
+				v, err := provider.GetCredential()
+				if err != nil {
+					logutil.Error("aliyun credential error", zap.Error(err))
+					return "", "", ""
+				}
+				return *v.AccessKeyId, *v.AccessKeySecret, *v.SecurityToken
+			})
 		}
 	}()
+
+	// try default nil config provider
+	{
+		provider, err := credentials.NewCredential(nil)
+		if err == nil {
+			_, err := provider.GetCredential()
+			if err == nil {
+				// ok
+				logutil.Info("aliyun sdk credential", zap.Any("using", "default"))
+				return toOSSCredentialProvider(provider), nil
+			}
+		}
+	}
 
 	// static
 	if o.KeyID != "" && o.KeySecret != "" {
 		logutil.Info("aliyun sdk credential", zap.Any("using", "static"))
 		return aliyunCredentialsProviderFunc(func() (string, string, string) {
 			return o.KeyID, o.KeySecret, o.SecurityToken
+		}), nil
+	}
+
+	// bearer token
+	if o.BearerToken != "" {
+		logutil.Info("aliyun sdk credential", zap.Any("using", "bearer token"))
+		provider, err := credentials.NewCredential(&credentials.Config{
+			Type:        ptrTo("bearer"),
+			BearerToken: &o.BearerToken,
 		})
+		if err != nil {
+			return nil, err
+		}
+		return toOSSCredentialProvider(provider), nil
+	}
+
+	// ram role
+	if o.RAMRole != "" {
+		logutil.Info("aliyun sdk credential", zap.Any("using", "ecs ram role"))
+		provider, err := credentials.NewCredential(&credentials.Config{
+			Type:     ptrTo("ecs_ram_role"),
+			RoleName: ptrTo(o.RAMRole),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return toOSSCredentialProvider(provider), nil
 	}
 
 	// from env
 	provider, err := oss.NewEnvironmentVariableCredentialsProvider()
 	if err == nil {
 		logutil.Info("aliyun sdk credential", zap.Any("using", "env"))
-		return &provider
+		return &provider, nil
 	}
 
 	// from aws env
 	awsCredentials := awscredentials.NewEnvCredentials()
-	v, err := awsCredentials.Get()
+	_, err = awsCredentials.Get()
 	if err == nil {
 		logutil.Info("aliyun sdk credential", zap.Any("using", "aws env"))
 		return aliyunCredentialsProviderFunc(func() (string, string, string) {
+			v, err := awsCredentials.Get()
+			if err != nil {
+				logutil.Error("aliyun credential error", zap.Error(err))
+				return "", "", ""
+			}
 			return v.AccessKeyID, v.SecretAccessKey, v.SessionToken
-		})
+		}), nil
 	}
 
-	// bearer token
-	if o.BearerToken != "" {
-		provider := &credentials.BearerTokenCredential{
-			BearerToken: o.BearerToken,
+	// oidc role arn
+	if o.OIDCProviderARN != "" {
+		logutil.Info("aliyun sdk credential", zap.Any("using", "oidc role arn"))
+		if o.OIDCRoleARN == "" {
+			panic("no role arn for oidc")
 		}
-		v, err := provider.GetCredential()
-		if err == nil {
-			logutil.Info("aliyun sdk credential", zap.Any("using", "bearer token"))
-			return aliyunCredentialsProviderFunc(func() (string, string, string) {
-				return *v.AccessKeyId, *v.AccessKeySecret, *v.SecurityToken
-			})
+		if o.OIDCTokenFilePath == "" {
+			panic("no token file path for oidc")
 		}
+		conf := &credentials.Config{
+			Type:              ptrTo("oidc_role_arn"),
+			RoleArn:           ptrTo(o.OIDCRoleARN),
+			OIDCProviderArn:   ptrTo(o.OIDCProviderARN),
+			OIDCTokenFilePath: ptrTo(o.OIDCTokenFilePath),
+		}
+		if o.RoleSessionName != "" {
+			conf.RoleSessionName = &o.RoleSessionName
+		}
+		if o.ExternalID != "" {
+			conf.ExternalId = &o.ExternalID
+		}
+		provider, err := credentials.NewCredential(conf)
+		if err != nil {
+			logutil.Error("aliyun credential error", zap.Error(err))
+			return nil, err
+		}
+		return toOSSCredentialProvider(provider), nil
 	}
 
-	// ram role
-	if o.RAMRole != "" {
-		provider := &credentials.EcsRAMRoleCredential{
-			RoleName: o.RAMRole,
-		}
-		v, err := provider.GetCredential()
-		if err == nil {
-			logutil.Info("aliyun sdk credential", zap.Any("using", "ecs ram role"))
-			return aliyunCredentialsProviderFunc(func() (string, string, string) {
-				return *v.AccessKeyId, *v.AccessKeySecret, *v.SecurityToken
-			})
-		}
-	}
-
-	return nil
+	return nil, nil
 }
 
 type aliyunCredentialsProviderFunc func() (string, string, string)
@@ -624,4 +717,51 @@ func (a aliyunCredential) GetAccessKeySecret() string {
 
 func (a aliyunCredential) GetSecurityToken() string {
 	return a.SecurityToken
+}
+
+func toOSSCredentialProvider(
+	provider credentials.Credential,
+) oss.CredentialsProvider {
+	return &ossCredentialProvider{
+		upstream: provider,
+	}
+}
+
+type ossCredentialProvider struct {
+	upstream credentials.Credential
+}
+
+var _ oss.CredentialsProvider = new(ossCredentialProvider)
+
+func (o *ossCredentialProvider) GetCredentials() oss.Credentials {
+	return o
+}
+
+var _ oss.Credentials = new(ossCredentialProvider)
+
+func (o *ossCredentialProvider) GetAccessKeyID() string {
+	ret, err := o.upstream.GetAccessKeyId()
+	if err != nil {
+		logutil.Error("aliyun credential error", zap.Error(err))
+		return ""
+	}
+	return *ret
+}
+
+func (o *ossCredentialProvider) GetAccessKeySecret() string {
+	ret, err := o.upstream.GetAccessKeySecret()
+	if err != nil {
+		logutil.Error("aliyun credential error", zap.Error(err))
+		return ""
+	}
+	return *ret
+}
+
+func (o *ossCredentialProvider) GetSecurityToken() string {
+	ret, err := o.upstream.GetSecurityToken()
+	if err != nil {
+		logutil.Error("aliyun credential error", zap.Error(err))
+		return ""
+	}
+	return *ret
 }

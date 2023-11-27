@@ -22,8 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -40,7 +42,8 @@ var (
 		},
 	}
 
-	defaultRPCTimeout = time.Second * 10
+	defaultRPCTimeout    = time.Second * 10
+	defaultHandleWorkers = 4
 )
 
 type client struct {
@@ -60,7 +63,8 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
 		morpc.WithBackendReadTimeout(defaultRPCTimeout))
 
-	client, err := c.cfg.NewClient("",
+	client, err := c.cfg.NewClient(
+		"lock-client",
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
@@ -84,6 +88,10 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	resp := v.(*pb.Response)
 	if err := resp.UnwrapError(); err != nil {
 		releaseResponse(resp)
+		// uuid and ip changed, async refresh cluster
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			c.cluster.ForceRefresh(false)
+		}
 		return nil, err
 	}
 	return resp, nil
@@ -95,41 +103,53 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	defer span.End()
 
 	var address string
-	switch request.Method {
-	case pb.Method_ForwardLock:
-		sid := request.Lock.Options.ForwardTo
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	case pb.Method_Lock,
-		pb.Method_Unlock,
-		pb.Method_GetTxnLock,
-		pb.Method_KeepRemoteLock:
-		sid := request.LockTable.ServiceID
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	case pb.Method_GetWaitingList:
-		sid := request.GetWaitingList.Txn.CreatedOn
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	default:
-		c.cluster.GetTNService(
-			clusterservice.NewSelector(),
-			func(d metadata.TNService) bool {
-				address = d.LockServiceAddress
-				return false
-			})
+	for i := 0; i < 2; i++ {
+		switch request.Method {
+		case pb.Method_ForwardLock:
+			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_Lock,
+			pb.Method_Unlock,
+			pb.Method_GetTxnLock,
+			pb.Method_KeepRemoteLock:
+			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_GetWaitingList:
+			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		default:
+			c.cluster.GetTNService(
+				clusterservice.NewSelector(),
+				func(d metadata.TNService) bool {
+					address = d.LockServiceAddress
+					return false
+				})
+		}
+		if address != "" {
+			break
+		}
+		if i == 0 {
+			c.cluster.ForceRefresh(true)
+		}
+	}
+	if address == "" {
+		getLogger().Error("cannot find lockservice address",
+			zap.String("request", request.DebugString()))
 	}
 	return c.client.Send(ctx, address, request)
 }
@@ -152,6 +172,9 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
+	requests chan requestCtx
+	stopper  *stopper.Stopper
+
 	options struct {
 		filter func(*pb.Request) bool
 	}
@@ -166,13 +189,17 @@ func NewServer(
 		cfg:      &cfg,
 		address:  address,
 		handlers: make(map[pb.Method]RequestHandleFunc),
+		requests: make(chan requestCtx, 10240),
+		stopper: stopper.NewStopper("lock-service-rpc-server",
+			stopper.WithLogger(getLogger().RawLogger())),
 	}
 	s.cfg.Adjust()
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer("server",
+	rpc, err := s.cfg.NewServer(
+		"lock-server",
 		address,
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
@@ -187,11 +214,21 @@ func NewServer(
 }
 
 func (s *server) Start() error {
+	for i := 0; i < defaultHandleWorkers; i++ {
+		if err := s.stopper.RunTask(s.handle); err != nil {
+			panic(err)
+		}
+	}
 	return s.rpc.Start()
 }
 
 func (s *server) Close() error {
-	return s.rpc.Close()
+	if err := s.rpc.Close(); err != nil {
+		return err
+	}
+	s.stopper.Stop()
+	close(s.requests)
+	return nil
 }
 
 func (s *server) RegisterMethodHandler(m pb.Method, h RequestHandleFunc) {
@@ -233,10 +270,17 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		return moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
+		err := moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
 			req.Method.String(),
 			cs.RemoteAddress(),
 			s.address)
+		writeResponse(
+			ctx,
+			msg.Cancel,
+			getResponse(req),
+			err,
+			cs)
+		return nil
 	}
 
 	select {
@@ -250,15 +294,41 @@ func (s *server) onMessage(
 	default:
 	}
 
-	fn := func(req *pb.Request) error {
-		defer releaseRequest(req)
-		resp := acquireResponse()
-		resp.RequestID = req.RequestID
-		resp.Method = req.Method
-		handler(ctx, msg.Cancel, req, resp, cs)
-		return nil
+	s.requests <- requestCtx{
+		req:     req,
+		handler: handler,
+		cs:      cs,
+		cancel:  msg.Cancel,
+		ctx:     ctx,
 	}
-	return fn(req)
+	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests)))
+	return nil
+}
+
+func (s *server) handle(ctx context.Context) {
+	fn := func(ctx requestCtx) {
+		req := ctx.req
+		defer releaseRequest(req)
+		resp := getResponse(req)
+		ctx.handler(ctx.ctx, ctx.cancel, req, resp, ctx.cs)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ctx := <-s.requests:
+			v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests)))
+			fn(ctx)
+		}
+	}
+}
+
+func getResponse(req *pb.Request) *pb.Response {
+	resp := acquireResponse()
+	resp.RequestID = req.RequestID
+	resp.Method = req.Method
+	return resp
 }
 
 func writeResponse(
@@ -304,4 +374,12 @@ func acquireResponse() *pb.Response {
 func releaseResponse(v morpc.Message) {
 	v.(*pb.Response).Reset()
 	responsePool.Put(v)
+}
+
+type requestCtx struct {
+	req     *pb.Request
+	handler RequestHandleFunc
+	cs      morpc.ClientSession
+	ctx     context.Context
+	cancel  context.CancelFunc
 }

@@ -15,11 +15,12 @@
 package functionAgg
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"math"
 )
 
 var (
@@ -33,7 +34,7 @@ var (
 	AggBitXorReturnType = AggBitAndReturnType
 )
 
-func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
 		return newGenericBitXor[uint8](overloadID, inputTypes[0], outputType, dist)
@@ -58,9 +59,9 @@ func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 	case types.T_binary, types.T_varbinary:
 		aggPriv := &sAggBinaryBitXor{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for bit_xor", inputTypes[0])
 }
@@ -68,14 +69,17 @@ func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 func newGenericBitXor[T numeric](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggBitXor[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
 type sAggBitXor[T numeric] struct{}
 type sAggBinaryBitXor struct{}
 
+func (s *sAggBitXor[T]) Dup() agg.AggStruct {
+	return &sAggBitXor[T]{}
+}
 func (s *sAggBitXor[T]) Grows(_ int)         {}
 func (s *sAggBitXor[T]) Free(_ *mpool.MPool) {}
 func (s *sAggBitXor[T]) Fill(groupNumber int64, value T, lastResult uint64, count int64, isEmpty bool, isNull bool) (uint64, bool, error) {
@@ -117,6 +121,9 @@ func (s *sAggBitXor[T]) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
+func (s *sAggBinaryBitXor) Dup() agg.AggStruct {
+	return &sAggBinaryBitXor{}
+}
 func (s *sAggBinaryBitXor) Grows(_ int)         {}
 func (s *sAggBinaryBitXor) Free(_ *mpool.MPool) {}
 func (s *sAggBinaryBitXor) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {

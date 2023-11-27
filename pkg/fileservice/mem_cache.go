@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
@@ -104,12 +105,13 @@ func (m *MemCache) Read(
 	err error,
 ) {
 
-	if vector.CachePolicy.Any(SkipMemoryReads) {
+	if vector.Policy.Any(SkipMemoryCacheReads) {
 		return nil
 	}
 
 	var numHit, numRead int64
 	defer func() {
+		v2.FSReadHitMemCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
@@ -159,7 +161,7 @@ func (m *MemCache) Update(
 	async bool,
 ) error {
 
-	if vector.CachePolicy.Any(SkipMemoryWrites) {
+	if vector.Policy.Any(SkipMemoryCacheWrites) {
 		return nil
 	}
 

@@ -18,10 +18,12 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -38,14 +40,13 @@ func (s *service) initDistributedTAE(
 	}
 	pu.TxnClient = client
 
-	// hakeeper
-	hakeeper, err := s.getHAKeeperClient()
-	if err != nil {
-		return err
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetTxnClient(s.cfg.UUID, client)
 	}
 
-	// Should be no fixed or some size?
-	mp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
+	// hakeeper
+	hakeeper, err := s.getHAKeeperClient()
 	if err != nil {
 		return err
 	}
@@ -61,9 +62,13 @@ func (s *service) initDistributedTAE(
 	blockio.Start()
 
 	// engine
+	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
 	s.storeEngine = disttae.New(
 		ctx,
-		mp,
+		distributeTaeMp,
 		fs,
 		client,
 		hakeeper,
@@ -72,14 +77,16 @@ func (s *service) initDistributedTAE(
 
 	// set up log tail client to subscribe table and receive table log.
 	cnEngine := pu.StorageEngine.(*disttae.Engine)
-	err = cnEngine.InitLogTailPushModel(
-		ctx,
-		mp,
-		s.timestampWaiter)
+	err = cnEngine.InitLogTailPushModel(ctx, s.timestampWaiter)
 	if err != nil {
 		return err
 	}
 
-	s.initInternalSQlExecutor(mp)
+	// internal sql executor.
+	internalExecutorMp, err := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	s.initInternalSQlExecutor(internalExecutorMp)
 	return nil
 }

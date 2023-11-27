@@ -265,6 +265,10 @@ func NewTxnStaleNoCtx() *Error {
 	return newError(Context(), ErrTxnStale)
 }
 
+func NewWaiterPausedNoCtx() *Error {
+	return newError(Context(), ErrWaiterPaused)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }

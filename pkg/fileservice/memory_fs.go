@@ -158,16 +158,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	var r io.Reader
-	r = newIOEntriesReader(ctx, vector.Entries)
-
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		r = io.TeeReader(r, h)
-		defer func() {
-			*vector.Hash.Sum = h.Sum(nil)
-		}()
-	}
+	r := newIOEntriesReader(ctx, vector.Entries)
 
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -308,6 +299,10 @@ func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, er
 		IsDir: false,
 		Size:  int64(len(fsEntry.Data)),
 	}, nil
+}
+
+func (m *MemoryFS) PrefetchFile(ctx context.Context, filePath string) error {
+	return nil
 }
 
 func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {

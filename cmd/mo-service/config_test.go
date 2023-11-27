@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"reflect"
 	"testing"
 
@@ -95,7 +96,7 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "DISK-ETL",
 	})
 
-	fs, err := c.createFileService(ctx, "A", globalCounterSet, 0, "")
+	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
 }
@@ -181,4 +182,10 @@ service-addresses = [
 	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
+}
+
+func TestDumpCommonConfig(t *testing.T) {
+	cfg1 := *NewConfig()
+	_, err := dumpCommonConfig(cfg1)
+	assert.NoError(t, err)
 }

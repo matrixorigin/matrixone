@@ -16,11 +16,12 @@ package functionAgg
 
 import (
 	"encoding/json"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"sort"
 )
 
 var (
@@ -48,7 +49,7 @@ var (
 	}
 )
 
-func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_int8:
 		return newGenericMedian[int8](overloadID, inputTypes[0], outputType, dist)
@@ -75,13 +76,13 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimal128Median{}
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for median", inputTypes[0])
 }
@@ -91,13 +92,23 @@ func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputT
 	if dist {
 		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
 type sAggMedian[T numeric] struct{ values []numericSlice[T] }
 type sAggDecimal64Median struct{ values []decimal64Slice }
 type sAggDecimal128Median struct{ values []decimal128Slice }
 
+func (s *sAggMedian[T]) Dup() agg.AggStruct {
+	val := &sAggMedian[T]{
+		values: make([]numericSlice[T], len(s.values)),
+	}
+	for i, v := range s.values {
+		val.values[i] = make(numericSlice[T], len(v))
+		copy(s.values[i], v)
+	}
+	return val
+}
 func (s *sAggMedian[T]) Grows(cnt int) {
 	oldLen := len(s.values)
 	s.values = append(s.values, make([]numericSlice[T], cnt)...)
@@ -174,6 +185,16 @@ type NumericMedian[T numeric] struct {
 	Vals []numericSlice[T]
 }
 
+func (s *sAggDecimal64Median) Dup() agg.AggStruct {
+	val := &sAggDecimal64Median{
+		values: make([]decimal64Slice, len(s.values)),
+	}
+	for i, v := range s.values {
+		val.values[i] = make(decimal64Slice, len(v))
+		copy(s.values[i], v)
+	}
+	return val
+}
 func (s *sAggDecimal64Median) Grows(cnt int) {
 	oldLen := len(s.values)
 	s.values = append(s.values, make([]decimal64Slice, cnt)...)
@@ -261,6 +282,16 @@ func (s *sAggDecimal64Median) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+func (s *sAggDecimal128Median) Dup() agg.AggStruct {
+	val := &sAggDecimal128Median{
+		values: make([]decimal128Slice, len(s.values)),
+	}
+	for i, v := range s.values {
+		val.values[i] = make(decimal128Slice, len(v))
+		copy(s.values[i], v)
+	}
+	return val
+}
 func (s *sAggDecimal128Median) Grows(cnt int) {
 	oldLen := len(s.values)
 	s.values = append(s.values, make([]decimal128Slice, cnt)...)

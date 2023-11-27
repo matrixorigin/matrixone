@@ -147,3 +147,18 @@ select min(distinct a),min(distinct grp) from t1;
 min(distinct a)	    min(distinct grp)
 1	1
 drop table t1;
+
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
+SELECT MIN(a) FROM t1;
+min(a)
+1
+DELETE FROM t1 WHERE a<=50000;
+SELECT MIN(a) FROM t1;
+min(a)
+50001
+DELETE FROM t1 WHERE a%2=1;
+SELECT MIN(a) FROM t1;
+min(a)
+50002
+DROP TABLE t1;

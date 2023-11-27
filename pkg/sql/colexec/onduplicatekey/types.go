@@ -18,9 +18,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	Build = iota
@@ -28,14 +31,13 @@ const (
 	End
 )
 
-type proc = process.Process
-
 type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch //batch to check conflict
-	insertBat        *batch.Batch //the final batch
+	checkConflictBat *batch.Batch   //batch to check conflict
+	insertBats       []*batch.Batch //the final batch
+	rbat             *batch.Batch
 }
 
 type Argument struct {
@@ -53,15 +55,32 @@ type Argument struct {
 
 	IdxIdx []int32
 
-	ctr *container
+	ctr      *container
+	IsIgnore bool
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-
-		if arg.ctr.insertBat != nil {
-			arg.ctr.insertBat.Clean(proc.GetMPool())
+		if len(arg.ctr.insertBats) > 0 {
+			for _, bat := range arg.ctr.insertBats {
+				bat.Clean(proc.Mp())
+			}
+			arg.ctr.insertBats = nil
+		}
+		if arg.ctr.rbat != nil {
+			arg.ctr.rbat.Clean(proc.GetMPool())
 		}
 		if arg.ctr.checkConflictBat != nil {
 			arg.ctr.checkConflictBat.Clean(proc.GetMPool())

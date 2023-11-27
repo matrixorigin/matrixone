@@ -43,7 +43,7 @@ jobs:
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "1.0.0"
+          milestone: "1.1.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -87,7 +87,7 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'closed'
     steps:
       - name: Reopen Issue
-        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'sukki37' && github.event.sender.login != 'aressu1985' && github.event.sender.login != 'fengttt'
+        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'sukki37' && github.event.sender.login != 'aressu1985' && github.event.sender.login != 'fengttt' && github.event.sender.login != 'florashi181'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'open-issue'
@@ -180,7 +180,11 @@ jobs:
           locale
 
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "============================"
+          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
       - name: Generate UT and BVT Coverage File
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10

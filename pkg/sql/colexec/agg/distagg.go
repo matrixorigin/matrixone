@@ -29,17 +29,19 @@ func NewUnaryDistAgg[T1, T2 any](
 	grows func(int),
 	eval func([]T2) ([]T2, error),
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryDistAgg[T1, T2]] {
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
+	partialresult any) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
-		op:         op,
-		priv:       priv,
-		outputType: otyp,
-		eval:       eval,
-		fill:       fill,
-		grows:      grows,
-		merge:      merge,
-		isCount:    isCount,
-		inputTypes: []types.Type{ityp},
+		op:            op,
+		priv:          priv,
+		outputType:    otyp,
+		eval:          eval,
+		fill:          fill,
+		grows:         grows,
+		merge:         merge,
+		isCount:       isCount,
+		inputTypes:    []types.Type{ityp},
+		partialresult: partialresult,
 	}
 }
 
@@ -458,6 +460,20 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus 
 }
 
 func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
+	if a.partialresult != nil {
+		if a.isCount {
+			var x T1
+			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.partialresult.(int64), false, false)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			a.vs[0], a.es[0], err = a.fill(0, a.partialresult.(T1), a.vs[0], 1, a.es[0], false)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	a.vs, err = a.eval(a.vs)
 	if err != nil {
 		return nil, err
@@ -505,6 +521,40 @@ func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {
 
 func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
+}
+
+// todo need improve performance
+func (a *UnaryDistAgg[T1, T2]) Dup(m *mpool.MPool) Agg[any] {
+	val := &UnaryDistAgg[T1, T2]{
+		op:            a.op,
+		priv:          a.priv.Dup(),
+		vs:            make([]T2, len(a.vs)),
+		es:            make([]bool, len(a.es)),
+		da:            make([]byte, len(a.da)),
+		srcs:          make([][]T1, len(a.srcs)),
+		isCount:       a.isCount,
+		outputType:    a.outputType,
+		inputTypes:    make([]types.Type, len(a.inputTypes)),
+		grows:         a.grows,
+		eval:          a.eval,
+		merge:         a.merge,
+		fill:          a.fill,
+		partialresult: a.partialresult,
+		maps:          make([]*hashmap.StrHashMap, len(a.maps)),
+	}
+	copy(val.vs, a.vs)
+	copy(val.es, a.es)
+	copy(val.da, a.da)
+	copy(val.inputTypes, a.inputTypes)
+	for i, src := range a.srcs {
+		val.srcs[i] = make([]T1, len(src))
+		copy(val.srcs[i], src)
+	}
+	for i, smap := range a.maps {
+		val.maps[i] = smap.Dup(m)
+	}
+
+	return val
 }
 
 func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {

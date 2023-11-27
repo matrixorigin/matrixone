@@ -53,6 +53,8 @@ const (
 	DefaultListenHost     = "0.0.0.0"
 	DefaultServiceHost    = "127.0.0.1"
 	DefaultLogServicePort = 32001
+
+	defaultRestoreFilePath = "hk_data"
 )
 
 var (
@@ -69,13 +71,13 @@ type Config struct {
 	// will not be able to communicate via raft.
 	DeploymentID uint64 `toml:"deployment-id"`
 	// UUID is the UUID of the log service node. UUID value must be set.
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// RTTMillisecond is the average round trip time between log service nodes in
 	// milliseconds.
 	RTTMillisecond uint64 `toml:"rttmillisecond"`
 	// DataDir is the name of the directory for storing all log service data. It
 	// should a locally mounted partition with good write and fsync performance.
-	DataDir string `toml:"data-dir"`
+	DataDir string `toml:"data-dir" user_setting:"basic"`
 	// SnapshotExportDir is the directory where the dragonboat snapshots are
 	// exported.
 	SnapshotExportDir string `toml:"snapshot-export-dir"`
@@ -88,7 +90,7 @@ type Config struct {
 	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
 	// other nodes such as TN nodes. It is deprecated and will be removed.
-	ServiceAddress string `toml:"logservice-address"`
+	ServiceAddress string `toml:"logservice-address" user_setting:"advanced"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
 	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
@@ -97,7 +99,7 @@ type Config struct {
 	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
 	// via their raft layer. It is deprecated and will be removed.
-	RaftAddress string `toml:"raft-address"`
+	RaftAddress string `toml:"raft-address" user_setting:"advanced"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	// It is deprecated and will be removed.
 	RaftListenAddress string `toml:"raft-listen-address"`
@@ -112,7 +114,7 @@ type Config struct {
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	// It is deprecated and will be removed.
-	GossipAddress string `toml:"gossip-address"`
+	GossipAddress string `toml:"gossip-address" user_setting:"advanced"`
 	// GossipAddressV2 is the address used for accepting gossip communication.
 	// This is for domain name support. It is deprecated and will be removed.
 	GossipAddressV2 string `toml:"gossip-address-v2"`
@@ -123,7 +125,7 @@ type Config struct {
 	GossipPort int `toml:"gossip-port"`
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
-	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	GossipSeedAddresses []string `toml:"gossip-seed-addresses" user_setting:"advanced"`
 	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// GossipAllowSelfAsSeed allow use self as gossip seed
@@ -184,12 +186,15 @@ type Config struct {
 		// is when Config.UUID is found in InitHAKeeperMembers, then the corresponding
 		// replica ID value will be used to launch a HAKeeper replica on the Log
 		// Service instance.
-		InitHAKeeperMembers []string `toml:"init-hakeeper-members"`
+		InitHAKeeperMembers []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 		// Restore structure is used when the cluster needs to restore data.
 		Restore struct {
 			// FilePath is the path of the file, which contains the backup data.
 			// If is not set, nothing will be done for restore.
 			FilePath string `toml:"file-path"`
+			// Force means that we force to do restore even if RESTORED tag file
+			// already exists.
+			Force bool `toml:"force"`
 		} `toml:"restore"`
 	}
 
@@ -404,9 +409,10 @@ func DefaultConfig() Config {
 			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
 			NumOfTNShards         uint64   `toml:"num-of-tn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
-			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
+			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 			Restore               struct {
 				FilePath string `toml:"file-path"`
+				Force    bool   `toml:"force"`
 			} `toml:"restore"`
 		}(struct {
 			BootstrapCluster      bool
@@ -416,6 +422,7 @@ func DefaultConfig() Config {
 			InitHAKeeperMembers   []string
 			Restore               struct {
 				FilePath string
+				Force    bool
 			}
 		}{
 			BootstrapCluster:      true,
@@ -423,7 +430,13 @@ func DefaultConfig() Config {
 			NumOfTNShards:         1,
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
-			Restore:               struct{ FilePath string }{FilePath: ""},
+			Restore: struct {
+				FilePath string
+				Force    bool
+			}{
+				FilePath: defaultRestoreFilePath,
+				Force:    false,
+			},
 		}),
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`

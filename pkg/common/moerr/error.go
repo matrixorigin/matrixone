@@ -40,6 +40,10 @@ const (
 
 	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
 
+	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
+	// phenomenon that the connection is not safe to transfer to other nodes.
+	OkExpectedNotSafeToStartTransfer uint16 = 6
+
 	OkMax uint16 = 99
 
 	// 100 - 200 is Info
@@ -78,6 +82,8 @@ const (
 	ErrWrongValueCountOnRow uint16 = 20308
 	ErrBadFieldError        uint16 = 20309
 	ErrWrongDatetimeSpec    uint16 = 20310
+	ErrUpgrateError         uint16 = 20311
+	ErrInvalidTz            uint16 = 20312
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -139,7 +145,7 @@ const (
 	ErrForeignKeyColumnCannotChangeChild        uint16 = 20456
 	ErrForeignKeyColumnCannotChange             uint16 = 20457
 	ErrForeignKeyOnPartitioned                  uint16 = 20458
-	ErrKeyColumnDoesNotExits                    uint16 = 20459
+	ErrKeyColumnDoesNotExist                    uint16 = 20459
 	ErrCantDropFieldOrKey                       uint16 = 20460
 	ErrTableMustHaveColumns                     uint16 = 20461
 	ErrCantRemoveAllFields                      uint16 = 20462
@@ -204,6 +210,7 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
+	ErrWaiterPaused               uint16 = 20633
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -235,6 +242,10 @@ const (
 	ErrPartitionMaxvalue                   uint16 = 20817
 	ErrRangeNotIncreasing                  uint16 = 20818
 	ErrCheckRecursiveLevel                 uint16 = 20819
+	ErrSameNamePartitionField              uint16 = 20820
+	ErrMaxvalueInValuesIn                  uint16 = 20821
+	ErrRowSinglePartitionField             uint16 = 20822
+	ErrTooManyPartitionFuncFields          uint16 = 20823
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -293,6 +304,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
+	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -354,7 +366,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
-	ErrKeyColumnDoesNotExits:                    {ER_KEY_COLUMN_DOES_NOT_EXITS, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
 	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
 	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
@@ -406,6 +418,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
 	ErrTxnStale:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn is stale: timestamp is too small"},
+	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -433,6 +446,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
 	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
+	ErrSameNamePartitionField:              {ER_SAME_NAME_PARTITION_FIELD, []string{MySQLDefaultSqlState}, "Duplicate partition field name '%-.192s'"},
+	ErrMaxvalueInValuesIn:                  {ER_MAXVALUE_IN_VALUES_IN, []string{MySQLDefaultSqlState}, "Cannot use MAXVALUE as value in VALUES IN"},
+	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
+	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -593,6 +610,7 @@ var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -623,6 +641,10 @@ func GetOkExpectedPossibleDup() *Error {
 	return &errOkExpectedPossibleDup
 }
 
+func GetOkExpectedNotSafeToStartTransfer() *Error {
+	return &errOkExpectedNotSafeToStartTransfer
+}
+
 func NewInfo(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInfo, msg)
 }
@@ -642,6 +664,10 @@ func NewBadS3Config(ctx context.Context, msg string) *Error {
 func NewInternalError(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
 	return newError(ctx, ErrInternal, xmsg)
+}
+
+func NewUpgrateError(ctx context.Context, dbName string, table string, tenant string, tenantId uint32, errmsg string) *Error {
+	return newError(ctx, ErrUpgrateError, dbName, table, tenant, tenantId, errmsg)
 }
 
 func NewNYI(ctx context.Context, msg string, args ...any) *Error {
@@ -1102,12 +1128,28 @@ func NewValuesIsNotIntType(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrValuesIsNotIntType, k)
 }
 
-func NewPartitionColumnList(ctx context.Context) *Error {
+func NewErrPartitionColumnList(ctx context.Context) *Error {
 	return newError(ctx, ErrPartitionColumnList)
 }
 
 func NewSameNamePartition(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrSameNamePartition)
+	return newError(ctx, ErrSameNamePartition, k)
+}
+
+func NewSameNamePartitionField(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrSameNamePartitionField, k)
+}
+
+func NewErrMaxvalueInValuesIn(ctx context.Context) *Error {
+	return newError(ctx, ErrMaxvalueInValuesIn)
+}
+
+func NewErrRowSinglePartitionField(ctx context.Context) *Error {
+	return newError(ctx, ErrRowSinglePartitionField)
+}
+
+func NewErrTooManyPartitionFuncFields(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrTooManyPartitionFuncFields, k)
 }
 
 func NewErrTooManyPartitions(ctx context.Context) *Error {
@@ -1157,8 +1199,8 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
 }
 
-func NewErrKeyColumnDoesNotExits(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrKeyColumnDoesNotExits, k)
+func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrKeyColumnDoesNotExist, k)
 }
 
 func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {

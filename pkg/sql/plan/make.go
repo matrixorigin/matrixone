@@ -322,12 +322,12 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType *Type) (*Ex
 	}
 	args[len(args)-1] = expr
 	if 20 <= expr.Typ.Id && expr.Typ.Id <= 29 {
-		expr, err = bindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		expr, err = bindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, args)
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, args)
 		if err != nil {
 			return nil, err
 		}

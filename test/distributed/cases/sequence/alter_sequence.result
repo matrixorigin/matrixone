@@ -24,19 +24,19 @@ last_seq_num    min_value    max_value    start_value    increment_value    cycl
 alter sequence alter_seq_01 start with 40;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-40    30    100    40    3    false    false
+30    30    100    40    3    false    false
 alter sequence alter_seq_01 minvalue 10;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-40    10    100    40    3    false    false
+30    10    100    30    3    false    false
 alter sequence alter_seq_01 maxvalue 1000;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-40    10    1000    40    3    false    false
+30    10    1000    30    3    false    false
 alter sequence alter_seq_01 minvalue 10000 maxvalue 10;
-invalid input: Max value of sequence must be bigger than min value of it
+invalid input: MAXVALUE (10) of sequence must be bigger than MINVALUE (10000) of it
 alter sequence alter_seq_01 minvalue 1 maxvalue 1000000000 cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-40    1    1000000000    40    3    true    false
+30    1    1000000000    30    3    true    false
 drop sequence alter_seq_01;

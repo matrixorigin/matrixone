@@ -231,9 +231,9 @@ SHOW CREATE TABLE mo_catalog.mo_columns;
 Table    Create Table
 mo_columns    CREATE TABLE `mo_columns` (\n`att_uniq_name` VARCHAR(256) DEFAULT NULL,\n`account_id` INT UNSIGNED DEFAULT NULL,\n`att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_database` VARCHAR(256) DEFAULT NULL,\n`att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_relname` VARCHAR(256) DEFAULT NULL,\n`attname` VARCHAR(256) DEFAULT NULL,\n`atttyp` VARCHAR(256) DEFAULT NULL,\n`attnum` INT DEFAULT NULL,\n`att_length` INT DEFAULT NULL,\n`attnotnull` TINYINT DEFAULT NULL,\n`atthasdef` TINYINT DEFAULT NULL,\n`att_default` VARCHAR(2048) DEFAULT NULL,\n`attisdropped` TINYINT DEFAULT NULL,\n`att_constraint_type` CHAR(1) DEFAULT NULL,\n`att_is_unsigned` TINYINT DEFAULT NULL,\n`att_is_auto_increment` TINYINT DEFAULT NULL,\n`att_comment` VARCHAR(2048) DEFAULT NULL,\n`att_is_hidden` TINYINT DEFAULT NULL,\n`attr_has_update` TINYINT DEFAULT NULL,\n`attr_update` VARCHAR(2048) DEFAULT NULL,\n`attr_is_clusterby` TINYINT DEFAULT NULL,\n`attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n`attr_enum` VARCHAR(65535) DEFAULT NULL,\nPRIMARY KEY (`att_uniq_name`)\n)
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
-no such table mo_sample_data_tpch_sf1.lineitem
+invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
-no such table mo_sample_data_tpch_sf1.supplier
+invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mysql.columns_priv;
 Table    Create Table
 columns_priv    CREATE TABLE `columns_priv` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`table_name` CHAR(64) DEFAULT '',\n`column_name` CHAR(64) DEFAULT '',\n`timestamp` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n`column_priv` VARCHAR(10) DEFAULT '',\nPRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
@@ -437,7 +437,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''        
 routine_name    CHAR(64)    NO    PRI    ''        
 routine_type    VARCHAR(10)    NO    PRI    null        
-grantor    VARCHAR(288)    NO        ''        
+grantor    VARCHAR(288)    NO    MUL    ''        
 proc_priv    VARCHAR(10)    NO        ''        
 timestamp    TIMESTAMP(0)    NO        current_timestamp()        
 DESC `mysql`.`tables_priv` ;
@@ -446,7 +446,7 @@ host    CHAR(255)    NO    PRI    ''
 db    CHAR(64)    NO    PRI    ''        
 user    CHAR(32)    NO    PRI    ''        
 table_name    CHAR(64)    NO    PRI    ''        
-grantor    VARCHAR(288)    NO        ''        
+grantor    VARCHAR(288)    NO    MUL    ''        
 timestamp    TIMESTAMP(0)    NO        current_timestamp()        
 table_priv    VARCHAR(10)    NO        ''        
 column_priv    VARCHAR(10)    NO        ''        
@@ -578,8 +578,6 @@ SELECT `statement_id`,`stats`,`duration`,`sql_source_type`,`account`,`response_a
 statement_id    stats    duration    sql_source_type    account    response_at
 SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and collecttime > '2023-07-28 06:07:53' and collecttime <= '2023-07-28 06:10:53' ORDER BY collecttime DESC LIMIT 1;
 value
-SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
-collecttime
 SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
 SQL parser error: table "moins" does not exist
 SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
@@ -596,8 +594,8 @@ system_metrics    7    accountadmin
 information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
-mo_catalog    18    -
-SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
+mo_catalog    21    -
+SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE (relname NOT LIKE "__mo_index_secondary_%" AND relname NOT LIKE "__mo_index_unique_%" OR relname IS NULL) ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
 information_schema    character_sets    r    accountadmin
@@ -616,7 +614,9 @@ information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
 information_schema    views    v    accountadmin
+mo_catalog    mo_cache    v    accountadmin
 mo_catalog    mo_columns    r    -
+mo_catalog    mo_configurations    v    accountadmin
 mo_catalog    mo_database    r    -
 mo_catalog    mo_increment_columns        accountadmin
 mo_catalog    mo_indexes    r    accountadmin
@@ -627,14 +627,15 @@ mo_catalog    mo_role    r    accountadmin
 mo_catalog    mo_role_grant    r    accountadmin
 mo_catalog    mo_role_privs    r    accountadmin
 mo_catalog    mo_sessions    v    accountadmin
-mo_catalog    mo_configurations    v    accountadmin
 mo_catalog    mo_stages    r    accountadmin
 mo_catalog    mo_stored_procedure    r    accountadmin
 mo_catalog    mo_table_partitions    r    accountadmin
 mo_catalog    mo_tables    r    -
+mo_catalog    mo_transactions    v    accountadmin
 mo_catalog    mo_user    r    accountadmin
 mo_catalog    mo_user_defined_function    r    accountadmin
 mo_catalog    mo_user_grant    r    accountadmin
+mo_catalog    mo_variables    v    accountadmin
 mysql    columns_priv    r    accountadmin
 mysql    db    r    accountadmin
 mysql    procs_priv    r    accountadmin

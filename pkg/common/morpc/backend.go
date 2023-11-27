@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
 )
 
@@ -117,21 +120,30 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
+// WithBackendMetrics setup backend metrics
+func WithBackendMetrics(metrics *metrics) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.metrics = metrics
+	}
+}
+
 type remoteBackend struct {
-	remote      string
-	logger      *zap.Logger
-	codec       Codec
-	conn        goetty.IOSession
-	writeC      chan *Future
-	stopWriteC  chan struct{}
-	resetConnC  chan struct{}
-	stopper     *stopper.Stopper
-	readStopper *stopper.Stopper
-	closeOnce   sync.Once
-	ctx         context.Context
-	cancel      context.CancelFunc
-	cancelOnce  sync.Once
-	pingTimer   *time.Timer
+	remote       string
+	metrics      *metrics
+	logger       *zap.Logger
+	codec        Codec
+	conn         goetty.IOSession
+	writeC       chan *Future
+	stopWriteC   chan struct{}
+	resetConnC   chan struct{}
+	stopper      *stopper.Stopper
+	readStopper  *stopper.Stopper
+	closeOnce    sync.Once
+	ctx          context.Context
+	cancel       context.CancelFunc
+	cancelOnce   sync.Once
+	pingTimer    *time.Timer
+	lastPingTime time.Time
 
 	options struct {
 		hasPayloadResponse bool
@@ -189,6 +201,8 @@ func NewRemoteBackend(
 		opt(rb)
 	}
 	rb.adjust()
+	rb.metrics.createCounter.Inc()
+
 	rb.ctx, rb.cancel = context.WithCancel(context.Background())
 	rb.pool.futures = &sync.Pool{
 		New: func() interface{} {
@@ -243,7 +257,7 @@ func (rb *remoteBackend) adjust() {
 		rb.options.batchSendSize = 8
 	}
 	if rb.options.connectTimeout == 0 {
-		rb.options.connectTimeout = time.Second * 10
+		rb.options.connectTimeout = time.Second * 5
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -312,6 +326,8 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 }
 
 func (rb *remoteBackend) doSend(f *Future) error {
+	rb.metrics.sendCounter.Inc()
+
 	if err := rb.codec.Valid(f.send.Message); err != nil {
 		return err
 	}
@@ -328,6 +344,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
 		case rb.writeC <- f:
+			rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
 			rb.stateMu.RUnlock()
 			return nil
 		case <-f.send.Ctx.Done():
@@ -340,6 +357,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
+	rb.metrics.closeCounter.Inc()
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -424,12 +442,25 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
+	lastScheduleTime := time.Now()
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
+		interval := time.Since(lastScheduleTime)
+		if rb.options.readTimeout > 0 && interval > time.Second*5 {
+			getLogger().Warn("system is busy, write loop schedule interval is too large",
+				zap.Duration("interval", interval),
+				zap.Time("last-ping-trigger-time", rb.lastPingTime),
+				zap.Duration("ping-interval", rb.getPingTimeout()))
+		}
 		if len(messages) > 0 {
+			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
+			start := time.Now()
+
 			writeTimeout := time.Duration(0)
 			written := messages[:0]
 			for _, f := range messages {
+				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+
 				id := f.getSendMessageID()
 				if stopped {
 					f.messageSent(backendClosed)
@@ -457,10 +488,13 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					}
 				}
 			}
+
+			rb.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
 		}
 		if stopped {
 			return
 		}
+		lastScheduleTime = time.Now()
 	}
 }
 
@@ -533,6 +567,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				rb.scheduleResetConn()
 				return
 			}
+			rb.metrics.receiveCounter.Inc()
 
 			rb.active()
 
@@ -549,20 +584,38 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 }
 
 func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
+	defer func() {
+		rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
+	}()
+
 	n := len(messages)
 	for i := 0; i < n; i++ {
 		messages[i] = nil
 	}
 	messages = messages[:0]
-	select {
-	case <-rb.pingTimer.C:
+
+	doHeartbeat := func() {
+		rb.lastPingTime = time.Now()
 		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
 		// no need wait response, close immediately
 		f.Close()
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		messages = append(messages, f)
 		rb.pingTimer.Reset(rb.getPingTimeout())
+	}
+	handleHeartbeat := func() {
+		select {
+		case <-rb.pingTimer.C:
+			doHeartbeat()
+		default:
+		}
+	}
+
+	select {
+	case <-rb.pingTimer.C:
+		doHeartbeat()
 	case f := <-rb.writeC:
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		handleHeartbeat()
+		messages = append(messages, f)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
@@ -571,10 +624,15 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
-	return messages, false
+
+	return rb.fetchN(messages, maxFetchCount), false
 }
 
-func (rb *remoteBackend) fetchN(messages []*Future, n int) []*Future {
+func (rb *remoteBackend) fetchN(messages []*Future, max int) []*Future {
+	if len(messages) >= max {
+		return messages
+	}
+	n := max - len(messages)
 	for i := 0; i < n; i++ {
 		select {
 		case f := <-rb.writeC:
@@ -676,6 +734,11 @@ func (rb *remoteBackend) stopWriteLoop() {
 }
 
 func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+	start := time.Now()
+	defer func() {
+		rb.metrics.doneDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	response := msg.Message
 	if msg.Cancel != nil {
 		defer msg.Cancel()
@@ -738,6 +801,10 @@ func (rb *remoteBackend) running() bool {
 
 func (rb *remoteBackend) resetConn() error {
 	start := time.Now()
+	defer func() {
+		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	wait := time.Second
 	sleep := time.Millisecond * 200
 	for {
@@ -752,14 +819,28 @@ func (rb *remoteBackend) resetConn() error {
 
 		rb.logger.Debug("start connect to remote")
 		rb.closeConn(false)
+		rb.metrics.connectCounter.Inc()
 		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed")
 			rb.activeReadLoop(false)
 			return nil
 		}
-		rb.logger.Error("init remote connection failed, retry later", zap.Error(err))
 
+		rb.metrics.connectFailedCounter.Inc()
+
+		// only retry on temp net error
+		canRetry := false
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			canRetry = true
+		}
+		rb.logger.Error("init remote connection failed, retry later",
+			zap.Bool("can-retry", canRetry),
+			zap.Error(err))
+
+		if !canRetry {
+			return err
+		}
 		duration := time.Duration(0)
 		for {
 			time.Sleep(sleep)
@@ -834,6 +915,8 @@ func (rb *remoteBackend) scheduleResetConn() {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
 	case <-time.After(time.Second * 10):
+		// dump all goroutines to stderr
+		profile.ProfileGoroutine(os.Stderr, 2)
 		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
 	}
 }
@@ -876,8 +959,11 @@ func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) Backend
 	}
 }
 
-func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
-	return NewRemoteBackend(remote, bf.codec, bf.options...)
+func (bf *goettyBasedBackendFactory) Create(
+	remote string,
+	extraOptions ...BackendOption) (Backend, error) {
+	opts := append(bf.options, extraOptions...)
+	return NewRemoteBackend(remote, bf.codec, opts...)
 }
 
 type stream struct {

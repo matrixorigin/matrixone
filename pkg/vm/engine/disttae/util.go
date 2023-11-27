@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"strings"
 
@@ -1103,24 +1106,24 @@ func getCompositeFilterFuncByExpr(
 		return EvalSelectedOnFixedSizeColumnFactory(val.Dval)
 	case *plan.Const_Timeval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Timeval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Time(val.Timeval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Timeval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Time(val.Timeval))
 	case *plan.Const_Timestampval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Timestampval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Timestamp(val.Timestampval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Timestampval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Timestamp(val.Timestampval))
 	case *plan.Const_Dateval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Dateval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Date(val.Dateval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Dateval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Date(val.Dateval))
 	case *plan.Const_Datetimeval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Datetimeval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Datetime(val.Datetimeval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Datetimeval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Datetime(val.Datetimeval))
 	case *plan.Const_Decimal64Val:
 		v := types.Decimal64(val.Decimal64Val.A)
 		if isSorted {
@@ -1286,4 +1289,123 @@ func extractPKValueFromEqualExprs(
 		}
 	}
 	return
+}
+
+// ListTnService gets all tn service in the cluster
+func ListTnService(appendFn func(service *metadata.TNService)) {
+	mc := clusterservice.GetMOCluster()
+	mc.GetTNService(clusterservice.NewSelector(), func(tn metadata.TNService) bool {
+		if appendFn != nil {
+			appendFn(&tn)
+		}
+		return true
+	})
+}
+
+// util function for object stats
+
+// UnfoldBlkInfoFromObjStats constructs a block info list from the given object stats.
+// this unfolds all block info at one operation, if an object contains a great many of blocks,
+// this operation is memory sensitive, we recommend another way, StatsBlkIter or ForEach.
+func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.BlockInfo) {
+	if stats.IsZero() {
+		return blks
+	}
+
+	name := stats.ObjectName()
+	blkCnt := uint16(stats.BlkCnt())
+	rowTotalCnt := stats.Rows()
+	accumulate := uint32(0)
+
+	for idx := uint16(0); idx < blkCnt; idx++ {
+		blkRows := uint32(options.DefaultBlockMaxRows)
+		if idx == blkCnt-1 {
+			blkRows = rowTotalCnt - accumulate
+		}
+		accumulate += blkRows
+		loc := objectio.BuildLocation(name, stats.Extent(), blkRows, idx)
+		blks = append(blks, catalog.BlockInfo{
+			BlockID:   *objectio.BuildObjectBlockid(name, idx),
+			MetaLoc:   catalog.ObjectLocation(loc),
+			SegmentID: name.SegmentId(),
+		})
+	}
+
+	return blks
+}
+
+// ForeachBlkInObjStatsList receives an object stats list,
+// and visits each blk of these object stats by OnBlock,
+// until the onBlock returns false or all blks have been enumerated.
+// when onBlock returns a false,
+// the nextStats argument decides whether continue onBlock on the next stats or exit foreach completely.
+func ForeachBlkInObjStatsList(
+	nextStats bool,
+	onBlock func(blk *catalog.BlockInfo) bool, statsList ...objectio.ObjectStats) {
+	stop := false
+	statsCnt := len(statsList)
+
+	for idx := 0; idx < statsCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&statsList[idx])
+		for iter.Next() {
+			blk := iter.Entry()
+			if !onBlock(blk) {
+				stop = true
+				break
+			}
+		}
+
+		if stop && nextStats {
+			stop = false
+		}
+	}
+}
+
+type StatsBlkIter struct {
+	name       objectio.ObjectName
+	extent     objectio.Extent
+	blkCnt     uint16
+	totalRows  uint32
+	cur        int
+	accRows    uint32
+	curBlkRows uint32
+}
+
+func NewStatsBlkIter(stats *objectio.ObjectStats) *StatsBlkIter {
+	return &StatsBlkIter{
+		name:       stats.ObjectName(),
+		blkCnt:     uint16(stats.BlkCnt()),
+		extent:     stats.Extent(),
+		cur:        -1,
+		accRows:    0,
+		totalRows:  stats.Rows(),
+		curBlkRows: options.DefaultBlockMaxRows,
+	}
+}
+
+func (i *StatsBlkIter) Next() bool {
+	if i.cur >= 0 {
+		i.accRows += i.curBlkRows
+	}
+	i.cur++
+	return i.cur < int(i.blkCnt)
+}
+
+func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	// assume that all blks have DefaultBlockMaxRows, except the last one
+	if i.cur == int(i.blkCnt-1) {
+		i.curBlkRows = i.totalRows - i.accRows
+	}
+
+	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
+	blk := &catalog.BlockInfo{
+		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		SegmentID: i.name.SegmentId(),
+		MetaLoc:   catalog.ObjectLocation(loc),
+	}
+	return blk
 }

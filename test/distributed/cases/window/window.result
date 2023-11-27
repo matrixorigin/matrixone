@@ -833,7 +833,7 @@ rank() over (partition by col2 order by col1)    sum(col1) over (partition by co
 select dense_rank() over (partition by col2 order by col1), sum(col1) over (partition by col2 order by col3) from bool01;
 dense_rank() over (partition by col2 order by col1)    sum(col1) over (partition by col2 order by col3)
 1    5
-2    null
+2    11
 2    4
 1    6
 2    3
@@ -1167,7 +1167,7 @@ null
 99999999999999999999999999999999999.833
 99999999999999999999999999999999999.833
 select avg(d) over (partition by d) from decimal01;
-invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
+invalid input: Decimal128 Div overflow: 28888888888888888888888888888888888123(Scale:3)/1(Scale:0)
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 [unknown result because it is related to issue#10043]
 drop table decimal01;
@@ -4058,4 +4058,35 @@ null
 2023-05-16 00:12:12
 2023-05-16 00:12:12
 drop table time01;
+drop table if exists window01;
+create table window01(col1 int, col2 varchar(20));
+[unknown result because it is related to issue#12639]
+insert into window01 values(1,'老师');
+[unknown result because it is related to issue#12639]
+insert into window01 values(2,'医生');
+[unknown result because it is related to issue#12639]
+insert into window01 values(3,'工人');
+[unknown result because it is related to issue#12639]
+insert into window01 values(10,'学生');
+[unknown result because it is related to issue#12639]
+insert into window01 values(20,'学生');
+[unknown result because it is related to issue#12639]
+insert into window01 values(12,'学生');
+[unknown result because it is related to issue#12639]
+insert into window01 values(21,'老师');
+[unknown result because it is related to issue#12639]
+insert into window01 values(100,'老师');
+[unknown result because it is related to issue#12639]
+insert into window01 values(200,'工人');
+[unknown result because it is related to issue#12639]
+select col2, avg(col1) over (partition by col2 order by col1 desc) from window01;
+[unknown result because it is related to issue#12639]
+select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from window01;
+[unknown result because it is related to issue#12639]
+select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
+[unknown result because it is related to issue#12639]
+select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
+[unknown result because it is related to issue#12639]
+select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
+[unknown result because it is related to issue#12639]
 drop database test;

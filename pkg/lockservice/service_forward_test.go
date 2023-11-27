@@ -35,10 +35,13 @@ func TestForwardLock(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
+			_, err := l2.getLockTableWithCreate(1, true)
+			require.NoError(t, err)
+
 			txn1 := []byte("txn1")
 			row1 := []byte{1}
 
-			_, err := l1.Lock(ctx, 1, [][]byte{row1}, txn1, pb.LockOptions{
+			_, err = l1.Lock(ctx, 1, [][]byte{row1}, txn1, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,

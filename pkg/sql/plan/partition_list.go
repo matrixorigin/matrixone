@@ -51,7 +51,7 @@ func (lpb *listPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	} else {
 		//PARTITION BY LIST COLUMNS(col1,col2,...)
 		partitionDef.Type = plan.PartitionType_LIST_COLUMNS
-		err = buildPartitionColumns(ctx, partitionBinder, partitionDef, partitionType.ColumnList)
+		err = buildPartitionColumns(ctx, tableDef, partitionBinder, partitionDef, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}
@@ -78,13 +78,8 @@ func (lpb *listPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 }
 
 func (lpb *listPartitionBuilder) buildPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, syntaxDefs []*tree.Partition) (err error) {
-	dedup := make(map[string]int)
 	for i, partition := range syntaxDefs {
 		name := string(partition.Name)
-		if _, ok := dedup[name]; ok {
-			return moerr.NewInvalidInput(ctx, "duplicate partition name %s", name)
-		}
-		dedup[name] = 0
 		partitionItem := &plan.PartitionItem{
 			PartitionName:   name,
 			OrdinalPosition: uint32(i + 1),
@@ -119,14 +114,13 @@ func (lpb *listPartitionBuilder) checkPartitionIntegrity(ctx context.Context, pa
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefines(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {
 		return err
 	}
 	if partitionDef.Type == plan.PartitionType_KEY || partitionDef.Type == plan.PartitionType_LINEAR_KEY {
-		//if len(partitionInfo.Columns) == 0 {
 		if len(partitionDef.PartitionColumns.Columns) == 0 {
 			return handleEmptyKeyPartition(partitionBinder, tableDef, partitionDef)
 		}

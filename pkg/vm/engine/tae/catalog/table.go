@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -184,8 +185,8 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 func (entry *TableEntry) CreateSegment(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	dataFactory SegmentDataFactory,
-	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
+	opts *objectio.CreateSegOpt,
+) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.Segmentid
@@ -194,7 +195,7 @@ func (entry *TableEntry) CreateSegment(
 	} else {
 		id = objectio.NewSegmentid()
 	}
-	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
+	created = NewSegmentEntry(entry, id, txn, state)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -290,6 +291,55 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	return w.String()
 }
 
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
+	var w bytes.Buffer
+
+	it := entry.MakeSegmentIt(true)
+	composeSortKey := false
+	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
+		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
+	}
+
+	var cnt, loadedCnt, rows, osize, avgRow, avgOsize int
+
+	for ; it.Valid(); it.Next() {
+		segment := it.Get().GetPayload()
+		if !segment.IsActive() {
+			continue
+		}
+		cnt++
+		if segment.Stat.GetLoaded() {
+			loadedCnt++
+			rows += int(segment.Stat.GetRows())
+			osize += int(segment.Stat.GetOriginSize())
+		}
+		if level > common.PPL0 {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(segment.ID.ToString())
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString("    ")
+			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+		}
+		if w.Len() > 8*common.Const1MBytes {
+			w.WriteString("\n...(truncated for too long, more than 8 MB)")
+			break
+		}
+	}
+	if level > common.PPL0 && cnt > 0 {
+		w.WriteByte('\n')
+	}
+	if loadedCnt > 0 {
+		avgRow = rows / cnt
+		avgOsize = osize / cnt
+	}
+	summary := fmt.Sprintf(
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s",
+		cnt, cnt-loadedCnt, avgRow, common.HumanReadableBytes(avgOsize),
+	)
+	w.WriteString(summary)
+	return w.String()
+}
+
 func (entry *TableEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -305,7 +355,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 	name := entry.GetLastestSchema().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
-			entry.ID, name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
 	return fmt.Sprintf("TBL%s[name=%s, id=%d]", entry.BaseEntryImpl.StringLocked(), name, entry.ID)
 }
@@ -411,7 +461,7 @@ func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTx
 }
 
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
+	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
 	// segment.Close()
 	entry.Lock()
@@ -535,11 +585,18 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
+		var hints []apipb.MergeHint
+		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+			NextColSeqnum:    newSchema.Extra.NextColSeqnum,
+			MinRowsQuailifed: newSchema.Extra.MinRowsQuailifed,
+			MaxObjOnerun:     newSchema.Extra.MaxObjOnerun,
+			MaxRowsMergedObj: newSchema.Extra.MaxRowsMergedObj,
+			Hints:            hints,
 		}
+
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return

@@ -862,6 +862,27 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCloneWindow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewConstNull(types.T_int32.ToType(), 10, mp)
+	defer v1.Free(mp)
+	v2, err := v1.CloneWindow(3, 5, mp)
+	defer v2.Free(mp)
+	require.NoError(t, err)
+	require.True(t, v2.IsConstNull())
+	require.Equal(t, 2, v2.Length())
+
+	v3 := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
+	defer v3.Free(mp)
+	v4, err := v3.CloneWindow(3, 5, mp)
+	defer v4.Free(mp)
+	require.NoError(t, err)
+	require.True(t, v4.IsConst())
+	require.Equal(t, 2, v4.Length())
+	require.Equal(t, int32(10), GetFixedAt[int32](v4, 0))
+	require.Equal(t, int32(10), GetFixedAt[int32](v4, 1))
+}
+
 func TestCloneWindowWithMpNil(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
@@ -1780,5 +1801,57 @@ func TestSetFunction2(t *testing.T) {
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
+func BenchmarkUnmarshal(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := vec.UnmarshalBinary(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkToTypedSlice(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	var slice []int8
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ToSlice(vec, &slice)
+	}
+	if slice[0] != 42 {
+		b.Fatalf("got %v", slice)
+	}
+}
+
+func BenchmarkToFixedCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	b.ResetTimer()
+	var slice []int8
+	for i := 0; i < b.N; i++ {
+		ToFixedCol[int8](vec, &slice)
+	}
+}
+
+func BenchmarkMustFixedCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		MustFixedCol[int8](vec)
 	}
 }

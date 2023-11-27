@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -84,7 +85,7 @@ type CompilerContext interface {
 	// get the list of the account id
 	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the relevant information of udf
-	ResolveUdf(name string, args []*Expr) (string, error)
+	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get needed info for stats by table
@@ -150,9 +151,9 @@ type ExecInfo struct {
 	CnNumbers  int
 }
 
-///////////////////////////////
-// Data structures for refactor
-///////////////////////////////
+type emptyType struct{}
+
+var emptyStruct = emptyType{}
 
 type QueryBuilder struct {
 	qry     *plan.Query
@@ -177,7 +178,7 @@ type CTERef struct {
 	defaultDatabase string
 	isRecursive     bool
 	ast             *tree.CTE
-	maskedCTEs      map[string]any
+	maskedCTEs      map[string]emptyType
 }
 
 type aliasItem struct {
@@ -189,7 +190,7 @@ type BindContext struct {
 	binder Binder
 
 	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]any
+	maskedCTEs             map[string]emptyType
 	normalCTE              bool
 	initSelect             bool
 	recSelect              bool
@@ -207,17 +208,24 @@ type BindContext struct {
 	resultTag    int32
 	sinkTag      int32
 	windowTag    int32
+	timeTag      int32
+	sampleTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
 	windows    []*plan.Expr
+	times      []*plan.Expr
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
+	sampleByAst    map[string]int32
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
+	timeByAst      map[string]int32
+
+	timeAsts []tree.Expr
 
 	aliasMap map[string]*aliasItem
 
@@ -240,6 +248,9 @@ type BindContext struct {
 	defaultDatabase string
 
 	forceWindows bool
+
+	// sample function related.
+	sampleFunc SampleFuncCtx
 }
 
 type NameTuple struct {
@@ -262,6 +273,7 @@ type Binder interface {
 	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
+	BindTimeWindowFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
 	GetContext() context.Context
 }
 

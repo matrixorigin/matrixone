@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -39,8 +40,59 @@ func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts ie.SessionO
 	return nil
 }
 
+type MysqlResultSet struct {
+	//column information
+	Columns []string
+
+	//column name --> column index
+	Name2Index map[string]uint64
+
+	//data
+	Data [][]interface{}
+}
+type internalExecResult struct {
+	affectedRows uint64
+	resultSet    *MysqlResultSet
+	err          error
+}
+
+func (res *internalExecResult) Error() error {
+	return res.err
+}
+
+func (res *internalExecResult) ColumnCount() uint64 {
+	return 1
+}
+
+func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
+	return "test", 1, true, nil
+}
+
+func (res *internalExecResult) RowCount() uint64 {
+	return 1
+}
+
+func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
+	return nil, nil
+}
+
+func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
+	return nil, nil
+}
+
+func (res *internalExecResult) ValueByName(ctx context.Context, ridx uint64, col string) (interface{}, error) {
+	return nil, nil
+}
+
+func (res *internalExecResult) StringValueByName(ctx context.Context, ridx uint64, col string) (string, error) {
+	return "test", nil
+}
+
+func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint64, col string) (float64, error) {
+	return 0, nil
+}
 func (m *MockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
-	return nil
+	return &internalExecResult{affectedRows: 1, resultSet: nil, err: moerr.NewInternalError(context.TODO(), "random")}
 }
 
 func (m *MockSQLExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
@@ -67,9 +119,10 @@ func TestKafkaMoConnector(t *testing.T) {
 		"table":             "testTable",
 		"value":             "json",
 		"bootstrap.servers": broker,
+		"sql":               "select * from testDB.testStream",
 	}
 	rt := runtime.DefaultRuntime()
-	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor)
+	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor, 1)
 	if err != nil {
 		t.Fatalf("Failed to create KafkaMoConnector: %s", err)
 	}

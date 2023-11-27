@@ -1,0 +1,34 @@
+select sha2("abc", 0);
+sha2(abc, 0)
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+select sha2("123", 256);
+sha2(123, 256)
+a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3
+select sha2("好好学习 天天向上", 224);
+sha2(好好学习 天天向上, 224)
+5ac0740a775e90bab4e373fda14120adceb3d4b99d99c5cb7b9b2457
+select sha2("hello world", 384);
+sha2(hello world, 384)
+fdbd8e75a67f29f701a4e040385e2e23986303ea10239211af907fcbb83578b3e417cb71ce646efd0819dd8c088de1bd
+select sha2("sha512", 512);
+sha2(sha512, 512)
+1f9720f871674c18e5fecff61d92c1355cd4bfac25699fb7ddfe7717c9669b4d085193982402156122dfaa706885fd64741704649795c65b2a5bdec40347e28a
+select sha2("hello world", 66666);
+sha2(hello world, 66666)
+null
+select sha2("+++++-------,./;[p][]", 512);
+sha2(+++++-------,./;[p][], 512)
+46ad76d2f3fed8f09347afe795edfb9b6a7e6c766d83d374642551c61847955a390531188cb33fe44f97e9dad814a39a24740c9e2b8598b1025b4e24af564246
+select sha2(null, 512);
+sha2(null, 512)
+null
+select sha2(null, null);
+sha2(null, null)
+null
+create table shatwo01 (a text);
+insert into shatwo01 values("网络安全"),("database"),(null);
+select a,sha2(a,0) from shatwo01;
+a    sha2(a, 0)
+网络安全    d4443b35a832768cd6211c9e45dc2ccfaca10b5203fd1f02ad500982942f9897
+database    3549b0028b75d981cdda2e573e9cb49dedc200185876df299f912b79f69dabd8
+null    null

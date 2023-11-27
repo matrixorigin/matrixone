@@ -16,11 +16,10 @@ package checkpoint
 
 import (
 	"context"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"time"
 )
 
 type RunnerReader interface {
@@ -48,6 +47,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
 		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
 		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
+		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Incremental), false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -62,6 +62,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
 		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
 		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
+		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Global), false)
 	}
 	return bat
 }

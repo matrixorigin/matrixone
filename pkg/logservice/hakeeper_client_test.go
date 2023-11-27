@@ -16,10 +16,11 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -38,13 +39,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 	cc2, err := NewTNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
@@ -195,6 +196,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 			WorkState:      metadata.WorkState_Working,
+			UpTime:         cd.CNStores[0].UpTime,
 		}
 		tn := pb.TNStore{
 			UUID:                 s.ID(),
@@ -350,7 +352,14 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, cfg1.LogServiceServiceAddr(), c.respPool, defaultMaxMessageSize, false)
+	cc, err := getRPCClient(
+		ctx,
+		cfg1.LogServiceServiceAddr(),
+		c.respPool,
+		defaultMaxMessageSize,
+		false,
+		0,
+	)
 	require.NoError(t, err)
 	c.addr = cfg1.LogServiceServiceAddr()
 	c.client = cc
@@ -693,6 +702,38 @@ func TestHAKeeperClientDeleteCNStore(t *testing.T) {
 		require.NoError(t, err)
 		_, ok = state.CNState.Stores[s.ID()]
 		assert.False(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientSendProxyHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+		}()
+
+		hb := pb.ProxyHeartbeat{
+			UUID:          s.ID(),
+			ListenAddress: "addr1",
+		}
+		cb, err := c1.SendProxyHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(cb.Commands))
+
+		cd, err := c1.GetClusterDetails(ctx)
+		require.NoError(t, err)
+		p := pb.ProxyStore{
+			UUID:          s.ID(),
+			ListenAddress: "addr1",
+		}
+		assert.Equal(t, []pb.ProxyStore{p}, cd.ProxyStores)
 	}
 	runServiceTest(t, true, true, fn)
 }

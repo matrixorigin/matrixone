@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"go/constant"
 	"strings"
 
@@ -37,6 +38,16 @@ const (
 			the number of subpartitions—discussed later in this section—is included in this maximum.)
 	*/
 	PartitionCountLimit = 1024
+
+	/*
+		    https://dev.mysql.com/doc/refman/8.0/en/create-table.html
+			1. KEY(column_list): the column_list argument is simply a list of 1 or more table columns (maximum: 16).
+			2. RANGE COLUMNS(column_list): The maximum number of columns that can be referenced in the column_list
+				and value_list is 16.
+			3. LIST COLUMNS(column_list): The maximum number of columns that can be used in the column_list and
+				in the elements making up the value_list is 16.
+	*/
+	PartitionColumnsLimit = 16
 )
 
 type partitionBuilder interface {
@@ -157,7 +168,6 @@ func getValidPartitionCount(ctx context.Context, needPartitionDefs bool, partiti
 
 	if needPartitionDefs && len(partitionSyntaxDef.Partitions) == 0 {
 		if _, ok := partitionSyntaxDef.PartBy.PType.(*tree.ListType); ok {
-			//return 0, moerr.NewInvalidInput(ctx, "For LIST partitions each partition must be defined")
 			return 0, moerr.NewPartitionsMustBeDefined(ctx, "LIST")
 		} else {
 			return 0, moerr.NewInvalidInput(ctx, "each partition must be defined")
@@ -184,30 +194,48 @@ func getValidPartitionCount(ctx context.Context, needPartitionDefs bool, partiti
 		return 0, moerr.NewInvalidInput(ctx, "Wrong number of partitions defined")
 	}
 	// check partition number
-	if err = checkPartitionCount(ctx, nil, int(partitionCount)); err != nil {
+	if err = checkPartitionCount(ctx, int(partitionCount)); err != nil {
 		return 0, err
 	}
 	return partitionCount, err
 }
 
 // buildPartitionColumns enables the use of multiple columns in partitioning keys
-func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
+func buildPartitionColumns(ctx context.Context, tableDef *TableDef, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
 	var err error
-	columnsExpr := make([]*plan.Expr, len(columnList))
-	partitionColumns := make([]string, len(columnList))
-	//partitionFmtColumns := make([]string, len(columnList))
+	partitionDef.PartitionColumns = &plan.PartitionColumns{
+		Columns:          make([]*plan.Expr, len(columnList)),
+		PartitionColumns: make([]string, len(columnList)),
+	}
 
-	//fmtCtx := tree.NewFmtCtxWithFlag(dialect.MYSQL, tree.RestoreNameBackQuotes)
-	// partition COLUMNS does not accept expressions, only names of columns.
+	// 1. First, check if the partition column is legal,
 	for i, column := range columnList {
-		columnsExpr[i], err = partitionBinder.BindColRef(column, 0, true)
+		partitionDef.PartitionColumns.PartitionColumns[i] = tree.String(column, dialect.MYSQL)
+	}
+	if err = checkColumnsPartitionType(ctx, tableDef, partitionDef); err != nil {
+		return err
+	}
+
+	// 2. then construct the expression for the partition column
+	for i, column := range columnList {
+		partitionDef.PartitionColumns.Columns[i], err = partitionBinder.BindColRef(column, 0, true)
 		if err != nil {
 			return err
 		}
-		t := types.T(columnsExpr[i].Typ.Id)
-		columnName := tree.String(column, dialect.MYSQL)
+	}
+	return nil
+}
 
-		if partitionDef.Type == plan.PartitionType_KEY || partitionDef.Type == plan.PartitionType_LINEAR_KEY {
+// checkColumnsPartitionType Check if the type of the partition column is correct
+func checkColumnsPartitionType(ctx context.Context, tbInfo *TableDef, pi *plan.PartitionByDef) error {
+	for _, colName := range pi.PartitionColumns.PartitionColumns {
+		colInfo := findColumnByName(colName, tbInfo)
+		if colInfo == nil {
+			return moerr.NewFieldNotFoundPart(ctx)
+		}
+
+		t := types.T(colInfo.Typ.Id)
+		if pi.Type == plan.PartitionType_KEY || pi.Type == plan.PartitionType_LINEAR_KEY {
 			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
 			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
@@ -224,20 +252,10 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 			//	TEXT and BLOB columns are not supported as partitioning columns.
 			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 			if t == types.T_float32 || t == types.T_float64 || t == types.T_decimal64 || t == types.T_decimal128 ||
-				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json {
-				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, columnName)
+				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json || t == types.T_enum {
+				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, colName)
 			}
 		}
-		partitionColumns[i] = columnName
-
-		//column.Format(fmtCtx)
-		//partitionFmtColumns[i] = fmtCtx.ToString()
-		//fmtCtx.Reset()
-	}
-	partitionDef.PartitionColumns = &plan.PartitionColumns{
-		Columns:          columnsExpr,
-		PartitionColumns: partitionColumns,
-		//PartitionFmtColumns: partitionFmtColumns,
 	}
 	return nil
 }
@@ -301,7 +319,7 @@ func checkPartitionIntegrity(ctx context.Context, partitionBinder *PartitionBind
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefines(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	return nil
@@ -593,8 +611,14 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 			return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
 		}
 
-		if partitionDef.Type == plan.PartitionType_LIST && !t.IsInteger() {
-			return moerr.NewPartitionFuncNotAllowed(ctx, "PARTITION")
+		if partitionDef.Type == plan.PartitionType_LIST {
+			if !t.IsInteger() {
+				if _, ok := expr.Expr.(*plan.Expr_Col); ok {
+					return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+				} else {
+					return moerr.NewPartitionFuncNotAllowed(ctx, "PARTITION")
+				}
+			}
 		}
 	}
 	return nil
@@ -604,6 +628,17 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 // return true -- has duplicate names
 func stringSliceToMap(stringSlice []string, stringMap map[string]int) (bool, string) {
 	for _, s := range stringSlice {
+		if _, ok := stringMap[s]; ok {
+			return true, s
+		}
+		stringMap[s] = 0
+	}
+	return false, ""
+}
+
+func stringSliceToMapForIndexParts(stringSlice []string, stringMap map[string]int) (bool, string) {
+	for _, s := range stringSlice {
+		s = catalog2.ResolveAlias(s)
 		if _, ok := stringMap[s]; ok {
 			return true, s
 		}
@@ -648,7 +683,7 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		for _, indexDef := range tableDef.Indexes {
 			if indexDef.Unique {
 				uniqueKeys := make(map[string]int)
-				if dup, dupName := stringSliceToMap(indexDef.Parts, uniqueKeys); dup {
+				if dup, dupName := stringSliceToMapForIndexParts(indexDef.Parts, uniqueKeys); dup {
 					//return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
 					return moerr.NewSameNamePartition(ctx, dupName)
 				}
@@ -683,29 +718,35 @@ func findColumnInIndexCols(c string, pkcols map[string]int) bool {
 }
 
 /*
-checkPartitionDefs
-check partition name unique or not
-check partition count limitation
-check partition column name uinque
+checkPartitionDefines Check partition definition
+
+	1.check partition name unique or not
+	2.check partition count limitation
+	3.check partition columns count limitation
+	4.check partition column name uinque
 */
-func checkPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) error {
+func checkPartitionDefines(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) error {
 	var err error
-	if err = checkDuplicatePartitionName(ctx, partitionBinder, partitionDef); err != nil {
+	if err = checkPartitionNameUnique(ctx, partitionDef); err != nil {
 		return err
 	}
-	if err = checkPartitionCount(ctx, partitionBinder, len(partitionDef.Partitions)); err != nil {
+
+	if err = checkPartitionCount(ctx, len(partitionDef.Partitions)); err != nil {
 		return err
 	}
-	if err = checkDuplicatePartitionColumns(ctx, partitionBinder, partitionDef); err != nil {
+
+	if err = checkPartitionColumnsCount(ctx, partitionDef); err != nil {
+		return err
+	}
+
+	if err = checkPartitionColumnsUnique(ctx, partitionDef); err != nil {
 		return err
 	}
 
 	if len(partitionDef.Partitions) == 0 {
 		if partitionDef.Type == plan.PartitionType_RANGE || partitionDef.Type == plan.PartitionType_RANGE_COLUMNS {
-			//return moerr.NewInvalidInput(partitionBinder.GetContext(), "range partition cannot be empty")
 			return moerr.NewPartitionsMustBeDefined(ctx, "RANGE")
 		} else if partitionDef.Type == plan.PartitionType_LIST || partitionDef.Type == plan.PartitionType_LIST_COLUMNS {
-			//return moerr.NewInvalidInput(partitionBinder.GetContext(), "list partition cannot be empty")
 			return moerr.NewPartitionsMustBeDefined(ctx, "LIST")
 		}
 	}
@@ -713,50 +754,54 @@ func checkPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, p
 	switch partitionDef.Type {
 	case plan.PartitionType_RANGE, plan.PartitionType_RANGE_COLUMNS:
 		err = checkPartitionByRange(partitionBinder, partitionDef, tableDef)
-	case plan.PartitionType_HASH:
-		// TODO
-	case plan.PartitionType_LIST:
+	case plan.PartitionType_LIST, plan.PartitionType_LIST_COLUMNS:
 		err = checkPartitionByList(partitionBinder, partitionDef, tableDef)
 	}
 	return err
 }
 
-// checkDuplicatePartitionColumns check duplicate partition columns
-func checkDuplicatePartitionColumns(ctx context.Context, _ *PartitionBinder, partitionDef *plan.PartitionByDef) error {
-	if partitionDef.PartitionColumns == nil {
-		return nil
+// checkPartitionColumnsUnique check duplicate partition columns
+func checkPartitionColumnsUnique(ctx context.Context, pi *plan.PartitionByDef) error {
+	if pi.PartitionColumns != nil {
+		if len(pi.PartitionColumns.PartitionColumns) <= 1 {
+			return nil
+		}
+		var columnsMap = make(map[string]struct{})
+		for _, column := range pi.PartitionColumns.PartitionColumns {
+			if _, ok := columnsMap[column]; ok {
+				return moerr.NewSameNamePartitionField(ctx, column)
+			}
+			columnsMap[column] = struct{}{}
+		}
 	}
-	if len(partitionDef.PartitionColumns.PartitionColumns) <= 1 {
-		return nil
-	}
-	columns := make(map[string]int)
-	if dup, dupName := stringSliceToMap(partitionDef.PartitionColumns.PartitionColumns, columns); dup {
-		//return moerr.NewSyntaxError(ctx, "duplicate partition column %s", dupName)
-		return moerr.NewSameNamePartition(ctx, dupName)
+	return nil
+}
+
+// checkPartitionColumns Check if the number of partition columns exceeds the limit
+func checkPartitionColumnsCount(ctx context.Context, pi *plan.PartitionByDef) error {
+	if pi.PartitionColumns != nil && len(pi.PartitionColumns.PartitionColumns) > PartitionColumnsLimit {
+		return moerr.NewErrTooManyPartitionFuncFields(ctx, "list of partition fields")
 	}
 	return nil
 }
 
 // checkPartitionCount: check whether check partition number exceeds the limit
-func checkPartitionCount(ctx context.Context, _ *PartitionBinder, partNum int) error {
+func checkPartitionCount(ctx context.Context, partNum int) error {
 	if partNum > PartitionCountLimit {
-		//return moerr.NewInvalidInput(ctx, "too many (%d) partitions", partNum)
 		return moerr.NewErrTooManyPartitions(ctx)
 	}
 	return nil
 }
 
 // Check whether the partition name is duplicate
-func checkDuplicatePartitionName(ctx context.Context, _ *PartitionBinder, pd *plan.PartitionByDef) error {
-	partitions := pd.Partitions
-
-	partNames := make(map[string]byte, len(partitions))
-	for _, par := range partitions {
-		if _, ok := partNames[par.PartitionName]; ok {
-			//return moerr.NewSyntaxError(ctx, "duplicate partition name %s", par.PartitionName)
-			return moerr.NewSameNamePartition(ctx, par.PartitionName)
+func checkPartitionNameUnique(ctx context.Context, pi *plan.PartitionByDef) error {
+	partitions := pi.Partitions
+	partNames := make(map[string]struct{}, len(partitions))
+	for _, partitionItem := range partitions {
+		if _, ok := partNames[partitionItem.PartitionName]; ok {
+			return moerr.NewSameNamePartition(ctx, partitionItem.PartitionName)
 		}
-		partNames[par.PartitionName] = 1
+		partNames[partitionItem.PartitionName] = struct{}{}
 	}
 	return nil
 }
@@ -806,9 +851,8 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 				if indexdef.Unique {
 					// A UNIQUE INDEX must include all columns in the table's partitioning function
 					uniqueKeys := make(map[string]int)
-					stringSliceToMap(indexdef.Parts, uniqueKeys)
+					stringSliceToMapForIndexParts(indexdef.Parts, uniqueKeys)
 					if !checkUniqueKeyIncludePartKey(pkcols, uniqueKeys) {
-						//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 						return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 					}
 				} else {
@@ -821,21 +865,19 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 		if uniqueIndexCount >= 2 {
 			firstUniqueKeyCols := make(map[string]int)
 			for _, indexdef := range tableDef.Indexes {
-				stringSliceToMap(indexdef.Parts, firstUniqueKeyCols)
+				stringSliceToMapForIndexParts(indexdef.Parts, firstUniqueKeyCols)
 				break
 			}
 
 			for _, indexdef := range tableDef.Indexes {
 				uniqueKeys := make(map[string]int)
-				stringSliceToMap(indexdef.Parts, uniqueKeys)
+				stringSliceToMapForIndexParts(indexdef.Parts, uniqueKeys)
 				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, uniqueKeys) {
-					//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 					return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 				}
 			}
 		}
 	} else {
-		//return moerr.NewInvalidInput(partitionBinder.GetContext(), "Field in list of fields for partition function not found in table")
 		return moerr.NewFieldNotFoundPart(partitionBinder.GetContext())
 	}
 	return nil

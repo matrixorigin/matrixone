@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -45,6 +46,11 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+	objStats          []ObjectStats
+	pkColIdx          uint16
+	appendable        bool
+	originSize        uint32
+	size              uint32
 }
 
 type blockData struct {
@@ -87,6 +93,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		buffer:   NewObjectBuffer(fileName),
 		blocks:   make([][]blockData, 2),
 		lastId:   0,
+		pkColIdx: math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
@@ -105,10 +112,55 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 		buffer:    NewObjectBuffer(fileName),
 		blocks:    make([][]blockData, 2),
 		lastId:    0,
+		pkColIdx:  math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
+}
+
+func (w *objectWriterV1) GetObjectStats() []ObjectStats {
+	return w.objStats
+}
+
+func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
+	ss := NewObjectStats()
+	SetObjectStatsObjectName(ss, w.name)
+	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
+	SetObjectStatsRowCnt(ss, w.totalRow)
+	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
+
+	if len(colmeta) > int(w.pkColIdx) {
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
+	}
+	SetObjectStatsSize(ss, w.size)
+	SetObjectStatsOriginSize(ss, w.originSize)
+
+	return *ss
+}
+
+// DescribeObject generates two object stats:
+//
+// 0: data object stats
+//
+// 1: tombstone object stats
+//
+// if an object only has inserts, only the data object stats valid.
+//
+// if an object only has deletes, only the tombstone object stats valid.
+//
+// if an object has both inserts and deletes, both stats are valid.
+func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
+	stats := make([]ObjectStats, 2)
+	if len(w.blocks[SchemaData]) != 0 {
+		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+	}
+
+	if len(w.blocks[SchemaTombstone]) != 0 {
+		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
+	}
+
+	return stats, nil
 }
 
 func (w *objectWriterV1) GetSeqnums() []uint16 {
@@ -138,12 +190,12 @@ func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error)
 	return block, nil
 }
 
-func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, error) {
+func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, int, error) {
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))
 	block := NewBlock(denseSeqnums)
-	w.AddSubBlock(block, batch, denseSeqnums, dataType)
-	return block, nil
+	size, err := w.AddSubBlock(block, batch, denseSeqnums, dataType)
+	return block, size, err
 }
 
 func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, error) {
@@ -154,13 +206,18 @@ func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, er
 	return block, nil
 }
 
-func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
-	w.blocks[SchemaData][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
+func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint16, zm ZoneMap) {
+	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.pkColIdx = seqnum
 	return
+}
+
+func (w *objectWriterV1) SetAppendable() {
+	w.appendable = true
 }
 
 func (w *objectWriterV1) WriteObjectMetaBF(buf []byte) (err error) {
@@ -179,9 +236,7 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []b
 	metaColCnt := uint16(0)
 	maxSeqnum := uint16(0)
 	var seqnums *Seqnums
-	if len(blocks) == 0 {
-		logutil.Warn("object io: no block needs to be written")
-	} else {
+	if len(blocks) != 0 {
 		columnCount = blocks[0].meta.GetColumnCount()
 		metaColCnt = blocks[0].meta.GetMetaColumnCount()
 		maxSeqnum = blocks[0].meta.GetMaxSeqnum()
@@ -351,6 +406,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 	offset := uint32(HeaderSize)
+	w.originSize += HeaderSize
 
 	for i := range w.blocks {
 		if i == int(SchemaData) {
@@ -380,7 +436,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			return nil, err
 		}
 		objectMetas[i].BlockHeader().SetBFExtent(bloomFilterExtents[i])
+		objectMetas[i].BlockHeader().SetAppendable(w.appendable)
+		objectMetas[i].BlockHeader().SetSortKey(w.pkColIdx)
 		offset += bloomFilterExtents[i].Length()
+		w.originSize += bloomFilterExtents[i].OriginSize()
 
 		// prepare zone map area
 		zoneMapAreaDatas[i], zoneMapAreaExtents[i], err = w.prepareZoneMapArea(w.blocks[i], uint32(len(w.blocks[i])), offset)
@@ -389,6 +448,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		}
 		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaExtents[i])
 		offset += zoneMapAreaExtents[i].Length()
+		w.originSize += zoneMapAreaExtents[i].OriginSize()
 	}
 	subMetaCount := uint16(len(w.blocks) - 2)
 	subMetachIndex := BuildSubMetaIndex(subMetaCount)
@@ -450,11 +510,14 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		version:    Version,
 		magic:      Magic,
 	}
-
-	w.buffer.Write(footer.Marshal())
+	footerBuf := footer.Marshal()
+	w.buffer.Write(footerBuf)
 	if err != nil {
 		return nil, err
 	}
+	w.originSize += objectHeader.Extent().OriginSize()
+	w.originSize += uint32(len(footerBuf))
+	w.size = objectHeader.Extent().End() + uint32(len(footerBuf))
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		for j := range w.blocks[i] {
@@ -467,7 +530,6 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	if err != nil {
 		return nil, err
 	}
-
 	// The buffer needs to be released at the end of WriteEnd
 	// Because the outside may hold this writer
 	// After WriteEnd is called, no more data can be written
@@ -485,8 +547,14 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err
 		}
-		return w.object.fs.Write(ctx, w.buffer.GetData())
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
+
+	if err != nil {
+		return err
+	}
+
+	w.objStats, err = w.DescribeObject()
 	return err
 }
 
@@ -507,7 +575,7 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 	return
 }
 
-func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	// CHANGE ME
 	// block.BlockHeader()return w.WriteWithCompress(offset, buf.Bytes()).SetBlockID(w.lastId)
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
@@ -516,6 +584,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 	var data []byte
 	var buf bytes.Buffer
 	var rows int
+	var size int
 	for i, vec := range bat.Vecs {
 		if i == 0 {
 			rows = vec.Length()
@@ -531,12 +600,13 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		buf.Write(EncodeIOEntryHeader(&h))
 		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		var ext Extent
 		if data, ext, err = w.WriteWithCompress(0, buf.Bytes()); err != nil {
-			return err
+			return 0, err
 		}
+		size += len(data)
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
@@ -544,21 +614,22 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			panic("any type batch")
 		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
+		w.originSize += ext.OriginSize()
 	}
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	*blocks = append(*blocks, block)
 	w.lastId++
-	return nil
+	return size, nil
 }
 
-func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 
 	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
 }
 
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 	if w.tombstonesColmeta == nil {
@@ -570,20 +641,19 @@ func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, s
 	return w.addBlock(&w.blocks[SchemaTombstone], blockMeta, bat, seqnums)
 }
 
-func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) error {
+func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 	if dataType < CkpMetaStart {
 		panic("invalid data type")
 	}
-	for i := int(CkpMetaStart); i <= int(dataType); i++ {
+	for i := int(CkpMetaStart); i <= int(CkpMetaEnd); i++ {
 		if len(w.blocks) <= i {
 			blocks := make([]blockData, 0)
 			w.blocks = append(w.blocks, blocks)
 		}
 	}
-	err := w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
-	return err
+	return w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
 }
 
 func (w *objectWriterV1) GetBlock(id uint32) BlockObject {

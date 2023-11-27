@@ -17,31 +17,31 @@ package ctl
 import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// getTNHandlerFunc used to handle dn's debug command handle func.
+// GetTNHandlerFunc used to handle dn's debug command handle func.
 // method: debug command type.
 // whichDN: used to decide which DNs to send the debug request to, nil returned means send all dns.
 // payload: used to get debug command request payload
 // repsonseUnmarshaler: used to unmarshal response
-func getTNHandlerFunc(method pb.CmdMethod,
+func GetTNHandlerFunc(method api.OpCode,
 	whichTN func(parameter string) ([]uint64, error),
 	payload func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
-	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
+	repsonseUnmarshaler func([]byte) (any, error)) handleFunc {
 	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender) (pb.CtlResult, error) {
+		sender requestSender) (Result, error) {
 		if service != tn {
-			return pb.CtlResult{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
+			return Result{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
 		}
 		targetTNs, err := whichTN(parameter)
 		if err != nil {
-			return pb.CtlResult{}, moerr.ConvertGoError(proc.Ctx, err)
+			return Result{}, moerr.ConvertGoError(proc.Ctx, err)
 		}
 
 		containsTN := func(id uint64) bool {
@@ -80,14 +80,14 @@ func getTNHandlerFunc(method pb.CmdMethod,
 				return true
 			})
 		if err != nil {
-			return pb.CtlResult{}, err
+			return Result{}, err
 		}
 
-		results := make([]interface{}, 0, len(requests))
+		results := make([]any, 0, len(requests))
 		if len(requests) > 0 {
-			responses, err := sender(proc.Ctx, requests)
+			responses, err := sender(proc.Ctx, proc, requests)
 			if err != nil {
-				return pb.CtlResult{}, err
+				return Result{}, err
 			}
 			if len(responses) != len(requests) {
 				panic("requests and response not match")
@@ -96,11 +96,16 @@ func getTNHandlerFunc(method pb.CmdMethod,
 			for _, resp := range responses {
 				r, err := repsonseUnmarshaler(resp.Payload)
 				if err != nil {
-					return pb.CtlResult{}, err
+					return Result{}, err
 				}
 				results = append(results, r)
 			}
 		}
-		return pb.CtlResult{Method: method.String(), Data: results}, nil
+		// remove "Op" prefix
+		methodName, ok := api.OpMethodName[method]
+		if !ok {
+			return Result{Method: method.String(), Data: results}, nil
+		}
+		return Result{Method: methodName, Data: results}, nil
 	}
 }

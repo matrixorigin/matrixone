@@ -20,6 +20,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,10 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strconv"
-	"strings"
-	"time"
+
+	"crypto/sha256"
+	"crypto/sha512"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -685,6 +689,105 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		}
 	}
 	return nil
+}
+
+func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	fromTzs := vector.GenerateFunctionStrParameter(ivecs[1])
+	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		date, null1 := dates.GetValue(i)
+		fromTz, null2 := fromTzs.GetStrValue(i)
+		toTz, null3 := toTzs.GetStrValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		} else if len(fromTz) == 0 || len(toTz) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			return nil
+		} else {
+			fromLoc := convertTimezone(string(fromTz))
+			if fromLoc == nil {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
+			}
+			toLoc := convertTimezone(string(toTz))
+			if toLoc == nil {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
+			}
+			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
+			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
+			minStartTime := time.Date(0001, 1, 1, 0, 0, 0, 0, fromLoc)
+			minEndTime := time.Date(0001, 1, 1, 0, 0, 0, 0, toLoc)
+			startTime := date.ConvertToGoTime(fromLoc)
+			if startTime.After(maxStartTime) { // if startTime > maxTime, return maxTime
+				if err = rs.AppendBytes([]byte(maxStartTime.Format(time.DateTime)), false); err != nil {
+					return err
+				}
+			} else if startTime.Before(minStartTime) { // if startTime < minTime, return minTime
+				if err = rs.AppendBytes([]byte(minStartTime.Format(time.DateTime)), false); err != nil {
+					return err
+				}
+			} else { // if minTime <= startTime <= maxTime
+				endTime := startTime.In(toLoc)
+				if endTime.After(maxEndTime) || endTime.Before(minEndTime) { // if endTime > maxTime or endTime < maxTime, return startTime
+					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
+						return err
+					}
+				} else {
+					if err = rs.AppendBytes([]byte(endTime.Format(time.DateTime)), false); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func convertTimezone(tz string) *time.Location {
+	loc, err := time.LoadLocation(tz)
+	if err != nil && tz[0] != '+' && tz[0] != '-' {
+		return nil
+	}
+	// convert from timezone offset to location
+	if tz[0] == '+' || tz[0] == '-' {
+		parts := strings.Split(tz, ":")
+		if len(parts) != 2 {
+			return nil
+		}
+		hours, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return nil
+		} else if hours < -13 || hours > 14 { // timezone should be in [-13, 14]
+			return nil
+		}
+		minutes, err := strconv.Atoi(parts[1])
+		if tz[0] == '-' {
+			minutes = -minutes
+		}
+		if err != nil {
+			return nil
+		}
+
+		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+		loc = time.FixedZone("GMT", int(offset.Seconds()))
+	}
+
+	return loc
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
@@ -1770,25 +1873,60 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	hasPrefix := func(b1, b2 []byte) uint8 {
-		if len(b1) >= len(b2) && bytes.Equal(b1[:len(b2)], b2) {
-			return 1
-		}
-		return 0
-	}
-
-	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, hasPrefix)
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasPrefix)
 }
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	isEqualSuffix := func(b1, b2 []byte) uint8 {
-		if len(b1) >= len(b2) && bytes.Equal(b1[len(b1)-len(b2):], b2) {
-			return 1
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
+}
+
+// https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
+
+		if isnull1 || isnull2 || !isSha2Family(shaType) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var checksum []byte
+
+			switch shaType {
+			case 0, 256:
+				sum256 := sha256.Sum256(str)
+				checksum = sum256[:]
+			case 224:
+				sum224 := sha256.Sum224(str)
+				checksum = sum224[:]
+			case 384:
+				sum384 := sha512.Sum384(str)
+				checksum = sum384[:]
+			case 512:
+				sum512 := sha512.Sum512(str)
+				checksum = sum512[:]
+			default:
+				panic("unexpected err happened in sha2 function")
+			}
+			checksum = []byte(hex.EncodeToString(checksum))
+			if err = res.AppendBytes(checksum, false); err != nil {
+				return err
+			}
 		}
-		return 0
+
 	}
 
-	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
+	return nil
+}
+
+// any one of 224 256 384 512 0 is valid
+func isSha2Family(len int64) bool {
+	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
 }
 
 // Encode convert binary data into a textual representation. Supported formats are: base64 and hex. return type types.T_text
@@ -2509,9 +2647,25 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opBinaryBytesBytesToFixedWithErrorCheck[float32](ivecs, result, proc, length, func(v1, v2 []byte) (out float32, err error) {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
+}
+
+func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L2Distance[T](_v1, _v2)
+	})
+}
+
+func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineDistance[T](_v1, _v2)
 	})
 }

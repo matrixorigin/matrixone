@@ -49,6 +49,7 @@ func SetupAutoIncrService() {
 	rt.SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrservice.NewIncrService(
+			"",
 			incrservice.NewMemStore(),
 			incrservice.Config{}))
 }
@@ -61,6 +62,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -90,11 +92,27 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	fs, err := fileservice.NewFileServices(
-		"local",
+		"",
 		local,
 		s3,
 		etl,
 	)
+	if err != nil {
+		panic(err)
+	}
+	return fs
+}
+
+func NewSharedFS() fileservice.FileService {
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		panic(err)
+	}
+	return fs
+}
+
+func NewETLFS() fileservice.FileService {
+	fs, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		panic(err)
 	}

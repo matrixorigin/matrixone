@@ -1147,3 +1147,20 @@ func TestServiceHandleCNDeleteStore(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
+
+func TestServiceHandleProxyHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.PROXY_HEARTBEAT,
+			ProxyHeartbeat: &pb.ProxyHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		resp := s.handleProxyHeartbeat(ctx, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, true, true, fn)
+}

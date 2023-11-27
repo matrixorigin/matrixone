@@ -63,7 +63,7 @@ func DeepCopyOnDupliateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyC
 		return nil
 	}
 	newCtx := &plan.OnDuplicateKeyCtx{
-		TableDef:       DeepCopyTableDef(ctx.TableDef),
+		TableDef:       DeepCopyTableDef(ctx.TableDef, true),
 		OnDuplicateIdx: make([]int32, len(ctx.OnDuplicateIdx)),
 	}
 
@@ -87,7 +87,7 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		Ref:                 DeepCopyObjectRef(ctx.Ref),
 		AddAffectedRows:     ctx.AddAffectedRows,
 		IsClusterTable:      ctx.IsClusterTable,
-		TableDef:            DeepCopyTableDef(ctx.TableDef),
+		TableDef:            DeepCopyTableDef(ctx.TableDef, true),
 		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
 		PartitionIdx:        ctx.PartitionIdx,
@@ -123,7 +123,7 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 	}
 	newCtx := &plan.PreInsertCtx{
 		Ref:        DeepCopyObjectRef(ctx.Ref),
-		TableDef:   DeepCopyTableDef(ctx.TableDef),
+		TableDef:   DeepCopyTableDef(ctx.TableDef, true),
 		HasAutoCol: ctx.HasAutoCol,
 		IsUpdate:   ctx.IsUpdate,
 	}
@@ -140,7 +140,7 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		PkColumn: ctx.PkColumn,
 		PkType:   DeepCopyType(ctx.PkType),
 		UkType:   DeepCopyType(ctx.UkType),
-		TableDef: DeepCopyTableDef(ctx.TableDef),
+		TableDef: DeepCopyTableDef(ctx.TableDef, true),
 	}
 	copy(newCtx.Columns, ctx.Columns)
 
@@ -209,6 +209,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		IsEnd:           node.IsEnd,
 		ExternScan:      node.ExternScan,
 		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
+		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -252,7 +253,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	for i, tbl := range node.TableDefVec {
-		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)
+		newNode.TableDefVec[i] = DeepCopyTableDef(tbl, true)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
@@ -267,7 +268,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	if node.TableDef != nil {
-		newNode.TableDef = DeepCopyTableDef(node.TableDef)
+		newNode.TableDef = DeepCopyTableDef(node.TableDef, true)
 	}
 
 	if node.RowsetData != nil {
@@ -352,12 +353,15 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		return nil
 	}
 	newindexDef := &plan.IndexDef{
-		IdxId:          indexDef.IdxId,
-		IndexName:      indexDef.IndexName,
-		Unique:         indexDef.Unique,
-		TableExist:     indexDef.TableExist,
-		IndexTableName: indexDef.IndexTableName,
-		Comment:        indexDef.Comment,
+		IdxId:              indexDef.IdxId,
+		IndexName:          indexDef.IndexName,
+		Unique:             indexDef.Unique,
+		TableExist:         indexDef.TableExist,
+		IndexTableName:     indexDef.IndexTableName,
+		Comment:            indexDef.Comment,
+		IndexAlgo:          indexDef.IndexAlgo,
+		IndexAlgoParams:    indexDef.IndexAlgoParams,
+		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 	}
 
 	newParts := make([]string, len(indexDef.Parts))
@@ -382,7 +386,7 @@ func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
 	}
 	ret := make([]*plan.TableDef, len(src))
 	for i, def := range src {
-		ret[i] = DeepCopyTableDef(def)
+		ret[i] = DeepCopyTableDef(def, true)
 	}
 	return ret
 }
@@ -409,7 +413,17 @@ func DeepCopyPartitionPrune(partitionPrune *plan.PartitionPrune) *plan.Partition
 	return newPartitionPrune
 }
 
-func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
+func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
+	if source == nil {
+		return nil
+	}
+	return &plan.SampleFuncSpec{
+		Rows:    source.Rows,
+		Percent: source.Percent,
+	}
+}
+
+func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 	if table == nil {
 		return nil
 	}
@@ -417,7 +431,6 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TblId:          table.TblId,
 		Name:           table.Name,
 		Hidden:         table.Hidden,
-		Cols:           make([]*plan.ColDef, len(table.Cols)),
 		TableType:      table.TableType,
 		Createsql:      table.Createsql,
 		Version:        table.Version,
@@ -437,8 +450,11 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
 
-	for idx, col := range table.Cols {
-		newTable.Cols[idx] = DeepCopyColDef(col)
+	if withCols {
+		newTable.Cols = make([]*plan.ColDef, len(table.Cols))
+		for idx, col := range table.Cols {
+			newTable.Cols[idx] = DeepCopyColDef(col)
+		}
 	}
 
 	for idx, fkey := range table.Fkeys {
@@ -650,7 +666,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			IfNotExists:     df.CreateTable.IfNotExists,
 			Temporary:       df.CreateTable.Temporary,
 			Database:        df.CreateTable.Database,
-			TableDef:        DeepCopyTableDef(df.CreateTable.TableDef),
+			TableDef:        DeepCopyTableDef(df.CreateTable.TableDef, true),
 			IndexTables:     DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
 			FkDbs:           make([]string, len(df.CreateTable.FkDbs)),
 			FkTables:        make([]string, len(df.CreateTable.FkTables)),
@@ -671,8 +687,8 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_AlterTable:
 		AlterTable := &plan.AlterTable{
 			Database:       df.AlterTable.Database,
-			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef),
-			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef),
+			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef, true),
+			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
 			IsClusterTable: df.AlterTable.IsClusterTable,
 			AlgorithmType:  df.AlterTable.AlgorithmType,
 			CreateTableSql: df.AlterTable.CreateTableSql,
@@ -722,7 +738,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				ForeignTbl:          DeepCopyNumberList(df.DropTable.GetForeignTbl()),
 				PartitionTableNames: DeepCopyStringList(df.DropTable.GetPartitionTableNames()),
 				IsView:              df.DropTable.IsView,
-				TableDef:            DeepCopyTableDef(df.DropTable.GetTableDef()),
+				TableDef:            DeepCopyTableDef(df.DropTable.GetTableDef(), true),
 			},
 		}
 
@@ -735,7 +751,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 					IfNotExists: df.CreateIndex.Index.IfNotExists,
 					Temporary:   df.CreateIndex.Index.Temporary,
 					Database:    df.CreateIndex.Index.Database,
-					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef),
+					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
 				},
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
 			},

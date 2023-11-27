@@ -69,6 +69,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
+	if colPos, ok := b.ctx.sampleByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.sampleFunc.columns[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -94,7 +106,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
-		newExpr, _ := bindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
+		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
 		return &plan.Expr{
@@ -130,7 +142,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
-			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
 	}
 	b.insideAgg = false
@@ -272,4 +284,31 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		return nil, moerr.NewNotSupported(b.GetContext(), "DISTINCT in time window")
+	}
+
+	b.insideAgg = true
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err != nil {
+		return nil, err
+	}
+	b.insideAgg = false
+
+	colPos := int32(len(b.ctx.times))
+	astStr := tree.String(astExpr, dialect.MYSQL)
+	b.ctx.timeByAst[astStr] = colPos
+	b.ctx.times = append(b.ctx.times, expr)
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: b.ctx.timeTag,
+				ColPos: colPos,
+			},
+		},
+	}, nil
 }

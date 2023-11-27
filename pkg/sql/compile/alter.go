@@ -15,7 +15,10 @@
 package compile
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -41,7 +44,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName); err != nil {
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -82,6 +85,28 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// 5. drop original table
 	if err = dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
+	}
+
+	// 5.1 delete all index objects of the table in mo_catalog.mo_indexes
+	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
+		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
+			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			err = c.runSql(deleteSql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// 5.2 delete all of the original table
+	if qry.TableDef.Indexes != nil {
+		for _, indexdef := range qry.TableDef.Indexes {
+			if indexdef.TableExist {
+				if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	// 6. Recreate the original table

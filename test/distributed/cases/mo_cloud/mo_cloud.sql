@@ -14,7 +14,7 @@ select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relnam
 select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage' and relkind = 'r';
 select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage_time' and relkind = 'r';
 
--- create tabel
+-- create table
 CREATE CLUSTER TABLE `mo_catalog`.`statement_mo` (`statement_id` varchar(36) NOT NULL,`account` VARCHAR(300) NOT NULL,`response_at` datetime(3) NULL,`stu` DECIMAL(23,3) NOT NULL,PRIMARY KEY (`statement_id`, `account_id`));
 CREATE TABLE `statement_time` (`cluster` varchar(191) NOT NULL,`last_time` datetime(3) NOT NULL,PRIMARY KEY (`cluster`));
 CREATE TABLE `stu` (`account` VARCHAR(300) NOT NULL,`start_time` datetime(3) NOT NULL,`end_time` datetime(3) NOT NULL,`stu` decimal(23,3) NOT NULL,`type` longtext NOT NULL);
@@ -152,13 +152,12 @@ SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE 'mo_m
 SELECT `collecttime`,`value`,`account` FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' and collectTime >= '2023-07-28 03:23:00' and collectTime < '2023-07-28 03:30:00';
 SELECT `statement_id`,`stats`,`duration`,`sql_source_type`,`account`,`response_at` FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' and response_at >= '2023-07-28 04:49:00' and response_at < '2023-07-28 04:50:00';
 SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and collecttime > '2023-07-28 06:07:53' and collecttime <= '2023-07-28 06:10:53' ORDER BY collecttime DESC LIMIT 1;
-SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
 SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
 SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
 SELECT count(*) FROM `mo_mo`.`wb` WHERE account_id = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_user = 'admin' AND id = '30415473-5276-42c5-8302-4e9a7e605900';
 SELECT count(*) FROM information_schema.tables WHERE table_schema = '' AND table_name = 'moins' AND table_type = 'BASE TABLE';
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id;
-SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
+SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE (relname NOT LIKE "__mo_index_secondary_%" AND relname NOT LIKE "__mo_index_unique_%" OR relname IS NULL) ORDER BY reldatabase, relname;
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';

@@ -46,7 +46,7 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	segCmd, err := seg.MakeCommand(1)
 	assert.Nil(t, err)
 	composed.AddCmd(segCmd)
@@ -64,7 +64,8 @@ func TestComposedCmd(t *testing.T) {
 
 	composed.AddCmd(cmd)
 
-	del := updates.NewDeleteNode(nil, handle.DT_Normal)
+	del := updates.NewDeleteNode(nil, handle.DT_Normal,
+		updates.IOET_WALTxnCommand_DeleteNode_V2)
 	del.AttachTo(controller.GetDeleteChain())
 	cmd2, err := del.MakeCommand(1)
 	assert.Nil(t, err)

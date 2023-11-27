@@ -75,6 +75,13 @@ func LogTxnPushedTimestampUpdated(
 	}
 }
 
+func LogTimestampWaiterCanceled() {
+	logger := getSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("timestamp waiter canceled")
+	}
+}
+
 // LogTxnRead log txn read
 func LogTxnRead(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
@@ -87,7 +94,7 @@ func LogTxnRead(txnMeta txn.TxnMeta) {
 func LogTxnWrite(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn write", zap.String("txn", txnMeta.DebugString()))
+		logger.Info("txn write", zap.String("txn", txnMeta.DebugString()))
 	}
 }
 
@@ -95,7 +102,7 @@ func LogTxnWrite(txnMeta txn.TxnMeta) {
 func LogTxnCommit(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn commit", zap.String("txn", txnMeta.DebugString()))
+		logger.Info("txn commit", zap.String("txn", txnMeta.DebugString()))
 	}
 }
 

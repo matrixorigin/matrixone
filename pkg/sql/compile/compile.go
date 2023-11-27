@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -66,24 +68,28 @@ import (
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold              uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate            uint64 = 300 * mpool.B
-	shuffleJoinMergeChannelBufferSize        = 4
-	shuffleJoinProbeChannelBufferSize        = 16
+	DistributedThreshold     uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate   uint64 = 300 * mpool.B
+	shuffleChannelBufferSize        = 16
 )
 
 var (
 	ncpu = runtime.NumCPU()
+
+	ctxCancelError = context.Canceled.Error()
 )
 
 var pool = sync.Pool{
@@ -93,8 +99,15 @@ var pool = sync.Pool{
 }
 
 // New is used to new an object of compile
-func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+func New(
+	addr, db, sql, tenant, uid string,
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process,
+	stmt tree.Statement,
+	isInternal bool,
+	cnLabel map[string]string,
+	startAt time.Time) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -110,6 +123,8 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
+	c.startAt = startAt
+	c.metaTables = make(map[string]struct{})
 	return c
 }
 
@@ -149,7 +164,10 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
-	c.fuzzy = nil
+	c.startAt = time.Time{}
+	c.metaTables = nil
+	c.needLockMeta = false
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -194,13 +212,36 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 // Compile is the entrance of the compute-execute-layer.
 // It generates a scope (logic pipeline) for a query plan.
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer task.End()
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in compile",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
 		}
 	}()
+
+	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
+			if qry.Query.StmtType == plan.Query_SELECT {
+				for _, n := range qry.Query.Nodes {
+					if n.NodeType == plan.Node_LOCK_OP {
+						c.needLockMeta = true
+						break
+					}
+				}
+			} else {
+				c.needLockMeta = true
+			}
+		}
+	}
 
 	// with values
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
@@ -231,6 +272,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 		if len(s.NodeInfo.Addr) == 0 {
 			s.NodeInfo.Addr = c.addr
 		}
+	}
+	if c.shouldReturnCtxErr() {
+		return c.proc.Ctx.Err()
 	}
 	return nil
 }
@@ -284,7 +328,9 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return s.RemoteRun(c)
+		err := s.RemoteRun(c)
+		c.addAffectedRows(s.affectedRows())
+		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
 		if err != nil {
@@ -347,102 +393,116 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
-	var cc *Compile
+func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	start := time.Now()
+	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
-	result = &util2.RunResult{
-		AffectRows: 0,
-	}
-
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
-	defer task.End()
+	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
+	stats.ExecutionStart()
 
 	defer func() {
-		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-		if cc != nil {
-			if cc.fuzzy != nil && cc.fuzzy.cnt > 0 && err == nil {
-				err = cc.fuzzy.backgroundSQLCheck(cc)
-			}
-		} else {
-			if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
-				err = c.fuzzy.backgroundSQLCheck(c)
-			}
-		}
+		stats.ExecutionEnd()
+		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
+	var span trace.Span
+	var cc *Compile // compile structure for rerun.
+	var result = &util2.RunResult{}
+	var err error
+
+	sp := c.proc.GetStmtProfile()
+	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
+	defer func() {
 		putCompile(c)
 		putCompile(cc)
+
+		task.End()
+		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
 	}()
 
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
+
+	v2.TxnStatementTotalCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
-		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-		if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.TxnOperator.Txn().IsRCIsolation() {
-			c.proc.TxnOperator.ResetRetry(true)
-			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
-
-			// clear the workspace of the failed statement
-			if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-				return nil, e
-			}
-			//  increase the statement id
-			if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-				return nil, e
-			}
-
-			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-			// improved to refresh expression in the future.
-			cc = New(
-				c.addr,
-				c.db,
-				c.sql,
-				c.tenant,
-				c.uid,
-				c.proc.Ctx,
-				c.e,
-				c.proc,
-				c.stmt,
-				c.isInternal,
-				c.cnLabel)
-			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				pn, err := c.buildPlanFunc()
-				if err != nil {
-					return nil, err
-				}
-				c.pn = pn
-			}
-			if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
-				c.fatalLog(1, err)
-				return nil, err
-			}
-			if err = cc.runOnce(); err != nil {
-				c.fatalLog(1, err)
-				return nil, err
-			}
-			// set affectedRows to old compile to return
-			c.setAffectedRows(cc.getAffectedRows())
-			result.AffectRows = cc.getAffectedRows()
-			return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		if !c.ifNeedRerun(err) {
+			return nil, err
 		}
-		return nil, err
+		v2.TxnStatementRetryCounter.Inc()
+
+		c.proc.TxnOperator.ResetRetry(true)
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
+
+		// clear the workspace of the failed statement
+		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+			return nil, e
+		}
+
+		// increase the statement id
+		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+			return nil, e
+		}
+
+		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+		// improved to refresh expression in the future.
+		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			pn, e := c.buildPlanFunc()
+			if e != nil {
+				return nil, e
+			}
+			c.pn = pn
+		}
+		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		if err = cc.runOnce(); err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		err = c.proc.TxnOperator.GetWorkspace().Adjust()
+		if err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		// set affectedRows to old compile to return
+		c.setAffectedRows(cc.getAffectedRows())
 	}
 
+	if c.shouldReturnCtxErr() {
+		return nil, c.proc.Ctx.Err()
+	}
 	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return result, err
+	return result, nil
+}
+
+// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+func (c *Compile) ifNeedRerun(err error) bool {
+	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation() {
+		return true
+	}
+	return false
 }
 
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
+	err := c.lockMetaTables()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -451,18 +511,46 @@ func (c *Compile) runOnce() error {
 		wg.Add(1)
 		scope := c.scope[i]
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.ctx, e)
+					getLogger().Error("panic in run",
+						zap.String("sql", c.sql),
+						zap.String("error", err.Error()))
+					errC <- err
+				}
+				wg.Done()
+			}()
 			errC <- c.run(scope)
-			wg.Done()
 		})
 	}
 	wg.Wait()
 	close(errC)
+
+	errList := make([]error, 0, len(c.scope))
 	for e := range errC {
 		if e != nil {
-			return e
+			errList = append(errList, e)
+			if c.ifNeedRerun(e) {
+				return e
+			}
 		}
 	}
-	return nil
+
+	if len(errList) == 0 {
+		return nil
+	} else {
+		return errList[0]
+	}
+}
+
+// shouldReturnCtxErr return true only if the ctx has error and the error is not canceled.
+// maybe deadlined or other error.
+func (c *Compile) shouldReturnCtxErr() bool {
+	if e := c.proc.Ctx.Err(); e != nil && e.Error() != ctxCancelError {
+		return true
+	}
+	return false
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
@@ -556,6 +644,42 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		}
 	}
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
+}
+
+func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if !c.needLockMeta {
+		return
+	}
+
+	if objRes.SchemaName == catalog.MO_CATALOG && (objRes.ObjName == catalog.MO_DATABASE || objRes.ObjName == catalog.MO_TABLES || objRes.ObjName == catalog.MO_COLUMNS) {
+		// do not lock meta table for meta table
+	} else {
+		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
+		c.metaTables[key] = struct{}{}
+	}
+}
+
+func (c *Compile) lockMetaTables() error {
+	lockLen := len(c.metaTables)
+	if lockLen == 0 {
+		return nil
+	}
+
+	tables := make([]string, 0, lockLen)
+	for table := range c.metaTables {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+
+	for _, table := range tables {
+		names := strings.SplitN(table, " ", 2)
+
+		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
+		if err != nil {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
+	return nil
 }
 
 func (c *Compile) cnListStrategy() {
@@ -850,6 +974,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		c.appendMetaTables(n.ObjRef)
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -889,6 +1014,17 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		}
+	case plan.Node_SAMPLE:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+
+		ss = c.compileSample(n, ss)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_WINDOW:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -899,6 +1035,26 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileWin(n, ss)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_TIME_WINDOW:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileTimeWin(n, c.compileSort(n, ss))
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_Fill:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileFill(n, ss)
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -922,6 +1078,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
+	case plan.Node_PARTITION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss))), nil
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -965,6 +1130,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
@@ -1025,20 +1191,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
-	case plan.Node_FUZZY_FILTER:
-		curr := c.anal.curr
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		ss, err = c.compileFuzzyFilter(n, ss)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
-	case plan.Node_PRE_INSERT_UK:
+	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
@@ -1046,16 +1199,30 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			preInsertUkArg, err := constructPreInsertUk(n, c.proc)
-			if err != nil {
-				return nil, err
+			if n.NodeType == plan.Node_PRE_INSERT_UK {
+				preInsertUkArg, err := constructPreInsertUk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertUnique,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertUkArg,
+				})
+			} else {
+				preInsertSkArg, err := constructPreInsertSk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertSecondaryIndex,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertSkArg,
+				})
 			}
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsertUnique,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     preInsertUkArg,
-			})
+
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
@@ -1081,6 +1248,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
+		c.appendMetaTables(n.ObjRef)
 		curr := c.anal.curr
 		n.NotCacheable = true
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1093,7 +1261,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
-			logutil.Infof("insert of '%s' write s3\n", c.sql)
+			logutil.Debugf("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
@@ -1125,13 +1293,28 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 						Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 					})
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
+					if c.anal.qry.LoadTag {
+						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
+							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+						}
+					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
-					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, false, regs),
-				})
+				if c.anal.qry.LoadTag {
+					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
+					arg.FuncId = dispatch.ShuffleToAllFunc
+					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: arg,
+					})
+				} else {
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: constructDispatchLocal(false, false, false, regs),
+					})
+				}
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
 					if err != nil {
@@ -1419,8 +1602,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
 
-	// lock table
-	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+	// lock table's meta
+	if n.ObjRef != nil && n.TableDef != nil {
+		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
+			return nil, err
+		}
+	}
+	// lock table, for tables with no primary key, there is no need to lock the data
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
+		n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -1458,6 +1648,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Terminated: n.ExternScan.Terminated,
 			EnclosedBy: n.ExternScan.EnclosedBy[0],
 		}
+		param.JsonData = n.ExternScan.JsonType
 	}
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {
@@ -1601,6 +1792,9 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
+		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1618,7 +1812,10 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	arg.FuncId = dispatch.SendToAnyLocalFunc
+	//arg.FuncId = dispatch.SendToAnyLocalFunc
+	//use shuffle instead of SendToAnyLocalFunc
+	arg.FuncId = dispatch.ShuffleToAllFunc
+	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
@@ -1644,7 +1841,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, err := c.generateNodes(n)
+	nodes, partialresults, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
 	}
@@ -1661,6 +1858,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	for i := range nodes {
 		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
 	}
+	ss[0].PartialResults = partialresults
 	return ss, nil
 }
 
@@ -1671,7 +1869,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1681,7 +1878,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1705,51 +1901,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 				panic(e)
 			}
 		}
-		// defs has no rowid
-		defs, err := rel.TableDefs(ctx)
-		if err != nil {
-			panic(err)
-		}
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			} else if c, ok := def.(*engine.ConstraintDef); ok {
-				for _, ct := range c.Cts {
-					switch k := ct.(type) {
-					case *engine.PrimaryKeyDef:
-						pkey = k.Pkey
-					}
-				}
-			}
-		}
-		tblDef = &plan.TableDef{
-			Cols:          cols,
-			Name2ColIndex: name2index,
-			Version:       n.TableDef.Version,
-			Name:          n.TableDef.Name,
-			TableType:     n.TableDef.GetTableType(),
-			Pkey:          pkey,
-		}
+		tblDef = rel.GetTableDef(ctx)
 	}
 
 	// prcoess partitioned table
@@ -2174,6 +2326,31 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	return rs
 }
 
+func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		c.anal.isFirst = currentFirstFlag
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Partition,
+		Idx: c.anal.curr,
+		Arg: constructPartition(n),
+	}
+	return []*Scope{rs}
+}
+
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
@@ -2297,6 +2474,26 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
+func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.TimeWin,
+		Idx: c.anal.curr,
+		Arg: constructTimeWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Fill,
+		Idx: c.anal.curr,
+		Arg: constructFill(n),
+	}
+	return []*Scope{rs}
+}
+
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -2340,59 +2537,56 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	if len(ss) != 1 {
-		panic("fuzzy filter should have only one prescope")
+func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructSample(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	if len(ss) == 1 {
+		return []*Scope{rs}
 	}
 
-	arg := constructFuzzyFilter()
-	ss[0].appendInstruction(vm.Instruction{
-		Op:  vm.FuzzyFilter,
-		Idx: c.anal.curr,
-		Arg: arg,
-	})
-
-	outData, err := newFuzzyCheck(n)
-	if err != nil {
-		return nil, err
+	// should sample again if sample by rows.
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		rs.appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     sample.NewMergeSample(constructSample(n)),
+		})
 	}
-
-	// wrap the collision key into c.fuzzy, for more information,
-	// please refer fuzzyCheck.go
-	ss[0].appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: &output.Argument{
-			Data: outData,
-			Func: func(data any, bat *batch.Batch) error {
-				if bat == nil || bat.IsEmpty() {
-					return nil
-				}
-				c.fuzzy = data.(*fuzzyCheck)
-				// the batch will contain the key that fuzzyCheck
-				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
-					return err
-				}
-
-				return nil
-			},
-		},
-	})
-
-	return ss, nil
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	partialresults := ss[0].PartialResults
+	ss[0].PartialResults = nil
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
+		arg := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
+		if partialresults != nil {
+			arg.PartialResults = partialresults
+			partialresults = nil
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
+			Arg:     arg,
 		})
 	}
 	c.anal.isFirst = false
@@ -2674,7 +2868,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -2830,7 +3024,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleJoinMergeChannelBufferSize)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -2913,6 +3107,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3005,6 +3200,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
+	if len(qry.Nodes) == 0 {
+		panic("empty plan")
+	}
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
 		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
@@ -3050,11 +3248,12 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var ranges [][]byte
+	var partialresults []any
 	var nodes engine.Nodes
 	isPartitionTable := false
 
@@ -3070,20 +3269,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
 		var e error // avoid contamination of error messages
 		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// if temporary table, just scan at local cn.
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		c.cnList = engine.Nodes{
 			engine.Node{
@@ -3096,7 +3295,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if n.TableDef.Partition != nil {
@@ -3106,11 +3305,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				partTableName := partitionItem.PartitionTableName
 				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
 				for _, r := range subranges[1:] {
@@ -3127,11 +3326,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				partTableName := partitionTableNames[i]
 				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
 				for _, r := range subranges[1:] {
@@ -3142,6 +3341,327 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			}
 		}
 	}
+
+	if len(n.AggList) > 0 && len(ranges) > 1 {
+		newranges := make([][]byte, 0, len(ranges))
+		newranges = append(newranges, ranges[0])
+		partialresults = make([]any, 0, len(n.AggList))
+
+		for i := range n.AggList {
+			agg := n.AggList[i].Expr.(*plan.Expr_F)
+			name := agg.F.Func.ObjName
+			switch name {
+			case "starcount", "count":
+				partialresults = append(partialresults, int64(0))
+			case "min", "max":
+				partialresults = append(partialresults, nil)
+			default:
+				partialresults = nil
+			}
+			if partialresults == nil {
+				break
+			}
+		}
+
+		if partialresults != nil {
+			columnMap := make(map[int]int)
+			for i := range n.AggList {
+				agg := n.AggList[i].Expr.(*plan.Expr_F)
+				if agg.F.Func.ObjName == "starcount" {
+					continue
+				}
+				args := agg.F.Args[0]
+				col, ok := args.Expr.(*plan.Expr_Col)
+				if !ok {
+					agg.F.Func.ObjName = "starcount"
+					continue
+				}
+				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
+				if len(n.TableDef.Cols) > 0 {
+					columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[columnMap[int(col.Col.ColPos)]].Seqnum)
+				}
+			}
+			for _, buf := range ranges[1:] {
+				blk := catalog.DecodeBlockInfo(buf)
+				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+					newranges = append(newranges, buf)
+					continue
+				}
+				var objMeta objectio.ObjectMeta
+				location := blk.MetaLocation()
+				var fs fileservice.FileService
+				fs, err = fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+				if err != nil {
+					return nil, nil, err
+				}
+				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					partialresults = nil
+					break
+				} else {
+					objDataMeta := objMeta.MustDataMeta()
+					blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+					for i := range n.AggList {
+						agg := n.AggList[i].Expr.(*plan.Expr_F)
+						name := agg.F.Func.ObjName
+						switch name {
+						case "starcount":
+							partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
+						case "count":
+							partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
+							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+							nullCnt := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).NullCnt()
+							partialresults[i] = partialresults[i].(int64) - int64(nullCnt)
+						case "min":
+							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
+							if zm.GetType().FixedLength() < 0 {
+								partialresults = nil
+							} else {
+								if partialresults[i] == nil {
+									partialresults[i] = zm.GetMin()
+								} else {
+									switch zm.GetType() {
+									case types.T_bool:
+										partialresults[i] = !partialresults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
+									case types.T_int8:
+										min := types.DecodeFixed[int8](zm.GetMinBuf())
+										if min < partialresults[i].(int8) {
+											partialresults[i] = min
+										}
+									case types.T_int16:
+										min := types.DecodeFixed[int16](zm.GetMinBuf())
+										if min < partialresults[i].(int16) {
+											partialresults[i] = min
+										}
+									case types.T_int32:
+										min := types.DecodeFixed[int32](zm.GetMinBuf())
+										if min < partialresults[i].(int32) {
+											partialresults[i] = min
+										}
+									case types.T_int64:
+										min := types.DecodeFixed[int64](zm.GetMinBuf())
+										if min < partialresults[i].(int64) {
+											partialresults[i] = min
+										}
+									case types.T_uint8:
+										min := types.DecodeFixed[uint8](zm.GetMinBuf())
+										if min < partialresults[i].(uint8) {
+											partialresults[i] = min
+										}
+									case types.T_uint16:
+										min := types.DecodeFixed[uint16](zm.GetMinBuf())
+										if min < partialresults[i].(uint16) {
+											partialresults[i] = min
+										}
+									case types.T_uint32:
+										min := types.DecodeFixed[uint32](zm.GetMinBuf())
+										if min < partialresults[i].(uint32) {
+											partialresults[i] = min
+										}
+									case types.T_uint64:
+										min := types.DecodeFixed[uint64](zm.GetMinBuf())
+										if min < partialresults[i].(uint64) {
+											partialresults[i] = min
+										}
+									case types.T_float32:
+										min := types.DecodeFixed[float32](zm.GetMinBuf())
+										if min < partialresults[i].(float32) {
+											partialresults[i] = min
+										}
+									case types.T_float64:
+										min := types.DecodeFixed[float64](zm.GetMinBuf())
+										if min < partialresults[i].(float64) {
+											partialresults[i] = min
+										}
+									case types.T_date:
+										min := types.DecodeFixed[types.Date](zm.GetMinBuf())
+										if min < partialresults[i].(types.Date) {
+											partialresults[i] = min
+										}
+									case types.T_time:
+										min := types.DecodeFixed[types.Time](zm.GetMinBuf())
+										if min < partialresults[i].(types.Time) {
+											partialresults[i] = min
+										}
+									case types.T_datetime:
+										min := types.DecodeFixed[types.Datetime](zm.GetMinBuf())
+										if min < partialresults[i].(types.Datetime) {
+											partialresults[i] = min
+										}
+									case types.T_timestamp:
+										min := types.DecodeFixed[types.Timestamp](zm.GetMinBuf())
+										if min < partialresults[i].(types.Timestamp) {
+											partialresults[i] = min
+										}
+									case types.T_enum:
+										min := types.DecodeFixed[types.Enum](zm.GetMinBuf())
+										if min < partialresults[i].(types.Enum) {
+											partialresults[i] = min
+										}
+									case types.T_decimal64:
+										min := types.DecodeFixed[types.Decimal64](zm.GetMinBuf())
+										if min < partialresults[i].(types.Decimal64) {
+											partialresults[i] = min
+										}
+									case types.T_decimal128:
+										min := types.DecodeFixed[types.Decimal128](zm.GetMinBuf())
+										if min.Compare(partialresults[i].(types.Decimal128)) < 0 {
+											partialresults[i] = min
+										}
+									case types.T_uuid:
+										min := types.DecodeFixed[types.Uuid](zm.GetMinBuf())
+										if min.Lt(partialresults[i].(types.Uuid)) {
+											partialresults[i] = min
+										}
+									case types.T_TS:
+										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
+										if min.Less(partialresults[i].(types.TS)) {
+											partialresults[i] = min
+										}
+									case types.T_Rowid, types.T_Blockid:
+										min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
+										if min.Less(partialresults[i].(types.Rowid)) {
+											partialresults[i] = min
+										}
+									}
+								}
+							}
+						case "max":
+							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
+							if zm.GetType().FixedLength() < 0 {
+								partialresults = nil
+							} else {
+								if partialresults[i] == nil {
+									partialresults[i] = zm.GetMax()
+								} else {
+									switch zm.GetType() {
+									case types.T_bool:
+										partialresults[i] = partialresults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
+									case types.T_int8:
+										max := types.DecodeFixed[int8](zm.GetMaxBuf())
+										if max > partialresults[i].(int8) {
+											partialresults[i] = max
+										}
+									case types.T_int16:
+										max := types.DecodeFixed[int16](zm.GetMaxBuf())
+										if max > partialresults[i].(int16) {
+											partialresults[i] = max
+										}
+									case types.T_int32:
+										max := types.DecodeFixed[int32](zm.GetMaxBuf())
+										if max > partialresults[i].(int32) {
+											partialresults[i] = max
+										}
+									case types.T_int64:
+										max := types.DecodeFixed[int64](zm.GetMaxBuf())
+										if max > partialresults[i].(int64) {
+											partialresults[i] = max
+										}
+									case types.T_uint8:
+										max := types.DecodeFixed[uint8](zm.GetMaxBuf())
+										if max > partialresults[i].(uint8) {
+											partialresults[i] = max
+										}
+									case types.T_uint16:
+										max := types.DecodeFixed[uint16](zm.GetMaxBuf())
+										if max > partialresults[i].(uint16) {
+											partialresults[i] = max
+										}
+									case types.T_uint32:
+										max := types.DecodeFixed[uint32](zm.GetMaxBuf())
+										if max > partialresults[i].(uint32) {
+											partialresults[i] = max
+										}
+									case types.T_uint64:
+										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
+										if max > partialresults[i].(uint64) {
+											partialresults[i] = max
+										}
+									case types.T_float32:
+										max := types.DecodeFixed[float32](zm.GetMaxBuf())
+										if max > partialresults[i].(float32) {
+											partialresults[i] = max
+										}
+									case types.T_float64:
+										max := types.DecodeFixed[float64](zm.GetMaxBuf())
+										if max > partialresults[i].(float64) {
+											partialresults[i] = max
+										}
+									case types.T_date:
+										max := types.DecodeFixed[types.Date](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Date) {
+											partialresults[i] = max
+										}
+									case types.T_time:
+										max := types.DecodeFixed[types.Time](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Time) {
+											partialresults[i] = max
+										}
+									case types.T_datetime:
+										max := types.DecodeFixed[types.Datetime](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Datetime) {
+											partialresults[i] = max
+										}
+									case types.T_timestamp:
+										max := types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Timestamp) {
+											partialresults[i] = max
+										}
+									case types.T_enum:
+										max := types.DecodeFixed[types.Enum](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Enum) {
+											partialresults[i] = max
+										}
+									case types.T_decimal64:
+										max := types.DecodeFixed[types.Decimal64](zm.GetMaxBuf())
+										if max > partialresults[i].(types.Decimal64) {
+											partialresults[i] = max
+										}
+									case types.T_decimal128:
+										max := types.DecodeFixed[types.Decimal128](zm.GetMaxBuf())
+										if max.Compare(partialresults[i].(types.Decimal128)) > 0 {
+											partialresults[i] = max
+										}
+									case types.T_uuid:
+										max := types.DecodeFixed[types.Uuid](zm.GetMaxBuf())
+										if max.Gt(partialresults[i].(types.Uuid)) {
+											partialresults[i] = max
+										}
+									case types.T_TS:
+										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
+										if max.Greater(partialresults[i].(types.TS)) {
+											partialresults[i] = max
+										}
+									case types.T_Rowid, types.T_Blockid:
+										max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
+										if max.Great(partialresults[i].(types.Rowid)) {
+											partialresults[i] = max
+										}
+									}
+								}
+							}
+						default:
+						}
+						if partialresults == nil {
+							break
+						}
+					}
+					if partialresults == nil {
+						break
+					}
+				}
+			}
+			if len(ranges) == len(newranges) {
+				partialresults = nil
+			} else if partialresults != nil {
+				ranges = newranges
+			}
+		}
+
+	}
+	//n.AggList = nil
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
@@ -3167,7 +3687,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				}
 			}
 		}
-		return nodes, nil
+		return nodes, partialresults, nil
 	}
 
 	engineType := rel.GetEngineType()
@@ -3177,14 +3697,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		return putBlocksInCurrentCN(c, ranges, rel, n), nil
+		return putBlocksInCurrentCN(c, ranges, rel, n), partialresults, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		return shuffleBlocksToMultiCN(c, ranges, rel, n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
+		return nodes, partialresults, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, ranges, rel, n), nil
+	return putBlocksInAverage(c, ranges, rel, n), partialresults, nil
 }
 
 func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
@@ -3324,6 +3845,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
+	var shuffleRangeUint64 []uint64
+	var shuffleRangeInt64 []int64
+	var init bool
+	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3339,7 +3864,27 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
+		if !init {
+			init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			}
+		}
+		if shuffleRangeUint64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+		} else if shuffleRangeInt64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+		} else {
+			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		}
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil

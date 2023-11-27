@@ -53,7 +53,7 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
-		err := buildPartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
+		err := buildPartitionColumns(ctx, tableDef, partitionBinder, partitionInfo, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func (rpb *rangePartitionBuilder) checkPartitionIntegrity(ctx context.Context, p
 	if err := checkPartitionExprType(ctx, partitionBinder, tableDef, partitionDef); err != nil {
 		return err
 	}
-	if err := checkPartitionDefs(ctx, partitionBinder, partitionDef, tableDef); err != nil {
+	if err := checkPartitionDefines(ctx, partitionBinder, partitionDef, tableDef); err != nil {
 		return err
 	}
 	if err := checkPartitionKeys(ctx, partitionBinder.builder.nameByColRef, tableDef, partitionDef); err != nil {

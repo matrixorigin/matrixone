@@ -56,7 +56,8 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 	runtime.SetupProcessLevelRuntime(rt)
 	ctx, cancel := context.WithCancel(context.TODO())
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
+		clusterservice.WithDisableRefresh())
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
@@ -200,8 +201,7 @@ func TestHandler_Handle(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
@@ -342,8 +342,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
@@ -417,8 +416,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),

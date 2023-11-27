@@ -19,8 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	buildingHashMap = iota
@@ -33,6 +36,17 @@ type Argument struct {
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 type container struct {
@@ -48,7 +62,7 @@ type container struct {
 	bat *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	arg.ctr.cleanBatch(mp)
 	arg.ctr.cleanHashMap()
