@@ -20,6 +20,9 @@ select sample(c1, 100.01 percent) from s_t1;
 /* 5. sample cannot be used in where clause */
 select c1, c2, c3 from s_t1 where sample(c1, 1 rows) = 1;
 select c1, c2, c3 from s_t1 where sample(c1, 1 percent) = 1;
+/* 6. cannot sample the group by column */
+select sample(c1, 1 rows) from s_t1 group by c1;
+select sample(*, 1 rows) from s_t1 group by c1;
 
 /* expected succeed case */
 /* 1. sample 2 rows from table by column c1 */
@@ -68,6 +71,10 @@ select count(*) from (select sample(cc1, cc2, 2 rows) from s_t2);
 select sample(cc1, cc2, 100 percent) from s_t2 order by cc1 asc;
 /* 3. sample 0 percent from table by column cc1, cc2, expected to get empty */
 select sample(cc1, cc2, 0 percent) from s_t2;
+/* 4. should support the sample * from table */
+select sample(*, 100 percent) from s_t2 order by cc1 asc;
+select sample(*, 0 percent) from s_t2;
+select sample(*, 2 rows) from s_t2 order by cc1 asc;
 
 /* data prepare for expression sample */
 drop table if exists s_t3;
