@@ -413,8 +413,6 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
 
-		p.dataObjects.Set(objEntry)
-
 		if old, ok := p.dataObjects.Get(objEntry); ok {
 			// if overwritten delete
 			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
@@ -422,6 +420,8 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 					old.String(), objEntry.String())
 			}
 		}
+
+		p.dataObjects.Set(objEntry)
 	}
 }
 
