@@ -2,7 +2,7 @@
 drop table if exists sample01;
 create table sample01 (col1 int, col2 decimal(6), col3 varchar(30));
 insert into sample01 values (1, null, 'database');
-insert into sample01 values (2, 38291.32132, 'database ');
+insert into sample01 values (2, 38291.32132, 'database');
 insert into sample01 values (3, null, 'database management system');
 insert into sample01 values (4, 10, null);
 insert into sample01 values (1, -321.321, null);
