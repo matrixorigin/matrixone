@@ -369,6 +369,9 @@ func (s *ShuffleRange) Eval() {
 		for i := range s.Result {
 			var frac float64
 			str := make([]byte, s.maxlen)
+			if s.Result[i] < 0 {
+				s.Result[i] = 0
+			}
 			s.Result[i], _ = math.Modf(s.Result[i])
 			for j := 0; j < s.maxlen; j++ {
 				s.Result[i], frac = math.Modf(s.Result[i] / lens)
