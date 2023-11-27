@@ -25,7 +25,9 @@ import (
 func init() {
 	reuse.CreatePool[waiter](
 		newWaiter,
-		resetWaiter,
+		func(w *waiter) {
+			w.reset()
+		},
 		reuse.DefaultOptions[waiter]().
 			WithReleaseFunc(func(w *waiter) {
 				close(w.c)

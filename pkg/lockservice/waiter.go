@@ -58,10 +58,6 @@ func newWaiter() *waiter {
 	return w
 }
 
-func resetWaiter(w *waiter) {
-	w.reset()
-}
-
 func (w waiter) Name() string {
 	return "lockservice.wait"
 }
@@ -110,7 +106,6 @@ func (w *waiter) close() {
 		panic("BUG: invalid ref count, " + w.String())
 	}
 	if n == 0 {
-		w.reset()
 		reuse.Free(w, nil)
 	}
 }
