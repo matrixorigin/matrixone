@@ -222,7 +222,7 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) isDeleted(blockID *types.Blockid) bool {
+func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
 	b.RLock()
 	defer b.RUnlock()
 	_, ok := b.offsets[*blockID]
