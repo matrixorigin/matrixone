@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -48,6 +49,8 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -193,6 +196,32 @@ func (s *service) processList(tenant string, sysTenant bool) ([]*status.Session,
 		sessions = append(sessions, ses.StatusSession())
 	}
 	return sessions, nil
+}
+
+func (s *service) handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	version, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		resp.WrapError(moerr.NewInternalError(ctx, "protocol version not found"))
+		return nil
+	}
+	resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
+		Version: version.(string),
+	}
+	return nil
+}
+
+func (s *service) handleSetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.SetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, req.SetProtocolVersion.Version)
+	resp.SetProtocolVersion = &query.SetProtocolVersionResponse{
+		Version: req.SetProtocolVersion.Version,
+	}
+	return nil
 }
 
 func copyKeys(src [][]byte) [][]byte {
