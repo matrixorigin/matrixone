@@ -552,6 +552,13 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
+func logInfof(info string, msg string, fields ...zap.Field) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		fields = append(fields, zap.String("session_info", info))
+		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+	}
+}
+
 func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
 		return
@@ -718,3 +725,7 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 	}
 	return false
 }
+
+const (
+	quitStr = "!!!COM_QUIT!!!"
+)
