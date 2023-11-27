@@ -717,11 +717,11 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment(false)
+	seg, _ := rel.CreateNonAppendableSegment(false)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.CreateBlock(false)
+		_, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
 		assert.Nil(t, err)
 	}
 

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 const (
@@ -32,10 +33,11 @@ const (
 	IOET_WALTxnCommand_TxnState uint16 = 3002
 
 	IOET_WALTxnEntry_V1            uint16 = 1
+	IOET_WALTxnEntry_V2            uint16 = 2
 	IOET_WALTxnCommand_Composed_V1 uint16 = 1
 	IOET_WALTxnCommand_TxnState_V1 uint16 = 1
 
-	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V1
+	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V2
 	IOET_WALTxnCommand_Composed_CurrVer = IOET_WALTxnCommand_Composed_V1
 	IOET_WALTxnCommand_TxnState_CurrVer = IOET_WALTxnCommand_TxnState_V1
 
@@ -57,7 +59,19 @@ func init() {
 		nil,
 		func(b []byte) (any, error) {
 			txnEntry := NewEmptyTxnCmd()
-			err := txnEntry.UnmarshalBinary(b)
+			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V1)
+			return txnEntry, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnEntry,
+			Version: IOET_WALTxnEntry_V2,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnEntry := NewEmptyTxnCmd()
+			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V2)
 			return txnEntry, err
 		},
 	)
@@ -320,7 +334,7 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
-func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
+func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn int64
 	if c.ID, sn, err = objectio.ReadString(r); err != nil {
 		return
@@ -352,7 +366,12 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 			n += 8
 		}
 	}
-	if sn, err = c.Memo.ReadFrom(r); err != nil {
+	MemoVersion := model.MemoTreeVersion1
+	if ver >= IOET_WALTxnEntry_V2 {
+		MemoVersion = model.MemoTreeVersion2
+	}
+
+	if sn, err = c.Memo.ReadFromWithVersion(r, MemoVersion); err != nil {
 		return
 	}
 	n += sn
@@ -367,7 +386,7 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (c *TxnCmd) UnmarshalBinary(buf []byte) (err error) {
+func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) {
 	c.ComposedCmd = NewComposedCmd(0)
 	composeedCmdBufLength := types.DecodeUint32(buf[:4])
 	n := 4
@@ -378,7 +397,7 @@ func (c *TxnCmd) UnmarshalBinary(buf []byte) (err error) {
 	c.ComposedCmd = cmd.(*ComposedCmd)
 	n += int(composeedCmdBufLength)
 	bbuf := bytes.NewBuffer(buf[n:])
-	_, err = c.ReadFrom(bbuf)
+	_, err = c.ReadFromWithVersion(bbuf, ver)
 	return err
 }
 func (c *TxnCmd) GetType() uint16 { return IOET_WALTxnEntry }

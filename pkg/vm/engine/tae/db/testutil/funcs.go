@@ -287,25 +287,26 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 		it.Next()
 	}
 	_ = txn.Commit(context.Background())
-	for _, meta := range metas {
-		txn, _ := GetRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime)
-		if skipConflict && err != nil {
+	if len(metas) == 0 {
+		return
+	}
+	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, e.Runtime, txn.GetStartTS())
+	if skipConflict && err != nil {
+		_ = txn.Rollback(context.Background())
+		return
+	}
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	if skipConflict {
+		if err != nil {
 			_ = txn.Rollback(context.Background())
-			continue
-		}
-		assert.NoError(t, err)
-		err = task.OnExec(context.Background())
-		if skipConflict {
-			if err != nil {
-				_ = txn.Rollback(context.Background())
-			} else {
-				_ = txn.Commit(context.Background())
-			}
 		} else {
-			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit(context.Background()))
+			_ = txn.Commit(context.Background())
 		}
+	} else {
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
 	}
 }
 
@@ -319,7 +320,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	segIt := rel.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetLastestSchema().SegmentMaxBlocks) {
+		if !seg.IsAppendable() {
 			segs = append(segs, seg)
 		}
 		segIt.Next()

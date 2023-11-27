@@ -435,7 +435,7 @@ func (d *dirtyCollector) tryCompactTree(
 				return
 			}
 			for id := range dirtySeg.Blks {
-				bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
+				bid := objectio.NewBlockidWithObjectID(dirtySeg.ID, id)
 				if blk, err = seg.GetBlockEntryByID(bid); err != nil {
 					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 						dirtySeg.Shrink(bid)

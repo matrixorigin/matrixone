@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -119,7 +118,6 @@ func TestHiddenWithPK1(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -142,7 +140,6 @@ func TestHiddenWithPK1(t *testing.T) {
 			if meta.IsAppendable() {
 				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 			} else {
-				segMeta = meta.GetSegment()
 				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 			}
 			it.Next()
@@ -151,14 +148,8 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	{
-		factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(
-			segMeta, tae.Runtime,
-		)
-		assert.NoError(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
-		assert.NoError(t, err)
+		testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+		testutil.MergeBlocks(t, 0, tae, "db", schema, false)
 	}
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -291,25 +282,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	{
-		it := rel.MakeBlockIt()
-		blks := make([]data.Block, 0)
-		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
-			blks = append(blks, blk)
-			it.Next()
-		}
-		for _, blk := range blks {
-			factory, taskType, scopes, err := blk.BuildCompactionTaskFactory()
-			assert.NoError(t, err)
-			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-			assert.NoError(t, err)
-			err = task.WaitDone()
-			assert.NoError(t, err)
-		}
-	}
-	assert.NoError(t, txn.Commit(context.Background()))
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)

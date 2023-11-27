@@ -194,6 +194,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
+	err = seg.GetRelation().SoftDeleteSegment(seg.GetID())
+	if err != nil {
+		return
+	}
 	oldBlkData := oldBMeta.GetBlockData()
 	phaseNumber = 3
 
@@ -208,7 +212,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				// we can't create appendable seg here because compaction can be rollbacked.
 				// so just wait until the new appendable seg is available.
 				// actually this log can barely be printed.
-				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.String(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
 			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {
@@ -269,6 +273,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			ablockTask.blocks[0].GetID())
 
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
+			return err
+		}
+		if err = task.compacted.GetSegment().UpdateStats(ablockTask.stat); err != nil {
 			return err
 		}
 		if deletes != nil {
@@ -359,6 +366,10 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	seg handle.Segment,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
+	seg, err = seg.GetRelation().CreateNonAppendableSegment(false)
+	if err != nil {
+		return
+	}
 	newBlk, err = seg.CreateNonAppendableBlock(nil)
 	if err != nil {
 		return
@@ -391,6 +402,9 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return
+	}
+	if err = newBlk.GetSegment().UpdateStats(ioTask.stat); err != nil {
 		return
 	}
 

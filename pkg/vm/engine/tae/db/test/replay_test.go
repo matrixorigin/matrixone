@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -67,11 +68,11 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			segCnt := rand.Intn(5) + 1
 			for i := 0; i < segCnt; i++ {
-				seg, err := rel.CreateSegment(false)
+				seg, err := rel.CreateNonAppendableSegment(false)
 				assert.Nil(t, err)
 				blkCnt := rand.Intn(5) + 1
 				for j := 0; j < blkCnt; j++ {
-					_, err = seg.CreateBlock(false)
+					_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
 					assert.Nil(t, err)
 				}
 			}
@@ -133,12 +134,12 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -174,7 +175,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	seg, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -213,12 +214,12 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -460,11 +461,11 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(seg.GetID())
+	segEntry, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(seg.GetID())
 	assert.Nil(t, err)
-	blkh, err := seg.GetBlock(blk.ID)
+	blkh, err := segEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
-	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).HasDropCommittedLocked())
+	assert.True(t, blkh.HasDropCommittedLocked())
 
 	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -501,9 +502,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(seg.GetID())
+	segEntry, err = rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(seg.GetID())
 	assert.Nil(t, err)
-	_, err = seg.GetBlock(blk.ID)
+	_, err = segEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -846,6 +847,9 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, testutil.LenOfBats(bats[:4]), false)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -868,6 +872,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
+	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutil.PrintCheckpointStats(t, tae)
@@ -901,8 +909,8 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
-	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
-	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {

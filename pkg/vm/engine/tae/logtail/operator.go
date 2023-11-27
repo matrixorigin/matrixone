@@ -83,7 +83,7 @@ func (c *BoundTableOperator) processTableData() error {
 			return err
 		}
 		for id := range dirtySeg.Blks {
-			bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
+			bid := objectio.NewBlockidWithObjectID(dirtySeg.ID, id)
 			blk, err := seg.GetBlockEntryByID(bid)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {

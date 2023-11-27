@@ -90,9 +90,10 @@ const (
 )
 
 const (
-	TxnTsSize   = 12
-	RowidSize   = 24
-	BlockidSize = 20
+	TxnTsSize    = 12
+	RowidSize    = 24
+	ObjectidSize = 18
+	BlockidSize  = 20
 )
 
 type Type struct {
@@ -247,6 +248,9 @@ type Rowid [RowidSize]byte
 
 // Segmentid
 type Segmentid = Uuid
+
+// Objectid
+type Objectid [ObjectidSize]byte
 
 // Blockid
 type Blockid [BlockidSize]byte

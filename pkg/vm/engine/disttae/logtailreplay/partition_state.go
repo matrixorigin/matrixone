@@ -47,11 +47,11 @@ func init() {
 
 type PartitionState struct {
 	// also modify the Copy method if adding fields
-
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
 	dataObjects           *btree.BTreeG[ObjectEntry]
+	dataObjectsShadow     *btree.BTreeG[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
@@ -75,9 +75,95 @@ type PartitionState struct {
 	// so just put it here.
 	shared *sharedStates
 
+	ConsumeTS types.TS
+	done      bool
+
+	PId atomic.Int64
 	// blocks deleted before minTS is hard deleted.
 	// partition state can't serve txn with snapshotTS less than minTS
 	minTS types.TS
+}
+
+var globalPID atomic.Int64
+var pidLock sync.Mutex
+
+func GetPID() int64 {
+	pidLock.Lock()
+	defer pidLock.Unlock()
+	pid := globalPID.Load()
+	globalPID.Add(1)
+	return pid
+}
+
+func (p *PartitionState) CheckObjectStats(ts *types.TS) {
+	statsCopy := p.dataObjects.Copy()
+	shadowCopy := p.dataObjectsShadow.Copy()
+
+	doneCheck := ""
+	statsUnique := ""
+	shadowUnique := ""
+	notEqual := ""
+
+	if !p.done {
+		doneCheck = fmt.Sprintf("partition not done")
+	} else {
+		doneCheck = "partition done"
+	}
+
+	var stats, shadow ObjectEntry
+
+	toString := func(entry ObjectEntry) string {
+		return fmt.Sprintf("entryState: %v; createTime: %s; deleteTime: %s; detail: %s",
+			entry.EntryState, entry.CreateTime.ToString(), entry.DeleteTime.ToString(), entry.String())
+	}
+
+	// check some fields whether equal or not between
+	// stats and shadow.
+	checkEqual := func() {
+		if shadow.EntryState != stats.EntryState ||
+			!shadow.CreateTime.Equal(stats.CreateTime) ||
+			!shadow.DeleteTime.Equal(stats.DeleteTime) {
+			notEqual += fmt.Sprintf("\nstats:  %s\nshadow: %s\n",
+				toString(stats), toString(shadow),
+			)
+		}
+	}
+
+	statsIter := statsCopy.Iter()
+	for statsIter.Next() {
+		stats = statsIter.Item()
+		// only stats has
+		if val, exist := shadowCopy.Get(stats); !exist {
+			statsUnique += fmt.Sprintf("\n %s", stats.String())
+		} else {
+			// both have, check whether equal or not
+			shadow = val
+			checkEqual()
+		}
+	}
+
+	shadowIter := shadowCopy.Iter()
+	for shadowIter.Next() {
+		shadow = shadowIter.Item()
+		// only shadow has
+		if _, exist := statsCopy.Get(shadow); !exist {
+			shadowUnique += fmt.Sprintf("\n %s", shadow.String())
+		} else {
+			// both have, checked already above.
+			//stats = statsIter.Item()
+			//checkEqual()
+		}
+	}
+
+	if statsUnique != "" || shadowUnique != "" || notEqual != "" {
+		fmt.Println(fmt.Sprintf(
+			"state id: %d, done check: %s, check ts: %s, consume ts: %s\nstats unique:  %s \n\nshadow unique: %s \n\nnot equal: %s \n\n",
+			p.PId.Load(), doneCheck, ts.ToString(), p.ConsumeTS.ToString(), statsUnique, shadowUnique, notEqual,
+		))
+	}
+
+	shadowIter.Release()
+	statsIter.Release()
 }
 
 // sharedStates is shared among all PartitionStates
@@ -161,6 +247,14 @@ type ObjectInfo struct {
 	CommitTS    types.TS
 	CreateTime  types.TS
 	DeleteTime  types.TS
+}
+
+func (o ObjectInfo) String() string {
+	return fmt.Sprintf(
+		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %s; createTS: %s; deleteTS: %s",
+		o.ObjectStats.String(), o.EntryState,
+		o.Sorted, o.HasDeltaLoc, o.CommitTS.ToString(),
+		o.CreateTime.ToString(), o.DeleteTime.ToString())
 }
 
 func (o ObjectInfo) Location() objectio.Location {
@@ -275,6 +369,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		noData:                noData,
 		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
 		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		dataObjectsShadow:     btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
 		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
@@ -288,6 +383,7 @@ func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		rows:                  p.rows.Copy(),
 		dataObjects:           p.dataObjects.Copy(),
+		dataObjectsShadow:     p.dataObjectsShadow.Copy(),
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
 		blockDeltas:           p.blockDeltas.Copy(),
 		primaryIndex:          p.primaryIndex.Copy(),
@@ -345,6 +441,10 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
+		} else if IsSegTable(entry.TableName) {
+			// TODO
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectInsertShadow(entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -353,11 +453,81 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectDeleteShadow(entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
 	default:
 		panic("unknown entry type")
+	}
+}
+
+func (p *PartitionState) HandleObjectDeleteShadow(bat *api.Batch) {
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle shadow delete[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
+
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjectsShadow.Set(objEntry)
+
+		fmt.Println(fmt.Sprintf("received shadow delete [%s]: %s\n", p.ConsumeTS.ToString(), objEntry.String()))
+	}
+}
+
+func (p *PartitionState) HandleObjectInsertShadow(bat *api.Batch) {
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle shadow insert[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
+
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		//fmt.Println(fmt.Sprintf("received shadow: entryState: %v; createTime: %s; deleteTime: %s; commitTS: %s\n",
+		//	stateCol[idx], createTSCol[idx].ToString(), deleteTSCol[idx].ToString(), commitTSCol[idx].ToString()))
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+		//
+		//if objEntry.ObjectStats.Rows() == 0 && stateCol[idx] {
+		//	continue
+		//}
+
+		if old, ok := p.dataObjectsShadow.Get(objEntry); ok {
+			// if overwritten delete
+			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
+				panic("shadow overwritten deleteTS")
+			}
+		}
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjectsShadow.Set(objEntry)
+
+		fmt.Println(fmt.Sprintf("received shadow insert [%s]: %s\n", p.ConsumeTS.ToString(), objEntry.String()))
 	}
 }
 
@@ -530,6 +700,8 @@ func (p *PartitionState) HandleMetadataInsert(
 	defer func() {
 		partitionStateProfileHandler.AddSample(time.Since(t0))
 	}()
+
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle meta insert[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -706,7 +878,10 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	t0 := time.Now()
 	defer func() {
 		partitionStateProfileHandler.AddSample(time.Since(t0))
+		p.done = true
 	}()
+
+	fmt.Println(fmt.Sprintf("state with pid  = %d handle meta delete[%s]\n", p.PId.Load(), p.ConsumeTS.ToString()))
 
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
@@ -773,6 +948,9 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 					p.objectIndexByTS.Set(e)
 				}
 			}
+
+			fmt.Println(fmt.Sprintf("metadata delete: \nconsume ts: %s\n block-obj-entry: %s\n",
+				p.ConsumeTS.ToString(), objEntry.String()))
 		})
 	}
 
@@ -873,6 +1051,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
 			p.dataObjects.Delete(objEntry)
+			p.dataObjectsShadow.Delete(objEntry)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
 			//	//ShortObjName: objEntry.ShortObjName,

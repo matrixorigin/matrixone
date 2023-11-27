@@ -29,7 +29,7 @@ type SegmentIt interface {
 
 type SegmentReader interface {
 	io.Closer
-	GetID() *types.Segmentid
+	GetID() *types.Objectid
 	IsUncommitted() bool
 	IsAppendable() bool
 	MakeBlockIt() BlockIt
@@ -60,6 +60,7 @@ type SegmentWriter interface {
 	CreateNonAppendableBlock(*objectio.CreateBlockOpt) (Block, error)
 
 	SoftDeleteBlock(id types.Blockid) (err error)
+	UpdateStats(objectio.ObjectStats) error
 }
 
 type Segment interface {

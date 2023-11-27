@@ -30,12 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type SegmentEntry struct {
-	ID   objectio.Segmentid
+	ID   types.Objectid
 	Stat SegStat
-	*BaseEntryImpl[*MetadataMVCCNode]
+	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
@@ -163,11 +164,11 @@ func (s *SegStat) String(composeSortKey bool) string {
 	)
 }
 
-func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState) *SegmentEntry {
+func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn, state EntryState) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -176,14 +177,32 @@ func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncT
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
 	}
-	e.CreateWithTxn(txn, &MetadataMVCCNode{})
+	e.CreateWithTxn(txn, &ObjectMVCCNode{objectio.NewObjectStats()})
+	return e
+}
+
+func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState) *SegmentEntry {
+	e := &SegmentEntry{
+		ID: *id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
+		table:   table,
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		SegmentNode: &SegmentNode{
+			state:    state,
+			sorted:   table.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
+			SortHint: table.GetDB().catalog.NextSegment(),
+		},
+	}
+	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{objectio.NewObjectStats()})
 	return e
 }
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
@@ -192,9 +211,9 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: *objectio.NewSegmentid(),
+		ID: *objectio.NewObjectid(),
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -203,14 +222,14 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 			IsLocal: true,
 		},
 	}
-	e.CreateWithTS(ts, &MetadataMVCCNode{})
+	e.CreateWithTS(ts, &ObjectMVCCNode{objectio.NewObjectStats()})
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -218,7 +237,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 			state: ES_Appendable,
 		},
 	}
-	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
+	e.CreateWithTS(types.SystemDBTS, &ObjectMVCCNode{objectio.NewObjectStats()})
 	var bid types.Blockid
 	schema := table.GetLastestSchema()
 	if schema.Name == SystemTableSchema.Name {
@@ -230,12 +249,84 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	} else {
 		panic("not supported")
 	}
-	e.ID = *bid.Segment()
+	e.ID = *bid.Object()
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
 }
+func (entry *SegmentEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool, blk *BlockEntry) {
+	lastNode := nodes[0]
+	for _, n := range nodes {
+		if n.Start.Greater(lastNode.Start) {
+			lastNode = n
+		}
+	}
+	if !lastNode.BaseNode.ObjectStats.IsZero() {
+		return
+	}
+	blk = entry.GetFirstBlkEntry()
+	// for gc in test
+	if blk == nil {
+		return false, nil
+	}
+	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
+	})
+	// in some unit tests, node doesn't exist
+	if node == nil || node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+		return
+	}
 
+	needPrefetch = true
+	return
+}
+func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.ObjectStats, error) {
+	stats := objectio.NewObjectStats()
+	blk := entry.GetFirstBlkEntry()
+	// for gc in test
+	if blk == nil {
+		return nil, nil
+	}
+	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: startTS},
+	})
+	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
+		return stats, nil
+	}
+
+	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
+		if n.BaseNode.ObjectStats != nil && !n.BaseNode.ObjectStats.IsZero() {
+			stats = n.BaseNode.ObjectStats.Clone()
+			return false
+		}
+		return true
+	})
+	if !stats.IsZero() {
+		return stats, nil
+	}
+	metaLoc := node.BaseNode.MetaLoc
+
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return nil, err
+	}
+	objectio.SetObjectStatsObjectName(stats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(stats, metaLoc.Extent())
+	objectDataMeta := objMeta.MustDataMeta()
+	objectio.SetObjectStatsRowCnt(stats, objectDataMeta.BlockHeader().Rows())
+	objectio.SetObjectStatsBlkCnt(stats, objectDataMeta.BlockCount())
+	pk := entry.table.schema.Load().GetPrimaryKey()
+	if !IsFakePkName(pk.Name) {
+		objectio.SetObjectStatsSortKeyZoneMap(stats, objectDataMeta.MustGetColumn(uint16(pk.Idx)).ZoneMap())
+	}
+	return stats, nil
+}
+
+// for test
+func (entry *SegmentEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
+	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
+}
 func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -294,6 +385,26 @@ func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEn
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
+func (entry *SegmentEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txnToWait.GetTxnState(true)
+		entry.Lock()
+	}
+	err = entry.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	baseNode := NewObjectInfoWithObjectStats(stats)
+	var node *MVCCNode[*ObjectMVCCNode]
+	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	node.BaseNode.Update(baseNode)
+	return
+}
+
 // XXX API like this, why do we need the error?   Isn't blk is nil enough?
 func (entry *SegmentEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *BlockEntry, err error) {
 	node := entry.entries[*id]
@@ -306,7 +417,7 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *B
 }
 
 func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := IOET_WALTxnCommand_Segment
+	cmdType := IOET_WALTxnCommand_Object
 	entry.RLock()
 	defer entry.RUnlock()
 	return newSegmentCmd(id, cmdType, entry), nil
@@ -360,9 +471,9 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.BaseEntryImpl.StringLocked())
+	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -461,13 +572,16 @@ func (entry *SegmentEntry) CreateBlock(
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.Blockid
+	if entry.IsAppendable() && len(entry.entries) >= 1 {
+		panic("Logic error. Appendable segment has as most one block.")
+	}
 	if opts != nil && opts.Id != nil {
-		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		id = objectio.NewBlockidWithObjectID(&entry.ID, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
 			entry.nextObjectIdx = opts.Id.Filen + 1
 		}
 	} else {
-		id = objectio.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
+		id = objectio.NewBlockidWithObjectID(&entry.ID, 0)
 		entry.nextObjectIdx += 1
 	}
 	if entry.nextObjectIdx == math.MaxUint16 {
@@ -535,7 +649,7 @@ func (entry *SegmentEntry) AsCommonID() *common.ID {
 		DbID:    entry.GetTable().GetDB().ID,
 		TableID: entry.GetTable().ID,
 	}
-	id.SetSegmentID(&entry.ID)
+	id.SetObjectID(&entry.ID)
 	return id
 }
 

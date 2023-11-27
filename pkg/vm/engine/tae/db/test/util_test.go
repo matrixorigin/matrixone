@@ -120,7 +120,7 @@ func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
 	blk, err := segHandle.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(0)))
 	require.Nil(t, err)
 
-	name := objectio.BuildObjectName(&segEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&segEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, []uint16{0})
 	require.Nil(t, err)
 
@@ -264,6 +264,10 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 
 		tae.Catalog.RecurLoop(collector)
+		err := collector.PostLoop(tae.Catalog)
+		if err != nil {
+			panic(err)
+		}
 		incrCkpData := collector.OrphanData()
 		defer incrCkpData.Close()
 

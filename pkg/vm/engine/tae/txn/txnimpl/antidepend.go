@@ -66,7 +66,7 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 func (checker *warChecker) CacheGet(
 	dbID uint64,
 	tableID uint64,
-	segmentID *types.Segmentid,
+	segmentID *types.Objectid,
 	blockID *objectio.Blockid) (block *catalog.BlockEntry, err error) {
 	block = checker.cacheGet(blockID)
 	if block != nil {
@@ -95,7 +95,7 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	segmentID *types.Segmentid,
+	segmentID *types.Objectid,
 	blockID *objectio.Blockid) {
 	block, err := checker.CacheGet(dbID, tableID, segmentID, blockID)
 	if err != nil {

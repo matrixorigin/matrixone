@@ -20,7 +20,6 @@ import (
 )
 
 var (
-	ErrAppendableBlockNotFound   = moerr.NewAppendableBlockNotFoundNoCtx()
 	ErrAppendableSegmentNotFound = moerr.NewAppendableSegmentNotFoundNoCtx()
 )
 

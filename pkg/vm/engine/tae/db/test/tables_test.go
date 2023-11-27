@@ -74,8 +74,9 @@ func TestTables1(t *testing.T) {
 	assert.Equal(t, uint32(0), toAppend)
 
 	_, err = handle.GetAppender()
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
 
+	seg, _ = rel.CreateSegment(false)
 	blk, _ = seg.CreateBlock(false)
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
@@ -111,7 +112,6 @@ func TestTxn1(t *testing.T) {
 
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 4
 	batchRows := schema.BlockMaxRows * 2 / 5
 	cnt := uint32(20)
 	bat := catalog.MockBatch(schema, int(batchRows*cnt))
@@ -155,7 +155,7 @@ func TestTxn1(t *testing.T) {
 	t.Logf("Append takes: %s", time.Since(now))
 	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
 	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
-	expectSegCnt := (expectBlkCnt-1)/uint32(schema.SegmentMaxBlocks) + 1
+	expectSegCnt := expectBlkCnt
 	// t.Log(expectBlkCnt)
 	// t.Log(expectSegCnt)
 	{

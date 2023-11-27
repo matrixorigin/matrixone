@@ -326,7 +326,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 
 	for id, offsets := range idOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.SegmentID())
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.ObjectID())
 		assert.NoError(e.t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(e.t, err)
@@ -585,7 +585,7 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 	assert.Nil(t, segDel)
 }
 
-func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
 	collector := logtail.NewIncrementalCollector(start, end)
 	p := &catalog.LoopProcessor{}
 	p.BlockFn = func(be *catalog.BlockEntry) error {
@@ -602,17 +602,22 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
+	collector.PostLoop(c)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]
 	del2 := bats[logtail.BLKMetaDeleteIDX]
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
-	segDel2 := bats[logtail.SEGDeleteIDX]
+	seg2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
 	isProtoTNBatchEqual(ctx, t, del, del2)
 	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
-	isProtoTNBatchEqual(ctx, t, segDel, segDel2)
+
+	// seg batch doesn't exist before ckp V9
+	if seg != nil {
+		isProtoTNBatchEqual(ctx, t, seg, seg2)
+	}
 }
 
 func CheckCheckpointReadWrite(
@@ -713,5 +718,20 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		return nil
 	})
 	err := txn.Commit(context.Background())
+	assert.NoError(e.t, err)
+}
+
+func (e *TestEngine) CheckObjectInfo() {
+	p := &catalog.LoopProcessor{}
+	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+			assert.NoError(e.t, err)
+			assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats, node.BaseNode.ObjectStats)
+			return true
+		})
+		return nil
+	}
+	err := e.Catalog.RecurLoop(p)
 	assert.NoError(e.t, err)
 }

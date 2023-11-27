@@ -52,6 +52,7 @@ const (
 	tblSpecialDeleteBatch
 	columnInsBatch
 	columnDelBatch
+	objectInfoBatch
 	batchTotalNum
 )
 
@@ -112,12 +113,23 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	seg := iseg.(*catalog.SegmentEntry)
 	node := seg.GetLatestNodeLocked()
+	if seg.IsAppendable() && node.BaseNode.IsEmpty() {
+		fmt.Println(fmt.Sprintf("visitSegment dropped: %s; %s\n", seg.String(), node.BaseNode.String()))
+		return
+	}
 	if !node.DeletedAt.Equal(txnif.UncommitTS) {
+		if b.batches[objectInfoBatch] == nil {
+			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+		}
+		visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+
+		fmt.Println(fmt.Sprintf("visitSegment collected create:\n %s\n", seg.String()))
+
 		return
 	}
 
 	deleteAt := b.txn.GetPrepareTS()
-	rowid := objectio.HackSegid2Rowid(&seg.ID)
+	rowid := objectio.HackObjid2Rowid(&seg.ID)
 
 	if b.batches[segMetaDelBatch] == nil {
 		b.batches[segMetaDelBatch] = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
@@ -125,12 +137,19 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid, false)
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(deleteAt, false)
+	if b.batches[objectInfoBatch] == nil {
+		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+	}
+	visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+
+	fmt.Println(fmt.Sprintf("visitSegment collected both:\n %s", seg.String()))
 }
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	blk := iblk.(*catalog.BlockEntry)
 	node := blk.GetLatestNodeLocked()
 	if node.BaseNode.MetaLoc.IsEmpty() {
+		//fmt.Println(fmt.Sprintf("visitMetadata dropped:\n %s\n %s\n", blk.String(), node.BaseNode.String()))
 		return
 	}
 	if b.batches[blkMetaInsBatch] == nil {
@@ -424,6 +443,12 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 		b.batchToClose = append(b.batchToClose, b.batches[segMetaDelBatch])
 		b.batches[segMetaDelBatch] = nil
 	}
+
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
+	if b.batches[objectInfoBatch] != nil {
+		b.batchToClose = append(b.batchToClose, b.batches[objectInfoBatch])
+		b.batches[objectInfoBatch] = nil
+	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	if b.batches[dataDelBatch] != nil {
 		b.batchToClose = append(b.batchToClose, b.batches[dataDelBatch])
@@ -445,6 +470,7 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 

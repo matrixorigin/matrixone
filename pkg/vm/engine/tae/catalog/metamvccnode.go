@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type MetadataMVCCNode struct {
@@ -87,6 +88,83 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 		return
 	}
 	n += sn
+	return
+}
+
+type ObjectMVCCNode struct {
+	*objectio.ObjectStats
+}
+
+func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: objectio.NewObjectStats(),
+	}
+}
+
+func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
+	obj := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(obj.ObjectStats, metalocation.Name())
+	return obj
+}
+
+func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: stats.Clone(),
+	}
+}
+
+func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: e.ObjectStats.Clone(),
+	}
+}
+func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: e.ObjectStats.Clone(),
+	}
+}
+func (e *ObjectMVCCNode) String() string {
+	if e == nil || e.IsEmpty() {
+		return "empty"
+	}
+	return e.ObjectStats.String()
+}
+func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
+	e.ObjectStats = vun.ObjectStats.Clone()
+}
+func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int
+	if sn, err = w.Write(e.ObjectStats[:]); err != nil {
+		return
+	}
+	n += int64(sn)
+	return
+}
+func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
+	var sn int
+	if sn, err = r.Read(e.ObjectStats[:]); err != nil {
+		return
+	}
+	n += int64(sn)
+	return
+}
+
+func (e *ObjectMVCCNode) IsEmpty() bool {
+	return e.OriginSize() == 0
+}
+
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
+	if e == nil || e.IsEmpty() {
+		objectio.SetObjectStatsObjectName(e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+	}
+	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
+}
+
+func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
+	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
+	e = &ObjectMVCCNode{
+		ObjectStats: (*objectio.ObjectStats)(buf),
+	}
 	return
 }
 

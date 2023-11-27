@@ -144,7 +144,7 @@ func TestCheckpoint2(t *testing.T) {
 		blk := it.GetBlock()
 		meta = blk.GetMeta().(*catalog.BlockEntry)
 		assert.Equal(t, 10, blk.Rows())
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, meta, tae.Runtime)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta}, tae.Runtime, txn.GetStartTS())
 		assert.Nil(t, err)
 		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)

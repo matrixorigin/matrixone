@@ -176,3 +176,5 @@ func (store *NoopTxnStore) ObserveTxn(
 func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
 	return txnif.TxnType_Normal
 }
+
+func (store *NoopTxnStore) UpdateSegmentStats(*common.ID, *objectio.ObjectStats) error { return nil }

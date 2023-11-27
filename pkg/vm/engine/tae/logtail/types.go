@@ -42,6 +42,10 @@ const (
 	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
 	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
+	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
+	ObjectAttr_State                            = catalog.ObjectAttr_State
+	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
+	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
 	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
 	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
@@ -82,6 +86,7 @@ var (
 	TblDelSchema     *catalog.Schema
 	ColumnDelSchema  *catalog.Schema
 	TNMetaSchema     *catalog.Schema
+	ObjectInfoSchema *catalog.Schema
 
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
@@ -288,6 +293,28 @@ var (
 	BaseTypes = []types.Type{
 		types.T_Rowid.ToType(),
 		types.T_TS.ToType(),
+	}
+	ObjectInfoAttr = []string{
+		ObjectAttr_ObjectStats,
+		ObjectAttr_State, // entry_state, true for appendable
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		EntryNode_CreateAt,
+		EntryNode_DeleteAt,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
+	}
+	ObjectInfoTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_bool, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
 	}
 
 	StorageUsageSchemaAttrs = []string{
@@ -552,6 +579,18 @@ func init() {
 		} else {
 			if err := TNMetaSchema.AppendCol(colname, TNMetaShcemaTypes[i]); err != nil {
 				panic(err)
+			}
+		}
+	}
+
+	ObjectInfoSchema = catalog.NewEmptySchema("object_info")
+	for i, colname := range ObjectInfoAttr {
+		if i == 0 {
+			if err := ObjectInfoSchema.AppendPKCol(colname, ObjectInfoTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := ObjectInfoSchema.AppendCol(colname, ObjectInfoTypes[i]); err != nil {
 			}
 		}
 	}

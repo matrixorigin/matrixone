@@ -43,7 +43,7 @@ func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.Se
 func (t *delSegTask) String() string {
 	segs := "DelSeg:"
 	for _, seg := range t.delSegs {
-		segs = fmt.Sprintf("%s%s,", segs, seg.ID.ToString())
+		segs = fmt.Sprintf("%s%s,", segs, seg.ID.String())
 	}
 	return segs
 }

@@ -161,7 +161,7 @@ func mergeColumnWithOutSort(
 func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	segs := ""
 	for _, seg := range task.mergedSegs {
-		segs = fmt.Sprintf("%s%s,", segs, common.ShortSegId(seg.ID))
+		segs = fmt.Sprintf("%s%s,", segs, common.ShortObjId(seg.ID))
 	}
 	enc.AddString("from-segs", segs)
 
@@ -363,7 +363,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseNumber = 4
-	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&task.toSegEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -389,6 +389,9 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		if err = blockHandles[i].UpdateMetaLoc(metaLoc); err != nil {
 			return err
 		}
+	}
+	if err = toSegEntry.UpdateStats(writer.Stats()); err != nil {
+		return err
 	}
 	for _, blk := range task.createdBlks {
 		if err = blk.GetBlockData().Init(); err != nil {
@@ -441,4 +444,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		counter.TAE.Segment.MergeBlocks.Add(1)
 	})
 	return err
+}
+
+func (task *mergeBlocksTask) GetCreatedBlocks() []*catalog.BlockEntry {
+	return task.createdBlks
 }

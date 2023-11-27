@@ -1000,40 +1000,36 @@ func dispatchUpdateResponse(
 	receiveAt time.Time) error {
 	list := response.GetLogtailList()
 
-	// loops for mo_database, mo_tables, mo_columns.
-	for i := 0; i < len(list); i++ {
-		table := list[i].Table
-		if table.TbId == catalog.MO_DATABASE_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+	// here, we assume the `[]logtail.TableLogtail` groups by table id.
+	pIdx, length := 0, 0
+	for idx := 0; idx < len(list); {
+		for idx < len(list) && list[idx].Table.TbId == list[pIdx].Table.TbId {
+			idx++
+			length++
+		}
+
+		switch list[pIdx].Table.TbId {
+		case catalog.MO_DATABASE_ID,
+			catalog.MO_TABLES_ID,
+			catalog.MO_COLUMNS_ID:
+			if err := e.consumeUpdateLogTail(ctx, list[pIdx:pIdx+length], false, receiveAt); err != nil {
 				return err
 			}
+
+			// parallel processing tails
+		default:
+			recIndex := list[pIdx].Table.TbId % consumerNumber
+			recRoutines[recIndex].sendTableLogTail(list[pIdx:pIdx+length], receiveAt)
 		}
-	}
-	for i := 0; i < len(list); i++ {
-		table := list[i].Table
-		if table.TbId == catalog.MO_TABLES_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
-				return err
-			}
+
+		if idx == len(list) {
+			break
 		}
-	}
-	for i := 0; i < len(list); i++ {
-		table := list[i].Table
-		if table.TbId == catalog.MO_COLUMNS_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
-				return err
-			}
-		}
+
+		pIdx = idx
+		length = 0
 	}
 
-	for index := 0; index < len(list); index++ {
-		table := list[index].Table
-		if ifShouldNotDistribute(table.DbId, table.TbId) {
-			continue
-		}
-		recIndex := table.TbId % consumerNumber
-		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
-	}
 	// should update all the timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
 	for _, rc := range recRoutines {
@@ -1088,7 +1084,7 @@ func (rc *routineController) sendSubscribeResponse(
 	rc.signalChan <- cmdToConsumeSub{log: r, receiveAt: receiveAt}
 }
 
-func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
+func (rc *routineController) sendTableLogTail(r []logtail.TableLogtail, receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
@@ -1171,7 +1167,7 @@ type cmdToConsumeSub struct {
 	receiveAt time.Time
 }
 type cmdToConsumeLog struct {
-	log       logtail.TableLogtail
+	log       []logtail.TableLogtail
 	receiveAt time.Time
 }
 type cmdToUpdateTime struct {
@@ -1219,24 +1215,25 @@ func (e *Engine) consumeSubscribeResponse(
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad, receiveAt)
+	tails := []logtail.TableLogtail{rp.GetLogtail()}
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, tails, lazyLoad, receiveAt)
 }
 
 func (e *Engine) consumeUpdateLogTail(
 	ctx context.Context,
-	rp logtail.TableLogtail,
+	tails []logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, tails, lazyLoad, receiveAt)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
+// all tails belong to a single table
 func updatePartitionOfPush(
 	ctx context.Context,
 	tnId int,
 	e *Engine,
-	tl *logtail.TableLogtail,
+	tails []logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) (err error) {
 	start := time.Now()
@@ -1246,7 +1243,7 @@ func updatePartitionOfPush(
 	}()
 
 	// get table info by table id
-	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
+	dbId, tblId := tails[0].Table.GetDbId(), tails[0].Table.GetTbId()
 
 	partition := e.getPartition(dbId, tblId)
 
@@ -1257,31 +1254,37 @@ func updatePartitionOfPush(
 	defer partition.Unlock()
 
 	state, doneMutate := partition.MutateState()
+	state.ConsumeTS = types.TimestampToTS(*tails[0].Ts)
+
+	state.PId.Store(logtailreplay.GetPID())
 
 	key := e.catalog.GetTableById(dbId, tblId)
 
-	if lazyLoad {
-		if len(tl.CkpLocation) > 0 {
-			state.AppendCheckpoint(tl.CkpLocation, partition)
+	for idx := 0; idx < len(tails); idx++ {
+		tl := tails[idx]
+		if lazyLoad {
+			if len(tl.CkpLocation) > 0 {
+				state.AppendCheckpoint(tl.CkpLocation, partition)
+			}
+
+			err = consumeLogTailOfPushWithLazyLoad(
+				ctx,
+				key.PrimarySeqnum,
+				e,
+				state,
+				&tl,
+			)
+		} else {
+			err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, &tl, dbId, key.Id, key.Name)
 		}
 
-		err = consumeLogTailOfPushWithLazyLoad(
-			ctx,
-			key.PrimarySeqnum,
-			e,
-			state,
-			tl,
-		)
-	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
-	}
+		if err != nil {
+			logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, key.Id, key.Name, err)
+			return err
+		}
 
-	if err != nil {
-		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, key.Id, key.Name, err)
-		return err
+		partition.TS = *tl.Ts
 	}
-
-	partition.TS = *tl.Ts
 
 	doneMutate()
 

@@ -418,9 +418,18 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 	if len(readedBats) == 0 {
 		//just  soft delete all ablks and return
+		segmentsToDelete := make(map[types.Objectid]handle.Segment)
 		for _, blk := range task.ablksHandles {
 			seg := blk.GetSegment()
 			if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+				return err
+			}
+			segmentsToDelete[*seg.GetID()] = seg
+		}
+		// delete all segments
+		for _, seg := range segmentsToDelete {
+			tbl := seg.GetRelation()
+			if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
 				return err
 			}
 		}
@@ -523,7 +532,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// write!
-	name := objectio.BuildObjectName(&toSegmentEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&toSegmentEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -555,11 +564,24 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 			return err
 		}
 	}
+	if err != nil {
+		return
+	}
+	toSegmentHandle.UpdateStats(writer.Stats())
 
+	segmentsToDelete := make(map[types.Objectid]handle.Segment)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
 		seg := blk.GetSegment()
 		if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+			return err
+		}
+		segmentsToDelete[*seg.GetID()] = seg
+	}
+	// delete all segments
+	for _, seg := range segmentsToDelete {
+		tbl := seg.GetRelation()
+		if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
 			return err
 		}
 	}
@@ -636,6 +658,9 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 			subtask.blocks[0].GetID(),
 		)
 		if err = task.ablksHandles[i].UpdateMetaLoc(metaLocABlk); err != nil {
+			return
+		}
+		if err = task.ablksHandles[i].GetSegment().UpdateStats(subtask.stat); err != nil {
 			return
 		}
 		if subtask.delta == nil {
@@ -760,4 +785,9 @@ func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 			subtask.delta.Close()
 		}
 	}
+}
+
+// For unit test
+func (task *flushTableTailTask) GetCreatedBlocks() []handle.Block {
+	return task.createdBlkHandles
 }

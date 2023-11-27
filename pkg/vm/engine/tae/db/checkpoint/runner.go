@@ -773,7 +773,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 			panic(err)
 		}
 		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			bid := objectio.NewBlockidWithObjectID(seg.ID, blk)
 			block, err := segment.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
@@ -809,7 +809,7 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 			panic(err)
 		}
 		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			bid := objectio.NewBlockidWithObjectID(seg.ID, blk)
 			block, err := segment.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)

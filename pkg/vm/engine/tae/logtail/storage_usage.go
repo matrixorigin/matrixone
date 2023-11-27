@@ -94,10 +94,10 @@ func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry, mp *mpo
 	accId := uint64(entry.GetTable().GetDB().GetTenantID())
 	dbId := entry.GetTable().GetDB().GetID()
 	tblId := entry.GetTable().GetID()
-	segId := entry.ID
+	segId := entry.ID.Segment()
 	appendTo := func(size uint64) {
 		appendToStorageUsageVectors(
-			UsageData{accId, dbId, tblId, segId, size},
+			UsageData{accId, dbId, tblId, *segId, size},
 			vecs,
 			mp,
 		)

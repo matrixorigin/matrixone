@@ -39,6 +39,7 @@ type flushBlkTask struct {
 	blocks    []objectio.BlockObject
 	schemaVer uint32
 	seqnums   []uint16
+	stat      objectio.ObjectStats
 	isABlk    bool
 }
 
@@ -101,5 +102,6 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)
 	})
+	task.stat = writer.Stats()
 	return err
 }

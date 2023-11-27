@@ -109,6 +109,7 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
 	case *catalog.EntryCommand[*catalog.EmptyMVCCNode, *catalog.DBNode],
 		*catalog.EntryCommand[*catalog.TableMVCCNode, *catalog.TableNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.SegmentNode],
+		*catalog.EntryCommand[*catalog.ObjectMVCCNode, *catalog.SegmentNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
 		store.catalog.ReplayCmd(txncmd, store.dataFactory, store.Observer)
 	case *AppendCmd:
