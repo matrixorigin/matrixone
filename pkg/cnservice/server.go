@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -458,6 +459,11 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		s._hakeeperClient = client
 		s.initClusterService()
 		s.initLockService()
+
+		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+		if ok {
+			ss.(*status.Server).SetHAKeeperClient(client)
+		}
 	})
 	client = s._hakeeperClient
 	return
