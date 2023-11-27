@@ -592,15 +592,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 	return nil
 }
 
-func (txn *Transaction) hasDeletesOnUncommitedObject() bool {
-	return !txn.deletedBlocks.isEmpty()
-}
-
-func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
-	return txn.deletedBlocks.hasDeletes(id)
-}
-
-func (txn *Transaction) getUncommitedDataObjectsByTable(
+func (txn *Transaction) getInsertedObjectListForTable(
 	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
 	txn.Lock()
 	defer txn.Unlock()
