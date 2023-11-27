@@ -612,6 +612,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
+					binder.builder = builder
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
