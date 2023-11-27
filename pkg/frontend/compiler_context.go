@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"sort"
 	"strconv"
 	"strings"
@@ -271,7 +270,15 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
-	return disttae.GetTableDef(txnCtx, table, dbName, tableName, nil)
+
+	// convert
+	obj := &plan2.ObjectRef{
+		SchemaName: dbName,
+		ObjName:    tableName,
+		Obj:        int64(tableId),
+	}
+	tableDef := table.GetTableDef(txnCtx)
+	return obj, tableDef
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -279,11 +286,37 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
+
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return nil, nil
 	}
-	return disttae.GetTableDef(ctx, table, dbName, tableName, sub)
+	tableDef := table.GetTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tableName
+	}
+
+	// convert
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
+	obj := &plan2.ObjectRef{
+		SchemaName:       dbName,
+		ObjName:          tableName,
+		Obj:              int64(table.GetTableID(ctx)),
+		SubscriptionName: subscriptionName,
+	}
+	if pubAccountId != -1 {
+		obj.PubInfo = &plan.PubInfo{
+			TenantId: pubAccountId,
+		}
+	}
+	return obj, tableDef
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {

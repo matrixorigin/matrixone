@@ -514,6 +514,32 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 	s.waterline.Advance(to)
 }
 
+func (s *LogtailServer) gcDeletedSessions(ctx context.Context) {
+	const gcTimeout = time.Hour * 24 * 7 // one week
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			func() {
+				s.ssmgr.Lock()
+				defer s.ssmgr.Unlock()
+				var pos int
+				for i := range s.ssmgr.deletedClients {
+					if time.Since(s.ssmgr.deletedClients[i].deletedAt) > gcTimeout {
+						pos++
+					} else {
+						break
+					}
+				}
+				s.ssmgr.deletedClients = s.ssmgr.deletedClients[pos:]
+			}()
+		}
+	}
+}
+
 // Close closes api server.
 func (s *LogtailServer) Close() error {
 	s.logger.Info("close logtail service")
@@ -537,6 +563,11 @@ func (s *LogtailServer) Start() error {
 		return err
 	}
 
+	if err := s.stopper.RunNamedTask("session cleaner", s.gcDeletedSessions); err != nil {
+		s.logger.Error("fail to start session cleaner", zap.Error(err))
+		return err
+	}
+
 	return s.rpc.Start()
 }
 
@@ -545,4 +576,8 @@ func (s *LogtailServer) NotifyLogtail(
 	from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
 	return s.event.NotifyLogtail(from, to, closeCB, tails...)
+}
+
+func (s *LogtailServer) SessionMgr() *SessionManager {
+	return s.ssmgr
 }
