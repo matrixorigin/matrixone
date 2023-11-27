@@ -957,7 +957,7 @@ func (tbl *txnTable) tryFastRanges(
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
-			blockCnt += obj.BlockCount
+			blockCnt += obj.BlkCnt()
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
