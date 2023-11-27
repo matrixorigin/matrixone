@@ -250,40 +250,6 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 	return nil
 }
 
-func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
-	//handle persisted insertNode.
-	metaloc, deltaloc := node.GetPersistedLoc()
-	blkn := metaloc.ID()
-	sid := metaloc.Name().SegmentId()
-	filen := metaloc.Name().Num()
-
-	shouldCreateNewSeg := func() bool {
-		if seg.nseg == nil {
-			return true
-		}
-		entry := seg.nseg.GetMeta().(*catalog.SegmentEntry)
-		return entry.ID != sid
-	}
-
-	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
-		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
-		if err != nil {
-			return
-		}
-	}
-	opts := new(objectio.CreateBlockOpt).
-		WithMetaloc(metaloc).
-		WithDetaloc(deltaloc).
-		WithFileIdx(filen).
-		WithBlkIdx(uint16(blkn))
-	_, err = seg.nseg.CreateNonAppendableBlock(opts)
-	if err != nil {
-		return
-	}
-	return
-}
-
 func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (err error) {
 	sid := stats.ObjectName().SegmentId()
 	shouldCreateNewSeg := func() bool {
