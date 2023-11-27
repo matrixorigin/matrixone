@@ -17,11 +17,13 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
 )
 
 func (s *service) initRemote() {
@@ -240,6 +242,33 @@ func (s *service) getLocalLockTable(
 		resp.NewBind = &bind
 		return nil, nil
 	}
+
+	if _, ok := l.(*remoteLockTable); ok {
+		// Assuming that we have cn0, cn1, and table1, we consider the following timing:
+		// 1. at time t0, cn0 obtains the t1 lock table, and the lock-table bind is t1-cn0-table1-version1.
+		// 2. at time t1, cn0 down.
+		// 3. at time t2, cn0 restarted, and (t2-t1) < cfg.KeepBindTimeout，so lock-table allocator will keep
+		//    the bind t1-cn0-table1-version1 valid
+		// 4. cn1 try to lock table1 and gets the binding t1-cn0-table1-version1 from allocator or local cache, then
+		//    sends a lock request to cn0.
+		// 5. cn0 receive the lock request, but the lock-table bind is t1-cn0-table1-version2, and cn0 cn0 will consider
+		//    this lock-table bind to be a remote lock table, because the serviceID(t1-cn0) != serviceID(t2-cn0). This
+		//    will make rpc handle blocked.
+		uuid := getUUIDFromServiceIdentifier(s.serviceID)
+		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
+		if strings.EqualFold(uuid, uuidRequest) {
+			l.close()
+			s.tables.Delete(bind.Table)
+			return nil, ErrLockTableBindChanged
+		}
+
+		getLogger().Fatal("get local lock table, but found remote lock table, ip reused between two cns.",
+			zap.String("request", req.DebugString()),
+			zap.String("serviceID", s.serviceID),
+			zap.String("request-lock-table", req.LockTable.DebugString()),
+			zap.String("current-bind", bind.DebugString()))
+	}
+
 	return l, nil
 }
 

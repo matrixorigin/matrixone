@@ -27,6 +27,11 @@ select c1, c2, c3 from s_t1 where sample(c1, 1 rows) = 1;
 expr 'sample' is not yet implemented
 select c1, c2, c3 from s_t1 where sample(c1, 1 percent) = 1;
 expr 'sample' is not yet implemented
+/* 6. cannot sample the group by column */
+select sample(c1, 1 rows) from s_t1 group by c1;
+internal error: cannot sample the group by column.
+select sample(*, 1 rows) from s_t1 group by c1;
+internal error: cannot sample the group by column.
 /* expected succeed case */
 /* 1. sample 2 rows from table by column c1 */
 select count(*) from (select sample(c1, 2 rows) from s_t1);
@@ -99,6 +104,13 @@ c1    c3
 2    0
 2    0
 3    null
+/* 12. sample as and outer filter */
+select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) where k < 2 order by c1, k;
+c1    k
+1    0
+1    1
+2    0
+2    0
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
 create table s_t2 (cc1 int, cc2 int);
@@ -121,6 +133,19 @@ null    2
 /* 3. sample 0 percent from table by column cc1, cc2, expected to get empty */
 select sample(cc1, cc2, 0 percent) from s_t2;
 cc1    cc2
+/* 4. should support the sample * from table */
+select sample(*, 100 percent) from s_t2 order by cc1 asc;
+cc1    cc2
+null    2
+1    1
+3    null
+select sample(*, 0 percent) from s_t2;
+cc1    cc2
+select sample(*, 2 rows) from s_t2 order by cc1 asc;
+cc1    cc2
+null    2
+1    1
+3    null
 /* data prepare for expression sample */
 drop table if exists s_t3;
 create table s_t3 (c1 int, c2 int);

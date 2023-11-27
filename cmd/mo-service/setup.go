@@ -112,3 +112,10 @@ func initLogger(cfg *Config) {
 		logutil.SetupMOLogger(&cfg.Log)
 	})
 }
+
+func setupStatusServer(rt runtime.Runtime) {
+	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
+	if !ok || ss == nil {
+		rt.SetGlobalVariables(runtime.StatusServer, statusServer)
+	}
+}

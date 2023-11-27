@@ -6457,6 +6457,16 @@ create_table_stmt:
             ClusterByOption: $11,
         }
     }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt stream_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            Options: $8,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -8080,28 +8090,57 @@ function_call_window:
     }
 
 sample_function_expr:
+    SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
+    {
+	v := int($5.(int64))
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' FLOAT PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
     	v := int($5.(int64))
-    	val, err := tree.NewSampleRowsFuncExpression(v, $3)
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
     	if err != nil {
     	    yylex.Error(err.Error())
     	    return 1
     	}
     	$$ = val
     }
-|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT')'
+|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), $3)
+        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
             return 1
         }
         $$ = val
     }
-|   SAMPLE '(' expression_list ',' FLOAT PERCENT')'
+|   SAMPLE '(' expression_list ',' FLOAT PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), $3)
+        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
             return 1
