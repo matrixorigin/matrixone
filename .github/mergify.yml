@@ -31,6 +31,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.0-dev
+      - approved-reviews-by=sukki37
     actions:
       request_reviews:
         users:
@@ -50,6 +51,7 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.1-dev
+      - approved-reviews-by=sukki37
     actions:
       request_reviews:
         users:

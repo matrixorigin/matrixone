@@ -230,7 +230,7 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := vector.NewVec(typ)
+	vec := proc.GetVector(typ)
 	err := vec.PreExtend(nele, proc.Mp())
 	if err != nil {
 		return nil, err
@@ -273,7 +273,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			// very large vectors should not put back into pool, which cause these memory can not release.
 			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
 			// use Allocated() may suitable.
-			if vec.IsConst() || vec.NeedDup() || vec.Capacity() > 8192*64 {
+			if vec.IsConst() || vec.NeedDup() || vec.Allocated() > 8192*64 {
 				vec.Free(proc.mp)
 				bat.ReplaceVector(vec, nil)
 				continue

@@ -137,7 +137,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		if !bat.Vecs[pIdx].GetNulls().Contains(uint64(i)) {
 			if partition == -1 {
 				for _, batchElem := range batches {
-					batchElem.Clean(proc.Mp())
+					proc.PutBatch(batchElem)
 				}
 				//panic("partiton number is -1, the partition number is incorrect")
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
