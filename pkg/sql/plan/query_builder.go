@@ -448,7 +448,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			remapping.addColRef(globalRef)
-
+			if node.JoinType == plan.Node_RIGHT {
+				childProjList[i].Typ.NotNullable = false
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: childProjList[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -486,6 +488,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				}
 
 				remapping.addColRef(globalRef)
+
+				if node.JoinType == plan.Node_LEFT {
+					childProjList[i].Typ.NotNullable = false
+				}
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: childProjList[i].Typ,
@@ -1156,6 +1162,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		var newProjList []*plan.Expr
 		for _, needed := range neededProj {
 			expr := node.ProjectList[needed]
@@ -1163,6 +1170,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
+			}
+
+			switch ne := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				expr.Typ.NotNullable = childProjList[ne.Col.ColPos].Typ.NotNullable
 			}
 
 			globalRef := [2]int32{projectTag, needed}
