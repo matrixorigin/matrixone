@@ -157,6 +157,9 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
+	if sql == "" {
+		return
+	}
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 

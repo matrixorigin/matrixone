@@ -44,6 +44,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb1.UUID].UpTime,
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
@@ -56,6 +57,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_TP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb2.UUID].UpTime,
 	})
 
 	hb3 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_TP}
@@ -68,6 +70,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_TP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb3.UUID].UpTime,
 	})
 }
 
@@ -373,6 +376,7 @@ func TestCNLabelUpdate(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb1.UUID].UpTime,
 	})
 
 	label = CNStoreLabel{
@@ -401,6 +405,7 @@ func TestCNLabelUpdate(t *testing.T) {
 				Labels: []string{"r1"},
 			},
 		},
+		UpTime: state.Stores[label.UUID].UpTime,
 	})
 
 	label = CNStoreLabel{
@@ -423,6 +428,7 @@ func TestCNLabelUpdate(t *testing.T) {
 				Labels: []string{"r1"},
 			},
 		},
+		UpTime: state.Stores[label.UUID].UpTime,
 	})
 }
 
@@ -448,6 +454,7 @@ func TestCNWorkStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb1.UUID].UpTime,
 	})
 
 	workState = CNWorkState{
@@ -462,6 +469,7 @@ func TestCNWorkStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Draining,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[workState.UUID].UpTime,
 	})
 
 	workState = CNWorkState{
@@ -476,6 +484,7 @@ func TestCNWorkStateUpdate(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[workState.UUID].UpTime,
 	})
 }
 
@@ -509,6 +518,7 @@ func TestCNStateLabelPatch(t *testing.T) {
 		Role:           metadata.CNRole_AP,
 		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
+		UpTime:         state.Stores[hb1.UUID].UpTime,
 	})
 
 	stateLabel = CNStateLabel{
@@ -537,6 +547,7 @@ func TestCNStateLabelPatch(t *testing.T) {
 				Labels: []string{"r1"},
 			},
 		},
+		UpTime: state.Stores[stateLabel.UUID].UpTime,
 	})
 
 	stateLabel = CNStateLabel{
@@ -557,6 +568,7 @@ func TestCNStateLabelPatch(t *testing.T) {
 				Labels: []string{"r1"},
 			},
 		},
+		UpTime: state.Stores[stateLabel.UUID].UpTime,
 	})
 
 	stateLabel = CNStateLabel{
@@ -578,6 +590,7 @@ func TestCNStateLabelPatch(t *testing.T) {
 				Labels: []string{"r1"},
 			},
 		},
+		UpTime: state.Stores[stateLabel.UUID].UpTime,
 	})
 }
 

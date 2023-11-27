@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"time"
-
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,9 +57,6 @@ const (
 
 var (
 	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
-	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
-	fuzzyNonCompoundCheck = "select %s from %s.%s where %s in (%s) group by %s having count(*) > 1 limit 1;"
-	fuzzyCompoundCheck    = "select serial(%s) from %s.%s where %s group by serial(%s) having count(*) > 1 limit 1;"
 )
 
 var (

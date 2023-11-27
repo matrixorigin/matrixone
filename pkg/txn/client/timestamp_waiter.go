@@ -114,6 +114,17 @@ func (tw *timestampWaiter) Close() {
 	tw.stopper.Stop()
 }
 
+func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
+	if tw == nil {
+		return timestamp.Timestamp{}
+	}
+	ts := tw.latestTS.Load()
+	if ts == nil {
+		return timestamp.Timestamp{}
+	}
+	return *ts
+}
+
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
