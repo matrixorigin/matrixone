@@ -179,21 +179,6 @@ func (cleaner *DiskCleaner) replay() error {
 		return nil
 	}
 
-	for _, dir := range readDirs {
-		table := NewGCTable()
-		err = table.Prefetch(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
-		if err != nil {
-			return err
-		}
-	}
-	for _, dir := range readDirs {
-		table := NewGCTable()
-		err = table.ReadTable(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
-		if err != nil {
-			return err
-		}
-		cleaner.updateInputs(table)
-	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	cleaner.updateMaxConsumed(ckp)
 	ckp = checkpoint.NewCheckpointEntry(minMergedStart, minMergedEnd, checkpoint.ET_Incremental)
@@ -246,8 +231,16 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	cleaner.updateInputs(input)
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
 
-	compareTS := cleaner.minMerged.Load().GetEnd()
-	maxGlobalCKP := cleaner.ckpClient.MaxCheckpoint()
+	var compareTS types.TS
+	minMerged := cleaner.minMerged.Load()
+	if minMerged != nil {
+		compareTS = minMerged.GetEnd()
+	}
+	maxGlobalCKP := cleaner.ckpClient.MaxGlobalCheckpoint()
+	if maxGlobalCKP == nil {
+		return
+	}
+	logutil.Infof("maxGlobalCKP is %s, compareTS is %s", maxGlobalCKP.String(), compareTS.ToString())
 	if compareTS.Less(maxGlobalCKP.GetEnd()) {
 		data, err := cleaner.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
@@ -371,7 +364,7 @@ func (cleaner *DiskCleaner) softGC(t *GCTable, ts types.TS) []string {
 	for _, table := range cleaner.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC(t)
+	gc := mergeTable.SoftGC(t, ts)
 	cleaner.inputs.tables = make([]*GCTable, 0)
 	cleaner.inputs.tables = append(cleaner.inputs.tables, mergeTable)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
@@ -441,23 +434,15 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 		return nil
 	}
 
-	var mergeTable *GCTable
 	cleaner.inputs.RLock()
 	if len(cleaner.inputs.tables) == 0 {
 		cleaner.inputs.RUnlock()
 		return nil
 	}
-	// tables[0] has always been a full GCTable
-	mergeTable = cleaner.inputs.tables[0]
 	cleaner.inputs.RUnlock()
 	logutil.Info("[DiskCleaner]",
 		common.OperationField("MergeGCFile start"),
 		common.OperandField(maxConsumed.String()))
-	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), cleaner.fs, nil)
-	if err != nil {
-		logutil.Errorf("SaveTable failed: %v", err.Error())
-		return err
-	}
 	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
@@ -474,6 +459,13 @@ func (cleaner *DiskCleaner) CheckGC() error {
 	debugCandidates := cleaner.ckpClient.GetAllIncrementalCheckpoints()
 	cleaner.inputs.RLock()
 	defer cleaner.inputs.RUnlock()
+	gCkp := cleaner.ckpClient.MaxGlobalCheckpoint()
+	data, err := cleaner.collectGlobalCkpData(gCkp)
+	if err != nil {
+		return err
+	}
+	gcTable := NewGCTable()
+	gcTable.UpdateTable(data)
 	maxConsumed := cleaner.GetMaxConsumed()
 	if maxConsumed == nil {
 		return moerr.NewInternalErrorNoCtx("GC has not yet run")
@@ -497,14 +489,14 @@ func (cleaner *DiskCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	debugTable.SoftGC()
+	debugTable.SoftGC(gcTable, gCkp.GetEnd())
 	var mergeTable *GCTable
 	if len(cleaner.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
 		for _, table := range cleaner.inputs.tables {
 			mergeTable.Merge(table)
 		}
-		mergeTable.SoftGC()
+		mergeTable.SoftGC(gcTable, gCkp.GetEnd())
 	} else {
 		mergeTable = cleaner.inputs.tables[0]
 	}

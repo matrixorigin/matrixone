@@ -15,7 +15,10 @@
 package gc2
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -91,17 +94,13 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS) []string {
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
-	ins, _, del, _ := data.GetBlkBatchs()
+	ins, _, del, delTxn := data.GetBlkBatchs()
 	insMetaObjectVec := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
 	insDeltaObjectVec := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
 	insCommitTSVec := ins.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
-
-	delMetaObjectVec := del.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
-	delDeltaObjectVec := del.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
-	delCommitTSVec := del.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
 	for i := 0; i < insMetaObjectVec.Length(); i++ {
-		metaLoc := objectio.Location(vector.GetFixedAt[[]byte](insMetaObjectVec, i))
-		deltaLoc := objectio.Location(vector.GetFixedAt[[]byte](insDeltaObjectVec, i))
+		metaLoc := objectio.Location(insMetaObjectVec.GetBytesAt(i))
+		deltaLoc := objectio.Location(insDeltaObjectVec.GetBytesAt(i))
 		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
 		if !metaLoc.IsEmpty() {
 			t.addObject(metaLoc.Name().String(), commitTS)
@@ -110,9 +109,16 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			t.addObject(deltaLoc.Name().String(), commitTS)
 		}
 	}
+
+	if del.Length() == 0 {
+		return
+	}
+	delMetaObjectVec := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
+	delDeltaObjectVec := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+	delCommitTSVec := del.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
 	for i := 0; i < del.Length(); i++ {
-		metaLoc := objectio.Location(vector.GetFixedAt[[]byte](delMetaObjectVec, i))
-		deltaLoc := objectio.Location(vector.GetFixedAt[[]byte](delDeltaObjectVec, i))
+		metaLoc := objectio.Location(delMetaObjectVec.GetBytesAt(i))
+		deltaLoc := objectio.Location(delDeltaObjectVec.GetBytesAt(i))
 		commitTS := vector.GetFixedAt[types.TS](delCommitTSVec, i)
 		if !metaLoc.IsEmpty() {
 			t.addObject(metaLoc.Name().String(), commitTS)
@@ -121,4 +127,34 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			t.addObject(deltaLoc.Name().String(), commitTS)
 		}
 	}
+}
+
+// For test
+func (t *GCTable) Compare(table *GCTable) bool {
+	if len(t.objects) != len(table.objects) {
+		return false
+	}
+	for name, entry := range t.objects {
+		object := table.objects[name]
+		if object == nil {
+			return false
+		}
+		if !entry.commitTS.Equal(object.commitTS) {
+			return false
+		}
+	}
+	return true
+}
+
+func (t *GCTable) String() string {
+	if len(t.objects) == 0 {
+		return ""
+	}
+	var w bytes.Buffer
+	_, _ = w.WriteString("objects:[\n")
+	for name, entry := range t.objects {
+		_, _ = w.WriteString(fmt.Sprintf("name: %s, commitTS: %v ", name, entry.commitTS.ToString()))
+	}
+	_, _ = w.WriteString("]\n")
+	return w.String()
 }
