@@ -956,6 +956,13 @@ func (tbl *txnTable) tryFastRanges(
 	for _, stats := range objStatsList {
 		s3BlkCnt += stats.BlkCnt()
 
+		if !stats.ZMIsEmpty() {
+			pkZM := stats.SortKeyZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
+		}
+
 		location := stats.ObjectLocation()
 		var objMeta objectio.ObjectMeta
 		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
@@ -964,7 +971,6 @@ func (tbl *txnTable) tryFastRanges(
 		); err != nil {
 			return
 		}
-
 		// reset bloom filter to nil for each object
 		bf = nil
 		// bfIdx = index.NewEmptyBinaryFuseFilter()
@@ -972,9 +978,11 @@ func (tbl *txnTable) tryFastRanges(
 		// check whether the object is skipped by zone map
 		// If object zone map doesn't contains the pk value, we need to check bloom filter
 		meta = objMeta.MustDataMeta()
-		pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-		if skipObj = !pkZM.ContainsKey(val); skipObj {
-			continue
+		if stats.ZMIsEmpty() {
+			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
 		}
 
 		// check whether the object is skipped by bloom filter
@@ -1044,6 +1052,14 @@ func (tbl *txnTable) tryFastRanges(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
+
+		if !obj.ZMIsEmpty() {
+			pkZM := obj.SortKeyZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
+		}
+
 		location := obj.Location()
 		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -1053,10 +1069,13 @@ func (tbl *txnTable) tryFastRanges(
 		}
 		objDataMeta = objMeta.MustDataMeta()
 		cnt += objDataMeta.BlockCount()
-		pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-		if !pkZM.ContainsKey(val) {
-			continue
+		if obj.ZMIsEmpty() {
+			pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
 		}
+
 		if bf, err = objectio.LoadBFWithMeta(
 			tbl.proc.Load().Ctx, objDataMeta, location, fs,
 		); err != nil {
@@ -1772,7 +1791,7 @@ func (tbl *txnTable) newBlockReader(
 		num,
 		expr,
 		proc)
-	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
+	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
 	}
@@ -1887,6 +1906,7 @@ func (tbl *txnTable) newReader(
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,
 		readerNumber-1,
+		len(dirtyBlks),
 		objInfos,
 		steps)
 	for i := range blockReaders {

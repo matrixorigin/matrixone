@@ -526,6 +526,41 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 	)
 }
 
+func TestIssue12554(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			table := uint64(1)
+
+			// txn1 hold lock row1 on l1
+			mustAddTestLock(t, ctx, l1, table, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			oldBind := alloc.Get(l1.serviceID, table)
+			// mock l1 restart, changed serviceID
+			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
+			l1.tables.Delete(table)
+			newLockTable := l1.createLockTableByBind(oldBind)
+			l1.tables.Store(table, newLockTable)
+
+			_, err := l2.Lock(ctx, table, [][]byte{row1}, txn2, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+		},
+	)
+}
+
 func runBindChangedTests(
 	t *testing.T,
 	makeBindChanged bool,
