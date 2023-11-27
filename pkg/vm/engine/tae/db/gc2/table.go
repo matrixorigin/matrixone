@@ -198,8 +198,8 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 
 func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
-		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
 		if t.objects[name] != nil {
 			continue
 		}
