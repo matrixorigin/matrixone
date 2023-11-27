@@ -81,6 +81,31 @@ select sample(c3, 3 rows) as k from s_t1 where c1 = 2;
 k
 0
 0
+/* 11. sample from all invalid rows, should get only one invalid row */
+select sample(c3, 1 rows) from s_t1 where c1 = 3;
+c3
+null
+select sample(c3, 2 rows) from s_t1 where c1 = 3;
+c3
+null
+select c1, sample(c3, 3 rows) from s_t1 where c1 = 3 group by c1;
+c1    c3
+3    null
+select c1, sample(c3, 3 rows) from s_t1 group by c1 order by c1, c3;
+c1    c3
+1    0
+1    1
+1    2
+2    0
+2    0
+3    null
+/* 12. sample as and outer filter */
+select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) where k < 2 order by c1, k;
+c1    k
+1    0
+1    1
+2    0
+2    0
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
 create table s_t2 (cc1 int, cc2 int);

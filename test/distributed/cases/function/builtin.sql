@@ -214,7 +214,7 @@ VALUES
 -- @case
 -- @desc:test for func endswith() select
 select a,endswith(b,'a') from t1;
-select a,b,c from t1 where endswith(b,'a')=1 and endswith(c,'I')=1;
+select a,b,c from t1 where endswith(b,'a') and endswith(c,'I');
 
 -- @suite
 -- @setup
@@ -341,7 +341,7 @@ VALUES
 
 
 select a,startswith(b,'An') from t1;
-select a,b,c from t1 where startswith(b,'An')=1 and startswith(c,'I')=1;
+select a,b,c from t1 where startswith(b,'An') and startswith(c,'I');
 
 -- @suite
 -- @setup

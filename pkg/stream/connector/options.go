@@ -52,13 +52,7 @@ var (
 			return len(s) > 0
 		},
 	}
-	integerOpt = OptConstraint{
-		Type: OptTypeInteger,
-		Validator: func(s string) bool {
-			_, err := strconv.Atoi(s)
-			return err == nil
-		},
-	}
+
 	addressOpt = OptConstraint{
 		Type: OptTypeAddress,
 		Validator: func(s string) bool {
@@ -88,19 +82,23 @@ func enumOpt(items ...string) OptConstraint {
 }
 
 const (
-	OptConnectorType      = "type"
-	OptConnectorServers   = "bootstrap.servers"
-	OptConnectorTopic     = "topic"
-	OptConnectorValue     = "value"
-	OptConnectorPartition = "partition"
+	OptConnectorType    = "type"
+	OptConnectorServers = "bootstrap.servers"
+	OptConnectorTopic   = "topic"
+	OptConnectorValue   = "value"
+
+	OptConnectorSql = "sql"
+
+	OptConnectorRel = "relkind"
 )
 
 var ConnectorOptConstraint = map[string]OptConstraint{
-	OptConnectorType:      enumOpt(SourceKafka),
-	OptConnectorServers:   addressOpt,
-	OptConnectorTopic:     stringOpt,
-	OptConnectorValue:     enumOpt(FormatJson),
-	OptConnectorPartition: integerOpt,
+	OptConnectorType:    enumOpt(SourceKafka),
+	OptConnectorServers: addressOpt,
+	OptConnectorTopic:   stringOpt,
+	OptConnectorValue:   enumOpt(FormatJson),
+	OptConnectorSql:     stringOpt,
+	OptConnectorRel:     stringOpt,
 }
 
 var ConnectorEssentialOpts = map[string]struct{}{
@@ -109,10 +107,9 @@ var ConnectorEssentialOpts = map[string]struct{}{
 
 var ConnectorEssentialTypeOpts = map[string]map[string]struct{}{
 	"kafka": {
-		OptConnectorServers:   {},
-		OptConnectorTopic:     {},
-		OptConnectorPartition: {},
-		OptConnectorValue:     {},
+		OptConnectorServers: {},
+		OptConnectorTopic:   {},
+		OptConnectorValue:   {},
 	},
 }
 

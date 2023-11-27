@@ -373,7 +373,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
 
 // MODump
 %token <str> MODUMP
@@ -497,6 +497,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <str> json_type_opt
 
 // case statement
 %type <statement> case_stmt
@@ -6456,6 +6457,16 @@ create_table_stmt:
             ClusterByOption: $11,
         }
     }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt stream_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            Options: $8,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -6474,13 +6485,16 @@ load_param_opt:
             },
         }
     }
-|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING  json_type_opt
     {
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
                 Format: $4,
                 Data: $8,
+            },
+            ExParam:tree.ExParam{
+                JsonData:$9,
             },
         }
     }
@@ -6508,6 +6522,15 @@ load_param_opt:
                 StageName: tree.Identifier($3.Compare()),
             },
         }
+    }
+
+json_type_opt:
+    {
+        $$ = ""
+    }
+|    ',' JSONTYPE '=' STRING 
+    {
+        $$ = $4
     }
 
 infile_or_s3_params:

@@ -331,3 +331,56 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 	}
 	return
 }
+
+func typeCompatible[T any](typ types.Type) bool {
+	var t T
+	switch (any)(t).(type) {
+	case types.Varlena:
+		return typ.IsVarlen()
+	case bool:
+		return typ.IsBoolean()
+	case int8:
+		return typ.Oid == types.T_int8
+	case int16:
+		return typ.Oid == types.T_int16
+	case int32:
+		return typ.Oid == types.T_int32
+	case int64:
+		return typ.Oid == types.T_int64
+	case uint8:
+		return typ.Oid == types.T_uint8
+	case uint16:
+		return typ.Oid == types.T_uint16
+	case uint32:
+		return typ.Oid == types.T_uint32
+	case uint64:
+		return typ.Oid == types.T_uint64
+	case float32:
+		return typ.Oid == types.T_float32
+	case float64:
+		return typ.Oid == types.T_float64
+	case types.Decimal64:
+		return typ.Oid == types.T_decimal64
+	case types.Decimal128:
+		return typ.Oid == types.T_decimal128
+	case types.Uuid:
+		return typ.Oid == types.T_uuid
+	case types.Date:
+		return typ.Oid == types.T_date
+	case types.Time:
+		return typ.Oid == types.T_time
+	case types.Datetime:
+		return typ.Oid == types.T_datetime
+	case types.Timestamp:
+		return typ.Oid == types.T_timestamp
+	case types.TS:
+		return typ.Oid == types.T_TS
+	case types.Rowid:
+		return typ.Oid == types.T_Rowid
+	case types.Blockid:
+		return typ.Oid == types.T_Blockid
+	case types.Enum:
+		return typ.Oid == types.T_enum
+	}
+	return false
+}

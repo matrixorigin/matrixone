@@ -85,7 +85,8 @@ func TestCollector(t *testing.T) {
 	t.Logf("runtime.NumCPU: %d", runtime.NumCPU())
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
-	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
+	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2),
+		WithSqlWorkerNum(runtime.NumCPU()))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}

@@ -145,25 +145,56 @@ func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	return getJob(
-		ctx,
-		makeName(reader.GetName()),
-		JTLoad,
-		func(_ context.Context) (res *tasks.JobResult) {
-			// TODO
-			res = &tasks.JobResult{}
-			err := reader.GetFs().PrefetchFile(ctx, params.key.Name().String())
-			if err != nil {
-				res.Err = err
+	if params.prefetchFile {
+		return getJob(
+			ctx,
+			makeName(reader.GetName()),
+			JTLoad,
+			func(_ context.Context) (res *tasks.JobResult) {
+				// TODO
+				res = &tasks.JobResult{}
+				var name string
+				if params.reader == nil {
+					name = params.key.Name().String()
+				} else {
+					name = params.reader.GetName()
+				}
+				err := reader.GetFs().PrefetchFile(ctx, name)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				if params.reader == nil {
+					putReader(reader)
+				}
 				return
-			}
-			// no further reads
-			if params.reader == nil {
-				putReader(reader)
-			}
-			return
-		},
-	)
+			},
+		)
+	} else {
+		return getJob(
+			ctx,
+			makeName(reader.GetName()),
+			JTLoad,
+			func(_ context.Context) (res *tasks.JobResult) {
+				// TODO
+				res = &tasks.JobResult{}
+				ioVectors, err := reader.ReadMultiBlocks(ctx,
+					params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
+				if params.reader == nil {
+					putReader(reader)
+				}
+				return
+			},
+		)
+	}
 }
 
 // prefetch metadata job
