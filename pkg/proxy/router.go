@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -189,6 +190,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 	} else {
 		cns = r.selectForCommonTenant(c, filter)
 	}
+	cnCount := len(cns)
+	v2.ProxyAvailableBackendServerNumGauge.
+		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
 
 	// getHash returns same hash for same labels.
 	hash, err := c.labelInfo.getHash()
@@ -196,9 +200,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 		return nil, err
 	}
 
-	if len(cns) == 0 {
+	if cnCount == 0 {
 		return nil, noCNServerErr
-	} else if len(cns) == 1 {
+	} else if cnCount == 1 {
 		cns[0].hash = hash
 		return cns[0], nil
 	}
