@@ -41,7 +41,6 @@ import (
 const (
 	blkMetaInsBatch int8 = iota
 	blkMetaDelBatch
-	segMetaDelBatch
 	dataInsBatch
 	dataDelBatch
 	dbInsBatch
@@ -124,15 +123,6 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 		return
 	}
 
-	deleteAt := b.txn.GetPrepareTS()
-	rowid := objectio.HackObjid2Rowid(&seg.ID)
-
-	if b.batches[segMetaDelBatch] == nil {
-		b.batches[segMetaDelBatch] = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	}
-
-	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid, false)
-	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(deleteAt, false)
 	if b.batches[objectInfoBatch] == nil {
 		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
@@ -431,11 +421,6 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 		b.batchToClose = append(b.batchToClose, b.batches[blkMetaDelBatch])
 		b.batches[blkMetaDelBatch] = nil
 	}
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
-	if b.batches[segMetaDelBatch] != nil {
-		b.batchToClose = append(b.batchToClose, b.batches[segMetaDelBatch])
-		b.batches[segMetaDelBatch] = nil
-	}
 
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
 	if b.batches[objectInfoBatch] != nil {
@@ -462,7 +447,6 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
-	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_obj", b.currTableID), b.currDBName, objectInfoBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
