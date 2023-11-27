@@ -38,6 +38,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
