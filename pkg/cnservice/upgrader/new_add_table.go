@@ -382,7 +382,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 	Account:  table.AccountAll,
 	Database: sysview.InformationDBConst,
 	Table:    "PARTITIONS",
-	CreateViewSql: fmt.Sprintf("CREATE VIEW `PARTITIONS` AS " +
+	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.PARTITIONS AS " +
 		"SELECT " +
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
