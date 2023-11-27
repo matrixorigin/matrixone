@@ -47,8 +47,10 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD = 512
-	PREFETCH_ROUNDS    = 32
+	PREFETCH_THRESHOLD  = 256
+	PREFETCH_ROUNDS     = 24
+	SMALLSCAN_THRESHOLD = 100
+	LARGESCAN_THRESHOLD = 1500
 )
 
 const (
@@ -57,6 +59,12 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+)
+
+const (
+	SMALL = iota
+	NORMAL
+	LARGE
 )
 
 const (
@@ -580,6 +588,7 @@ type blockReader struct {
 	steps       []int
 	currentStep int
 
+	scanType int
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
