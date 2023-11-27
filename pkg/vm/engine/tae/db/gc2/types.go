@@ -44,20 +44,17 @@ const (
 	GCAttrBlockId    = "block_id"
 	GCAttrTableId    = "table_id"
 	GCAttrDBId       = "db_id"
+	GCAttrCommitTS   = "commit_ts"
 )
 
 var (
 	BlockSchemaAttr = []string{
-		GCAttrBlockId,
-		GCAttrTableId,
-		GCAttrDBId,
 		GCAttrObjectName,
+		GCAttrCommitTS,
 	}
 	BlockSchemaTypes = []types.Type{
-		types.New(types.T_Blockid, 0, 0),
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
 	}
 
 	DropTableSchemaAttr = []string{

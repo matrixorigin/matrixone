@@ -237,11 +237,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		compareTS = minMerged.GetEnd()
 	}
 	maxGlobalCKP := cleaner.ckpClient.MaxGlobalCheckpoint()
-	if maxGlobalCKP == nil {
-		return
-	}
-	logutil.Infof("maxGlobalCKP is %s, compareTS is %s", maxGlobalCKP.String(), compareTS.ToString())
-	if compareTS.Less(maxGlobalCKP.GetEnd()) {
+	if maxGlobalCKP != nil && compareTS.Less(maxGlobalCKP.GetEnd()) {
 		data, err := cleaner.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
 			return
@@ -316,6 +312,16 @@ func (cleaner *DiskCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
+	}
+	files := cleaner.GetAndClearOutputs()
+	_, err = input.SaveTable(
+		ckps[0].GetStart(),
+		ckps[len(ckps)-1].GetEnd(),
+		cleaner.fs,
+		files,
+	)
+	if err != nil {
+		return
 	}
 	return
 }
@@ -433,16 +439,28 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 	if len(deleteFiles) < cleaner.getMinMergeCount() {
 		return nil
 	}
-
+	var mergeTable *GCTable
 	cleaner.inputs.RLock()
 	if len(cleaner.inputs.tables) == 0 {
 		cleaner.inputs.RUnlock()
 		return nil
 	}
+	// tables[0] has always been a full GCTable
+	mergeTable = cleaner.inputs.tables[0]
 	cleaner.inputs.RUnlock()
 	logutil.Info("[DiskCleaner]",
 		common.OperationField("MergeGCFile start"),
 		common.OperandField(maxConsumed.String()))
+	_, err = mergeTable.SaveFullTable(maxConsumed.GetStart(), maxConsumed.GetEnd(), cleaner.fs, nil)
+	if err != nil {
+		logutil.Errorf("SaveTable failed: %v", err.Error())
+		return err
+	}
+	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
+	if err != nil {
+		logutil.Errorf("DelFiles failed: %v", err.Error())
+		return err
+	}
 	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())

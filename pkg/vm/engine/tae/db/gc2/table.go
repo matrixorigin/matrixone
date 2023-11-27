@@ -16,9 +16,13 @@ package gc2
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -127,6 +131,69 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			t.addObject(deltaLoc.Name().String(), commitTS)
 		}
 	}
+}
+
+func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
+	bats := make([]*containers.Batch, 1)
+	bats[CreateBlock] = containers.NewBatch()
+	return bats
+}
+
+func (t *GCTable) closeBatch(bs []*containers.Batch) {
+	for i := range bs {
+		bs[i].Close()
+	}
+}
+
+// collectData collects data from memory that can be written to s3
+func (t *GCTable) collectData(files []string) []*containers.Batch {
+	bats := t.makeBatchWithGCTable()
+	for i, attr := range BlockSchemaAttr {
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], common.CheckpointAllocator))
+	}
+	for name, entry := range t.objects {
+		bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
+		bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
+	}
+	return bats
+}
+
+// SaveTable is to write data to s3
+func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+	bats := t.collectData(files)
+	defer t.closeBatch(bats)
+	name := blockio.EncodeCheckpointMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bats {
+		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
+			return nil, err
+		}
+	}
+
+	blocks, err := writer.WriteEnd(context.Background())
+	return blocks, err
+}
+
+// SaveFullTable is to write data to s3
+func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, files []string) ([]objectio.BlockObject, error) {
+	bats := t.collectData(files)
+	defer t.closeBatch(bats)
+	name := blockio.EncodeGCMetadataFileName(GCMetaDir, PrefixGCMeta, start, end)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs.Service)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bats {
+		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
+			return nil, err
+		}
+	}
+
+	blocks, err := writer.WriteEnd(context.Background())
+	return blocks, err
 }
 
 // For test
