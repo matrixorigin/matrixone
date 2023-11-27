@@ -302,7 +302,7 @@ func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.
 		}
 		return true
 	})
-	if !stats.IsZero() {
+	if stats.Rows() != 0 {
 		return stats, nil
 	}
 	metaLoc := node.BaseNode.MetaLoc

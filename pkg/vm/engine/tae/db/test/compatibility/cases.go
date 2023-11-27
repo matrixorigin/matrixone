@@ -545,8 +545,10 @@ func prepareObjectInfo(tc PrepareCase, t *testing.T) {
 func testObjectInfo(tc TestCase, t *testing.T) {
 	tae := initTestEngine(tc, t)
 	defer tae.Close()
+	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.ForceCheckpoint()
 	tae.Restart(context.TODO())
+	t.Log(tae.Catalog.SimplePPString(3))
 	tae.CheckObjectInfo()
 }

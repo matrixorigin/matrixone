@@ -867,7 +867,7 @@ func LoadCheckpointEntries(
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
+		ins, del, cnIns, objInfo, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
@@ -914,14 +914,14 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if segDel != nil {
+		if objInfo != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
+				EntryType:    api.Entry_Insert,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_seg", tableID),
+				TableName:    fmt.Sprintf("_%d_obj", tableID),
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
-				Bat:          segDel,
+				Bat:          objInfo,
 			}
 			entries = append(entries, entry)
 		}
