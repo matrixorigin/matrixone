@@ -76,7 +76,7 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 		return node.NodeId
 	}
 	leftChild.Children[1] = node.NodeId
-	ReCalcNodeStats(leftChild.NodeId, builder, true, false)
+	ReCalcNodeStats(leftChild.NodeId, builder, true, false, true)
 	return leftChild.NodeId
 }
 
