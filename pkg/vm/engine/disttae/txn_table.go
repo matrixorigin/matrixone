@@ -582,9 +582,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		return
 	}
 
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-	part.CheckObjectStats(&ts)
-
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
@@ -632,10 +629,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
-	ranges *[][]byte, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
+	ranges *[][]byte,                    // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
@@ -924,7 +921,7 @@ func (tbl *txnTable) tryFastRanges(
 	state *logtailreplay.PartitionState,
 	exprs []*plan.Expr,
 	objStatsList []objectio.ObjectStats,
-	//snapshotObjs []logtailreplay.ObjectEntry,
+//snapshotObjs []logtailreplay.ObjectEntry,
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,

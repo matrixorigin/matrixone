@@ -622,17 +622,6 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
 		delBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
 	}
-
-	//if delete {
-	//	fmt.Println(fmt.Sprintf(
-	//		"visitMetadata collected delete:\n deleteTS: %s; entryState: %v\n",
-	//		deletets.ToString(), e.IsAppendable()))
-	//} else {
-	//	fmt.Println(fmt.Sprintf(
-	//		"visitMetadata collected create:\n createTS: %s; entryState: %v\n",
-	//		createts.ToString(), e.IsAppendable()))
-	//}
-
 }
 
 // visitBlkData collects logtail in memory

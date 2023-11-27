@@ -207,11 +207,3 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	}
 	return ObjectInfo{}, false
 }
-
-func (p *PartitionState) GetObjectStats() *btree.BTreeG[ObjectEntry] {
-	return p.dataObjects.Copy()
-}
-
-func (p *PartitionState) GetObjectStatsShadow() *btree.BTreeG[ObjectEntry] {
-	return p.dataObjectsShadow.Copy()
-}
