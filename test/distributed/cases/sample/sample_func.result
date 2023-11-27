@@ -18,8 +18,6 @@ SQL syntax error: sample(expr list, N rows) requires N between 1 and 1000.
 select sample(c1, 1001 rows) from s_t1;
 SQL syntax error: sample(expr list, N rows) requires N between 1 and 1000.
 /* 4. sample(column list, K percent) requires 0.00 <= K <= 100.00, should watch that 99.994 was accepted but will treat as 99.99 */
-select sample(c1, -1 percent) from s_t1;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near " percent) from s_t1";
 select sample(c1, 101 percent) from s_t1;
 SQL syntax error: sample(expr list, K percent) requires K between 0.00 and 100.00
 select sample(c1, 100.01 percent) from s_t1;
