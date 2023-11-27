@@ -1001,10 +1001,8 @@ func (tbl *txnTable) tryFastRanges(
 			var exist bool
 			if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
 				return false
-			} else {
-				if !exist {
-					return true
-				}
+			} else if !exist {
+				return true
 			}
 
 			if hasDeletes {
