@@ -1459,14 +1459,15 @@ func ForeachSnapshotObjects(
 
 func ConstructObjStatsByLoadObjMeta(
 	ctx context.Context, metaLoc objectio.Location,
-	fs fileservice.FileService) (stats objectio.ObjectStats, err error) {
+	fs fileservice.FileService) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
 
+	// 1. load object meta
 	var meta objectio.ObjectMeta
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs); err != nil {
 		logutil.Error("fast load object meta failed when split object stats. ", zap.Error(err))
 		return
 	}
-	dataMeta := meta.MustDataMeta()
+	dataMeta = meta.MustDataMeta()
 
 	// 2. construct an object stats
 	objectio.SetObjectStatsObjectName(&stats, metaLoc.Name())
