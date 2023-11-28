@@ -106,7 +106,7 @@ select * from enum05;
 drop table enum05;
 
 
--- create table enum column as primary key
+-- create table enum column
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
 show create table pri01;
@@ -120,7 +120,6 @@ show columns from pri01;
 drop table pri01;
 
 
--- alter table add primary key for enum column and duplicate exists
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri02 values (1, '数据库');
@@ -133,7 +132,6 @@ select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.c
 drop table pri02;
 
 
--- alter table add primary key for enum column and duplicate does not exists
 drop table if exists pri03;
 create table pri03 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri03 values (1, '数据库');
@@ -146,7 +144,6 @@ select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.c
 drop table pri03;
 
 
--- alter table drop primary key for enum column
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
 insert into pri04 (col1, col2) values (1, 'database');
