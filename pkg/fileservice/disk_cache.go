@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/ncw/directio"
 	"go.uber.org/zap"
 )
 
@@ -140,7 +141,7 @@ func (d *DiskCache) Read(
 		// entry file
 		diskPath := d.pathForIOEntry(path.File, entry)
 		d.waitUpdateComplete(diskPath)
-		diskFile, err := os.Open(diskPath)
+		diskFile, err := directio.OpenFile(diskPath, os.O_RDONLY, 0644)
 		if err == nil {
 			file = diskFile
 			defer diskFile.Close()
@@ -151,7 +152,7 @@ func (d *DiskCache) Read(
 			// full file
 			diskPath := d.pathForFile(path.File)
 			d.waitUpdateComplete(diskPath)
-			diskFile, err := os.Open(diskPath)
+			diskFile, err := directio.OpenFile(diskPath, os.O_RDONLY, 0644)
 			if err == nil {
 				defer diskFile.Close()
 				numOpenFull++
@@ -282,13 +283,34 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
-	f, err := os.CreateTemp(dir, "*")
-	if err != nil {
-		numError++
-		logutil.Warn("write disk cache error", zap.Any("error", err))
-		return false, nil // ignore error
+
+	try := 0
+	var f *os.File
+	for {
+		tempFilePath := filepath.Join(
+			dir,
+			fmt.Sprintf("%d.tmp", fastrand()),
+		)
+		f, err = directio.OpenFile(tempFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			if os.IsExist(err) {
+				if try++; try < 10000 {
+					continue
+				}
+				err = &os.PathError{Op: "createtemp", Path: tempFilePath, Err: os.ErrExist}
+				numError++
+				logutil.Warn("write disk cache error", zap.Any("error", err))
+				return false, nil // ignore error
+			}
+			err = &os.PathError{Op: "createtemp", Path: tempFilePath, Err: os.ErrExist}
+			numError++
+			logutil.Warn("write disk cache error", zap.Any("error", err))
+			return false, nil // ignore error
+		}
+		break
 	}
 	numCreate++
+
 	from, err := openReader(ctx)
 	if err != nil {
 		numError++
@@ -296,8 +318,9 @@ func (d *DiskCache) writeFile(
 		return false, nil // ignore error
 	}
 	defer from.Close()
+
 	var buf []byte
-	put := ioBufferPool.Get(&buf)
+	put := directioBufferPool.Get(&buf)
 	defer put.Put()
 	n, err := io.CopyBuffer(f, from, buf)
 	if err != nil {
@@ -307,6 +330,7 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
+
 	if err := f.Close(); err != nil {
 		numError++
 		logutil.Warn("write disk cache error", zap.Any("error", err))
@@ -317,10 +341,10 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
+
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
 	)
-
 	numWrite++
 	d.triggerEvict(ctx, int64(n))
 	d.fileExists.Store(diskPath, true)

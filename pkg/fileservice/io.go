@@ -70,3 +70,18 @@ var ioBufferPool = NewPool(
 	nil,
 	nil,
 )
+
+func ReadFullBuffer(r io.Reader, target []byte, buffer []byte) (n int, err error) {
+	for n < len(target) && err == nil {
+		var nn int
+		nn, err = r.Read(buffer)
+		copy(target[n:], buffer[:nn])
+		n += nn
+	}
+	if n >= len(target) {
+		err = nil
+	} else if n > 0 && err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return
+}

@@ -42,6 +42,7 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
+	github.com/ncw/directio v1.0.5-0.20220118110502-743c0ba8bd96
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
 	github.com/pierrec/lz4/v4 v4.1.17

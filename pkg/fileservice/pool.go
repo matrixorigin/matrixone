@@ -17,6 +17,8 @@ package fileservice
 import (
 	"sync/atomic"
 	_ "unsafe"
+
+	"github.com/ncw/directio"
 )
 
 type Pool[T any] struct {
@@ -99,6 +101,14 @@ var bytesPoolDefaultBlockSize = NewPool(
 	1024,
 	func() []byte {
 		return make([]byte, _DefaultBlockSize)
+	},
+	nil, nil,
+)
+
+var directioBufferPool = NewPool(
+	1024,
+	func() []byte {
+		return directio.AlignedBlock(32 * 1024)
 	},
 	nil, nil,
 )
