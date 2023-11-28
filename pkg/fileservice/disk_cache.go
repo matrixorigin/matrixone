@@ -32,12 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/ncw/directio"
 	"go.uber.org/zap"
 )
 
 type DiskCache struct {
 	path            string
 	perfCounterSets []*perfcounter.CounterSet
+	useDirectIO     bool
 
 	updatingPaths struct {
 		*sync.Cond
@@ -52,6 +54,7 @@ func NewDiskCache(
 	path string,
 	capacity int,
 	perfCounterSets []*perfcounter.CounterSet,
+	useDirectIO bool,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -77,13 +80,71 @@ func NewDiskCache(
 				return uint8(xxhash.Sum64String(key))
 			},
 		),
+
+		useDirectIO: useDirectIO,
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 
+	if err := ret.checkDirectIO(); err != nil {
+		return nil, err
+	}
+
 	ret.loadCache()
 
 	return ret, nil
+}
+
+func (d *DiskCache) checkDirectIO() error {
+	if !d.useDirectIO {
+		return nil
+	}
+
+	// check block size
+	stat, err := os.Stat(d.path)
+	if err != nil {
+		return err
+	}
+	sys, ok := stat.Sys().(*syscall.Stat_t)
+	if ok {
+		logutil.Info("using direct I/O",
+			zap.Any("block size", sys.Blksize),
+			zap.Any("align size", directIOAlignSize),
+		)
+		if directIOAlignSize%sys.Blksize != 0 ||
+			directIOAlignSize/sys.Blksize == 0 {
+			panic("bad align size")
+		}
+
+	} else {
+		// cannot get block size, do not use direct I/O
+		d.useDirectIO = false
+		return nil
+	}
+
+	// write checks
+	// if direct I/O doesn't work due to unknown reason, we just disable it
+	f, err := d.createTemp(d.path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	var buf []byte
+	put := directioBufferPool.Get(&buf)
+	defer put.Put()
+	_, err = CopyBuffer(f, bytes.NewReader(bytes.Repeat([]byte("test"), 8192)), buf)
+	if err != nil {
+		logutil.Warn("not using direct I/O",
+			zap.Error(err),
+		)
+		d.useDirectIO = false
+		return nil
+	}
+
+	return nil
 }
 
 func (d *DiskCache) loadCache() {
@@ -163,7 +224,12 @@ func (d *DiskCache) Read(
 		// entry file
 		diskPath := d.pathForIOEntry(path.File, entry)
 		d.waitUpdateComplete(diskPath)
-		diskFile, err := os.Open(diskPath)
+		var diskFile *os.File
+		if d.useDirectIO {
+			diskFile, err = directio.OpenFile(diskPath, os.O_RDONLY, 0644)
+		} else {
+			diskFile, err = os.OpenFile(diskPath, os.O_RDONLY, 0644)
+		}
 		if err == nil {
 			file = diskFile
 			defer diskFile.Close()
@@ -174,7 +240,12 @@ func (d *DiskCache) Read(
 			// full file
 			diskPath = d.pathForFile(path.File)
 			d.waitUpdateComplete(diskPath)
-			diskFile, err := os.Open(diskPath)
+			var diskFile *os.File
+			if d.useDirectIO {
+				diskFile, err = directio.OpenFile(diskPath, os.O_RDONLY, 0644)
+			} else {
+				diskFile, err = os.OpenFile(diskPath, os.O_RDONLY, 0644)
+			}
 			if err == nil {
 				defer diskFile.Close()
 				numOpenFull++
@@ -314,13 +385,15 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
-	f, err := os.CreateTemp(dir, "*")
+
+	f, err := d.createTemp(dir)
 	if err != nil {
 		numError++
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	numCreate++
+
 	from, err := openReader(ctx)
 	if err != nil {
 		numError++
@@ -328,10 +401,11 @@ func (d *DiskCache) writeFile(
 		return false, nil // ignore error
 	}
 	defer from.Close()
+
 	var buf []byte
-	put := ioBufferPool.Get(&buf)
+	put := directioBufferPool.Get(&buf)
 	defer put.Put()
-	_, err = io.CopyBuffer(f, from, buf)
+	_, err = CopyBuffer(f, from, buf)
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
@@ -365,16 +439,46 @@ func (d *DiskCache) writeFile(
 		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
+
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
 	)
-
 	numWrite++
 
 	return true, nil
 }
 
 func (d *DiskCache) Flush() {
+}
+
+func (d *DiskCache) createTemp(dir string) (*os.File, error) {
+	try := 0
+	var f *os.File
+	var err error
+	for {
+		tempFilePath := filepath.Join(
+			dir,
+			fmt.Sprintf("%d.tmp", fastrand()),
+		)
+		if d.useDirectIO {
+			f, err = directio.OpenFile(tempFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		} else {
+			f, err = os.OpenFile(tempFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		}
+		if err != nil {
+			if os.IsExist(err) {
+				if try++; try < 10000 {
+					continue
+				}
+				err = &os.PathError{Op: "createtemp", Path: tempFilePath, Err: os.ErrExist}
+				return nil, err
+			}
+			err = &os.PathError{Op: "createtemp", Path: tempFilePath, Err: os.ErrExist}
+			return nil, err
+		}
+		break
+	}
+	return f, err
 }
 
 const cacheFileSuffix = ".mofscache"

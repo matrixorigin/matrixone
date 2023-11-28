@@ -42,7 +42,10 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 		i.Data = make([]byte, i.Size)
 	}
 
-	n, err := io.ReadFull(r, i.Data)
+	var buf []byte
+	put := directioBufferPool.Get(&buf)
+	defer put.Put()
+	n, err := ReadFullBuffer(r, i.Data, buf)
 	if err != nil {
 		return err
 	}

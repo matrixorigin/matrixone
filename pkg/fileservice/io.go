@@ -17,6 +17,8 @@ package fileservice
 import (
 	"io"
 	"sync/atomic"
+
+	"github.com/ncw/directio"
 )
 
 type readCloser struct {
@@ -69,4 +71,73 @@ var ioBufferPool = NewPool(
 	},
 	nil,
 	nil,
+)
+
+// from std io.readFullBuffer
+func ReadFullBuffer(r io.Reader, target []byte, buffer []byte) (n int, err error) {
+	for n < len(target) && err == nil {
+		var nn int
+		nn, err = r.Read(buffer)
+		copy(target[n:], buffer[:nn])
+		n += nn
+	}
+	if n >= len(target) {
+		err = nil
+	} else if n > 0 && err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return
+}
+
+// from std io.CopyBuffer without CopyFrom and WriteTo to avoid using not-aligned buffer in direct I/O
+func CopyBuffer(dst io.Writer, src io.Reader, buf []byte) (written int64, err error) {
+	if buf == nil {
+		size := 32 * 1024
+		if l, ok := src.(*io.LimitedReader); ok && int64(size) > l.N {
+			if l.N < 1 {
+				size = 1
+			} else {
+				size = int(l.N)
+			}
+		}
+		buf = make([]byte, size)
+	}
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = io.ErrShortWrite
+				}
+			}
+			written += int64(nw)
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+	return written, err
+}
+
+const directIOAlignSize = 8 * 1024
+
+var directioBufferPool = NewPool(
+	1024,
+	func() []byte {
+		return directio.AlignedBlock(directIOAlignSize)
+	},
+	nil, nil,
 )
