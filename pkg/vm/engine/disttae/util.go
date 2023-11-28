@@ -1344,12 +1344,15 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.Bloc
 // the next argument decides whether continue onBlock on the next stats or exit foreach completely.
 func ForeachBlkInObjStatsList(
 	next bool,
-	onBlock func(blk *catalog.BlockInfo) bool, objects ...objectio.ObjectStats) {
+	dataMeta objectio.ObjectDataMeta,
+	onBlock func(blk *catalog.BlockInfo) bool,
+	objects ...objectio.ObjectStats,
+) {
 	stop := false
 	objCnt := len(objects)
 
 	for idx := 0; idx < objCnt && !stop; idx++ {
-		iter := NewStatsBlkIter(&objects[idx])
+		iter := NewStatsBlkIter(&objects[idx], dataMeta)
 		for iter.Next() {
 			blk := iter.Entry()
 			if !onBlock(blk) {
@@ -1372,9 +1375,10 @@ type StatsBlkIter struct {
 	cur        int
 	accRows    uint32
 	curBlkRows uint32
+	meta       objectio.ObjectDataMeta
 }
 
-func NewStatsBlkIter(stats *objectio.ObjectStats) *StatsBlkIter {
+func NewStatsBlkIter(stats *objectio.ObjectStats, meta objectio.ObjectDataMeta) *StatsBlkIter {
 	return &StatsBlkIter{
 		name:       stats.ObjectName(),
 		blkCnt:     uint16(stats.BlkCnt()),
@@ -1383,6 +1387,7 @@ func NewStatsBlkIter(stats *objectio.ObjectStats) *StatsBlkIter {
 		accRows:    0,
 		totalRows:  stats.Rows(),
 		curBlkRows: options.DefaultBlockMaxRows,
+		meta:       meta,
 	}
 }
 
@@ -1400,8 +1405,12 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 	}
 
 	// assume that all blks have DefaultBlockMaxRows, except the last one
-	if i.cur == int(i.blkCnt-1) {
-		i.curBlkRows = i.totalRows - i.accRows
+	if i.meta.IsEmpty() {
+		if i.cur == int(i.blkCnt-1) {
+			i.curBlkRows = i.totalRows - i.accRows
+		}
+	} else {
+		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
 	}
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))

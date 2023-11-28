@@ -17,11 +17,12 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math/rand"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1204,7 +1205,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -1212,7 +1213,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -1220,7 +1221,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)
@@ -1233,7 +1234,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)

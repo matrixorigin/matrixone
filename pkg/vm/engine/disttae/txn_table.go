@@ -675,7 +675,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
 			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -784,7 +784,7 @@ func (tbl *txnTable) rangesOnePart(
 		//     2. if skipped, skip this block
 		//     3. if not skipped, eval expr on the block
 
-		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
 			skipBlk := false
 
 			if auxIdCnt > 0 {
@@ -996,7 +996,7 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+			ForeachBlkInObjStatsList(false, meta, func(blk *catalog.BlockInfo) bool {
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
