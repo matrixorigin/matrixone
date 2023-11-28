@@ -303,3 +303,6 @@ with cte_1 as(select * from cte01 where col2 = 'hfjsa') select col2 from cte_1 w
 with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2 where col2 = '&**())_';
 drop table cte01;
 
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
+drop table if exists agg01;

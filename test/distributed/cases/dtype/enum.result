@@ -500,3 +500,7 @@ with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2
 col2
 &**())_
 drop table cte01;
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
+not supported: ENUM column 'col2' cannot be in primary key
+drop table if exists agg01;
