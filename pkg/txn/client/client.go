@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	gotrace "runtime/trace"
 	"sync"
@@ -168,6 +169,26 @@ type txnClient struct {
 		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
 		waitActiveTxns []*txnOperator
+	}
+}
+
+func (client *txnClient) GetState() TxnState {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	at := make([]string, 0, len(client.mu.activeTxns))
+	for k := range client.mu.activeTxns {
+		at = append(at, hex.EncodeToString([]byte(k)))
+	}
+	wt := make([]string, 0, len(client.mu.waitActiveTxns))
+	for _, v := range client.mu.waitActiveTxns {
+		wt = append(wt, hex.EncodeToString(v.txnID))
+	}
+	return TxnState{
+		State:          int(client.mu.state),
+		Users:          client.mu.users,
+		ActiveTxns:     at,
+		WaitActiveTxns: wt,
+		LatestTS:       client.timestampWaiter.LatestTS(),
 	}
 }
 
@@ -408,7 +429,14 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 			client.addActiveTxnLocked(op)
 			return nil
 		}
-		op.waiter = newWaiter(timestamp.Timestamp{})
+		var cancelC chan struct{}
+		if client.timestampWaiter != nil {
+			cancelC = client.timestampWaiter.CancelC()
+			if cancelC == nil {
+				return moerr.NewWaiterPausedNoCtx()
+			}
+		}
+		op.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
 		op.waiter.ref()
 		client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
 		return nil
@@ -487,9 +515,8 @@ func (client *txnClient) Resume() {
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for key, op := range client.mu.activeTxns {
+	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
-		delete(client.mu.activeTxns, key)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
@@ -498,23 +525,24 @@ func (client *txnClient) AbortAllRunningTxn() {
 	if client.timestampWaiter != nil {
 		// Cancel all waiters, means that all waiters do not need to wait for
 		// the newer timestamp from logtail consumer.
-		client.timestampWaiter.Cancel()
+		client.timestampWaiter.Pause()
 	}
 
 	for _, op := range ops {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 	}
 	for _, op := range waitOps {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 		op.notifyActive()
+	}
+
+	if client.timestampWaiter != nil {
+		// After rollback all transactions, resume the timestamp waiter channel.
+		client.timestampWaiter.Resume()
 	}
 }
 

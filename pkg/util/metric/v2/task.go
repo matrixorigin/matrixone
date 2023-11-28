@@ -25,7 +25,7 @@ var (
 			Subsystem: "task",
 			Name:      "short_duration_seconds",
 			Help:      "Bucketed histogram of short tn task execute duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 
 	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
@@ -41,7 +41,28 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
 		}, []string{"type"})
 
+	taskBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "hist_bytes",
+			Help:      "Bucketed histogram of task result bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		}, []string{"type"})
+
+	taskCountHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "hist_total",
+			Help:      "Bucketed histogram of task result count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
+		}, []string{"type"})
+
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
+	TaskLoadMemDeletesPerBlockHistogram  = taskCountHistogram.WithLabelValues("load_mem_deletes_per_block")
+	TaskFlushDeletesCountHistogram       = taskCountHistogram.WithLabelValues("flush_deletes_count")
+	TaskFlushDeletesSizeHistogram        = taskBytesHistogram.WithLabelValues("flush_deletes_size")
 )
 
 var (
@@ -67,4 +88,29 @@ var (
 	TasKMergedSizeCounter     = taskGeneratedStuffCounter.WithLabelValues("merged_size")
 	TaskGCkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("gckp_load_object")
 	TaskICkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("ickp_load_object")
+
+	taskSelectivityCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "selectivity",
+			Help:      "Selectivity counter for read filter, block etc.",
+		}, []string{"type"})
+
+	TaskSelReadFilterTotal = taskSelectivityCounter.WithLabelValues("readfilter_total")
+	TaskSelReadFilterHit   = taskSelectivityCounter.WithLabelValues("readfilter_hit")
+	TaskSelBlockTotal      = taskSelectivityCounter.WithLabelValues("block_total")
+	TaskSelBlockHit        = taskSelectivityCounter.WithLabelValues("block_hit")
+	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
+	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
+)
+
+var (
+	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_transfer_page_size",
+			Help:      "Size of merge generated transfer page",
+		})
 )

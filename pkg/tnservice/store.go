@@ -17,9 +17,6 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"time"
 
@@ -28,19 +25,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -97,7 +97,6 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 }
 
 type store struct {
-	perfCounter         *perfcounter.CounterSet
 	cfg                 *Config
 	rt                  runtime.Runtime
 	sender              rpc.TxnSender
@@ -107,7 +106,6 @@ type store struct {
 	metadataFileService fileservice.ReplaceableFileService
 	lockTableAllocator  lockservice.LockTableAllocator
 	moCluster           clusterservice.MOCluster
-	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
@@ -140,7 +138,6 @@ type store struct {
 
 // NewService create TN Service
 func NewService(
-	perfCounter *perfcounter.CounterSet,
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
@@ -166,7 +163,6 @@ func NewService(
 	blockio.Start()
 
 	s := &store{
-		perfCounter:         perfCounter,
 		cfg:                 cfg,
 		rt:                  rt,
 		fileService:         fileService,
@@ -204,14 +200,15 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
-	if err := s.initCtlService(); err != nil {
-		return nil, err
-	}
 
 	s.initQueryService(cfg.InStandalone)
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
+	s.setupStatusServer()
+
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
+
 	return s, nil
 }
 
@@ -220,9 +217,6 @@ func (s *store) Start() error {
 		return err
 	}
 	if err := s.server.Start(); err != nil {
-		return err
-	}
-	if err := s.ctlservice.Start(); err != nil {
 		return err
 	}
 	if s.queryService != nil {
@@ -238,7 +232,6 @@ func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
 	err := errors.Join(
-		s.ctlservice.Close(),
 		s.hakeeperClient.Close(),
 		s.sender.Close(),
 		s.server.Close(),
@@ -311,7 +304,6 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				ctx = perfcounter.WithCounterSet(ctx, s.perfCounter)
 				storage, err := s.createTxnStorage(ctx, shard)
 				if err != nil {
 					r.logger.Error("start DNShard failed",
@@ -442,7 +434,7 @@ func (s *store) initQueryService(inStandalone bool) {
 	}
 	var err error
 	s.queryService, err = queryservice.NewQueryService(s.cfg.UUID,
-		s.queryServiceListenAddr(), s.cfg.RPC, nil)
+		s.queryServiceListenAddr(), s.cfg.RPC)
 	if err != nil {
 		panic(err)
 	}
@@ -450,9 +442,9 @@ func (s *store) initQueryService(inStandalone bool) {
 }
 
 func (s *store) initQueryCommandHandler() {
-	if s.queryService != nil {
-		s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
-	}
+	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetProtocolVersion, s.handleGetProtocolVersion, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_SetProtocolVersion, s.handleSetProtocolVersion, false)
 }
 
 func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -466,4 +458,38 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 	})
 
 	return nil
+}
+
+func (s *store) handleGetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	version, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		resp.WrapError(moerr.NewInternalError(ctx, "protocol version not found"))
+		return nil
+	}
+	resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
+		Version: version.(string),
+	}
+	return nil
+}
+
+func (s *store) handleSetProtocolVersion(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.SetProtocolVersion == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, req.SetProtocolVersion.Version)
+	resp.SetProtocolVersion = &query.SetProtocolVersionResponse{
+		Version: req.SetProtocolVersion.Version,
+	}
+	return nil
+}
+
+func (s *store) setupStatusServer() {
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetHAKeeperClient(s.hakeeperClient)
+	}
+
 }

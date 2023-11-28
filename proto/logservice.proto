@@ -40,7 +40,7 @@ message CNStore {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
+  reserved 5;
   metadata.CNRole Role               = 6;
   uint64          Tick               = 7;
   NodeState       State              = 8;
@@ -48,6 +48,8 @@ message CNStore {
   metadata.WorkState WorkState       = 10;
   string          QueryAddress       = 11;
   ConfigData ConfigData = 12;
+  Resource Resource = 13 [(gogoproto.nullable) = false];
+  int64 UpTime = 14;
 }
 
 message TNStore {
@@ -62,10 +64,10 @@ message TNStore {
   string LogtailServerAddress = 6;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
-  string          CtlAddress         = 8;
+  reserved 8;
   ConfigData ConfigData = 9;
   // QueryAddress is the address of the queryservice on tn
-  string          QueryAddress       = 10;
+  string QueryAddress = 10;
 }
 
 message LogStore {
@@ -104,13 +106,20 @@ message LogReplicaInfo {
   uint64 ReplicaID = 2;
 }
 
+message Resource {
+  uint64 CPUTotal = 1;
+  double CPUAvailable = 2;
+  uint64 MemTotal = 3;
+  uint64 MemAvailable = 4;
+}
+
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
   string          UUID               = 1;
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
+  reserved 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
@@ -118,8 +127,8 @@ message CNStoreHeartbeat {
   string          GossipAddress      = 10;
   bool            GossipJoined       = 11;
   ConfigData      ConfigData         = 12;
+  Resource        Resource           = 13 [(gogoproto.nullable) = false];
 }
-
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
 message CNAllocateID {
@@ -169,15 +178,14 @@ message TNStoreHeartbeat {
   // TN store.
   repeated TNShardInfo Shards = 3 [(gogoproto.nullable) = false];
   bool            TaskServiceCreated = 4;
-
   // Server address for logtail push model
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  string          CtlAddress         = 7;
+  reserved 7;
   ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
-  string          QueryAddress       = 9;
+  string QueryAddress = 9;
 };
 
 message RSMState {
@@ -479,7 +487,7 @@ message CNStoreInfo {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
+  reserved 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
   map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
@@ -488,6 +496,8 @@ message CNStoreInfo {
   string          GossipAddress      = 11;
   bool            GossipJoined       = 12;
   ConfigData      ConfigData         = 13;
+  Resource        Resource           = 14 [(gogoproto.nullable) = false];
+  int64           UpTime             = 15;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -509,7 +519,7 @@ message TNStoreInfo {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  string CtlAddress         = 7;
+  reserved 7;
   ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
   string          QueryAddress       = 9;
@@ -543,6 +553,7 @@ message ClusterDetails {
   repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
+  repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -599,6 +610,16 @@ message CheckerState {
   uint64 NextId                         = 9;
   map<string, uint64> NextIDByKey       = 10;
   ProxyState ProxyState = 11 [(gogoproto.nullable) = false];
+  Resource Resource = 12 [(gogoproto.nullable) = false];
+}
+
+message DeletedStore {
+  string UUID = 1;
+  // StoreType indicates the type of the store: CN, TN or proxy.
+  string StoreType = 2;
+  string Address = 3;
+  int64 UpTime = 4;
+  int64 DownTime = 5;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -620,6 +641,7 @@ message HAKeeperRSMState {
   ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
   TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
   ProxyState ProxyState         = 15 [(gogoproto.nullable) = false];
+  repeated DeletedStore DeletedStores = 16 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

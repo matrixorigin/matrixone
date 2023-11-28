@@ -20,10 +20,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
@@ -397,6 +399,11 @@ func (mp *MPool) destroy() {
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
 func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMpoolNewDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
@@ -482,6 +489,11 @@ func (mp *MPool) CurrNB() int64 {
 }
 
 func DeleteMPool(mp *MPool) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMpoolDeleteDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if mp == nil {
 		return
 	}
@@ -495,6 +507,7 @@ var nextPool int64
 var globalCap int64
 var globalStats MPoolStats
 var globalPools sync.Map
+var crossPoolFreeCounter atomic.Int64
 
 func InitCap(cap int64) {
 	if cap < GB {
@@ -502,6 +515,10 @@ func InitCap(cap int64) {
 	} else {
 		globalCap = cap
 	}
+}
+
+func TotalCrossPoolFreeCounter() int64 {
+	return crossPoolFreeCounter.Load()
 }
 
 func GlobalStats() *MPoolStats {
@@ -524,6 +541,11 @@ func sizeToIdx(size int) int {
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMpoolAllocDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
 		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
@@ -588,6 +610,11 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 }
 
 func (mp *MPool) Free(bs []byte) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMpoolFreeDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if bs == nil || cap(bs) == 0 {
 		return
 	}
@@ -604,6 +631,7 @@ func (mp *MPool) Free(bs []byte) {
 
 	// if cross pool free.
 	if pHdr.poolId != mp.id {
+		crossPoolFreeCounter.Add(1)
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
 			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))

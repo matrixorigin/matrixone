@@ -17,7 +17,9 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,13 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 
 	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
@@ -41,57 +43,56 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
-	bat := proc.InputBatch()
-	if bat == nil {
-		return process.ExecStop, nil
-	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
 	}
 
-	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+		return result, nil
+	}
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	arg.buf = result.Batch
+
+	anal.Input(arg.buf, arg.info.IsFirst)
 
 	var sels []int64
-	for i := range ap.ctr.executors {
-		if bat.IsEmpty() {
+	for i := range arg.ctr.executors {
+		if arg.buf.IsEmpty() {
 			break
 		}
 
-		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
+		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf})
 		if err != nil {
-			bat.Clean(proc.Mp())
-			proc.SetInputBatch(nil)
-			return process.ExecNext, err
+			result.Batch = nil
+			return result, err
 		}
 
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
-			return process.ExecNext, moerr.NewOOM(proc.Ctx)
+			return result, moerr.NewOOM(proc.Ctx)
 		}
 		anal.Alloc(int64(vec.Size()))
 		if !vec.GetType().IsBoolean() {
-			return process.ExecNext, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			return result, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
 		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				bat, err = tryDupBatch(proc, bat)
+				arg.buf, err = tryDupBatch(proc, arg.buf)
 				if err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
-				bat.Shrink(nil)
+				arg.buf.Shrink(nil)
 			}
 		} else {
 			if sels == nil {
@@ -115,11 +116,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (s
 					}
 				}
 			}
-			bat, err = tryDupBatch(proc, bat)
+			arg.buf, err = tryDupBatch(proc, arg.buf)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
-			bat.Shrink(sels)
+			arg.buf.Shrink(sels)
 		}
 	}
 
@@ -129,14 +130,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (s
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
 	// but not use the IsEnd flag to do the clean work.
-	if ap.IsEnd {
-		bat.Clean(proc.Mp())
-		proc.SetInputBatch(nil)
+	if arg.IsEnd {
+		result.Batch = nil
 	} else {
-		anal.Output(bat, isLast)
-		proc.SetInputBatch(bat)
+		anal.Output(arg.buf, arg.info.IsLast)
+		if arg.buf == result.Batch {
+			arg.buf = nil
+		} else {
+			result.Batch = arg.buf
+		}
 	}
-	return process.ExecNext, nil
+	return result, nil
 }
 
 func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
@@ -148,6 +152,6 @@ func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) 
 	if err != nil {
 		return nil, err
 	}
-	proc.PutBatch(bat)
+	// proc.PutBatch(bat)
 	return newBat, nil
 }

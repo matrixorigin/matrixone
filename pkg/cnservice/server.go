@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -106,9 +107,6 @@ func NewService(
 	}
 	srv.initQueryService()
 
-	for _, opt := range options {
-		opt(srv)
-	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
@@ -209,8 +207,6 @@ func NewService(
 		opt(srv)
 	}
 
-	srv.initCtlService()
-
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
 		srv.pipelineServiceServiceAddr(),
@@ -218,6 +214,8 @@ func NewService(
 	if err != nil {
 		panic(err)
 	}
+
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
 
 	return srv, nil
 }
@@ -227,10 +225,6 @@ func (s *service) Start() error {
 	s.initSqlWriterFactory()
 
 	if err := s.queryService.Start(); err != nil {
-		return err
-	}
-
-	if err := s.ctlservice.Start(); err != nil {
 		return err
 	}
 
@@ -323,11 +317,6 @@ func (s *service) stopRPCs() error {
 			return err
 		}
 	}
-	if s.ctlservice != nil {
-		if err := s.ctlservice.Close(); err != nil {
-			return err
-		}
-	}
 	if s.queryService != nil {
 		if err := s.queryService.Close(); err != nil {
 			return err
@@ -360,9 +349,9 @@ func (s *service) handleRequest(
 		panic("cn server receive a message with unexpected type")
 	}
 	switch msg.GetSid() {
-	case pipeline.WaitingNext:
+	case pipeline.Status_WaitingNext:
 		return handleWaitingNextMsg(ctx, req, cs)
-	case pipeline.Last:
+	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
 			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
 				return err
@@ -404,7 +393,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm, s)
+	s.createMOServer(cancelMoServerCtx, pu, aicm)
 	return nil
 }
 
@@ -442,11 +431,10 @@ func (s *service) createMOServer(
 	inputCtx context.Context,
 	pu *config.ParameterUnit,
 	aicm *defines.AutoIncrCacheManager,
-	baseService frontend.BaseService,
 ) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, baseService)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, s)
 }
 
 func (s *service) runMoServer() error {
@@ -471,6 +459,11 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		s._hakeeperClient = client
 		s.initClusterService()
 		s.initLockService()
+
+		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+		if ok {
+			ss.(*status.Server).SetHAKeeperClient(client)
+		}
 	})
 	client = s._hakeeperClient
 	return
@@ -543,7 +536,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				panic("should never happen")
+				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
@@ -635,7 +628,7 @@ func (s *service) initLockService() {
 func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
-	case pipeline.PipelineMessage:
+	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {

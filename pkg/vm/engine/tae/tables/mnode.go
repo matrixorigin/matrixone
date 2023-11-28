@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -132,13 +133,19 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
-func (node *memoryNode) Foreach(readSchema *catalog.Schema, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
+func (node *memoryNode) Foreach(
+	readSchema *catalog.Schema,
+	colIdx int,
+	op func(v any, isNull bool, row int) error,
+	sels []uint32,
+	mp *mpool.MPool,
+) error {
 	if node.data == nil {
 		return nil
 	}
 	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[colIdx].SeqNum]
 	if !ok {
-		v := containers.FillConstVector(int(node.data.Length()), readSchema.ColDefs[colIdx].Type, nil)
+		v := containers.NewConstNullVector(readSchema.ColDefs[colIdx].Type, int(node.data.Length()), mp)
 		for _, row := range sels {
 			val := v.Get(int(row))
 			isNull := v.IsNull(int(row))
@@ -183,13 +190,14 @@ func (node *memoryNode) GetColumnDataWindow(
 	from uint32,
 	to uint32,
 	col int,
+	mp *mpool.MPool,
 ) (vec containers.Vector, err error) {
 	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[col].SeqNum]
 	if !ok {
-		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil), nil
+		return containers.NewConstNullVector(readSchema.ColDefs[col].Type, int(to-from), mp), nil
 	}
 	if node.data == nil {
-		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx])
+		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx], mp)
 		return
 	}
 	data := node.data.Vecs[idx]
@@ -199,11 +207,12 @@ func (node *memoryNode) GetColumnDataWindow(
 }
 
 func (node *memoryNode) GetDataWindowOnWriteSchema(
-	from, to uint32) (bat *containers.BatchWithVersion, err error) {
+	from, to uint32, mp *mpool.MPool,
+) (bat *containers.BatchWithVersion, err error) {
 	if node.data == nil {
 		schema := node.writeSchema
 		opts := containers.Options{
-			Allocator: common.DefaultAllocator,
+			Allocator: mp,
 		}
 		inner := containers.BuildBatch(
 			schema.AllNames(), schema.AllTypes(), opts,
@@ -230,11 +239,12 @@ func (node *memoryNode) GetDataWindow(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	from, to uint32,
+	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
 	if node.data == nil {
 		schema := node.writeSchema
 		opts := containers.Options{
-			Allocator: common.DefaultAllocator,
+			Allocator: mp,
 		}
 		bat = containers.BuildBatch(
 			schema.AllNames(), schema.AllTypes(), opts,
@@ -252,7 +262,7 @@ func (node *memoryNode) GetDataWindow(
 		idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 		var vec containers.Vector
 		if !ok {
-			vec = containers.FillConstVector(int(to-from), colDef.Type, nil)
+			vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
 		} else {
 			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}
@@ -294,7 +304,7 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	err = node.mustData().Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
+	col.Free(common.MutMemAllocator)
 	return
 }
 
@@ -315,6 +325,7 @@ func (node *memoryNode) GetRowByFilter(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	filter *handle.Filter,
+	mp *mpool.MPool,
 ) (row uint32, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
@@ -468,12 +479,12 @@ func (node *memoryNode) checkConflictAandVisibility(
 }
 
 func (node *memoryNode) CollectAppendInRange(
-	start, end types.TS, withAborted bool,
+	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
 	node.block.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		node.block.mvcc.CollectAppendLocked(start, end)
-	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow)
+		node.block.mvcc.CollectAppendLocked(start, end, mp)
+	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow, mp)
 	if err != nil {
 		node.block.RUnlock()
 		return nil, err
@@ -486,6 +497,7 @@ func (node *memoryNode) CollectAppendInRange(
 		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
 		batWithVer.AddVector(catalog.AttrAborted, abortVec)
 	} else {
+		abortVec.Close()
 		batWithVer.Deletes = abortedMap
 		batWithVer.Compact()
 	}
@@ -499,6 +511,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
+	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
@@ -507,7 +520,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 		// blk.RUnlock()
 		return
 	}
-	data, err := node.GetDataWindow(readSchema, colIdxes, 0, maxRow)
+	data, err := node.GetDataWindow(readSchema, colIdxes, 0, maxRow, mp)
 	if err != nil {
 		return
 	}
@@ -539,6 +552,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	readSchema *catalog.Schema,
 	col int,
 	skipDeletes bool,
+	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
@@ -554,6 +568,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		0,
 		maxRow,
 		col,
+		mp,
 	); err != nil {
 		return
 	}
@@ -582,6 +597,7 @@ func (node *memoryNode) getInMemoryValue(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	row, col int,
+	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
 	node.block.RLock()
 	deleted, err := node.block.mvcc.IsDeletedLocked(uint32(row), txn, node.block.RWMutex)
@@ -593,7 +609,7 @@ func (node *memoryNode) getInMemoryValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view, err := node.resolveInMemoryColumnData(txn, readSchema, col, true)
+	view, err := node.resolveInMemoryColumnData(txn, readSchema, col, true, mp)
 	if err != nil {
 		return
 	}

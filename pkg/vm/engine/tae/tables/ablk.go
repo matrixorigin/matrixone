@@ -17,10 +17,10 @@ package tables
 import (
 	"context"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -121,13 +121,16 @@ func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
+	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
-		false)
+		false,
+		mp,
+	)
 }
 
 func (blk *ablock) GetColumnDataById(
@@ -135,13 +138,16 @@ func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
+	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	return blk.resolveColumnData(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		col,
-		false)
+		false,
+		mp,
+	)
 }
 
 func (blk *ablock) resolveColumnDatas(
@@ -149,13 +155,15 @@ func (blk *ablock) resolveColumnDatas(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
-	skipDeletes bool) (view *containers.BlockView, err error) {
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnDatas(
-			txn, readSchema, colIdxes, skipDeletes,
+			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
@@ -164,6 +172,7 @@ func (blk *ablock) resolveColumnDatas(
 			readSchema,
 			colIdxes,
 			skipDeletes,
+			mp,
 		)
 	}
 }
@@ -197,13 +206,15 @@ func (blk *ablock) resolveColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
-	skipDeletes bool) (view *containers.ColumnView, err error) {
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (view *containers.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnData(
-			txn, readSchema, col, skipDeletes,
+			txn, readSchema, col, skipDeletes, mp,
 		)
 	} else {
 		return blk.ResolvePersistedColumnData(
@@ -212,6 +223,7 @@ func (blk *ablock) resolveColumnData(
 			readSchema,
 			col,
 			skipDeletes,
+			mp,
 		)
 	}
 }
@@ -220,15 +232,17 @@ func (blk *ablock) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
-	row, col int) (v any, isNull bool, err error) {
+	row, col int,
+	mp *mpool.MPool,
+) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return node.MustMNode().getInMemoryValue(txn, schema, row, col)
+		return node.MustMNode().getInMemoryValue(txn, schema, row, col, mp)
 	} else {
 		return blk.getPersistedValue(
-			ctx, txn, schema, row, col, true,
+			ctx, txn, schema, row, col, true, mp,
 		)
 	}
 }
@@ -237,7 +251,9 @@ func (blk *ablock) GetValue(
 func (blk *ablock) GetByFilter(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
-	filter *handle.Filter) (offset uint32, err error) {
+	filter *handle.Filter,
+	mp *mpool.MPool,
+) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
@@ -249,7 +265,7 @@ func (blk *ablock) GetByFilter(
 
 	node := blk.PinNode()
 	defer node.Unref()
-	return node.GetRowByFilter(ctx, txn, filter)
+	return node.GetRowByFilter(ctx, txn, filter, mp)
 }
 
 func (blk *ablock) BatchDedup(
@@ -260,6 +276,7 @@ func (blk *ablock) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	bf objectio.BloomFilter,
+	mp *mpool.MPool,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
@@ -288,16 +305,19 @@ func (blk *ablock) BatchDedup(
 			rowmask,
 			true,
 			bf,
+			mp,
 		)
 	}
 }
 
 func (blk *ablock) CollectAppendInRange(
 	start, end types.TS,
-	withAborted bool) (*containers.BatchWithVersion, error) {
+	withAborted bool,
+	mp *mpool.MPool,
+) (*containers.BatchWithVersion, error) {
 	node := blk.PinNode()
 	defer node.Unref()
-	return node.CollectAppendInRange(start, end, withAborted)
+	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
 func (blk *ablock) estimateRawScore() (score int, dropped bool) {
@@ -336,10 +356,6 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 func (blk *ablock) RunCalibration() (score int) {
 	score, _ = blk.estimateRawScore()
 	return
-}
-
-func (blk *ablock) EstimateScore(ttl time.Duration, force bool) int {
-	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 
 func (blk *ablock) OnReplayAppend(node txnif.AppendNode) (err error) {

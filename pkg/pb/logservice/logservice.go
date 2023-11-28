@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -75,6 +76,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	if !ok {
 		storeInfo = CNStoreInfo{}
 		storeInfo.Labels = make(map[string]metadata.LabelList)
+		storeInfo.UpTime = time.Now().UnixNano()
 	}
 	if storeInfo.WorkState == metadata.WorkState_Unknown { // set init value
 		v, ok := metadata.WorkState_value[metadata.ToTitle(hb.InitWorkState)]
@@ -88,7 +90,6 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.SQLAddress = hb.SQLAddress
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
-	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	storeInfo.QueryAddress = hb.QueryAddress
@@ -97,6 +98,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
+	storeInfo.Resource = hb.Resource
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -164,7 +166,6 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.LogtailServerAddress = hb.LogtailServerAddress
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
-	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
@@ -242,9 +243,10 @@ func (m *ScheduleCommand) LogString() string {
 	}
 
 	serviceType := map[ServiceType]string{
-		LogService: "L",
-		TNService:  "D",
-		CNService:  "C",
+		LogService:   "L",
+		TNService:    "D",
+		CNService:    "C",
+		ProxyService: "P",
 	}[m.ServiceType]
 
 	target := c(m.UUID)
@@ -253,6 +255,15 @@ func (m *ScheduleCommand) LogString() string {
 	}
 	if m.CreateTaskService != nil {
 		return fmt.Sprintf("%s/CreateTask %s", serviceType, target)
+	}
+	if m.DeleteCNStore != nil {
+		return fmt.Sprintf("%s/DeleteCNStore %s", serviceType, target)
+	}
+	if m.JoinGossipCluster != nil {
+		return fmt.Sprintf("%s/JoinGossipCluster %s", serviceType, target)
+	}
+	if m.DeleteProxyStore != nil {
+		return fmt.Sprintf("%s/DeleteProxyStore %s", serviceType, target)
 	}
 	if m.ConfigChange == nil {
 		return fmt.Sprintf("%s/unknown command %s", serviceType, m.String())

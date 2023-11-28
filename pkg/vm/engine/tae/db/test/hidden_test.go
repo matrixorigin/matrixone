@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
@@ -81,7 +82,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		blk := testutil.GetOneBlock(rel)
-		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -123,7 +124,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
+			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -150,8 +151,9 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	{
-		seg := segMeta.GetSegmentData()
-		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+		factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(
+			segMeta, tae.Runtime,
+		)
 		assert.NoError(t, err)
 		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.NoError(t, err)
@@ -164,7 +166,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
+			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -216,7 +218,7 @@ func TestHidden2(t *testing.T) {
 		blk := testutil.GetOneBlock(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
@@ -238,7 +240,7 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			view.ApplyDeletes()
@@ -253,7 +255,7 @@ func TestHidden2(t *testing.T) {
 		blk := testutil.GetOneBlock(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
@@ -313,14 +315,14 @@ func TestHidden2(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeSegmentIt()
-		segs := make([]data.Segment, 0)
+		segs := make([]*catalog.SegmentEntry, 0)
 		for it.Valid() {
-			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry).GetSegmentData()
+			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
 			segs = append(segs, seg)
 			it.Next()
 		}
 		for _, seg := range segs {
-			factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+			factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(seg, tae.Runtime)
 			assert.NoError(t, err)
 			if factory == nil {
 				continue
@@ -340,7 +342,7 @@ func TestHidden2(t *testing.T) {
 		rows := 0
 		for it.Valid() {
 			blk := it.GetBlock()
-			hidden, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx)
+			hidden, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer hidden.Close()
 			hidden.ApplyDeletes()

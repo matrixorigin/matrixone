@@ -15,6 +15,10 @@
 package mergesort
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -48,6 +52,7 @@ func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret 
 		if v.isNull {
 			col.Update(i, nil, true)
 		} else {
+			// FIXME: memory waste for varlen type
 			col.Update(i, v.data, false)
 		}
 	}
@@ -132,25 +137,122 @@ func Shuffle(
 	return ret
 }
 
-func Multiplex(
-	col []containers.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+func multiplexVarlen(
+	cols []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
 ) (ret []containers.Vector) {
 	ret = make([]containers.Vector, len(toLayout))
 	cursors := make([]int, len(fromLayout))
 
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = pool.GetVector(col[0].GetType())
+		ret[i] = pool.GetVector(cols[0].GetType())
 		ret[i].PreExtend(int(toLayout[i]))
+		vec := ret[i].GetDownstreamVector()
+		mp := ret[i].GetAllocator()
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			if col[s].IsNull(cursors[s]) {
-				ret[i].Append(nil, true)
+			if cols[s].IsNull(uint64(cursors[s])) {
+				vector.AppendBytes(vec, nil, true, mp)
 			} else {
-				ret[i].Append(col[s].Get(cursors[s]), false)
+				vector.AppendBytes(vec, cols[s].GetBytesAt(cursors[s]), false, mp)
 			}
 			cursors[s]++
 			k++
+		}
+	}
+
+	return
+}
+
+func multiplexFixed[T any](
+	cols []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
+	ret = make([]containers.Vector, len(toLayout))
+	cursors := make([]int, len(fromLayout))
+
+	k := 0
+	var nullVal T
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = pool.GetVector(cols[0].GetType())
+		ret[i].PreExtend(int(toLayout[i]))
+		vec := ret[i].GetDownstreamVector()
+		mp := ret[i].GetAllocator()
+		for j := 0; j < int(toLayout[i]); j++ {
+			s := src[k]
+			if cols[s].IsNull(uint64(cursors[s])) {
+				vector.AppendFixed(vec, nullVal, true, mp)
+			} else {
+				vector.AppendFixed(vec, vector.GetFixedAt[T](cols[s], cursors[s]), false, mp)
+			}
+			cursors[s]++
+			k++
+		}
+	}
+	return
+}
+
+func Multiplex(
+	col []containers.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
+	if len(col) == 0 {
+		return
+	}
+	columns := make([]*vector.Vector, len(col))
+	for i := range col {
+		columns[i] = col[i].GetDownstreamVector()
+	}
+
+	typ := col[0].GetType()
+	if typ.IsVarlen() {
+		ret = multiplexVarlen(columns, src, fromLayout, toLayout, pool)
+	} else {
+		switch typ.Oid {
+		case types.T_bool:
+			ret = multiplexFixed[bool](columns, src, fromLayout, toLayout, pool)
+		case types.T_int8:
+			ret = multiplexFixed[int8](columns, src, fromLayout, toLayout, pool)
+		case types.T_int16:
+			ret = multiplexFixed[int16](columns, src, fromLayout, toLayout, pool)
+		case types.T_int32:
+			ret = multiplexFixed[int32](columns, src, fromLayout, toLayout, pool)
+		case types.T_int64:
+			ret = multiplexFixed[int64](columns, src, fromLayout, toLayout, pool)
+		case types.T_float32:
+			ret = multiplexFixed[float32](columns, src, fromLayout, toLayout, pool)
+		case types.T_float64:
+			ret = multiplexFixed[float64](columns, src, fromLayout, toLayout, pool)
+		case types.T_uint8:
+			ret = multiplexFixed[uint8](columns, src, fromLayout, toLayout, pool)
+		case types.T_uint16:
+			ret = multiplexFixed[uint16](columns, src, fromLayout, toLayout, pool)
+		case types.T_uint32:
+			ret = multiplexFixed[uint32](columns, src, fromLayout, toLayout, pool)
+		case types.T_uint64:
+			ret = multiplexFixed[uint64](columns, src, fromLayout, toLayout, pool)
+		case types.T_date:
+			ret = multiplexFixed[types.Date](columns, src, fromLayout, toLayout, pool)
+		case types.T_timestamp:
+			ret = multiplexFixed[types.Timestamp](columns, src, fromLayout, toLayout, pool)
+		case types.T_datetime:
+			ret = multiplexFixed[types.Datetime](columns, src, fromLayout, toLayout, pool)
+		case types.T_time:
+			ret = multiplexFixed[types.Time](columns, src, fromLayout, toLayout, pool)
+		case types.T_enum:
+			ret = multiplexFixed[types.Enum](columns, src, fromLayout, toLayout, pool)
+		case types.T_decimal64:
+			ret = multiplexFixed[types.Decimal64](columns, src, fromLayout, toLayout, pool)
+		case types.T_decimal128:
+			ret = multiplexFixed[types.Decimal128](columns, src, fromLayout, toLayout, pool)
+		case types.T_uuid:
+			ret = multiplexFixed[types.Uuid](columns, src, fromLayout, toLayout, pool)
+		case types.T_TS:
+			ret = multiplexFixed[types.TS](columns, src, fromLayout, toLayout, pool)
+		case types.T_Rowid:
+			ret = multiplexFixed[types.Rowid](columns, src, fromLayout, toLayout, pool)
+		case types.T_Blockid:
+			ret = multiplexFixed[types.Blockid](columns, src, fromLayout, toLayout, pool)
+		default:
+			panic(fmt.Sprintf("unsupported type %s", typ.String()))
 		}
 	}
 

@@ -26,12 +26,12 @@ const (
 	ClusterService = "cluster-service"
 	// ClusterService cluster service
 	LockService = "lock-service"
-	// CtlService ctl service
-	CtlService = "ctl-service"
 	// InternalSQLExecutor attr name for internal sql executor
 	InternalSQLExecutor = "internal-sql-executor"
 	// AutoIncrmentService attr name for AutoIncrmentService
 	AutoIncrmentService = "auto-incrment-service"
+	// StatusServer is the global server of status of cluster.
+	StatusServer = "status-server"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
@@ -42,6 +42,8 @@ const (
 
 	// EnableCheckInvalidRCErrors enable check rc errors
 	EnableCheckInvalidRCErrors = "enable-check-rc-invalid-error"
+
+	MOProtocolVersion = "protocol-version"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

@@ -342,9 +342,10 @@ import (
 // MO table option
 %token <str> PROPERTIES
 
-// Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
+// Secondary Index
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
@@ -372,7 +373,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
 
 // MODump
 %token <str> MODUMP
@@ -415,6 +416,7 @@ import (
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
+%token <str> CLUSTER_CENTERS SPHERICAL_KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
@@ -454,6 +456,9 @@ import (
 // python udf
 %token <str> HANDLER
 
+// Sample Related.
+%token <str> PERCENT SAMPLE
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
@@ -492,6 +497,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <str> json_type_opt
 
 // case statement
 %type <statement> case_stmt
@@ -585,6 +591,7 @@ import (
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
 %type <funcExpr> function_call_window
+%type <expr> sample_function_expr
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
@@ -683,7 +690,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword separator_opt
+%type <str> name_confict distinct_keyword separator_opt spherical_kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -3719,7 +3726,7 @@ drop_index_stmt:
     {
         $$ = &tree.DropIndex{
             Name: tree.Identifier($4.Compare()),
-            TableName: *$6,
+            TableName: $6,
             IfExists: $3,
         }
     }
@@ -6114,7 +6121,7 @@ create_index_stmt:
 	 }
         $$ = &tree.CreateIndex{
             Name: tree.Identifier($4.Compare()),
-            Table: *$7,
+            Table: $7,
             IndexCat: $2,
             KeyParts: $9,
             IndexOption: io,
@@ -6142,7 +6149,11 @@ index_option_list:
                 opt1.ParserName = opt2.ParserName
             } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
                 opt1.Visible = opt2.Visible
-            }
+            } else if opt2.AlgoParamList > 0 {
+	      opt1.AlgoParamList = opt2.AlgoParamList
+	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
+	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    }
             $$ = opt1
         }
     }
@@ -6151,6 +6162,14 @@ index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         $$ = &tree.IndexOption{KeyBlockSize: uint64($3.(int64))}
+    }
+|   LISTS equal_opt INTEGRAL
+    {
+	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
+    }
+|   SIMILARITY_FUNCTION STRING
+    {
+	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -6197,6 +6216,10 @@ using_opt:
 |   USING BTREE
     {
         $$ = tree.INDEX_TYPE_BTREE
+    }
+|   USING IVFFLAT
+    {
+	$$ = tree.INDEX_TYPE_IVFFLAT
     }
 |   USING HASH
     {
@@ -6434,6 +6457,16 @@ create_table_stmt:
             ClusterByOption: $11,
         }
     }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt stream_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            Options: $8,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -6452,13 +6485,16 @@ load_param_opt:
             },
         }
     }
-|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING  json_type_opt
     {
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
                 Format: $4,
                 Data: $8,
+            },
+            ExParam:tree.ExParam{
+                JsonData:$9,
             },
         }
     }
@@ -6486,6 +6522,15 @@ load_param_opt:
                 StageName: tree.Identifier($3.Compare()),
             },
         }
+    }
+
+json_type_opt:
+    {
+        $$ = ""
+    }
+|    ',' JSONTYPE '=' STRING 
+    {
+        $$ = $4
     }
 
 infile_or_s3_params:
@@ -7506,6 +7551,7 @@ index_type:
 |   HASH
 |   RTREE
 |   ZONEMAP
+|   IVFFLAT
 |   BSI
 
 insert_method_options:
@@ -8012,6 +8058,10 @@ simple_expr:
     {
         $$ = $1
     }
+|   sample_function_expr
+    {
+	$$ = $1
+    }
 
 function_call_window:
 	RANK '(' ')' window_spec
@@ -8037,6 +8087,65 @@ function_call_window:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             WindowSpec: $4,
         }
+    }
+
+sample_function_expr:
+    SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
+    {
+	v := int($5.(int64))
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' FLOAT PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|
+    SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
+    {
+    	v := int($5.(int64))
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
+    	if err != nil {
+    	    yylex.Error(err.Error())
+    	    return 1
+    	}
+    	$$ = val
+    }
+|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
+    }
+|   SAMPLE '(' expression_list ',' FLOAT PERCENT ')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
     }
 
 else_opt:
@@ -8343,6 +8452,15 @@ separator_opt:
        $$ = $2
     }
 
+spherical_kmeans_opt:
+    {
+        $$ = "1,vector_cosine_ops"
+    }
+|   SPHERICAL_KMEANS STRING
+    {
+       $$ = $2
+    }
+
 window_spec_opt:
     {
         $$ = nil
@@ -8387,6 +8505,17 @@ function_call_aggregate:
             OrderBy:$5,
 	    }
     }
+|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt spherical_kmeans_opt ')' window_spec_opt
+      {
+  	     name := tree.SetUnresolvedName(strings.ToLower($1))
+		$$ = &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+		Type: $3,
+		WindowSpec: $8,
+		OrderBy:$5,
+	    }
+      }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -10479,6 +10608,8 @@ non_reserved_keyword:
 |   VECF32
 |   VECF64
 |   KEY_BLOCK_SIZE
+|   LISTS
+|   SIMILARITY_FUNCTION
 |   KEYS
 |   LANGUAGE
 |   LESS
@@ -10651,6 +10782,8 @@ not_keyword:
 |   DATE_SUB
 |   EXTRACT
 |   GROUP_CONCAT
+|   CLUSTER_CENTERS
+|   SPHERICAL_KMEANS
 |   MAX
 |   MID
 |   MIN

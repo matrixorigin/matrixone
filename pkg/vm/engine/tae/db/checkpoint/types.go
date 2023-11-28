@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -36,6 +37,7 @@ type EntryType int8
 const (
 	ET_Global EntryType = iota
 	ET_Incremental
+	ET_Backup
 )
 
 type Runner interface {
@@ -94,8 +96,10 @@ const (
 	CheckpointAttr_AllLocations  = "all_locations"
 	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
 	CheckpointAttr_TruncateLSN   = "truncate_lsn"
+	CheckpointAttr_Type          = "type"
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
+	CheckpointSchemaColumnCountV2 = 9
 )
 
 var (
@@ -112,6 +116,7 @@ var (
 		CheckpointAttr_AllLocations,
 		CheckpointAttr_CheckpointLSN,
 		CheckpointAttr_TruncateLSN,
+		CheckpointAttr_Type,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),
@@ -122,6 +127,7 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_int8, 0, 0),
 	}
 )
 
@@ -144,7 +150,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i]))
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
 	}
 	return bat
 }

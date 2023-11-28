@@ -214,7 +214,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			} else {
 				indexStr = "KEY "
 			}
-			indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
+			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+			}
+			indexStr += "("
 			i := 0
 			for _, part := range indexdef.Parts {
 				if catalog.IsAlias(part) {
@@ -229,6 +233,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 
 			indexStr += ")"
+			if indexdef.IndexAlgoParams != "" {
+				var paramList string
+				paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+				if err != nil {
+					return nil, err
+				}
+				indexStr += paramList
+			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
@@ -703,7 +715,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || haveUniqueKey(tableDef) {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
@@ -713,18 +725,35 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if len(tableDef.Fkeys) != 0 {
+				colIdToName := make(map[uint64]string)
+				for _, col := range tableDef.Cols {
+					if col.Hidden {
+						continue
+					}
+					colIdToName[col.ColId] = col.Name
+				}
 				for _, fk := range tableDef.Fkeys {
-					keyStr += " when attname = "
-					keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
-					keyStr += " then 'MUL'"
+					for _, colId := range fk.Cols {
+						keyStr += " when attname = "
+						keyStr += "'" + colIdToName[colId] + "'"
+						keyStr += " then 'MUL'"
+					}
 				}
 			}
-			if haveUniqueKey(tableDef) {
+			if tableDef.Indexes != nil {
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
-						keyStr += " when attname = "
-						keyStr += "'" + indexdef.IndexName + "'"
-						keyStr += " then 'UNI'"
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
+						}
+					} else {
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'MUL'"
+						}
 					}
 				}
 			}
@@ -936,9 +965,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
-		"'' as 'Index_type', " +
+		"`idx`.`algo` as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
+		"`idx`.`algo_params` as `Index_params`, " +
 		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +
 		"'NULL' as `Expression` " +
 		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +

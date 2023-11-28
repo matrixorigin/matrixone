@@ -108,6 +108,8 @@ func (node IndexT) ToString() string {
 	default:
 		return "INVAILD"
 	}
+	//TODO: @arjun fix this later
+	// Should this be same as secondary index algo type?
 }
 
 const (
@@ -573,6 +575,9 @@ type Relation interface {
 	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
+
+	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
+	GetTableDef(context.Context) *plan.TableDef
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 

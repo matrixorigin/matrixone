@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -135,8 +136,10 @@ func BlockRead(
 		); err != nil {
 			return nil, err
 		}
+		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
 			RecordReadFilterSelectivity(1, 1)
+			v2.TaskSelReadFilterHit.Inc()
 		} else {
 			RecordReadFilterSelectivity(0, 1)
 		}
@@ -571,7 +574,7 @@ func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo, prefetchFile bool) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
@@ -589,6 +592,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 				}
 			}
 		}
+		pref.prefetchFile = prefetchFile
 		err = pipeline.Prefetch(pref)
 		if err != nil {
 			return err

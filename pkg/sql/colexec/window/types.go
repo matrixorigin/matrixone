@@ -22,16 +22,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type evalVector struct {
 	vec      *vector.Vector
 	executor colexec.ExpressionExecutor
 }
 
+const (
+	receive = iota
+	eval
+	done
+	receiveAll
+)
+
 type container struct {
 	colexec.ReceiverOperator
+	status int
 
 	bat *batch.Batch
 
@@ -53,6 +64,17 @@ type Argument struct {
 	// agg func
 	Types []types.Type
 	Aggs  []agg.Aggregate
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

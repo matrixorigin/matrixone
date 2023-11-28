@@ -188,6 +188,8 @@ type TemporaryTN struct{}
 
 type IsMoLogger struct{}
 
+type SourceScanResKey struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 
@@ -199,6 +201,9 @@ type InSp struct{}
 
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
+
+// StartTS is the start timestamp of a statement.
+type StartTS struct{}
 
 /*
 The autoIncrCacheManager is initialized with a starting CN.

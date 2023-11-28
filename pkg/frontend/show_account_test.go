@@ -16,6 +16,11 @@ package frontend
 
 import (
 	"context"
+	"math"
+	"os"
+	"path"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,10 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math"
-	"os"
-	"path"
-	"testing"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -159,19 +160,15 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 }
 
 func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
-	var err error
-	common.DefaultAllocator, err = mpool.NewMPool("tae_default", 0, mpool.NoFixed)
-	require.Nil(t, err)
-
-	ckpData := logtail.NewCheckpointData()
+	ckpData := logtail.NewCheckpointData(common.CheckpointAllocator)
 	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 
 	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
 	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
 	for idx := range accIds {
-		vector.AppendFixed(accVec, accIds[idx], false, common.DefaultAllocator)
-		vector.AppendFixed(sizeVec, sizes[idx], false, common.DefaultAllocator)
+		vector.AppendFixed(accVec, accIds[idx], false, ckpData.Allocator())
+		vector.AppendFixed(sizeVec, sizes[idx], false, ckpData.Allocator())
 	}
 
 	return ckpData
@@ -197,7 +194,7 @@ func Test_ShowAccounts(t *testing.T) {
 
 	dirName := "show_account_test"
 	objFs := mockObjectFileService(ctx, dirName)
-	cnLocation, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
+	cnLocation, _, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 	require.Nil(t, err)
 
 	defer func() {
@@ -211,7 +208,7 @@ func Test_ShowAccounts(t *testing.T) {
 		Version:  9,
 	})
 
-	usage, err := handleStorageUsageResponse(ctx, objFs.Service, resp)
+	usage, err := handleStorageUsageResponse(ctx, resp, objFs.Service)
 	require.Nil(t, err)
 
 	require.Equal(t, len(usage), len(accIds))

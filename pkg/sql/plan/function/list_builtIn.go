@@ -292,7 +292,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `endswith`
 	{
 		functionId: ENDSWITH,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -301,7 +301,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return EndsWith
@@ -1327,7 +1327,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `startswith`
 	{
 		functionId: STARTSWITH,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1336,7 +1336,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return StartsWith
@@ -1755,6 +1755,96 @@ var supportedArrayOperations = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float64]
+				},
+			},
+		},
+	},
+	// function `l2_distance`
+	{
+		functionId: L2_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceArray[float64]
+				},
+			},
+		},
+	},
+	// function `cosine_distance`
+	{
+		functionId: COSINE_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineDistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineDistanceArray[float64]
+				},
+			},
+		},
+	},
+	// function `normalize_l2`
+	{
+		functionId: NORMALIZE_L2,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float32]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float64]
 				},
 			},
 		},
@@ -4810,6 +4900,69 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return MoMemUsage
+				},
+			},
+		},
+	},
+	// function `mo_memory`
+	{
+		functionId: MO_MEMORY,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoMemory
+				},
+			},
+		},
+	},
+	// function `mo_cpu`
+	{
+		functionId: MO_CPU,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoCPU
+				},
+			},
+		},
+	},
+	// function `mo_cpu_dump`
+	{
+		functionId: MO_CPU_DUMP,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoCPUDump
 				},
 			},
 		},

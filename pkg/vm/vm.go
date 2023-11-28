@@ -18,14 +18,15 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ins Instruction) MarshalBinary() ([]byte, error) {
+func (ins *Instruction) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func (ins Instruction) UnmarshalBinary(_ []byte) error {
+func (ins *Instruction) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
@@ -35,14 +36,14 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(" -> ")
 		}
-		stringFunc[in.Op](in.Arg, buf)
+		in.Arg.String(buf)
 	}
 }
 
 // Prepare range instructions and do init work for each operator's argument by calling its prepare function
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
-		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
+		if err := in.Arg.Prepare(proc); err != nil {
 			return err
 		}
 	}
@@ -53,34 +54,59 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(proc.Ctx, e)
+			logutil.Errorf("panic in vm.Run: %v", err)
 		}
 	}()
 
-	return fubarRun(ins, proc, 0)
-}
-
-func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
-	var fubarStack []int
-	var ok process.ExecStatus
-
-	for i := start; i < len(ins); i++ {
-		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
-			return ok == process.ExecStop || end, err
+	for i := 0; i < len(ins); i++ {
+		info := &OperatorInfo{
+			Idx:     ins[i].Idx,
+			IsFirst: ins[i].IsFirst,
+			IsLast:  ins[i].IsLast,
 		}
+		ins[i].Arg.SetInfo(info)
 
-		if ok == process.ExecStop {
-			end = true
-		} else if ok == process.ExecHasMore {
-			fubarStack = append(fubarStack, i)
+		if i > 0 {
+			ins[i].Arg.AppendChild(ins[i-1].Arg)
 		}
 	}
 
-	// run the stack backwards.
-	for i := len(fubarStack) - 1; i >= 0; i-- {
-		end, err = fubarRun(ins, proc, fubarStack[i])
-		if end || err != nil {
-			return end, err
+	root := ins[len(ins)-1].Arg
+	end = false
+	for !end {
+		result, err := root.Call(proc)
+		if err != nil {
+			return true, err
 		}
+		end = result.Status == ExecStop || result.Batch == nil
 	}
-	return end, err
+	return end, nil
+
+	// return fubarRun(ins, proc, 0)
 }
+
+// func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
+// 	var fubarStack []int
+// 	var result CallResult
+
+// 	for i := start; i < len(ins); i++ {
+// 		if result, err = ins[i].Arg.Call(proc); err != nil {
+// 			return result.Status == ExecStop || end, err
+// 		}
+
+// 		if result.Status == process.ExecStop {
+// 			end = true
+// 		} else if result.Status == process.ExecHasMore {
+// 			fubarStack = append(fubarStack, i)
+// 		}
+// 	}
+
+// 	// run the stack backwards.
+// 	for i := len(fubarStack) - 1; i >= 0; i-- {
+// 		end, err = fubarRun(ins, proc, fubarStack[i])
+// 		if end || err != nil {
+// 			return end, err
+// 		}
+// 	}
+// 	return end, err
+// }

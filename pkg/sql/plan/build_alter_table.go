@@ -284,7 +284,11 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				} else {
 					indexStr = "KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
+				indexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					// NOTE: we skip the alias PK column from the secondary keys list here.
@@ -304,6 +308,15 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				if indexdef.Comment != "" {
 					indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 					indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				}
+				if indexdef.IndexAlgoParams != "" {
+					var paramList string
+					var err error
+					paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+					if err != nil {
+						return "", err
+					}
+					indexStr += paramList
 				}
 				if rowCount != 0 {
 					createStr += ",\n"

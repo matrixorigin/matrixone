@@ -52,7 +52,7 @@ col2 datetime,
 col3 timestamp
 );
 insert into t6 values ('2022-02-01', '2022-02-01:23:59 59.999999', '2037-09-08 23:59:59.999999');
-invalid input: invalid datatime value 2022-02-01:23:59 59.999999
+invalid input: invalid datetime value 2022-02-01:23:59 59.999999
 select cast(col1 as text), cast(col2 as text), cast(col3 as text) from t6;
 cast(col1 as text)    cast(col2 as text)    cast(col3 as text)
 drop table t6;
@@ -430,14 +430,14 @@ delete from t9 where a is not NULL;
 insert into t9 values ('Ananya Majumdar', 'IX'),('Anushka Samanta', 'X'),('Sharma', 'XI');
 select startswith(a,'An') from t9;
 startswith(a, An)
-1
-1
-0
+true
+true
+false
 select endswith(b,'X') from t9;
 endswith(b, X)
-1
-1
-0
+true
+true
+false
 delete from t9 where a is not NULL;
 insert into t9 values('  sdfad  ','2022-02-02 22:22:22');
 insert into t9 values('sdfad  ','2022-02-02 22:22:22');

@@ -16,6 +16,9 @@ package tree
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"math"
+	"strconv"
 )
 
 // AST for the expression
@@ -1599,4 +1602,103 @@ func (node *MaxValue) Accept(v Visitor) (Expr, bool) {
 		return v.Exit(newNode)
 	}
 	return v.Exit(node)
+}
+
+// SampleExpr for sample(exprList, N rows / R percent)
+type SampleExpr struct {
+	// rows or percent.
+	typ sampleType
+
+	// N or K
+	n int
+	k float64
+
+	// sample by '*'
+	isStar bool
+	// sample by columns.
+	columns Exprs
+}
+
+func (s SampleExpr) String() string {
+	return "sample"
+}
+
+func (s SampleExpr) Format(ctx *FmtCtx) {
+	if s.typ == SampleRows {
+		ctx.WriteString(fmt.Sprintf("sample %d rows", s.n))
+	} else {
+		ctx.WriteString(fmt.Sprintf("sample %.1f percent", s.k))
+	}
+}
+
+func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(node)
+}
+
+func (s SampleExpr) Valid() error {
+	if s.typ == SampleRows {
+		if s.n < 1 || s.n > 1000 {
+			return moerr.NewSyntaxErrorNoCtx("sample(expr list, N rows) requires N between 1 and 1000.")
+		}
+		return nil
+	} else {
+		if s.k < 0 || s.k > 100 {
+			return moerr.NewSyntaxErrorNoCtx("sample(expr list, K percent) requires K between 0.00 and 100.00")
+		}
+		return nil
+	}
+}
+
+func (s SampleExpr) GetColumns() (columns Exprs, isStar bool) {
+	return s.columns, s.isStar
+}
+
+func (s SampleExpr) GetSampleDetail() (isSampleRows bool, n int32, k float64) {
+	return s.typ == SampleRows, int32(s.n), s.k
+}
+
+type sampleType int
+
+const (
+	SampleRows    sampleType = 0
+	SamplePercent sampleType = 1
+)
+
+func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs) (*SampleExpr, error) {
+	return &SampleExpr{
+		typ:     SampleRows,
+		n:       number,
+		k:       0,
+		isStar:  isStar,
+		columns: columns,
+	}, nil
+}
+
+func NewSamplePercentFuncExpression1(percent int64, isStar bool, columns Exprs) (*SampleExpr, error) {
+	return &SampleExpr{
+		typ:     SamplePercent,
+		n:       0,
+		k:       float64(percent),
+		isStar:  isStar,
+		columns: columns,
+	}, nil
+}
+
+func NewSamplePercentFuncExpression2(percent float64, isStar bool, columns Exprs) (*SampleExpr, error) {
+	if nan := math.IsNaN(percent); nan {
+		return nil, moerr.NewSyntaxErrorNoCtx("sample(expr, K percent) requires K between 0.00 and 100.00")
+	}
+	k, _ := strconv.ParseFloat(fmt.Sprintf("%.2f", percent), 64)
+
+	return &SampleExpr{
+		typ:     SamplePercent,
+		n:       0,
+		k:       k,
+		isStar:  isStar,
+		columns: columns,
+	}, nil
 }

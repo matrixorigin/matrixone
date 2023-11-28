@@ -19,6 +19,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
@@ -40,10 +41,18 @@ func TestGetBackupData(t *testing.T) {
 
 	ctx := context.Background()
 	dir := t.TempDir()
-	name := "hakeeper.bak"
+	name := defines.LocalFileServiceName
 	fs, err := fileservice.NewLocalFS(ctx, name, dir, fileservice.DisabledCacheConfig, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, fs)
+
+	s := &Service{
+		fileService: fs,
+	}
+	// If the file do not exist, do not return error.
+	restore, err := s.getBackupData(ctx)
+	assert.NoError(t, err)
+	assert.Nil(t, restore)
 
 	ioVec := fileservice.IOVector{
 		FilePath: path.Join(dir, name),
@@ -57,10 +66,7 @@ func TestGetBackupData(t *testing.T) {
 	err = fs.Write(ctx, ioVec)
 	assert.NoError(t, err)
 
-	s := &Service{
-		fileService: fs,
-	}
-	restore, err := s.getBackupData(ctx)
+	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 

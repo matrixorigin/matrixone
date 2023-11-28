@@ -50,9 +50,9 @@ type PartitionState struct {
 
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
-	//blocks *btree.BTreeG[BlockEntry]
 	//table data objects
-	dataObjects *btree.BTreeG[ObjectEntry]
+	dataObjects           *btree.BTreeG[ObjectEntry]
+	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
@@ -61,10 +61,10 @@ type PartitionState struct {
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
+	//TODO::remove it
 	dirtyBlocks *btree.BTreeG[types.Blockid]
-	//index for blocks by timestamp.
-	//TODO gc entries
-	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
+	//index for objects by timestamp.
+	objectIndexByTS *btree.BTreeG[ObjectIndexByTSEntry]
 
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
@@ -152,22 +152,35 @@ func (b BlockDeltaEntry) DeltaLocation() objectio.Location {
 	return b.DeltaLoc[:]
 }
 
-type ObjectEntry struct {
-	ShortObjName objectio.ObjectNameShort
+type ObjectInfo struct {
+	objectio.ObjectStats
 
-	Loc         objectio.Location
 	EntryState  bool
 	Sorted      bool
 	HasDeltaLoc bool
-	SegmentID   types.Uuid
 	CommitTS    types.TS
 	CreateTime  types.TS
 	DeleteTime  types.TS
-	BlkCnt      uint16
+}
+
+func (o ObjectInfo) String() string {
+	return fmt.Sprintf(
+		"%s; entryState: %v; sorted: %v; hasDeltaLoc: %v; commitTS: %s; createTS: %s; deleteTS: %s",
+		o.ObjectStats.String(), o.EntryState,
+		o.Sorted, o.HasDeltaLoc, o.CommitTS.ToString(),
+		o.CreateTime.ToString(), o.DeleteTime.ToString())
+}
+
+func (o ObjectInfo) Location() objectio.Location {
+	return o.ObjectLocation()
+}
+
+type ObjectEntry struct {
+	ObjectInfo
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
-	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
+	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
 }
 
 func (o *ObjectEntry) Visible(ts types.TS) bool {
@@ -176,7 +189,36 @@ func (o *ObjectEntry) Visible(ts types.TS) bool {
 }
 
 func (o ObjectEntry) Location() objectio.Location {
-	return o.Loc
+	return o.ObjectLocation()
+}
+
+type ObjectIndexByCreateTSEntry struct {
+	ObjectInfo
+}
+
+func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
+	//asc
+	if o.CreateTime.Less(than.CreateTime) {
+
+		return true
+	}
+	if than.CreateTime.Less(o.CreateTime) {
+		return false
+	}
+
+	cmp := bytes.Compare(o.ObjectShortName()[:], than.ObjectShortName()[:])
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	return false
+}
+
+func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
+	return o.CreateTime.LessEq(ts) &&
+		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
 }
 
 type PrimaryIndexEntry struct {
@@ -198,15 +240,15 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 	return p.RowEntryID < than.RowEntryID
 }
 
-type BlockIndexByTSEntry struct {
-	Time     types.TS // insert or delete time
-	BlockID  types.Blockid
-	IsDelete bool
+type ObjectIndexByTSEntry struct {
+	Time         types.TS // insert or delete time
+	ShortObjName objectio.ObjectNameShort
+	IsDelete     bool
 
 	IsAppendable bool
 }
 
-func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
+func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	// asc
 	if b.Time.Less(than.Time) {
 		return true
@@ -215,7 +257,7 @@ func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
 		return false
 	}
 
-	cmp := b.BlockID.Compare(than.BlockID)
+	cmp := bytes.Compare(b.ShortObjName[:], than.ShortObjName[:])
 	if cmp < 0 {
 		return true
 	}
@@ -238,29 +280,29 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData: noData,
-		rows:   btree.NewBTreeGOptions((RowEntry).Less, opts),
-		//blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		dataObjects:    btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		blockDeltas:    btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:    btree.NewBTreeGOptions((types.Blockid).Less, opts),
-		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
-		shared:         new(sharedStates),
+		noData:                noData,
+		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
+		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
+		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
+		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:           btree.NewBTreeGOptions((types.Blockid).Less, opts),
+		objectIndexByTS:       btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
+		shared:                new(sharedStates),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows: p.rows.Copy(),
-		//blocks:         p.blocks.Copy(),
-		dataObjects:    p.dataObjects.Copy(),
-		blockDeltas:    p.blockDeltas.Copy(),
-		primaryIndex:   p.primaryIndex.Copy(),
-		noData:         p.noData,
-		dirtyBlocks:    p.dirtyBlocks.Copy(),
-		blockIndexByTS: p.blockIndexByTS.Copy(),
-		shared:         p.shared,
+		rows:                  p.rows.Copy(),
+		dataObjects:           p.dataObjects.Copy(),
+		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
+		blockDeltas:           p.blockDeltas.Copy(),
+		primaryIndex:          p.primaryIndex.Copy(),
+		noData:                p.noData,
+		dirtyBlocks:           p.dirtyBlocks.Copy(),
+		objectIndexByTS:       p.objectIndexByTS.Copy(),
+		shared:                p.shared,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -311,6 +353,10 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
+		} else if IsSegTable(entry.TableName) {
+			// TODO
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectInsert(entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -319,11 +365,63 @@ func (p *PartitionState) HandleLogtailEntry(
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
+		} else if IsObjTable(entry.TableName) {
+			p.HandleObjectDelete(entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
 	default:
 		panic("unknown entry type")
+	}
+}
+
+func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		p.dataObjects.Set(objEntry)
+	}
+}
+
+func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
+	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+
+	for idx := 0; idx < len(statsCol); idx++ {
+		var objEntry ObjectEntry
+
+		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+
+		if old, ok := p.dataObjects.Get(objEntry); ok {
+			// if overwritten delete
+			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
+				logutil.Errorf("overwritten data objects delete time to 0-0:\n old: %s\n new: %s",
+					old.String(), objEntry.String())
+			}
+		}
+
+		p.dataObjects.Set(objEntry)
 	}
 }
 
@@ -504,7 +602,7 @@ func (p *PartitionState) HandleMetadataInsert(
 	metaLocationVector := mustVectorFromProto(input.Vecs[5])
 	deltaLocationVector := mustVectorFromProto(input.Vecs[6])
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
-	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
+	//segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 	memTruncTSVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
 
 	var numInserted, numDeleted int64
@@ -543,16 +641,6 @@ func (p *PartitionState) HandleMetadataInsert(
 
 			if !isEmptyDelta {
 				p.blockDeltas.Set(blockEntry)
-			}
-
-			{
-				e := BlockIndexByTSEntry{
-					Time:         createTimeVector[i],
-					BlockID:      blockID,
-					IsDelete:     false,
-					IsAppendable: isAppendable,
-				}
-				p.blockIndexByTS.Set(e)
 			}
 
 			{
@@ -611,46 +699,56 @@ func (p *PartitionState) HandleMetadataInsert(
 
 			//create object by block insert
 			{
-				objPivot := ObjectEntry{
-					ShortObjName: *(objectio.Location(metaLocationVector.GetBytesAt(i)).ShortName()),
-				}
+				objPivot := ObjectEntry{}
+				metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i))
+				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
-					// don't need to update objEntry, except for HasDeltaLoc
+					// don't need to update objEntry, except for HasDeltaLoc and blkCnt
 					if !isEmptyDelta {
 						objEntry.HasDeltaLoc = true
 					}
 
 					blkCnt := blockID.Sequence() + 1
-					if blkCnt > objEntry.BlkCnt {
-						objEntry.BlkCnt = blkCnt
+					if uint32(blkCnt) > objEntry.BlkCnt() {
+						objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
 					}
-
 					p.dataObjects.Set(objEntry)
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 					return
 				}
 				objEntry = objPivot
-				if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
-					objEntry.Loc = metaLocation
-				}
 				objEntry.EntryState = entryStateVector[i]
 				objEntry.Sorted = sortedStateVector[i]
 				if !isEmptyDelta {
 					objEntry.HasDeltaLoc = true
 				}
-				objEntry.SegmentID = segmentIDVector[i]
 				objEntry.CommitTS = commitTimeVector[i]
 				objEntry.CreateTime = createTimeVector[i]
 
 				blkCnt := blockID.Sequence() + 1
-				if blkCnt > objEntry.BlkCnt {
-					objEntry.BlkCnt = blkCnt
+				if uint32(blkCnt) > objEntry.BlkCnt() {
+					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
 				}
 
 				p.dataObjects.Set(objEntry)
+
 				//prefetch the object meta
-				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
+				if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
 					logutil.Errorf("prefetch object meta failed. %v", err)
+				}
+
+				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+				{
+					e := ObjectIndexByTSEntry{
+						Time:         createTimeVector[i],
+						ShortObjName: *objEntry.ObjectShortName(),
+						IsDelete:     false,
+
+						IsAppendable: objEntry.EntryState,
+					}
+					p.objectIndexByTS.Set(e)
 				}
 			}
 
@@ -680,10 +778,8 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaDelete, func() {
-
-			pivot := ObjectEntry{
-				ShortObjName: *objectio.ShortName(&blockID),
-			}
+			pivot := ObjectEntry{}
+			objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
 			objEntry, ok := p.dataObjects.Get(pivot)
 			//TODO non-appendable block' delete maybe arrive before its insert?
 			if !ok {
@@ -693,45 +789,52 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			if objEntry.DeleteTime.IsEmpty() {
 				// apply first delete
 				objEntry.DeleteTime = deleteTimeVector[i]
-
 				p.dataObjects.Set(objEntry)
+				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 
 				{
-					e := BlockIndexByTSEntry{
+					e := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
-						BlockID:      blockID,
+						ShortObjName: *objEntry.ObjectShortName(),
 						IsDelete:     true,
+
 						IsAppendable: objEntry.EntryState,
 					}
-					p.blockIndexByTS.Set(e)
+					p.objectIndexByTS.Set(e)
 				}
 			} else {
 				// update deletetime, if incoming delete ts is less
 				if objEntry.DeleteTime.Greater(deleteTimeVector[i]) {
-					old := BlockIndexByTSEntry{
+					old := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
-						BlockID:      blockID,
+						ShortObjName: *objEntry.ObjectShortName(),
 						IsDelete:     true,
+
 						IsAppendable: objEntry.EntryState,
 					}
-					p.blockIndexByTS.Delete(old)
+					p.objectIndexByTS.Delete(old)
 					objEntry.DeleteTime = deleteTimeVector[i]
 					p.dataObjects.Set(objEntry)
-					new := BlockIndexByTSEntry{
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+					new := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
-						BlockID:      blockID,
+						ShortObjName: *objEntry.ObjectShortName(),
 						IsDelete:     true,
+
 						IsAppendable: objEntry.EntryState,
 					}
-					p.blockIndexByTS.Set(new)
+					p.objectIndexByTS.Set(new)
 				} else if objEntry.DeleteTime.Equal(deleteTimeVector[i]) {
-					e := BlockIndexByTSEntry{
+					//FIXME:: should we do something here?
+					e := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
-						BlockID:      blockID,
+						ShortObjName: *objEntry.ObjectShortName(),
 						IsDelete:     true,
+
 						IsAppendable: objEntry.EntryState,
 					}
-					p.blockIndexByTS.Set(e)
+					p.objectIndexByTS.Set(e)
 				}
 			}
 		})
@@ -769,34 +872,34 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 	p.minTS = ts
 	gced := false
-	pivot := BlockIndexByTSEntry{
-		Time:     ts.Next(),
-		BlockID:  types.Blockid{},
-		IsDelete: true,
+	pivot := ObjectIndexByTSEntry{
+		Time:         ts.Next(),
+		ShortObjName: objectio.ObjectNameShort{},
+		IsDelete:     true,
 	}
-	iter := p.blockIndexByTS.Copy().Iter()
+	iter := p.objectIndexByTS.Copy().Iter()
 	ok := iter.Seek(pivot)
 	if !ok {
 		ok = iter.Last()
 	}
-	blkIDsToDelete := make(map[types.Blockid]struct{}, 0)
-	blksToDelete := ""
+	objIDsToDelete := make(map[objectio.ObjectNameShort]struct{}, 0)
+	objectsToDelete := ""
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
 		if entry.Time.Greater(ts) {
 			continue
 		}
 		if entry.IsDelete {
-			blkIDsToDelete[entry.BlockID] = struct{}{}
+			objIDsToDelete[entry.ShortObjName] = struct{}{}
 			if gced {
-				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
+				objectsToDelete = fmt.Sprintf("%s, %v", objectsToDelete, entry.ShortObjName)
 			} else {
-				blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
+				objectsToDelete = fmt.Sprintf("%s%v", objectsToDelete, entry.ShortObjName)
 			}
 			gced = true
 		}
 	}
-	iter = p.blockIndexByTS.Copy().Iter()
+	iter = p.objectIndexByTS.Copy().Iter()
 	ok = iter.Seek(pivot)
 	if !ok {
 		ok = iter.Last()
@@ -806,12 +909,12 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		if entry.Time.Greater(ts) {
 			continue
 		}
-		if _, ok := blkIDsToDelete[entry.BlockID]; ok {
-			p.blockIndexByTS.Delete(entry)
+		if _, ok := objIDsToDelete[entry.ShortObjName]; ok {
+			p.objectIndexByTS.Delete(entry)
 		}
 	}
 	if gced {
-		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objectsToDelete)
 	}
 
 	objsToDelete := ""
@@ -834,6 +937,12 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
 			p.dataObjects.Delete(objEntry)
+			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
+			//	//CreateTime:   objEntry.CreateTime,
+			//	//ShortObjName: objEntry.ShortObjName,
+			//	ObjectInfo: objEntry.ObjectInfo,
+			//})
+			p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry(objEntry))
 			if objGced {
 				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
 			} else {

@@ -445,11 +445,7 @@ func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.Creat
 
 func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
-	var factory catalog.SegmentDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeSegmentFactory()
-	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory, opts); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, opts); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -683,7 +679,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -777,7 +773,7 @@ func (tbl *txnTable) RangeDelete(
 		mvcc := chain.GetController()
 		mvcc.Lock()
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
-			node.RangeDeleteLocked(start, end, pk)
+			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -849,7 +845,7 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 			blockIt.Next()
 			continue
 		}
-		offset, err = h.GetByFilter(ctx, filter)
+		offset, err = h.GetByFilter(ctx, filter, common.WorkspaceAllocator)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -882,7 +878,7 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
@@ -931,7 +927,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_UpdateComment,
 		apipb.AlterKind_AddColumn,
 		apipb.AlterKind_DropColumn,
-		apipb.AlterKind_RenameTable:
+		apipb.AlterKind_RenameTable,
+		apipb.AlterKind_UpdatePolicy:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
@@ -1049,12 +1046,11 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 		currBf = prevBF
 		return
 	}
-	currBf, err = blockio.LoadBF(
+	currBf, err = objectio.FastLoadBF(
 		ctx,
 		currLocation,
-		tbl.store.rt.Cache.FilterIndex,
-		tbl.store.rt.Fs.Service,
 		false,
+		tbl.store.rt.Fs.Service,
 	)
 	return
 }
@@ -1135,6 +1131,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			rowmask,
 			false,
 			bf,
+			common.WorkspaceAllocator,
 		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
@@ -1202,7 +1199,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(
@@ -1213,6 +1210,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				rowmask,
 				false,
 				objectio.BloomFilter{},
+				common.WorkspaceAllocator,
 			); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 				loaded[i].Close()
@@ -1257,15 +1255,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					continue
 				}
 			}
-			segData := seg.GetSegmentData()
-			// TODO: Add a new batch dedup method later
-			if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				return
-			}
-			if err == nil {
-				segIt.Next()
-				continue
-			}
 			var shouldSkip bool
 			err = nil
 			blkIt := seg.MakeBlockIt(false)
@@ -1305,6 +1294,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					rowmask,
 					true,
 					objectio.BloomFilter{},
+					common.WorkspaceAllocator,
 				); err != nil {
 					return
 				}
@@ -1341,25 +1331,16 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 				continue
 			}
 		}
-		segData := seg.GetSegmentData()
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
-			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx())
+			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx(), common.WorkspaceAllocator)
 			if err != nil {
 				return err
 			}
 			colV.ApplyDeletes()
 			pks = colV.Orphan()
 			defer pks.Close()
-		}
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return err
-		}
-		if err == nil {
-			segIt.Next()
-			continue
 		}
 		var shouldSkip bool
 		err = nil
@@ -1400,6 +1381,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 				rowmask,
 				true,
 				objectio.BloomFilter{},
+				common.WorkspaceAllocator,
 			); err != nil {
 				return err
 			}

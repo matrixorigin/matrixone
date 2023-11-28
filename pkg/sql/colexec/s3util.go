@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -54,6 +55,8 @@ type S3Writer struct {
 	writer  *blockio.BlockWriter
 	lengths []uint64
 
+	// the third vector only has several rows, not aligns with the other two vectors.
+	// the third vector stores some object stats(one object), all blocks, stored in the second vector, belong to that object.
 	blockInfoBat *batch.Batch
 
 	// An intermediate cache after the merge sort of all `Bats` data
@@ -247,11 +250,15 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.Clean(proc.GetMPool())
 	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	blockInfoBat := batch.NewWithSize(len(attrs))
 	blockInfoBat.Attrs = attrs
 	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
+
+	blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
+		objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
+
 	w.blockInfoBat = blockInfoBat
 }
 
@@ -262,7 +269,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //	}
 //}
 
-func (w *S3Writer) Output(proc *process.Process) error {
+func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
 	bat.SetAttributes(w.blockInfoBat.Attrs)
 
@@ -275,7 +282,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 	}
 	bat.SetRowCount(w.blockInfoBat.RowCount())
 	w.ResetBlockInfoBat(proc)
-	proc.SetInputBatch(bat)
+	result.Batch = bat
 	return nil
 }
 
@@ -640,7 +647,7 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaTyp
 }
 
 func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
-	blkInfos, err := w.WriteEndBlocks(proc)
+	blkInfos, stats, err := w.WriteEndBlocks(proc)
 	if err != nil {
 		return err
 	}
@@ -661,17 +668,30 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 			return err
 		}
 	}
+
+	// append the object stats to bat,
+	// at most one will append in
+	for idx := 0; idx < len(stats); idx++ {
+		if stats[idx].IsZero() {
+			continue
+		}
+		if err = vector.SetConstBytes(w.blockInfoBat.Vecs[2], stats[idx].Marshal(),
+			1, proc.GetMPool()); err != nil {
+			return err
+		}
+	}
+
 	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
 }
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
@@ -684,7 +704,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, e
 		)
 
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		sid := location.Name().SegmentId()
 		blkInfo := catalog.BlockInfo{
@@ -702,5 +722,5 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, e
 		}
 		blkInfos = append(blkInfos, blkInfo)
 	}
-	return blkInfos, err
+	return blkInfos, w.writer.GetObjectStats(), err
 }

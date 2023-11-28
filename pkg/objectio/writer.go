@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -45,6 +46,11 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+	objStats          []ObjectStats
+	pkColIdx          uint16
+	appendable        bool
+	originSize        uint32
+	size              uint32
 }
 
 type blockData struct {
@@ -87,6 +93,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		buffer:   NewObjectBuffer(fileName),
 		blocks:   make([][]blockData, 2),
 		lastId:   0,
+		pkColIdx: math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
@@ -105,10 +112,55 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 		buffer:    NewObjectBuffer(fileName),
 		blocks:    make([][]blockData, 2),
 		lastId:    0,
+		pkColIdx:  math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
+}
+
+func (w *objectWriterV1) GetObjectStats() []ObjectStats {
+	return w.objStats
+}
+
+func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
+	ss := NewObjectStats()
+	SetObjectStatsObjectName(ss, w.name)
+	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
+	SetObjectStatsRowCnt(ss, w.totalRow)
+	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
+
+	if len(colmeta) > int(w.pkColIdx) {
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
+	}
+	SetObjectStatsSize(ss, w.size)
+	SetObjectStatsOriginSize(ss, w.originSize)
+
+	return *ss
+}
+
+// DescribeObject generates two object stats:
+//
+// 0: data object stats
+//
+// 1: tombstone object stats
+//
+// if an object only has inserts, only the data object stats valid.
+//
+// if an object only has deletes, only the tombstone object stats valid.
+//
+// if an object has both inserts and deletes, both stats are valid.
+func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
+	stats := make([]ObjectStats, 2)
+	if len(w.blocks[SchemaData]) != 0 {
+		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+	}
+
+	if len(w.blocks[SchemaTombstone]) != 0 {
+		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
+	}
+
+	return stats, nil
 }
 
 func (w *objectWriterV1) GetSeqnums() []uint16 {
@@ -154,13 +206,18 @@ func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, er
 	return block, nil
 }
 
-func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
-	w.blocks[SchemaData][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
+func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint16, zm ZoneMap) {
+	w.blocks[tye][blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
 }
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.pkColIdx = seqnum
 	return
+}
+
+func (w *objectWriterV1) SetAppendable() {
+	w.appendable = true
 }
 
 func (w *objectWriterV1) WriteObjectMetaBF(buf []byte) (err error) {
@@ -349,6 +406,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 	offset := uint32(HeaderSize)
+	w.originSize += HeaderSize
 
 	for i := range w.blocks {
 		if i == int(SchemaData) {
@@ -378,7 +436,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			return nil, err
 		}
 		objectMetas[i].BlockHeader().SetBFExtent(bloomFilterExtents[i])
+		objectMetas[i].BlockHeader().SetAppendable(w.appendable)
+		objectMetas[i].BlockHeader().SetSortKey(w.pkColIdx)
 		offset += bloomFilterExtents[i].Length()
+		w.originSize += bloomFilterExtents[i].OriginSize()
 
 		// prepare zone map area
 		zoneMapAreaDatas[i], zoneMapAreaExtents[i], err = w.prepareZoneMapArea(w.blocks[i], uint32(len(w.blocks[i])), offset)
@@ -387,6 +448,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		}
 		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaExtents[i])
 		offset += zoneMapAreaExtents[i].Length()
+		w.originSize += zoneMapAreaExtents[i].OriginSize()
 	}
 	subMetaCount := uint16(len(w.blocks) - 2)
 	subMetachIndex := BuildSubMetaIndex(subMetaCount)
@@ -448,11 +510,14 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		version:    Version,
 		magic:      Magic,
 	}
-
-	w.buffer.Write(footer.Marshal())
+	footerBuf := footer.Marshal()
+	w.buffer.Write(footerBuf)
 	if err != nil {
 		return nil, err
 	}
+	w.originSize += objectHeader.Extent().OriginSize()
+	w.originSize += uint32(len(footerBuf))
+	w.size = objectHeader.Extent().End() + uint32(len(footerBuf))
 	blockObjects := make([]BlockObject, 0)
 	for i := range w.blocks {
 		for j := range w.blocks[i] {
@@ -465,7 +530,6 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	if err != nil {
 		return nil, err
 	}
-
 	// The buffer needs to be released at the end of WriteEnd
 	// Because the outside may hold this writer
 	// After WriteEnd is called, no more data can be written
@@ -483,8 +547,14 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err
 		}
-		return w.object.fs.Write(ctx, w.buffer.GetData())
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
+
+	if err != nil {
+		return err
+	}
+
+	w.objStats, err = w.DescribeObject()
 	return err
 }
 
@@ -544,6 +614,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			panic("any type batch")
 		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
+		w.originSize += ext.OriginSize()
 	}
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	*blocks = append(*blocks, block)

@@ -986,12 +986,11 @@ insert into td(d) select d+2000 from td;
 insert into td(d) select d+3000 from td;
 select count(*) from td;
 
-
--- @bvt:issue#10381
-select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
+-- @bvt:issue#13008
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
 -- @bvt:issue
+select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
+select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
 drop table td;
 
 drop table if exists `c`;
@@ -1422,4 +1421,25 @@ select row_number() over (partition by col2 order by col1 rows between unbounded
 select rank() over (partition by col1 order by col2 rows between 0 preceding and 0 following) as newcol from time01;
 select max(col2) over (partition by col1 order by col2 rows between 3 preceding and 3 following) as newcol from time01;
 drop table time01;
+
+-- @bvt:issue#12639
+drop table if exists window01;
+create table window01(col1 int, col2 varchar(20));
+insert into window01 values(1,'老师');
+insert into window01 values(2,'医生');
+insert into window01 values(3,'工人');
+insert into window01 values(10,'学生');
+insert into window01 values(20,'学生');
+insert into window01 values(12,'学生');
+insert into window01 values(21,'老师');
+insert into window01 values(100,'老师');
+insert into window01 values(200,'工人');
+
+select col2, avg(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
+-- @bvt:issue
 drop database test;
+

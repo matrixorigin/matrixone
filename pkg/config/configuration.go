@@ -131,6 +131,13 @@ var (
 	//defaultOBBufferSize, 10 << 20 = 10485760
 	defaultOBBufferSize int64 = 10485760
 
+	// defaultOBCollectorCntPercent
+	defaultOBCollectorCntPercent = 10
+	// defaultOBGeneratorCntPercent
+	defaultOBGeneratorCntPercent = 400
+	// defaultOBExporterCntPercent
+	defaultOBExporterCntPercent = 400
+
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
 
@@ -269,8 +276,11 @@ type FrontendParameters struct {
 	// SkipCheckPrivilege denotes the privilege check should be passed.
 	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 
-	//skip checking the password of the user
+	// skip checking the password of the user
 	SkipCheckUser bool `toml:"skipCheckUser"`
+
+	// disable select into
+	DisableSelectInto bool `toml:"disable-select-into"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -624,13 +634,21 @@ type OBCollectorConfig struct {
 	// BufferCnt
 	BufferCnt  int32 `toml:"bufferCnt"`
 	BufferSize int64 `toml:"bufferSize"`
+	// Collector Worker
+
+	CollectorCntPercent int `toml:"collector_cnt_percent"`
+	GeneratorCntPercent int `toml:"generator_cnt_percent"`
+	ExporterCntPercent  int `toml:"exporter_cnt_percent"`
 }
 
 func NewOBCollectorConfig() *OBCollectorConfig {
 	cfg := &OBCollectorConfig{
-		ShowStatsInterval: toml.Duration{},
-		BufferCnt:         defaultOBBufferCnt,
-		BufferSize:        defaultOBBufferSize,
+		ShowStatsInterval:   toml.Duration{},
+		BufferCnt:           defaultOBBufferCnt,
+		BufferSize:          defaultOBBufferSize,
+		CollectorCntPercent: defaultOBCollectorCntPercent,
+		GeneratorCntPercent: defaultOBGeneratorCntPercent,
+		ExporterCntPercent:  defaultOBExporterCntPercent,
 	}
 	cfg.ShowStatsInterval.Duration = defaultOBShowStatsInterval
 	return cfg
@@ -645,6 +663,15 @@ func (c *OBCollectorConfig) SetDefaultValues() {
 	}
 	if c.BufferSize == 0 {
 		c.BufferSize = defaultOBBufferSize
+	}
+	if c.CollectorCntPercent <= 0 {
+		c.CollectorCntPercent = defaultOBCollectorCntPercent
+	}
+	if c.GeneratorCntPercent <= 0 {
+		c.GeneratorCntPercent = defaultOBGeneratorCntPercent
+	}
+	if c.ExporterCntPercent <= 0 {
+		c.ExporterCntPercent = defaultOBExporterCntPercent
 	}
 }
 

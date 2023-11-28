@@ -145,28 +145,56 @@ func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	return getJob(
-		ctx,
-		makeName(reader.GetName()),
-		JTLoad,
-		func(_ context.Context) (res *tasks.JobResult) {
-			// TODO
-			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMultiBlocks(ctx,
-				params.ids, nil)
-			if err != nil {
-				res.Err = err
+	if params.prefetchFile {
+		return getJob(
+			ctx,
+			makeName(reader.GetName()),
+			JTLoad,
+			func(_ context.Context) (res *tasks.JobResult) {
+				// TODO
+				res = &tasks.JobResult{}
+				var name string
+				if params.reader == nil {
+					name = params.key.Name().String()
+				} else {
+					name = params.reader.GetName()
+				}
+				err := reader.GetFs().PrefetchFile(ctx, name)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				if params.reader == nil {
+					putReader(reader)
+				}
 				return
-			}
-			// no further reads
-			res.Res = nil
-			ioVectors.Release()
-			if params.reader == nil {
-				putReader(reader)
-			}
-			return
-		},
-	)
+			},
+		)
+	} else {
+		return getJob(
+			ctx,
+			makeName(reader.GetName()),
+			JTLoad,
+			func(_ context.Context) (res *tasks.JobResult) {
+				// TODO
+				res = &tasks.JobResult{}
+				ioVectors, err := reader.ReadMultiBlocks(ctx,
+					params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
+				if params.reader == nil {
+					putReader(reader)
+				}
+				return
+			},
+		)
+	}
 }
 
 // prefetch metadata job
@@ -178,12 +206,11 @@ func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			res = &tasks.JobResult{}
-			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
+			_, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = objectMeta
 			return
 		},
 	)
@@ -466,11 +493,11 @@ func (p *IoPipeline) onWait(jobs ...any) {
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
 		logutil.Info(p.stats.selectivityStats.ExportString())
-		logutil.Info(p.sensors.prefetchDepth.String())
-		wdrops := p.stats.prefetchDropStats.SwapW(0)
-		if wdrops > 0 {
-			logutil.Infof("PrefetchDropStats: %d", wdrops)
-		}
+		// logutil.Info(p.sensors.prefetchDepth.String())
+		// wdrops := p.stats.prefetchDropStats.SwapW(0)
+		// if wdrops > 0 {
+		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
+		// }
 		logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()

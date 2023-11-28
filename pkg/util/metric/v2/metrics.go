@@ -16,18 +16,34 @@ package v2
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 var (
-	registry = prometheus.DefaultRegisterer
+	registry = prometheus.NewRegistry()
 )
 
+func GetPrometheusRegistry() prometheus.Registerer {
+	return registry
+}
+
+func GetPrometheusGatherer() prometheus.Gatherer {
+	return registry
+}
+
 func init() {
+	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector(
+		collectors.WithGoCollectorRuntimeMetrics(collectors.MetricsAll),
+	))
+
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
+	initMemMetrics()
+	initTraceMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -35,12 +51,23 @@ func init() {
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 }
 
+func initMemMetrics() {
+	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemTotalCrossPoolFreeCounter)
+	registry.MustRegister(memMPoolHighWaterMarkGauge)
+}
+
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
+	registry.MustRegister(taskBytesHistogram)
+	registry.MustRegister(taskCountHistogram)
 
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskSelectivityCounter)
+
+	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 }
 
 func initFileServiceMetrics() {
@@ -57,11 +84,12 @@ func initFileServiceMetrics() {
 
 func initLogtailMetrics() {
 	registry.MustRegister(LogtailLoadCheckpointCounter)
+	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
 
 	registry.MustRegister(LogTailBytesHistogram)
-	registry.MustRegister(LogTailApplyDurationHistogram)
+	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
@@ -84,13 +112,20 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnCommitDurationHistogram)
 	registry.MustRegister(TxnLifeCycleDurationHistogram)
+	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
-	registry.MustRegister(TxnUnlockDurationHistogram)
+	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnLockWaitersTotalHistogram)
+	registry.MustRegister(TxnTableRangeSizeHistogram)
+	registry.MustRegister(txnMpoolDurationHistogram)
+	registry.MustRegister(TxnUnlockTableTotalHistogram)
+	registry.MustRegister(txnReaderDurationHistogram)
 
-	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
+	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
+	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 }
 
 func initRPCMetrics() {
@@ -110,4 +145,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcWriteLatencyDurationHistogram)
 	registry.MustRegister(rpcBackendDoneDurationHistogram)
 
+}
+
+func initTraceMetrics() {
+	registry.MustRegister(traceCollectorDurationHistogram)
 }

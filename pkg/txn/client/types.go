@@ -66,6 +66,21 @@ type TxnClient interface {
 
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+
+	// GetState returns the current state of txn client.
+	GetState() TxnState
+}
+
+type TxnState struct {
+	State int
+	// user active txns
+	Users int
+	// all active txns
+	ActiveTxns []string
+	// FIFO queue for ready to active txn
+	WaitActiveTxns []string
+	// LatestTS is the latest timestamp of the txn client.
+	LatestTS timestamp.Timestamp
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -178,11 +193,20 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
-	// Cancel cancels all waiters in timestamp waiter. They will not wait for the newer
-	// timestamp anymore.
-	Cancel()
+	// Pause pauses the timestamp waiter and cancel all waiters in timestamp waiter.
+	// They will not wait for the newer timestamp anymore.
+	Pause()
+	// Resume resumes the cancel channel in the timestamp waiter after all transactions are
+	// aborted.
+	Resume()
+	// CancelC returns the cancel channel of timestamp waiter. If it is nil, means that
+	// the logtail consumer is reconnecting to logtail server and is aborting all transaction.
+	// At this time, we cannot open new transactions.
+	CancelC() chan struct{}
 	// Close close the timestamp waiter
 	Close()
+	// LatestTS returns the latest timestamp of the waiter.
+	LatestTS() timestamp.Timestamp
 }
 
 type Workspace interface {

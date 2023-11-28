@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -222,7 +223,7 @@ func (proc *Process) ResetContextFromParent(parent context.Context) context.Cont
 }
 
 func (proc *Process) GetAnalyze(idx int) Analyze {
-	if idx >= len(proc.AnalInfos) {
+	if idx >= len(proc.AnalInfos) || idx < 0 {
 		return &analyze{analInfo: nil}
 	}
 	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}

@@ -81,6 +81,18 @@ var (
 		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
+		input:  "select cluster_centers(a) from t1;",
+		output: "select cluster_centers(a, 1,vector_cosine_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
+		output: "select cluster_centers(a, 5) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_l2_ops') from t1;",
+		output: "select cluster_centers(a, 5,vector_l2_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops) from t1",
+	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {
@@ -723,6 +735,9 @@ var (
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
+		input:  "create dynamic table t as select a from t1",
+		output: "create dynamic table t as select a from t1",
+	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
@@ -862,6 +877,9 @@ var (
 		},
 		{
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
 		},
 		{
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",
@@ -1389,6 +1407,12 @@ var (
 		}, {
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
@@ -2637,6 +2661,10 @@ var (
 		{
 			input:  "show index from db.t1 from db",
 			output: "show index from db.t1 from db",
+		},
+		{
+			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
+			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
 		},
 	}
 )

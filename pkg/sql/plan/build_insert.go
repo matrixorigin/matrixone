@@ -122,7 +122,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 						},
 					})
 				} else {
-					aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
+					aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
 						{
 							Typ: dupProjection[i].Typ,
 							Expr: &plan.Expr_Col{
@@ -347,35 +347,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount < 5 {
-			var orExpr *Expr
-			for i := 0; i < rowsCount; i++ {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: colTyp,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-							Name:   tableDef.Pkey.PkeyColName,
-						},
-					},
-				}, colExprs[0][i]})
-				if err != nil {
-					return nil
-				}
-
-				if i == 0 {
-					orExpr = expr
-				} else {
-					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
-					if err != nil {
-						return nil
-					}
-				}
-			}
-			return []*Expr{orExpr}
-		} else {
+		if rowsCount > useInExprCount {
 			// args in list must be constant
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
@@ -396,18 +370,44 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil
 			}
-			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, true)
+			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
 			if err != nil {
 				return nil
 			}
 			return []*Expr{expr}
+		} else {
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}, colExprs[0][i]})
+				if err != nil {
+					return nil
+				}
+
+				if i == 0 {
+					orExpr = expr
+				} else {
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					if err != nil {
+						return nil
+					}
+				}
+			}
+			return []*Expr{orExpr}
 		}
 	} else {
 		// multi cols pk & one row for insert
 		if rowsCount == 1 {
 			filterExprs := make([]*Expr, pkColLength)
 			for insertRowIdx, pkColIdx = range pkPosInValues {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: tableDef.Cols[insertRowIdx].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
@@ -428,7 +428,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			for i := 0; i < rowsCount; i++ {
 				var andExpr *Expr
 				for insertRowIdx, pkColIdx = range pkPosInValues {
-					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 						Typ: tableDef.Cols[insertRowIdx].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
@@ -444,7 +444,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					if andExpr == nil {
 						andExpr = eqExpr
 					} else {
-						andExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
+						andExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
 						if err != nil {
 							return nil
 						}
@@ -454,7 +454,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				if i == 0 {
 					orExpr = andExpr
 				} else {
-					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
 					if err != nil {
 						return nil
 					}

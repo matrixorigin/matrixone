@@ -17,7 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -187,6 +188,8 @@ func newTxnExecutor(
 }
 
 func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
+	receiveAt := time.Now()
+
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	if err != nil {
 		return executor.Result{}, err
@@ -234,7 +237,12 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
+		return plan.BuildPlan(
+			exec.s.getCompileContext(exec.ctx, proc, exec.opts),
+			stmts[0], false)
+	})
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch

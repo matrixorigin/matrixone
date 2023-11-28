@@ -14,28 +14,45 @@
 
 package plan
 
+import (
+	"math"
+)
+
+const DefaultEvalSize = 1024
+
 type shuffleHeap struct {
 	left    *shuffleHeap
 	right   *shuffleHeap
 	key     float64
 	value   float64
 	height  int
+	size    int
+	nulls   int
 	reverse bool
 }
 
 type shuffleList struct {
-	next    *shuffleList
-	tree    *shuffleHeap
-	size    int
-	value   float64
-	overlap float64
+	size  int
+	value float64
+	next  *shuffleList
+	tree  *shuffleHeap
 }
 
 type ShuffleRange struct {
-	tree    *shuffleHeap
-	Result  []float64
-	size    int
-	Overlap float64
+	isStrType bool
+	size      int
+	tree      *shuffleHeap
+	min       float64
+	max       float64
+	mins      [][]byte
+	maxs      [][]byte
+	rows      []int
+	nulls     []int
+	maxlen    int
+	flags     []bool
+	Overlap   float64
+	Uniform   float64
+	Result    []float64
 }
 
 func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
@@ -68,99 +85,202 @@ func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
 	}
 }
 
-func (t *shuffleHeap) Pop() (*shuffleHeap, float64, float64) {
+func (t *shuffleHeap) Pop() (*shuffleHeap, *shuffleHeap) {
 	if t.left == nil {
-		return nil, t.key, t.value
+		return nil, t
 	}
 	if t.right == nil {
-		return t.left, t.key, t.value
+		return t.left, t
 	}
-	return t.left.Merge(t.right), t.key, t.value
+	return t.left.Merge(t.right), t
 }
 
-func NewShuffleRange() *ShuffleRange {
-	return &ShuffleRange{}
+func NewShuffleRange(isString bool) *ShuffleRange {
+	return &ShuffleRange{isStrType: isString}
+}
+func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32, nullCount uint32) {
+	if len(zmmin) > 8 {
+		zmmin = zmmin[:8]
+	}
+	if len(zmmax) > 8 {
+		zmmax = zmmax[:8]
+	}
+	if s.size == 0 {
+		s.size = int(rowCount)
+		s.flags = make([]bool, 256)
+		s.mins = make([][]byte, 0)
+		s.maxs = make([][]byte, 0)
+		s.mins = append(s.mins, zmmin)
+		s.maxs = append(s.maxs, zmmax)
+		s.rows = make([]int, 0)
+		s.rows = append(s.rows, int(rowCount))
+		s.nulls = make([]int, 0)
+		s.nulls = append(s.nulls, int(nullCount))
+	} else {
+		s.size += int(rowCount)
+		s.mins = append(s.mins, zmmin)
+		s.maxs = append(s.maxs, zmmax)
+		s.rows = append(s.rows, int(rowCount))
+		s.nulls = append(s.nulls, int(nullCount))
+	}
+	if s.maxlen < len(zmmin) {
+		s.maxlen = len(zmmin)
+	}
+	for _, c := range zmmin {
+		s.flags[int(c)] = true
+	}
+	if s.maxlen < len(zmmax) {
+		s.maxlen = len(zmmax)
+	}
+	for _, c := range zmmax {
+		s.flags[int(c)] = true
+	}
 }
 
-func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
-	s.size++
+func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nullCount uint32) {
+	s.size += int(rowCount)
 	if s.tree == nil {
 		s.tree = &shuffleHeap{
 			height: 1,
 			key:    zmmax,
 			value:  zmmin,
+			size:   int(rowCount),
+			nulls:  int(nullCount),
 		}
+		s.min = zmmin
+		s.max = zmmax
 	} else {
 		s.tree = s.tree.Merge(&shuffleHeap{
 			height: 1,
 			key:    zmmax,
 			value:  zmmin,
+			size:   int(rowCount),
+			nulls:  int(nullCount),
 		})
+		if s.min > zmmin {
+			s.min = zmmin
+		}
+		if s.max < zmmax {
+			s.max = zmmax
+		}
 	}
+
 }
 
-func (s *ShuffleRange) Eval(k int) {
-	if k <= 1 {
+func (s *ShuffleRange) Eval() {
+	k := DefaultEvalSize
+	if s.size == 0 {
 		return
 	}
-	var Head *shuffleList
-	var key, value float64
-	s.Result = make([]float64, k-1)
-	for s.tree != nil {
-		s.tree, key, value = s.tree.Pop()
-		Head = &shuffleList{
-			next: Head,
-			tree: &shuffleHeap{
-				height:  1,
-				key:     key,
-				value:   value,
-				reverse: true,
-			},
-			size:    1,
-			value:   value,
-			overlap: 1,
+	bytetoint := make(map[byte]int)
+	inttobyte := make([]byte, 0)
+	var lens float64
+	if s.isStrType {
+		for i := 0; i < 256; i++ {
+			if s.flags[i] {
+				bytetoint[byte(i)] = len(inttobyte)
+				inttobyte = append(inttobyte, byte(i))
+			}
 		}
-		for Head.next != nil {
-			next := Head.next
-			if Head.tree.value >= next.tree.key {
-				break
+		lens = float64(len(inttobyte))
+		for i := range s.mins {
+			node := &shuffleHeap{
+				height: 1,
+				key:    0,
+				value:  0,
+				size:   s.rows[i],
+				nulls:  s.nulls[i],
 			}
-			var delta float64
-			if next.value >= Head.value {
-				delta = next.overlap
+			for _, c := range s.maxs[i] {
+				node.key = node.key*lens + float64(bytetoint[c])
+			}
+			for j := len(s.maxs[i]); j < s.maxlen; j++ {
+				node.key = node.key * lens
+			}
+			for _, c := range s.mins[i] {
+				node.value = node.value*lens + float64(bytetoint[c])
+			}
+			for j := len(s.mins[i]); j < s.maxlen; j++ {
+				node.value = node.value * lens
+			}
+			if s.tree == nil {
+				s.tree = node
 			} else {
-				delta = (next.tree.key-Head.value)/(next.tree.key-next.value)*(next.overlap) + (next.tree.key-Head.value)/(Head.tree.key-Head.value)*(Head.overlap)
-				Head.value = next.value
+				s.tree = s.tree.Merge(node)
 			}
-			s.Overlap += delta
-			Head.overlap += next.overlap - delta
-			Head.tree = Head.tree.Merge(next.tree)
-			Head.size += next.size
-			Head.next = next.next
 		}
 	}
+	var head *shuffleList
+	var node *shuffleHeap
+	var nulls int
+	s.Result = make([]float64, k-1)
+	for s.tree != nil {
+		s.tree, node = s.tree.Pop()
+		node.left = nil
+		node.right = nil
+		node.height = 1
+		node.size -= node.nulls
+		nulls += node.nulls
+		node.reverse = true
+		head = &shuffleList{
+			next:  head,
+			tree:  node,
+			size:  node.size,
+			value: node.value,
+		}
+		if head.next != nil {
+			for head.next != nil {
+				next := head.next
+				if head.tree.value >= next.tree.key {
+					break
+				}
+				if head.tree.key != head.value {
+					if head.value <= next.value {
+						s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - next.value) / (head.tree.key - head.value)
+					} else {
+						s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - head.value) * (next.tree.key - head.value) / (head.tree.key - head.value) / (next.tree.key - next.value)
+						head.value = next.value
+					}
+				}
+				head.tree = head.tree.Merge(next.tree)
+				head.size += next.size
+				head.next = next.next
+			}
+
+		}
+	}
+	s.Overlap /= float64(s.size) * float64(s.size)
+	s.Overlap = math.Sqrt(s.Overlap)
 
 	step := float64(s.size) / float64(k)
+	if float64(nulls) >= step {
+		step = float64(s.size-nulls) / float64(k-1)
+	}
 	last := step
 	k -= 2
+	s.Uniform = float64(s.size) / (s.max - s.min)
 	for {
-		size := float64(Head.size)
-		if last > size {
-			last -= size
-			Head = Head.next
-			continue
+		if head == nil {
+			for i := 0; i <= k; i++ {
+				s.Result[k-i] = s.min
+			}
+			break
 		}
+		size := float64(head.size)
 		var valuetree *shuffleHeap
 		var speed float64
-		now := Head.tree.key
-		for last <= size {
-			if valuetree == nil || (Head.tree != nil && valuetree.key < Head.tree.key) {
-				Head.tree, key, value = Head.tree.Pop()
-				delta := speed * (now - key)
+		now := head.tree.key
+		for {
+			if valuetree == nil || (head.tree != nil && valuetree.key < head.tree.key) {
+				if head.tree == nil {
+					break
+				}
+				head.tree, node = head.tree.Pop()
+				delta := speed * (now - node.key)
 				last -= delta
 				size -= delta
-				for last < 0 {
-					s.Result[k] = key - (last/delta)*(now-key)
+				for last <= 0 {
+					s.Result[k] = node.key - (last/delta)*(now-node.key)
 					last += step
 					k--
 					if k < 0 || last > size {
@@ -171,47 +291,60 @@ func (s *ShuffleRange) Eval(k int) {
 				if k < 0 {
 					break
 				}
-				now = key
-				if key == value {
-					last -= 1
-					size -= 1
-					for last < 0 {
-						s.Result[k] = key
-						last += step
-						k--
-						if k < 0 || last > size {
-							break
+				now = node.key
+				if node.key == node.value {
+					last -= float64(node.size)
+					size -= float64(node.size)
+					if last <= 0 {
+						if -last <= last+float64(node.size) {
+							s.Result[k] = now
+							last = step
+							k--
+							if k < 0 {
+								break
+							}
+						} else {
+							s.Result[k] = now
+							last = step - float64(node.size)
+							k--
+							if k < 0 {
+								break
+							}
+							if last <= 0 {
+								s.Result[k] = now
+								last = step
+								k--
+								if k < 0 {
+									break
+								}
+							}
 						}
 
 					}
-					if k < 0 {
-						break
-					}
 					continue
 				}
-				speed += 1.0 / (key - value)
+				speed += float64(node.size) / (node.key - node.value)
+				if s.Uniform < speed {
+					s.Uniform = speed
+				}
+				node.left = nil
+				node.right = nil
+				node.height = 1
+				node.key += node.value
+				node.value = node.key - node.value
+				node.key -= node.value
 				if valuetree == nil {
-					valuetree = &shuffleHeap{
-						key:     value,
-						value:   key,
-						height:  1,
-						reverse: true,
-					}
+					valuetree = node
 				} else {
-					valuetree = valuetree.Merge(&shuffleHeap{
-						key:     value,
-						value:   key,
-						height:  1,
-						reverse: true,
-					})
+					valuetree = valuetree.Merge(node)
 				}
 			} else {
-				valuetree, key, value = valuetree.Pop()
-				delta := speed * (now - key)
+				valuetree, node = valuetree.Pop()
+				delta := speed * (now - node.key)
 				last -= delta
 				size -= delta
 				for last < 0 {
-					s.Result[k] = key - (last/delta)*(now-key)
+					s.Result[k] = node.key - (last/delta)*(now-node.key)
 					last += step
 					k--
 					if k < 0 || last > size {
@@ -222,15 +355,79 @@ func (s *ShuffleRange) Eval(k int) {
 				if k < 0 {
 					break
 				}
-				now = key
-				speed -= 1.0 / (value - key)
+				now = node.key
+				speed -= float64(node.size) / (node.value - node.key)
 			}
 		}
 		if k < 0 {
 			break
 		}
-		last -= size
-		Head = Head.next
+		head = head.next
 	}
-	s.Overlap /= float64(s.size)
+	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
+	if s.isStrType {
+		for i := range s.Result {
+			var frac float64
+			str := make([]byte, s.maxlen)
+			if s.Result[i] < 0 {
+				s.Result[i] = 0
+			}
+			s.Result[i], _ = math.Modf(s.Result[i])
+			for j := 0; j < s.maxlen; j++ {
+				s.Result[i], frac = math.Modf(s.Result[i] / lens)
+				str[j] = inttobyte[int(frac*lens+0.01)]
+			}
+			s.Result[i] = 0
+			for j := len(str) - 1; j >= 0; j-- {
+				s.Result[i] = s.Result[i]*256 + float64(str[j])
+			}
+			for j := 8 - len(str); j > 0; j-- {
+				s.Result[i] = s.Result[i] * 256
+			}
+		}
+	}
+	for i := 1; i < len(s.Result); i++ {
+		if s.Result[i] == s.Result[i-1] {
+			s.Result = nil
+			return
+		}
+	}
+}
+
+func ShuffleRangeReEvalUnsigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []uint64 {
+	k1 := len(ranges)
+	if k2 > k1/2 {
+		return nil
+	}
+	result := make([]uint64, k2-1)
+	if tableCnt/int64(k2) <= nullCnt {
+		result[0] = uint64(ranges[0])
+		for i := 1; i <= k2-2; i++ {
+			result[i] = uint64(ranges[(i)*(k1-1)/(k2-1)])
+		}
+	} else {
+		for i := 0; i <= k2-2; i++ {
+			result[i] = uint64(ranges[(i+1)*k1/k2-1])
+		}
+	}
+	return result
+}
+
+func ShuffleRangeReEvalSigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []int64 {
+	k1 := len(ranges)
+	if k2 > k1/2 {
+		return nil
+	}
+	result := make([]int64, k2-1)
+	if tableCnt/int64(k2) <= nullCnt {
+		result[0] = int64(ranges[0])
+		for i := 1; i <= k2-2; i++ {
+			result[i] = int64(ranges[(i)*(k1-1)/(k2-1)])
+		}
+	} else {
+		for i := 0; i <= k2-2; i++ {
+			result[i] = int64(ranges[(i+1)*k1/k2-1])
+		}
+	}
+	return result
 }

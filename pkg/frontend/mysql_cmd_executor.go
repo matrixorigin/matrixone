@@ -30,6 +30,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1713,6 +1714,14 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 				if colCnt1 != colCnt2 {
 					return true
 				}
+				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
+					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
+						continue
+					}
+					if p.Query.Nodes[i].TableDef.Cols[j].Name != tableDef.Cols[j].Name {
+						return true
+					}
+				}
 			}
 		}
 	default:
@@ -2587,7 +2596,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
-	defer ses.SetQueryInExecute(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
@@ -2870,6 +2878,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
+			if ses.pu.SV.DisableSelectInto {
+				err = moerr.NewSyntaxError(requestCtx, "Unsupport select statement")
+				return
+			}
 			ses.InitExportConfig(st.Ep)
 			defer func() {
 				ses.ClearExportParam()
@@ -3285,11 +3297,143 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	}
 
 	mrs = ses.GetMysqlResultSet()
+	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
 	switch statement := cw.GetAst().(type) {
 	//produce result set
-	case *tree.Select,
-		*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
+	case *tree.Select:
+		if ep.needExportToFile() {
+
+			columns, err = cw.GetColumns()
+			if err != nil {
+				logError(ses, ses.GetDebugString(),
+					"Failed to get columns from computation handler",
+					zap.Error(err))
+				return
+			}
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+			}
+
+			// open new file
+			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
+			initExportFileParam(ep, mrs)
+			if err = openNewFile(requestCtx, ep, mrs); err != nil {
+				return
+			}
+
+			runBegin := time.Now()
+			/*
+				Start pipeline
+				Producing the data row and sending the data row
+			*/
+			// todo: add trace
+			if _, err = runner.Run(0); err != nil {
+				return
+			}
+
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			}
+
+			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
+			if err = exportAllData(oq); err != nil {
+				return
+			}
+			if err = ep.Writer.Flush(); err != nil {
+				return
+			}
+			if err = ep.File.Close(); err != nil {
+				return
+			}
+
+			/*
+			   Serialize the execution plan by json
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				_ = cwft.RecordExecPlan(requestCtx)
+			}
+
+		} else {
+			columns, err = cw.GetColumns()
+			if err != nil {
+				logError(ses, ses.GetDebugString(),
+					"Failed to get columns from computation handler",
+					zap.Error(err))
+				return
+			}
+			if c, ok := cw.(*TxnComputationWrapper); ok {
+				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
+			}
+			/*
+				Step 1 : send column count and column definition.
+			*/
+			//send column count
+			colCnt := uint64(len(columns))
+			err = proto.SendColumnCountPacket(colCnt)
+			if err != nil {
+				return
+			}
+			//send columns
+			//column_count * Protocol::ColumnDefinition packets
+			cmd := ses.GetCmd()
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+				/*
+					mysql COM_QUERY response: send the column definition per column
+				*/
+				err = proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+				if err != nil {
+					return
+				}
+			}
+
+			/*
+				mysql COM_QUERY response: End after the column has been sent.
+				send EOF packet
+			*/
+			err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
+			if err != nil {
+				return
+			}
+
+			runBegin := time.Now()
+			/*
+				Step 2: Start pipeline
+				Producing the data row and sending the data row
+			*/
+			// todo: add trace
+			if _, err = runner.Run(0); err != nil {
+				return
+			}
+
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			}
+
+			/*
+				Step 3: Say goodbye
+				mysql COM_QUERY response: End after the data row has been sent.
+				After all row data has been sent, it sends the EOF or OK packet.
+			*/
+			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
+			if err != nil {
+				return
+			}
+
+			/*
+				Step 4: Serialize the execution plan by json`
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				_ = cwft.RecordExecPlan(requestCtx)
+			}
+		}
+
+	case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
@@ -3342,14 +3486,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Step 2: Start pipeline
 			Producing the data row and sending the data row
 		*/
-		ep := ses.GetExportConfig()
-		if ep.needExportToFile() {
-			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
-			initExportFileParam(ep, mrs)
-			if err = openNewFile(requestCtx, ep, mrs); err != nil {
-				return
-			}
-		}
 		// todo: add trace
 		if _, err = runner.Run(0); err != nil {
 			return
@@ -3358,19 +3494,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		switch ses.GetShowStmtType() {
 		case ShowTableStatus:
 			if err = handleShowTableStatus(ses, statement.(*tree.ShowTableStatus), proc); err != nil {
-				return
-			}
-		}
-
-		if ep.needExportToFile() {
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
-			if err = exportAllData(oq); err != nil {
-				return
-			}
-			if err = ep.Writer.Flush(); err != nil {
-				return
-			}
-			if err = ep.File.Close(); err != nil {
 				return
 			}
 		}
@@ -3449,6 +3572,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				}
 			}
 			return
+		}
+
+		// Start the dynamic table daemon task
+		if st, ok := cw.GetAst().(*tree.CreateTable); ok {
+			if st.IsDynamicTable {
+				if err = mce.handleCreateDynamicTable(requestCtx, st); err != nil {
+					return
+				}
+			}
 		}
 
 		if loadLocalErrGroup != nil {
@@ -3565,7 +3697,16 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
+	// set the batch buf for stream scan
+	var inMemStreamScan []*kafka.Message
+
+	if batchValue, ok := requestCtx.Value(defines.SourceScanResKey{}).([]*kafka.Message); ok {
+		inMemStreamScan = batchValue
+	}
+
 	beginInstant := time.Now()
+	requestCtx = appendStatementAt(requestCtx, beginInstant)
+
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
@@ -3575,6 +3716,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
+
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
@@ -3594,16 +3736,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		SqlHelper:     ses.GetSqlHelper(),
-		Buf:           ses.GetBuffer(),
+		User:                 ses.GetUserName(),
+		Host:                 pu.SV.Host,
+		ConnectionID:         uint64(proto.ConnectionID()),
+		Database:             ses.GetDatabaseName(),
+		Version:              makeServerVersion(pu, serverVersion.Load().(string)),
+		TimeZone:             ses.GetTimeZone(),
+		StorageEngine:        pu.StorageEngine,
+		LastInsertID:         ses.GetLastInsertID(),
+		SqlHelper:            ses.GetSqlHelper(),
+		Buf:                  ses.GetBuffer(),
+		StreamInMemScanBatch: inMemStreamScan,
 	}
 	proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
@@ -3638,7 +3781,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
 
-	statsInfo := statistic.StatsInfo{}
+	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
@@ -3889,7 +4032,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			int(COM_QUIT),
 			nil,
 		)*/
-		return resp, moerr.NewInternalError(requestCtx, "client send quit")
+		return resp, moerr.NewInternalError(requestCtx, quitStr)
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)

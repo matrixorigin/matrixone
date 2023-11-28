@@ -34,7 +34,7 @@ import (
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 8192
+const maxRowThenUnusePkFilterExpr = 1024
 
 type dmlSelectInfo struct {
 	typ string
@@ -666,14 +666,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							},
 						},
 					}
-					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
 						return false, nil, false, err
 					}
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
+						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return false, nil, false, err
 						}
@@ -684,7 +684,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				if joinIdx == 0 {
 					joinConds = condExpr
 				} else {
-					joinConds, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
+					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
 					if err != nil {
 						return false, nil, false, err
 					}

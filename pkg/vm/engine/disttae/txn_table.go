@@ -74,9 +74,9 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 	}
 	if s.NeedUpdate(approxNumObjects) {
 		if partitionTables != nil {
-			return UpdateStatsForPartitionTable(ctx, tbl, partitionTables, s)
+			return UpdateStatsForPartitionTable(ctx, tbl, partitionTables, s, approxNumObjects)
 		} else {
-			return UpdateStats(ctx, tbl, s)
+			return UpdateStats(ctx, tbl, s, approxNumObjects)
 		}
 	} else {
 		return true
@@ -138,6 +138,10 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		return 0, err
 	}
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		if obj.Rows() != 0 {
+			rows += int64(obj.Rows())
+			return nil
+		}
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -151,32 +155,13 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		rows += int64(meta.BlockHeader().Rows())
 		return nil
 	}
-	if err = tbl.ForeachDataObject(partition, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(partition, onObjFn); err != nil {
 		return 0, err
 	}
 	return rows, nil
 }
 
-//func (tbl *txnTable) ForeachBlock(
-//	state *logtailreplay.PartitionState,
-//	fn func(block logtailreplay.BlockEntry) error,
-//) (err error) {
-//	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-//	iter, err := state.NewBlocksIter(ts)
-//	if err != nil {
-//		return err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		if err = fn(entry); err != nil {
-//			break
-//		}
-//	}
-//	iter.Close()
-//	return
-//}
-
-func (tbl *txnTable) ForeachDataObject(
+func (tbl *txnTable) ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
@@ -214,7 +199,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	var inited bool
-	cols := tbl.getTableDef().GetCols()
+	cols := tbl.GetTableDef(ctx).GetCols()
 	dataLength := len(cols) - 1
 
 	tableVal := make([][2]any, dataLength)
@@ -254,7 +239,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -279,7 +264,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 	ret := int64(0)
 	neededCols := make(map[string]*plan.ColDef)
-	cols := tbl.getTableDef().Cols
+	cols := tbl.GetTableDef(ctx).Cols
 	found := false
 
 	for i := range cols {
@@ -377,7 +362,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, err
 	}
 	return ret, nil
@@ -389,7 +374,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 
-	cols := tbl.getTableDef().GetCols()
+	cols := tbl.GetTableDef(ctx).GetCols()
 	found := false
 	n := 0
 	for _, c := range cols {
@@ -452,9 +437,18 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(state, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(state, onObjFn); err != nil {
 		return nil, err
 	}
+
+	var logStr string
+	for i, col := range needCols {
+		if i > 0 {
+			logStr += ", "
+		}
+		logStr += col.GetName()
+	}
+	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
 
 	return infoList, nil
 }
@@ -568,6 +562,7 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
 	defer func() {
+		v2.TxnTableRangeSizeHistogram.Observe(float64(len(ranges)))
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -605,7 +600,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
-		tbl.getTableDef(),
+		tbl.GetTableDef(ctx),
 		newExprs,
 		&ranges,
 		tbl.proc.Load(),
@@ -644,10 +639,10 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
+		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		if len(deleteBlks) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks); err != nil {
+		if len(deleteObjs) > 0 {
+			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
 				return err
 			}
 		}
@@ -672,15 +667,20 @@ func (tbl *txnTable) rangesOnePart(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	insertedS3Blks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+	objectStatsList, err := tbl.db.txn.getInsertedObjectListForTable(tbl.db.databaseId, tbl.tableId)
 	if err != nil {
 		return err
 	}
-	for _, blk := range insertedS3Blks {
-		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
-			dirtyBlks[blk.BlockID] = struct{}{}
-		}
+
+	if !tbl.db.txn.deletedBlocks.isEmpty() {
+		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+			if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
+				dirtyBlks[blk.BlockID] = struct{}{}
+			}
+			return true
+		}, objectStatsList...)
 	}
+
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
 			continue
@@ -706,6 +706,7 @@ func (tbl *txnTable) rangesOnePart(
 		vecs        []*vector.Vector
 		skipObj     bool
 		auxIdCnt    int32
+		s3BlkCnt    uint32
 	)
 
 	defer func() {
@@ -722,7 +723,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err := tbl.tryFastRanges(
-		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
+		state, exprs, objectStatsList, dirtyBlks, ranges, fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -744,71 +745,76 @@ func (tbl *txnTable) rangesOnePart(
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
 	hasDeletes := len(dirtyBlks) > 0
-	for _, blk := range insertedS3Blks {
-		// if expr is monotonic, we need evaluating expr for each block
-		if auxIdCnt > 0 {
-			location := blk.MetaLocation()
 
-			// check whether the block belongs to a new object
-			// yes:
-			//     1. load object meta
-			//     2. eval expr on object meta
-			//     3. if the expr is false, skip eval expr on the blocks of the same object
-			// no:
-			//     1. check whether the object is skipped
-			//     2. if skipped, skip this block
-			//     3. if not skipped, eval expr on the block
-			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnFastLoadObjectMetaTotalCounter.Inc()
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-					return
-				}
-				objDataMeta = objMeta.MustDataMeta()
-				skipObj = false
-				// here we only eval expr on the object meta if it has more than 2 blocks
-				if objDataMeta.BlockCount() > 2 {
-					for _, expr := range exprs {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
-							skipObj = true
-							break
-						}
+	for _, objStats := range objectStatsList {
+		s3BlkCnt += objStats.BlkCnt()
+		// for a new object :
+		//     1. load object meta
+		//     2. eval expr on object meta
+		//     3. if the expr is false, skip eval expr on the blocks of the same object
+		skipObj = false
+		if auxIdCnt > 0 {
+			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+			location := objStats.ObjectLocation()
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+				return
+			}
+			objDataMeta = objMeta.MustDataMeta()
+			// here we only eval expr on the object meta if it has more than 2 blocks
+			if objDataMeta.BlockCount() > 2 {
+				for _, expr := range exprs {
+					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
+						skipObj = true
+						break
 					}
 				}
 			}
+		}
 
-			if skipObj {
-				continue
-			}
+		if skipObj {
+			continue
+		}
 
-			var skipBlk bool
+		// for each blk in the object:
+		//     1. check whether the object is skipped
+		//     2. if skipped, skip this block
+		//     3. if not skipped, eval expr on the block
 
-			// eval filter expr on the block
-			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-			for _, expr := range exprs {
-				if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
-					skipBlk = true
-					break
+		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+			skipBlk := false
+
+			if auxIdCnt > 0 {
+				// eval filter expr on the block
+				blkMeta := objDataMeta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
+				for _, expr := range exprs {
+					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+						skipBlk = true
+						break
+					}
+				}
+
+				// if the block is not needed, skip it
+				if skipBlk {
+					return true
 				}
 			}
 
-			// if the block is not needed, skip it
-			if skipBlk {
-				continue
+			if hasDeletes {
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
+				}
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				return true
 			}
-		}
-
-		if hasDeletes {
-			if _, ok := dirtyBlks[blk.BlockID]; !ok {
-				blk.CanRemote = true
-			}
+			// store the block in ranges
+			blk.CanRemote = true
 			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			continue
-		}
-		// store the block in ranges
-		blk.CanRemote = true
-		blk.PartitionNum = -1
-		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+
+			return true
+
+		}, objStats)
 	}
 
 	//filter objects
@@ -829,6 +835,7 @@ func (tbl *txnTable) rangesOnePart(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -866,10 +873,10 @@ func (tbl *txnTable) rangesOnePart(
 			if skipBlk {
 				continue
 			}
-			bid := *blkMeta.GetBlockID(obj.Loc.Name())
+			bid := *blkMeta.GetBlockID(obj.Location().Name())
 			metaLoc := blockio.EncodeLocation(
-				obj.Loc.Name(),
-				obj.Loc.Extent(),
+				obj.Location().Name(),
+				obj.Location().Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
@@ -879,10 +886,10 @@ func (tbl *txnTable) rangesOnePart(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -903,14 +910,17 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}
 
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, int(s3BlkCnt)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 
 func (tbl *txnTable) tryFastRanges(
 	state *logtailreplay.PartitionState,
 	exprs []*plan.Expr,
-	insertedS3Blocks []catalog.BlockInfo,
+	objStatsList []objectio.ObjectStats,
 	//snapshotObjs []logtailreplay.ObjectEntry,
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
@@ -939,80 +949,93 @@ func (tbl *txnTable) tryFastRanges(
 		meta objectio.ObjectDataMeta
 		bf   objectio.BloomFilter
 		// bfIdx   index.StaticFilter
-		skipObj bool
+		skipObj  bool
+		s3BlkCnt uint32
 	)
-	//TODO::remove
-	for _, blk := range insertedS3Blocks {
-		location := blk.MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			var objMeta objectio.ObjectMeta
-			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
-			); err != nil {
-				return
+
+	for _, stats := range objStatsList {
+		s3BlkCnt += stats.BlkCnt()
+
+		if !stats.ZMIsEmpty() {
+			pkZM := stats.SortKeyZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
 			}
+		}
 
-			// reset bloom filter to nil for each object
-			bf = nil
-			// bfIdx = index.NewEmptyBinaryFuseFilter()
+		location := stats.ObjectLocation()
+		var objMeta objectio.ObjectMeta
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+		if objMeta, err = objectio.FastLoadObjectMeta(
+			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
+		); err != nil {
+			return
+		}
+		// reset bloom filter to nil for each object
+		bf = nil
+		// bfIdx = index.NewEmptyBinaryFuseFilter()
 
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			meta = objMeta.MustDataMeta()
+		// check whether the object is skipped by zone map
+		// If object zone map doesn't contains the pk value, we need to check bloom filter
+		meta = objMeta.MustDataMeta()
+		if stats.ZMIsEmpty() {
 			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
 			if skipObj = !pkZM.ContainsKey(val); skipObj {
 				continue
 			}
-
-			// check whether the object is skipped by bloom filter
-			if bf, err = objectio.LoadBFWithMeta(
-				tbl.proc.Load().Ctx, meta, location, fs,
-			); err != nil {
-				return
-			}
-
-			// TODO: use object bf first
-			// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
-			// 	return
-			// }
-			// var exist bool
-			// if exist, err = bfIdx.MayContainsKey(val); err != nil {
-			// 	return
-			// } else {
-			// 	skipObj = !exist
-			// }
 		}
 
-		if skipObj {
-			continue
-		}
-
-		blkBf := bf.GetBloomFilter(uint32(location.ID()))
-		blkBfIdx := index.NewEmptyBinaryFuseFilter()
-		if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+		// check whether the object is skipped by bloom filter
+		if bf, err = objectio.LoadBFWithMeta(
+			tbl.proc.Load().Ctx, meta, location, fs,
+		); err != nil {
 			return
 		}
-		var exist bool
-		if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
-			return
-		} else {
-			if !exist {
-				continue
-			}
-		}
 
-		if hasDeletes {
-			if _, ok := dirtyBlks[blk.BlockID]; !ok {
-				blk.CanRemote = true
+		// TODO: use object bf first
+		// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
+		// 	return
+		// }
+		// var exist bool
+		// if exist, err = bfIdx.MayContainsKey(val); err != nil {
+		// 	return
+		// } else {
+		// 	skipObj = !exist
+		// }
+
+		ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+			blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+			blkBfIdx := index.NewEmptyBinaryFuseFilter()
+			if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+				return false
 			}
+			var exist bool
+			if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
+				return false
+			} else {
+				if !exist {
+					return true
+				}
+			}
+
+			if hasDeletes {
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
+				}
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				return true
+			}
+
+			blk.CanRemote = true
 			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			continue
-		}
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+			return true
+		}, stats)
 
-		blk.CanRemote = true
-		blk.PartitionNum = -1
-		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+		if err != nil {
+			return
+		}
 	}
 
 	//filter objects and blocks.
@@ -1029,7 +1052,16 @@ func (tbl *txnTable) tryFastRanges(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
+
+		if !obj.ZMIsEmpty() {
+			pkZM := obj.SortKeyZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
+		}
+
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -1037,10 +1069,13 @@ func (tbl *txnTable) tryFastRanges(
 		}
 		objDataMeta = objMeta.MustDataMeta()
 		cnt += objDataMeta.BlockCount()
-		pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-		if !pkZM.ContainsKey(val) {
-			continue
+		if obj.ZMIsEmpty() {
+			pkZM := objDataMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if !pkZM.ContainsKey(val) {
+				continue
+			}
 		}
+
 		if bf, err = objectio.LoadBFWithMeta(
 			tbl.proc.Load().Ctx, objDataMeta, location, fs,
 		); err != nil {
@@ -1065,11 +1100,11 @@ func (tbl *txnTable) tryFastRanges(
 					continue
 				}
 			}
-			bid := *blkMeta.GetBlockID(obj.Loc.Name())
+			bid := *blkMeta.GetBlockID(obj.Location().Name())
 			metaLoc := blockio.EncodeLocation(
-				obj.Loc.Name(),
+				obj.Location().Name(),
 				//blkMeta.GetExtent(),
-				obj.Loc.Extent(),
+				obj.Location().Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
@@ -1079,10 +1114,10 @@ func (tbl *txnTable) tryFastRanges(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1104,64 +1139,14 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blocks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, int(s3BlkCnt)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 
-// getTableDef only return all cols and their index.
-func (tbl *txnTable) getTableDef() *plan.TableDef {
-	if tbl.tableDef == nil {
-		var cols []*plan.ColDef
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range tbl.defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					Name:  attr.Attr.Name,
-					ColId: attr.Attr.ID,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			}
-		}
-		tbl.tableDef = &plan.TableDef{
-			Name:          tbl.tableName,
-			Cols:          cols,
-			Name2ColIndex: name2index,
-		}
-		tbl.tableDef.Version = tbl.version
-		// add Constraint
-		if len(tbl.constraint) != 0 {
-			c := new(engine.ConstraintDef)
-			err := c.UnmarshalBinary(tbl.constraint)
-			if err != nil {
-				return nil
-			}
-			for _, ct := range c.Cts {
-				switch k := ct.(type) {
-				case *engine.PrimaryKeyDef:
-					tbl.tableDef.Pkey = k.Pkey
-				}
-			}
-		}
-	}
-
-	return tbl.tableDef
-}
-
+// the return defs has no rowid column
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
 	// I don't understand why the logic now is not to get all the tableDef. Don't understand.
@@ -1213,7 +1198,163 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	defs = append(defs, pro)
 	return defs, nil
+}
 
+func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
+	if tbl.tableDef == nil {
+		var clusterByDef *plan.ClusterByDef
+		var cols []*plan.ColDef
+		var defs []*plan.TableDef_DefType
+		var properties []*plan.Property
+		var TableType string
+		var Createsql string
+		var partitionInfo *plan.PartitionByDef
+		var viewSql *plan.ViewDef
+		var foreignKeys []*plan.ForeignKeyDef
+		var primarykey *plan.PrimaryKeyDef
+		var indexes []*plan.IndexDef
+		var refChildTbls []uint64
+		var hasRowId bool
+
+		i := int32(0)
+		name2index := make(map[string]int32)
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				name2index[attr.Attr.Name] = i
+				cols = append(cols, &plan.ColDef{
+					ColId: attr.Attr.ID,
+					Name:  attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:          int32(attr.Attr.Type.Oid),
+						Width:       attr.Attr.Type.Width,
+						Scale:       attr.Attr.Type.Scale,
+						AutoIncr:    attr.Attr.AutoIncrement,
+						Table:       tbl.tableName,
+						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:  attr.Attr.EnumVlaues,
+					},
+					Primary:   attr.Attr.Primary,
+					Default:   attr.Attr.Default,
+					OnUpdate:  attr.Attr.OnUpdate,
+					Comment:   attr.Attr.Comment,
+					ClusterBy: attr.Attr.ClusterBy,
+					Hidden:    attr.Attr.IsHidden,
+					Seqnum:    uint32(attr.Attr.Seqnum),
+				})
+				if attr.Attr.ClusterBy {
+					clusterByDef = &plan.ClusterByDef{
+						Name: attr.Attr.Name,
+					}
+				}
+				if attr.Attr.Name == catalog.Row_ID {
+					hasRowId = true
+				}
+				i++
+			}
+		}
+
+		if tbl.comment != "" {
+			properties = append(properties, &plan.Property{
+				Key:   catalog.SystemRelAttr_Comment,
+				Value: tbl.comment,
+			})
+		}
+
+		if tbl.partitioned > 0 {
+			p := &plan.PartitionByDef{}
+			err := p.UnMarshalPartitionInfo(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
+			partitionInfo = p
+		}
+
+		if tbl.viewdef != "" {
+			viewSql = &plan.ViewDef{
+				View: tbl.viewdef,
+			}
+		}
+
+		if len(tbl.constraint) > 0 {
+			c := &engine.ConstraintDef{}
+			err := c.UnmarshalBinary(tbl.constraint)
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+				return nil
+			}
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.IndexDef:
+					indexes = k.Indexes
+				case *engine.ForeignKeyDef:
+					foreignKeys = k.Fkeys
+				case *engine.RefChildTableDef:
+					refChildTbls = k.Tables
+				case *engine.PrimaryKeyDef:
+					primarykey = k.Pkey
+				case *engine.StreamConfigsDef:
+					properties = append(properties, k.Configs...)
+				}
+			}
+		}
+
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: tbl.relKind,
+		})
+		TableType = tbl.relKind
+
+		if tbl.createSql != "" {
+			properties = append(properties, &plan.Property{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: tbl.createSql,
+			})
+			Createsql = tbl.createSql
+		}
+
+		if len(properties) > 0 {
+			defs = append(defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
+					},
+				},
+			})
+		}
+
+		if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+			primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
+		}
+		if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
+			clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+		}
+		if !hasRowId {
+			rowIdCol := plan2.MakeRowIdColDef()
+			cols = append(cols, rowIdCol)
+		}
+
+		tbl.tableDef = &plan.TableDef{
+			TblId:         tbl.tableId,
+			Name:          tbl.tableName,
+			Cols:          cols,
+			Name2ColIndex: name2index,
+			Defs:          defs,
+			TableType:     TableType,
+			Createsql:     Createsql,
+			Pkey:          primarykey,
+			ViewSql:       viewSql,
+			Partition:     partitionInfo,
+			Fkeys:         foreignKeys,
+			RefChildTbls:  refChildTbls,
+			ClusterBy:     clusterByDef,
+			Indexes:       indexes,
+			Version:       tbl.version,
+		}
+	}
+	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
+	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
+	return tableDef
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1230,6 +1371,8 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
@@ -1247,6 +1390,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	tbl.constraint = ct
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 	return nil
 }
 
@@ -1378,13 +1523,13 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) mergeCompaction(
-	compactedBlks map[catalog.BlockInfo][]int64) ([]catalog.BlockInfo, error) {
+	compactedBlks map[catalog.BlockInfo][]int64) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
 	_, err := s3writer.GenerateWriter(tbl.db.txn.proc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tbl.seqnums == nil {
 		n := len(tbl.tableDef.Cols) - 1
@@ -1411,7 +1556,7 @@ func (tbl *txnTable) mergeCompaction(
 			tbl.db.txn.engine.fs,
 			tbl.db.txn.proc.GetMPool())
 		if e != nil {
-			return nil, e
+			return nil, nil, e
 		}
 		if bat.RowCount() == 0 {
 			continue
@@ -1420,11 +1565,11 @@ func (tbl *txnTable) mergeCompaction(
 		bat.Clean(tbl.db.txn.proc.GetMPool())
 
 	}
-	createdBlks, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
+	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return createdBlks, nil
+	return createdBlks, stats, nil
 }
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
@@ -1610,7 +1755,7 @@ func (tbl *txnTable) newBlockReader(
 	proc *process.Process) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.op.SnapshotTS()
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(ctx)
 
 	if len(blkInfos) < num || len(blkInfos) == 1 {
 		for i, blk := range blkInfos {
@@ -1646,7 +1791,7 @@ func (tbl *txnTable) newBlockReader(
 		num,
 		expr,
 		proc)
-	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
+	distributeBlocksToBlockReaders(blockReaders, num, len(blkInfos), infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
 	}
@@ -1761,6 +1906,7 @@ func (tbl *txnTable) newReader(
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,
 		readerNumber-1,
+		len(dirtyBlks),
 		objInfos,
 		steps)
 	for i := range blockReaders {
@@ -1866,25 +2012,22 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	for _, key := range keys {
-		if snap.PrimaryKeyMayBeModified(from, to, key) {
-			return true, nil
-		}
+	if snap.PrimaryKeyMayBeModified(from, to, keys) {
+		return true, nil
 	}
-
 	return false, nil
 }
 
 func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
-	deleteBlks,
-	createBlks []types.Blockid) error {
+	deleteObjs,
+	createObjs []objectio.ObjectNameShort) error {
 	var blks []catalog.BlockInfo
 
-	deleteBlksMap := make(map[types.Blockid]struct{})
-	for _, id := range deleteBlks {
-		deleteBlksMap[id] = struct{}{}
+	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
+	for _, name := range deleteObjs {
+		deleteObjsMap[name] = struct{}{}
 	}
 
 	{
@@ -1896,8 +2039,8 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, id := range createBlks {
-			if obj, ok := state.GetObject(id); ok {
+		for _, name := range createObjs {
+			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
@@ -1910,32 +2053,29 @@ func (tbl *txnTable) updateDeleteInfo(
 				blkCnt := objDataMeta.BlockCount()
 				for i := 0; i < int(blkCnt); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					bid := *blkMeta.GetBlockID(obj.Loc.Name())
-					if bid == id {
-						metaLoc := blockio.EncodeLocation(
-							obj.Loc.Name(),
-							obj.Loc.Extent(),
-							blkMeta.GetRows(),
-							blkMeta.GetID(),
-						)
-						blkInfo := catalog.BlockInfo{
-							BlockID:    bid,
-							EntryState: obj.EntryState,
-							Sorted:     obj.Sorted,
-							MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-							CommitTs:   obj.CommitTS,
-							SegmentID:  obj.SegmentID,
-						}
-						if obj.HasDeltaLoc {
-							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-							if ok {
-								blkInfo.DeltaLoc = deltaLoc
-								blkInfo.CommitTs = commitTs
-							}
-						}
-						blks = append(blks, blkInfo)
-						break
+					bid := *blkMeta.GetBlockID(obj.Location().Name())
+					metaLoc := blockio.EncodeLocation(
+						obj.Location().Name(),
+						obj.Location().Extent(),
+						blkMeta.GetRows(),
+						blkMeta.GetID(),
+					)
+					blkInfo := catalog.BlockInfo{
+						BlockID:    bid,
+						EntryState: obj.EntryState,
+						Sorted:     obj.Sorted,
+						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+						CommitTs:   obj.CommitTS,
+						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
+					if obj.HasDeltaLoc {
+						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						if ok {
+							blkInfo.DeltaLoc = deltaLoc
+							blkInfo.CommitTs = commitTs
+						}
+					}
+					blks = append(blks, blkInfo)
 				}
 			}
 		}
@@ -1949,7 +2089,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := deleteBlksMap[blkid]; ok {
+				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
@@ -1973,7 +2113,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
 			typ = col.Typ
