@@ -122,6 +122,7 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 
 			pkCol := bat.GetVector(0)
 			arg.bloomFilter.Add(pkCol)
+			proc.PutBatch(bat)
 			continue
 
 		case Probe:
@@ -168,8 +169,7 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 					}
 				}
 			})
-
-			result.Batch = batch.EmptyBatch
+			proc.PutBatch(bat)
 			continue
 		case End:
 			result.Status = vm.ExecStop
@@ -200,6 +200,7 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 
 			pkCol := bat.GetVector(0)
 			arg.roaringFilter.addFunc(arg.roaringFilter, pkCol)
+			proc.PutBatch(bat)
 			continue
 
 		case Probe:
@@ -239,6 +240,7 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 			pkCol := bat.GetVector(0)
 
 			idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
+			proc.PutBatch(bat)
 
 			if idx == -1 {
 				continue
