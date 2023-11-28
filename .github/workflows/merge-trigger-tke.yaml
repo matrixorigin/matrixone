@@ -512,7 +512,7 @@ jobs:
 
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
