@@ -1410,41 +1410,6 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 	return blk
 }
 
-func ForeachSnapshotObjects(
-	ts timestamp.Timestamp,
-	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
-	tableSnapshot *logtailreplay.PartitionState,
-	uncommitted ...objectio.ObjectStats,
-) (err error) {
-	// process all uncommitted objects first
-	for _, obj := range uncommitted {
-		info := logtailreplay.ObjectInfo{
-			ObjectStats: obj,
-		}
-		if err = onObject(info, false); err != nil {
-			return
-		}
-	}
-
-	// process all committed objects
-	if tableSnapshot == nil {
-		return
-	}
-
-	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
-	if err != nil {
-		return
-	}
-	defer iter.Close()
-	for iter.Next() {
-		obj := iter.Entry()
-		if err = onObject(obj.ObjectInfo, true); err != nil {
-			return
-		}
-	}
-	return
-}
-
 func ConstructObjStatsByLoadObjMeta(
 	ctx context.Context, metaLoc objectio.Location,
 	fs fileservice.FileService) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
