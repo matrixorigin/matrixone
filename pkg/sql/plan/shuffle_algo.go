@@ -284,6 +284,9 @@ func (s *ShuffleRange) Eval() {
 				size -= delta
 				for last <= 0 {
 					s.Result[k] = node.key - (last/delta)*(now-node.key)
+					if s.Result[k] != s.Result[k] {
+						s.Result[k] = node.key
+					}
 					last += step
 					k--
 					if k < 0 || last > size {
@@ -348,6 +351,9 @@ func (s *ShuffleRange) Eval() {
 				size -= delta
 				for last < 0 {
 					s.Result[k] = node.key - (last/delta)*(now-node.key)
+					if s.Result[k] != s.Result[k] {
+						s.Result[k] = node.key
+					}
 					last += step
 					k--
 					if k < 0 || last > size {
