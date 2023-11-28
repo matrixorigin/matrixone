@@ -227,6 +227,30 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		node.Children[0] = childID
 
+	case plan.Node_SAMPLE:
+		groupTag := node.BindingTags[0]
+		sampleTag := node.BindingTags[1]
+
+		for _, filter := range filters {
+			if !containsTag(filter, sampleTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
 
@@ -289,14 +313,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]any)
+		leftTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
-			leftTags[tag] = nil
+			leftTags[tag] = emptyStruct
 		}
 
-		rightTags := make(map[int32]any)
+		rightTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
-			rightTags[tag] = nil
+			rightTags[tag] = emptyStruct
 		}
 
 		var markTag int32
@@ -688,7 +712,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 }
 
 /*
-func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
+func getJoinCondLeftCol(cond *Expr, leftTags map[int32]emptyType) *plan.Expr_Col {
 	fun, ok := cond.Expr.(*plan.Expr_F)
 	if !ok || fun.F.Func.ObjName != "=" {
 		return nil
@@ -723,7 +747,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
-			if SupportedJoinCondition(exprf.F.Func.GetObj()) {
+			if IsEqualFunc(exprf.F.Func.GetObj()) {
 				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
 				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
 				if leftok && rightok {
@@ -870,14 +894,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		return
 	}
 
-	leftTags := make(map[int32]any)
+	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
+		leftTags[tag] = emptyStruct
 	}
 
-	rightTags := make(map[int32]any)
+	rightTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
+		rightTags[tag] = emptyStruct
 	}
 
 	exprs := make([]*plan.Expr, 0)

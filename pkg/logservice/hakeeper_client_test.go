@@ -196,6 +196,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 			WorkState:      metadata.WorkState_Working,
+			UpTime:         cd.CNStores[0].UpTime,
 		}
 		tn := pb.TNStore{
 			UUID:                 s.ID(),

@@ -735,6 +735,9 @@ var (
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
+		input:  "create dynamic table t as select a from t1",
+		output: "create dynamic table t as select a from t1",
+	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
@@ -874,6 +877,9 @@ var (
 		},
 		{
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
+		},
+		{
+			input: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
 		},
 		{
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",

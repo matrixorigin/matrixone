@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"testing"
 	"time"
@@ -570,6 +571,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table := mock_frontend.NewMockRelation(ctrl)
 		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(false).AnyTimes()

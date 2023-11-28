@@ -55,7 +55,8 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	// todo will do not lock table now.
-	needLockTable := false
+	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
+	needLockTable := isDeleteWithoutFilters
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
 		delPlanCtx := getDmlPlanCtx()
@@ -69,6 +70,21 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
 		delPlanCtx.lockTable = needLockTable
+		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
+
+		if tableDef.Partition != nil {
+			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
+			partTableNames := make([]string, tableDef.Partition.PartitionNum)
+			for j, partition := range tableDef.Partition.Partitions {
+				_, partTableDef := ctx.Resolve(tblInfo.objRef[i].SchemaName, partition.PartitionTableName)
+				partTableIds[j] = partTableDef.TblId
+				partTableNames[j] = partition.PartitionTableName
+			}
+			delPlanCtx.partitionInfos[tableDef.TblId] = &partSubTableInfo{
+				partTableIDs:   partTableIds,
+				partTableNames: partTableNames,
+			}
+		}
 
 		lastNodeId = appendSinkScanNode(builder, deleteBindCtx, sourceStep)
 		lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx, lastNodeId)
@@ -78,6 +94,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		lastNodeId = appendSinkNode(builder, deleteBindCtx, lastNodeId)
 		nextSourceStep := builder.appendStep(lastNodeId)
 		delPlanCtx.sourceStep = nextSourceStep
+
 		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
 			return nil, err

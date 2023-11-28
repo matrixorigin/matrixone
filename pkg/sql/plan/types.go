@@ -151,9 +151,9 @@ type ExecInfo struct {
 	CnNumbers  int
 }
 
-///////////////////////////////
-// Data structures for refactor
-///////////////////////////////
+type emptyType struct{}
+
+var emptyStruct = emptyType{}
 
 type QueryBuilder struct {
 	qry     *plan.Query
@@ -178,7 +178,7 @@ type CTERef struct {
 	defaultDatabase string
 	isRecursive     bool
 	ast             *tree.CTE
-	maskedCTEs      map[string]any
+	maskedCTEs      map[string]emptyType
 }
 
 type aliasItem struct {
@@ -190,7 +190,7 @@ type BindContext struct {
 	binder Binder
 
 	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]any
+	maskedCTEs             map[string]emptyType
 	normalCTE              bool
 	initSelect             bool
 	recSelect              bool
@@ -209,6 +209,7 @@ type BindContext struct {
 	sinkTag      int32
 	windowTag    int32
 	timeTag      int32
+	sampleTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
@@ -219,6 +220,7 @@ type BindContext struct {
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
+	sampleByAst    map[string]int32
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
@@ -246,6 +248,9 @@ type BindContext struct {
 	defaultDatabase string
 
 	forceWindows bool
+
+	// sample function related.
+	sampleFunc SampleFuncCtx
 }
 
 type NameTuple struct {

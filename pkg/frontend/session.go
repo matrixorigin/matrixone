@@ -1241,10 +1241,14 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	var compCtx *TxnCompilerContext
+	var proc *process.Process
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
-	return ses.txnCompileCtx
+	compCtx = ses.txnCompileCtx
+	proc = ses.proc
+	ses.mu.Unlock()
+	compCtx.SetProcess(proc)
+	return compCtx
 }
 
 func (ses *Session) GetBuffer() *buffer.Buffer {
@@ -2120,7 +2124,6 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		return nil, err
 	}
 
-	tenantInfo := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -2131,7 +2134,9 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	accountId = tenantInfo.GetTenantID()
+	if tenantInfo := ses.GetTenantInfo(); tenantInfo != nil {
+		accountId = tenantInfo.GetTenantID()
+	}
 	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
 	bh.ClearExecResultSet()

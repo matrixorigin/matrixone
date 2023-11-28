@@ -179,11 +179,12 @@ type txnOperator struct {
 		lockSeq   uint64
 		waitLocks map[uint64]Lock
 	}
-	workspace       Workspace
-	timestampWaiter TimestampWaiter
-	clock           clock.Clock
-	createAt        time.Time
-	commitAt        time.Time
+	cannotCleanWorkspace bool
+	workspace            Workspace
+	timestampWaiter      TimestampWaiter
+	clock                clock.Clock
+	createAt             time.Time
+	commitAt             time.Time
 }
 
 func newTxnOperator(
@@ -475,7 +476,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	defer task.End()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
-	if tc.workspace != nil {
+	if tc.workspace != nil && !tc.cannotCleanWorkspace {
 		if err := tc.workspace.Rollback(ctx); err != nil {
 			util.GetLogger().Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
@@ -852,10 +853,8 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		util.GetLogger().Fatal("invalid response",
-			zap.String("response", resp.DebugString()))
+		return moerr.NewNotSupportedNoCtx("unknown txn response method: %s", resp.DebugString())
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) error {

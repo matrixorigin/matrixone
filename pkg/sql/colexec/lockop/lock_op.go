@@ -89,11 +89,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	return callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
-	// if ok {
-	// 	result.Status = vm.ExecStop
-	// 	return result, err
-	// }
-	// return result, err
 }
 
 func callNonBlocking(
@@ -105,6 +100,11 @@ func callNonBlocking(
 	if err != nil {
 		return result, err
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil {
 		return result, arg.rt.retryError
 	}

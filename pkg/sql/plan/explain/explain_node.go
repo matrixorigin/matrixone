@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -86,6 +87,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_PARTITION:
+		pname = "Partition"
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -297,11 +300,17 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 
 	// Get Aggregate function info
 	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
-		aggListInfo, err := ndesc.GetAggregationInfo(ctx, options)
+		var listInfo string
+		var err error
+		if ndesc.Node.NodeType == plan.Node_SAMPLE {
+			listInfo, err = ndesc.GetSampleFuncInfo(ctx, options)
+		} else {
+			listInfo, err = ndesc.GetAggregationInfo(ctx, options)
+		}
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, aggListInfo)
+		lines = append(lines, listInfo)
 	}
 
 	// Get Window function info
@@ -614,6 +623,34 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Aggregate Functions: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetAggList() {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetSampleFuncInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	if ndesc.Node.SampleFunc.Rows == plan2.NotSampleByRows {
+		buf.WriteString(fmt.Sprintf("Sample %.2f Percent by: ", ndesc.Node.SampleFunc.Percent))
+	} else {
+		buf.WriteString(fmt.Sprintf("Sample %d Rows by: ", ndesc.Node.SampleFunc.Rows))
+	}
+
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.GetAggList() {
