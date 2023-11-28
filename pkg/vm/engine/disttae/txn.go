@@ -294,7 +294,7 @@ func (txn *Transaction) WriteFileLocked(
 
 		// append obj stats, may multiple
 		statsList := vector.MustBytesCol(bat.Vecs[1])
-		for idx, _ := range statsList {
+		for idx := range statsList {
 			vector.AppendBytes(newBat.Vecs[1], statsList[idx], false, txn.proc.Mp())
 		}
 
