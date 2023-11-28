@@ -57,6 +57,14 @@ func SplitCompositeClusterByColumnName(s string) []string {
 	return names
 }
 
+func GetClusterByFirstColumn(cbName string) string {
+	if !JudgeIsCompositeClusterByColumn(cbName) {
+		return cbName
+	} else {
+		return SplitCompositeClusterByColumnName(cbName)[0]
+	}
+}
+
 func GetClusterByColumnOrder(cbName, colName string) int {
 	if len(cbName) == 0 || len(colName) == 0 {
 		return -1
