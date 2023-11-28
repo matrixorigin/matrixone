@@ -182,6 +182,9 @@ func (s *ShuffleRange) Eval() {
 				inttobyte = append(inttobyte, byte(i))
 			}
 		}
+		if len(inttobyte) == 0 {
+			return
+		}
 		lens = float64(len(inttobyte))
 		for i := range s.mins {
 			node := &shuffleHeap{
@@ -292,7 +295,7 @@ func (s *ShuffleRange) Eval() {
 					break
 				}
 				now = node.key
-				if node.key == node.value {
+				if node.key-node.value < 0.1 {
 					last -= float64(node.size)
 					size -= float64(node.size)
 					if last <= 0 {
@@ -304,7 +307,7 @@ func (s *ShuffleRange) Eval() {
 								break
 							}
 						} else {
-							s.Result[k] = now
+							s.Result[k] = now + 1
 							last = step - float64(node.size)
 							k--
 							if k < 0 {
@@ -365,17 +368,25 @@ func (s *ShuffleRange) Eval() {
 		head = head.next
 	}
 	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
+	for i := range s.Result {
+		if s.Result[i] != s.Result[i] {
+			s.Result = nil
+			return
+		}
+	}
 	if s.isStrType {
 		for i := range s.Result {
 			var frac float64
 			str := make([]byte, s.maxlen)
-			if s.Result[i] < 0 {
-				s.Result[i] = 0
-			}
 			s.Result[i], _ = math.Modf(s.Result[i])
 			for j := 0; j < s.maxlen; j++ {
 				s.Result[i], frac = math.Modf(s.Result[i] / lens)
-				str[j] = inttobyte[int(frac*lens+0.01)]
+				k := int(frac*lens + 0.01)
+				if k < 0 {
+					s.Result = nil
+					return
+				}
+				str[j] = inttobyte[k]
 			}
 			s.Result[i] = 0
 			for j := len(str) - 1; j >= 0; j-- {
