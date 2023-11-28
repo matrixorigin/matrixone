@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"go.uber.org/zap"
@@ -88,7 +90,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -1102,7 +1103,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 		}
-	case *stream.Argument:
+	case *source.Argument:
 		in.StreamScan = &pipeline.StreamScan{
 			TblDef: t.TblDef,
 			Limit:  t.Limit,
@@ -1533,9 +1534,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 				},
 			},
 		}
-	case vm.Stream:
+	case vm.Source:
 		t := opr.GetStreamScan()
-		v.Arg = &stream.Argument{
+		v.Arg = &source.Argument{
 			TblDef: t.TblDef,
 			Limit:  t.Limit,
 			Offset: t.Offset,
