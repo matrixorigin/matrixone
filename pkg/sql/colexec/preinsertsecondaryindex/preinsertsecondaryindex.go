@@ -87,7 +87,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap = util.SerialWithoutCompacted(vs, proc)
+		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc)
+		if err != nil {
+			return result, err
+		}
 	}
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())
@@ -97,7 +100,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(rowIdInBat)).GetType()))
+		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
 		err := arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
 			return result, err
