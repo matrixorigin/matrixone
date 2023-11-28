@@ -1043,43 +1043,44 @@ func buildValueScan(
 	}
 
 	onUpdateExprs := make([]*plan.Expr, 0)
-	for _, expr := range OnDuplicateUpdate {
-		var updateExpr *plan.Expr
-		col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
-		if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
-			updateExpr = &plan.Expr{
-				Typ: constTextType,
-				Expr: &plan.Expr_P{
-					P: &plan.ParamRef{
-						Pos: int32(nv.Offset),
+	if builder.isPrepareStatement {
+		for _, expr := range OnDuplicateUpdate {
+			var updateExpr *plan.Expr
+			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
+			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
+				updateExpr = &plan.Expr{
+					Typ: constTextType,
+					Expr: &plan.Expr_P{
+						P: &plan.ParamRef{
+							Pos: int32(nv.Offset),
+						},
 					},
-				},
-			}
-		} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
-			if checkExprHasParamExpr(nv.Exprs) {
-				binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-				binder.builder = builder
-				binder.ctx = bindCtx
-				updateExpr, err = binder.BindExpr(nv, 0, true)
-				if err != nil {
-					return err
+				}
+			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
+				if checkExprHasParamExpr(nv.Exprs) {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder.builder = builder
+					binder.ctx = bindCtx
+					updateExpr, err = binder.BindExpr(nv, 0, true)
+					if err != nil {
+						return err
+					}
+				}
+			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
+				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder.builder = builder
+					binder.ctx = bindCtx
+					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
+					if err != nil {
+						return err
+					}
 				}
 			}
-		} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
-			if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-				binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-				binder.builder = builder
-				binder.ctx = bindCtx
-				updateExpr, err = binder.BindExpr(nv.Right, 0, true)
-				if err != nil {
-					return err
-				}
+			if updateExpr != nil {
+				onUpdateExprs = append(onUpdateExprs, updateExpr)
 			}
 		}
-		if updateExpr != nil {
-			onUpdateExprs = append(onUpdateExprs, updateExpr)
-		}
-
 	}
 	bat.SetRowCount(len(slt.Rows))
 	nodeId, _ := uuid.NewUUID()
