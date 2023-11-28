@@ -71,6 +71,7 @@ func (s *OptsBuilder) DefaultRoleId(id uint32) *OptsBuilder {
 	return s
 }
 
+// Finish returns the final SessionOverrideOptions. Ideally should be called Build() in reference to Builder pattern.
 func (s *OptsBuilder) Finish() SessionOverrideOptions {
 	return *s.opts
 }
