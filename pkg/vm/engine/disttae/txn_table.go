@@ -750,75 +750,76 @@ func (tbl *txnTable) rangesOnePart(
 
 	hasDeletes := len(dirtyBlks) > 0
 
-	for _, objStats := range uncommittedObjects {
-		s3BlkCnt += objStats.BlkCnt()
-		// for a new object :
-		//     1. load object meta
-		//     2. eval expr on object meta
-		//     3. if the expr is false, skip eval expr on the blocks of the same object
-		skipObj = false
-		if auxIdCnt > 0 {
-			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
-			location := objStats.ObjectLocation()
-			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+	if err = ForeachSnapshotObjects(
+		tbl.db.txn.op.SnapshotTS(),
+		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			s3BlkCnt += obj.BlkCnt()
+			skipObj = false
+			if auxIdCnt > 0 {
+				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+				location := obj.ObjectLocation()
+				if objMeta, err2 = objectio.FastLoadObjectMeta(
+					errCtx, &location, false, fs,
+				); err2 != nil {
+					return
+				}
+
+				objDataMeta = objMeta.MustDataMeta()
+				// here we only eval expr on the object meta if it has more than one blocks
+				if objDataMeta.BlockCount() > 2 {
+					for _, expr := range exprs {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
+							skipObj = true
+							break
+						}
+					}
+				}
+			}
+			if skipObj {
 				return
 			}
-			objDataMeta = objMeta.MustDataMeta()
-			// here we only eval expr on the object meta if it has more than 2 blocks
-			if objDataMeta.BlockCount() > 2 {
-				for _, expr := range exprs {
-					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
-						skipObj = true
-						break
+
+			ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
+				skipBlk := false
+
+				if auxIdCnt > 0 {
+					// eval filter expr on the block
+					blkMeta := objDataMeta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
+					for _, expr := range exprs {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+							skipBlk = true
+							break
+						}
 					}
-				}
-			}
-		}
 
-		if skipObj {
-			continue
-		}
-
-		// for each blk in the object:
-		//     1. check whether the object is skipped
-		//     2. if skipped, skip this block
-		//     3. if not skipped, eval expr on the block
-
-		ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
-			skipBlk := false
-
-			if auxIdCnt > 0 {
-				// eval filter expr on the block
-				blkMeta := objDataMeta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
-				for _, expr := range exprs {
-					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
-						skipBlk = true
-						break
+					// if the block is not needed, skip it
+					if skipBlk {
+						return true
 					}
 				}
 
-				// if the block is not needed, skip it
-				if skipBlk {
+				if hasDeletes {
+					if _, ok := dirtyBlks[blk.BlockID]; !ok {
+						blk.CanRemote = true
+					}
+					blk.PartitionNum = -1
+					*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 					return true
 				}
-			}
-
-			if hasDeletes {
-				if _, ok := dirtyBlks[blk.BlockID]; !ok {
-					blk.CanRemote = true
-				}
+				// store the block in ranges
+				blk.CanRemote = true
 				blk.PartitionNum = -1
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+
 				return true
-			}
-			// store the block in ranges
-			blk.CanRemote = true
-			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 
-			return true
-
-		}, objStats)
+			}, obj.ObjectStats)
+			return
+		},
+		nil, //state,
+		uncommittedObjects...,
+	); err != nil {
+		return
 	}
 
 	//filter objects
