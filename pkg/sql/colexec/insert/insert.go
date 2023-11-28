@@ -16,10 +16,11 @@ package insert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -199,7 +200,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 				partitionBat.Clean(proc.Mp())
 				return result, err
 			}
-			partitionBat.Clean(proc.Mp())
+			proc.PutBatch(partitionBat)
 		}
 	} else {
 		// insert into table, insertBat will be deeply copied into txn's workspace.
