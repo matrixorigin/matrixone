@@ -210,6 +210,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ExternScan:      node.ExternScan,
 		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
 		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:   make([]*plan.Expr, len(node.OnUpdateExprs)),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -254,6 +255,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for i, tbl := range node.TableDefVec {
 		newNode.TableDefVec[i] = DeepCopyTableDef(tbl, true)
+	}
+
+	for idx, expr := range node.OnUpdateExprs {
+		newNode.OnUpdateExprs[idx] = DeepCopyExpr(expr)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
