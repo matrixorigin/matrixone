@@ -1409,3 +1409,67 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 	}
 	return blk
 }
+
+func ForeachSnapshotObjects(
+	ts timestamp.Timestamp,
+	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	tableSnapshot *logtailreplay.PartitionState,
+	uncommitted ...objectio.ObjectStats,
+) (err error) {
+	// process all uncommitted objects first
+	for _, obj := range uncommitted {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if err = onObject(info, false); err != nil {
+			return
+		}
+	}
+
+	// process all committed objects
+	if tableSnapshot == nil {
+		return
+	}
+
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
+	if err != nil {
+		return
+	}
+	defer iter.Close()
+	for iter.Next() {
+		obj := iter.Entry()
+		if err = onObject(obj.ObjectInfo, true); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func ConstructObjStatsByLoadObjMeta(
+	ctx context.Context, metaLoc objectio.Location,
+	fs fileservice.FileService) (stats objectio.ObjectStats, err error) {
+
+	var meta objectio.ObjectMeta
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs); err != nil {
+		logutil.Error("fast load object meta failed when split object stats. ", zap.Error(err))
+		return
+	}
+	dataMeta := meta.MustDataMeta()
+
+	// 2. construct an object stats
+	objectio.SetObjectStatsObjectName(&stats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&stats, metaLoc.Extent())
+	objectio.SetObjectStatsBlkCnt(&stats, dataMeta.BlockCount())
+
+	sortKeyIdx := dataMeta.BlockHeader().SortKey()
+	objectio.SetObjectStatsSortKeyZoneMap(&stats, dataMeta.MustGetColumn(sortKeyIdx).ZoneMap())
+
+	totalRows := uint32(0)
+	for idx := uint32(0); idx < dataMeta.BlockCount(); idx++ {
+		totalRows += dataMeta.GetBlockMeta(idx).GetRows()
+	}
+
+	objectio.SetObjectStatsRowCnt(&stats, totalRows)
+
+	return
+}
