@@ -801,6 +801,7 @@ message Node {
 	SampleFuncSpec sample_func = 51;
 
 	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
 }
 
 message ExternScan {
