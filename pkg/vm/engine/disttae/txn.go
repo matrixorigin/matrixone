@@ -285,17 +285,17 @@ func (txn *Transaction) WriteFileLocked(
 			newBat.SetVector(int32(idx), vector.NewVec(*bat.Vecs[idx].GetType()))
 		}
 
-		blkInfos := vector.MustBytesCol(bat.Vecs[0])
-		for _, blk := range blkInfos {
-			blkInfo := *catalog.DecodeBlockInfo(blk)
+		blkInfosVec := bat.Vecs[0]
+		for idx := 0; idx < blkInfosVec.Length(); idx++ {
+			blkInfo := *catalog.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
 		}
 
 		// append obj stats, may multiple
-		statsList := vector.MustBytesCol(bat.Vecs[1])
-		for idx := range statsList {
-			vector.AppendBytes(newBat.Vecs[1], statsList[idx], false, txn.proc.Mp())
+		statsListVec := bat.Vecs[1]
+		for idx := 0; idx < statsListVec.Length(); idx++ {
+			vector.AppendBytes(newBat.Vecs[1], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
 		}
 
 		newBat.SetRowCount(bat.Vecs[0].Length())
