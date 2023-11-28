@@ -1869,7 +1869,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1879,7 +1878,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1903,51 +1901,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 				panic(e)
 			}
 		}
-		// defs has no rowid
-		defs, err := rel.TableDefs(ctx)
-		if err != nil {
-			panic(err)
-		}
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			} else if c, ok := def.(*engine.ConstraintDef); ok {
-				for _, ct := range c.Cts {
-					switch k := ct.(type) {
-					case *engine.PrimaryKeyDef:
-						pkey = k.Pkey
-					}
-				}
-			}
-		}
-		tblDef = &plan.TableDef{
-			Cols:          cols,
-			Name2ColIndex: name2index,
-			Version:       n.TableDef.Version,
-			Name:          n.TableDef.Name,
-			TableType:     n.TableDef.GetTableType(),
-			Pkey:          pkey,
-		}
+		tblDef = rel.GetTableDef(ctx)
 	}
 
 	// prcoess partitioned table
@@ -3891,6 +3845,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
+	var shuffleRangeUint64 []uint64
+	var shuffleRangeInt64 []int64
+	var init bool
+	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3906,7 +3864,27 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
+		if !init {
+			init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			}
+		}
+		if shuffleRangeUint64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+		} else if shuffleRangeInt64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+		} else {
+			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		}
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil
