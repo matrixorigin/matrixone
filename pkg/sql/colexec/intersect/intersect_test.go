@@ -89,6 +89,7 @@ func TestIntersect(t *testing.T) {
 	c.proc.Reg.MergeReceivers[0].Ch <- nil
 	c.proc.Reg.MergeReceivers[1].Ch <- nil
 	c.arg.Free(c.proc, false, nil)
+	proc.FreeVectors()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
