@@ -1186,7 +1186,7 @@ func TestNewStatsBlkIter(t *testing.T) {
 	stats := mockStatsList(t, 1)[0]
 	blks := UnfoldBlkInfoFromObjStats(&stats)
 
-	iter := NewStatsBlkIter(&stats)
+	iter := NewStatsBlkIter(&stats, nil)
 	for iter.Next() {
 		actual := iter.Entry()
 		id := actual.BlockID.Sequence()
