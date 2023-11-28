@@ -33,7 +33,10 @@ select sample (col3, 3 rows) from sample01 where col3 is null;
 col3
 null
 select sample (col2, 2 rows) from sample01 where col3 is null group by col1;
-
+col2
+10
+-321
+-1
 select col1, sample(col2, 20 rows) from sample01 group by col1 order by col1;
 col1    col2
 1    -321
