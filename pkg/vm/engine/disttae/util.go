@@ -1456,3 +1456,32 @@ func ForeachSnapshotObjects(
 	}
 	return
 }
+
+func ConstructObjStatsByLoadObjMeta(
+	ctx context.Context, metaLoc objectio.Location,
+	fs fileservice.FileService) (stats objectio.ObjectStats, err error) {
+
+	var meta objectio.ObjectMeta
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs); err != nil {
+		logutil.Error("fast load object meta failed when split object stats. ", zap.Error(err))
+		return
+	}
+	dataMeta := meta.MustDataMeta()
+
+	// 2. construct an object stats
+	objectio.SetObjectStatsObjectName(&stats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&stats, metaLoc.Extent())
+	objectio.SetObjectStatsBlkCnt(&stats, dataMeta.BlockCount())
+
+	sortKeyIdx := dataMeta.BlockHeader().SortKey()
+	objectio.SetObjectStatsSortKeyZoneMap(&stats, dataMeta.MustGetColumn(sortKeyIdx).ZoneMap())
+
+	totalRows := uint32(0)
+	for idx := uint32(0); idx < dataMeta.BlockCount(); idx++ {
+		totalRows += dataMeta.GetBlockMeta(idx).GetRows()
+	}
+
+	objectio.SetObjectStatsRowCnt(&stats, totalRows)
+
+	return
+}
