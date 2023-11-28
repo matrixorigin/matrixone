@@ -3408,8 +3408,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 							break
 						} else {
 							objDataMeta = objMeta.MustDataMeta()
-							blkMeta = objDataMeta.GetBlockMeta(uint32(location.ID()))
 						}
+					}
+					if !objDataMeta.IsEmpty() {
+						blkMeta = objDataMeta.GetBlockMeta(uint32(location.ID()))
 					}
 					switch name {
 					case "starcount":
