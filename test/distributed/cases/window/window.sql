@@ -1422,7 +1422,6 @@ select rank() over (partition by col1 order by col2 rows between 0 preceding and
 select max(col2) over (partition by col1 order by col2 rows between 3 preceding and 3 following) as newcol from time01;
 drop table time01;
 
--- @bvt:issue#12639
 drop table if exists window01;
 create table window01(col1 int, col2 varchar(20));
 insert into window01 values(1,'老师');
@@ -1440,6 +1439,5 @@ select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from wi
 select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
 select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
 select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
--- @bvt:issue
 drop database test;
 
