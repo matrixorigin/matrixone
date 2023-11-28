@@ -56,7 +56,6 @@ type S3Writer struct {
 	lengths []uint64
 
 	// the third vector only has several rows, not aligns with the other two vectors.
-	// the third vector stores some object stats(one object), all blocks, stored in the second vector, belong to that object.
 	blockInfoBat *batch.Batch
 
 	// An intermediate cache after the merge sort of all `Bats` data
@@ -255,9 +254,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	blockInfoBat.Attrs = attrs
 	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-
-	blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
-		objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
+	blockInfoBat.Vecs[2] = proc.GetVector(types.T_binary.ToType())
 
 	w.blockInfoBat = blockInfoBat
 }
@@ -675,8 +672,9 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if stats[idx].IsZero() {
 			continue
 		}
-		if err = vector.SetConstBytes(w.blockInfoBat.Vecs[2], stats[idx].Marshal(),
-			1, proc.GetMPool()); err != nil {
+
+		if err = vector.AppendBytes(w.blockInfoBat.Vecs[2],
+			stats[idx].Marshal(), false, proc.GetMPool()); err != nil {
 			return err
 		}
 	}
