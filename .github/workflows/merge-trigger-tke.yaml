@@ -614,7 +614,7 @@ jobs:
           retention-days: 7
         
       - name: Check MO Status and Clean ENV
-        if: ${{ needs.docker_image_build.result == 'success' && needs.setup_mo_test_env.result == 'success' && needs.bvt_test.result == 'success' && needs.ssb_and_tpch_test.result == 'success' && needs.sysbench_test.result !== 'success' && needs.tpcc_test.result == 'success'  }}
+        if: ${{ needs.docker_image_build.result == 'success' && needs.setup_mo_test_env.result == 'success' && needs.bvt_test.result == 'success' && needs.ssb_and_tpch_test.result == 'success' && needs.sysbench_test.result == 'success' && needs.tpcc_test.result == 'success'  }}
         run: |
           cd $GITHUB_WORKSPACE
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
