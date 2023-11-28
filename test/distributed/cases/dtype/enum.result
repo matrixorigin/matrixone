@@ -137,26 +137,7 @@ a    b
 drop table enum05;
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
-show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
-insert into pri01 values ('qy4iujd3wi4fu4h3f');
-insert into pri01 values ('qy4iujd3wi4fu4h3f');
-Duplicate entry '1' for key 'col1'
-insert into pri01 (col1) values ('323242r34df432432');
-insert into pri01 (col1) values (null);
-constraint violation: Column 'col1' cannot be null
-select * from pri01;
-col1
-qy4iujd3wi4fu4h3f
-323242r34df432432
-show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
-show columns from pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO    PRI    null        
-drop table pri01;
+not supported: ENUM column 'col1' cannot be in primary key
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri02 values (1, '数据库');
