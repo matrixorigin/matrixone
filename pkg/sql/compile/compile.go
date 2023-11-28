@@ -3390,11 +3390,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					newranges = append(newranges, buf)
 					continue
 				}
+				var blkMeta objectio.BlockObject
 				for i := range n.AggList {
 					agg := n.AggList[i].Expr.(*plan.Expr_F)
 					name := agg.F.Func.ObjName
 
-					var blkMeta objectio.BlockObject
+					//var blkMeta objectio.BlockObject
 
 					location := blk.MetaLocation()
 					var fs fileservice.FileService
