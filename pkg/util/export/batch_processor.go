@@ -359,10 +359,10 @@ func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 func WithCollectorCntP(p int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.collectorCntP = p })
 }
-func WithGeneratorCnt(p int) MOCollectorOption {
+func WithGeneratorCntP(p int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.generatorCntP = p })
 }
-func WithExporterCnt(p int) MOCollectorOption {
+func WithExporterCntP(p int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
 }
 
