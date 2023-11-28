@@ -86,50 +86,58 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64) uint64 {
+func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
 	switch zm.GetType() {
 	case types.T_int64:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, types.DecodeInt64(zm.GetMinBuf()), upplerLimit)
+		return types.DecodeInt64(zm.GetMinBuf())/2 + types.DecodeInt64(zm.GetMaxBuf())/2
 	case types.T_int32:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, int64(types.DecodeInt32(zm.GetMinBuf())), upplerLimit)
+		return int64(types.DecodeInt32(zm.GetMinBuf()))/2 + int64(types.DecodeInt32(zm.GetMaxBuf()))/2
 	case types.T_int16:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, int64(types.DecodeInt16(zm.GetMinBuf())), upplerLimit)
+		return int64(types.DecodeInt16(zm.GetMinBuf()))/2 + int64(types.DecodeInt16(zm.GetMaxBuf()))/2
+	default:
+		panic("wrong type!")
+	}
+}
+
+func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
+	switch zm.GetType() {
 	case types.T_uint64:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), types.DecodeUint64(zm.GetMinBuf()), upplerLimit)
+		return types.DecodeUint64(zm.GetMinBuf())/2 + types.DecodeUint64(zm.GetMaxBuf())/2
 	case types.T_uint32:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
+		return uint64(types.DecodeUint32(zm.GetMinBuf()))/2 + uint64(types.DecodeUint32(zm.GetMaxBuf()))/2
 	case types.T_uint16:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+		return uint64(types.DecodeUint16(zm.GetMinBuf()))/2 + uint64(types.DecodeUint16(zm.GetMaxBuf()))/2
 	case types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
+		return ByteSliceToUint64(zm.GetMinBuf())/2 + ByteSliceToUint64(zm.GetMaxBuf())/2
+	default:
+		panic("wrong type!")
+	}
+}
+
+func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64) uint64 {
+	switch zm.GetType() {
+	case types.T_int64, types.T_int32, types.T_int16:
+		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, GetCenterValueForZMSigned(zm), upplerLimit)
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), GetCenterValueForZMUnsigned(zm), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
 
 func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint64 {
 	switch zm.GetType() {
-	case types.T_int64:
-		return GetRangeShuffleIndexSignedSlice(val, types.DecodeInt64(zm.GetMinBuf()))
-	case types.T_int32:
-		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt32(zm.GetMinBuf())))
-	case types.T_int16:
-		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt16(zm.GetMinBuf())))
+	case types.T_int64, types.T_int32, types.T_int16:
+		return GetRangeShuffleIndexSignedSlice(val, GetCenterValueForZMSigned(zm))
 	}
-	panic("unsupported shuffle type!")
+	panic("wrong type!")
 }
 
 func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
 	switch zm.GetType() {
-	case types.T_uint64:
-		return GetRangeShuffleIndexUnsignedSlice(val, types.DecodeUint64(zm.GetMinBuf()))
-	case types.T_uint32:
-		return GetRangeShuffleIndexUnsignedSlice(val, uint64(types.DecodeUint32(zm.GetMinBuf())))
-	case types.T_uint16:
-		return GetRangeShuffleIndexUnsignedSlice(val, uint64(types.DecodeUint16(zm.GetMinBuf())))
-	case types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedSlice(val, ByteSliceToUint64(zm.GetMinBuf()))
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsignedSlice(val, GetCenterValueForZMUnsigned(zm))
 	}
-	panic("unsupported shuffle type!")
+	panic("wrong type!")
 }
 
 func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
