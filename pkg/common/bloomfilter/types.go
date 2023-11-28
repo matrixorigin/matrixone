@@ -21,13 +21,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
+const (
+	add = iota
+	test
+	testAndAdd
+)
+
+type TaggedFunc struct {
+	fn  func(int, int)
+	typ int
+}
+
 type BloomFilter struct {
 	bitmap   *bitmap.Bitmap
 	hashSeed []uint64
 
-	keys   [][]byte
-	states [][3]uint64
-	vals   [][]uint64
+	keys      [][]byte
+	states    [][3]uint64
+	vals      [][]uint64
+	valLength int
+
+	addVals []uint64
 }
 
 func New(rowCount int64, probability float64) *BloomFilter {
@@ -50,8 +64,10 @@ func New(rowCount int64, probability float64) *BloomFilter {
 		bitmap:   bits,
 		hashSeed: hashSeed,
 
-		keys:   keys,
-		states: states,
-		vals:   vals,
+		keys:      keys,
+		states:    states,
+		vals:      vals,
+		addVals:   make([]uint64, hashmap.UnitLimit*3*seedCount),
+		valLength: len(hashSeed) * 3,
 	}
 }

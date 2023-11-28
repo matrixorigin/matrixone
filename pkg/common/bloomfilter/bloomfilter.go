@@ -29,43 +29,67 @@ func (bf *BloomFilter) Clean() {
 	bf.vals = nil
 }
 
+func (bf *BloomFilter) Add(v *vector.Vector) {
+	length := v.Length()
+	bitSize := uint64(bf.bitmap.Len())
+	step := hashmap.UnitLimit
+
+	var i, j, n int
+	getIdxVal := func(v uint64) uint64 {
+		if v >= bitSize {
+			return v % bitSize
+		}
+		return v
+	}
+
+	// There is no question of correctness if no distinction is made.
+	// However, there is an unacceptable slowdown in calling the Add method.
+	for i = 0; i < length; i += step {
+		n = length - i
+		if n > step {
+			n = step
+		}
+
+		for j = 0; j < n; j++ {
+			bf.keys[j] = bf.keys[j][:0]
+		}
+		encodeHashKeys(bf.keys, v, i, n)
+
+		var idx int
+		for _, seed := range bf.hashSeed {
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, seed)
+			for j = 0; j < n; j++ {
+				bf.addVals[idx] = getIdxVal(bf.states[j][0])
+				bf.addVals[idx+1] = getIdxVal(bf.states[j][1])
+				bf.addVals[idx+2] = getIdxVal(bf.states[j][2])
+				idx += 3
+			}
+		}
+		bf.bitmap.AddMany(bf.addVals[:idx])
+	}
+}
+
 func (bf *BloomFilter) Test(v *vector.Vector, callBack func(bool, int)) {
-	valLength := len(bf.hashSeed) * 3
-	var exits bool
-	var vals []uint64
-	bf.getValue(v, func(idx int, beginIdx int) {
-		exits = true
-		vals = bf.vals[idx]
-		for j := 0; j < valLength; j++ {
-			exits = bf.bitmap.Contains(vals[j])
-			if !exits {
+	bf.handle(v, func(idx, beginIdx int) {
+		exist := true
+		vals := bf.vals[idx]
+		for j := 0; j < bf.valLength; j++ {
+			exist = bf.bitmap.Contains(vals[j])
+			if !exist {
 				break
 			}
 		}
-		callBack(exits, beginIdx+idx)
-	})
-}
-
-func (bf *BloomFilter) Add(v *vector.Vector) {
-	valLength := len(bf.hashSeed) * 3
-	var vals []uint64
-	bf.getValue(v, func(idx int, _ int) {
-		vals = bf.vals[idx]
-		for j := 0; j < valLength; j++ {
-			bf.bitmap.Add(vals[j])
-		}
-	})
+		callBack(exist, beginIdx+idx)
+	},
+	)
 }
 
 func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
-	valLength := len(bf.hashSeed) * 3
-	var exist bool
-	var vals []uint64
-	var contains bool
-	bf.getValue(v, func(idx int, beginIdx int) {
-		exist = true
-		vals = bf.vals[idx]
-		for j := 0; j < valLength; j++ {
+	bf.handle(v, func(idx, beginIdx int) {
+		var contains bool
+		exist := true
+		vals := bf.vals[idx]
+		for j := 0; j < bf.valLength; j++ {
 			if exist {
 				contains = bf.bitmap.Contains(vals[j])
 				if !contains {
@@ -78,15 +102,17 @@ func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 		}
 		callBack(exist, beginIdx+idx)
 	})
+
 }
 
-func (bf *BloomFilter) getValue(v *vector.Vector, callBack func(int, int)) {
+// for an incoming vector, compute the hash value of each of its elements, and manipulate it with func tf.fn
+func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 	length := v.Length()
 	bitSize := uint64(bf.bitmap.Len())
 	lastSeed := len(bf.hashSeed) - 1
 	step := hashmap.UnitLimit
-	var i, j, n, k, idx int
 
+	var i, j, n, k, idx int
 	getIdxVal := func(v uint64) uint64 {
 		if v >= bitSize {
 			return v % bitSize
@@ -94,6 +120,10 @@ func (bf *BloomFilter) getValue(v *vector.Vector, callBack func(int, int)) {
 		return v
 	}
 
+	// The reason we need to distinguish whether an operator is an Add or not is
+	// because it determines whether we can call tf.fn more efficiently or not.
+	//
+	// There is no question of correctness if no distinction is made. However, there is an unacceptable slowdown in calling the Add method.
 	for i = 0; i < length; i += step {
 		n = length - i
 		if n > step {
