@@ -1043,7 +1043,7 @@ func buildValueScan(
 	}
 
 	onUpdateExprs := make([]*plan.Expr, 0)
-	if builder.isPrepareStatement {
+	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
 		for _, expr := range OnDuplicateUpdate {
 			var updateExpr *plan.Expr
 			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
