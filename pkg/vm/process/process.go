@@ -273,7 +273,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			// very large vectors should not put back into pool, which cause these memory can not release.
 			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
 			// use Allocated() may suitable.
-			if vec.IsConst() || vec.NeedDup() || vec.Capacity() > 8192*64 {
+			if vec.IsConst() || vec.NeedDup() || vec.Allocated() > 8192*64 {
 				vec.Free(proc.mp)
 				bat.ReplaceVector(vec, nil)
 				continue
@@ -313,14 +313,6 @@ func (proc *Process) GetVector(typ types.Type) *vector.Vector {
 	return vector.NewVec(typ)
 }
 
-func (proc *Process) GetVectorWithLen(typ types.Type, len int) *vector.Vector {
-	if vec := proc.vp.getVectorWithLen(typ, len); vec != nil {
-		vec.Reset(typ)
-		return vec
-	}
-	return vector.NewVec(typ)
-}
-
 func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
 	vp.Lock()
 	defer vp.Unlock()
@@ -351,33 +343,6 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 		vec := vecs[len(vecs)-1]
 		vp.vecs[key] = vecs[:len(vecs)-1]
 		return vec
-	}
-	return nil
-}
-
-func (vp *vectorPool) getVectorWithLen(typ types.Type, srcLen int) *vector.Vector {
-	vp.Lock()
-	defer vp.Unlock()
-	key := uint8(typ.Oid)
-	if key == uint8(types.T_varchar) || key == uint8(types.T_char) || key == uint8(types.T_text) {
-		if vecs := vp.vecs[key]; len(vecs) > 0 {
-			idx := 0
-			var vec *vector.Vector
-			for idx, vec = range vp.vecs[key] {
-				if cap(vec.GetArea()) >= srcLen {
-					break
-				}
-			}
-			vec = vecs[idx]
-			vp.vecs[key] = append(vecs[0:idx], vecs[idx+1:]...)
-			return vec
-		}
-	} else {
-		if vecs := vp.vecs[key]; len(vecs) > 0 {
-			vec := vecs[len(vecs)-1]
-			vp.vecs[key] = vecs[:len(vecs)-1]
-			return vec
-		}
 	}
 	return nil
 }
