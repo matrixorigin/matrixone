@@ -3391,20 +3391,17 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					continue
 				}
 				var blkMeta objectio.BlockObject
+				location := blk.MetaLocation()
 				for i := range n.AggList {
 					agg := n.AggList[i].Expr.(*plan.Expr_F)
 					name := agg.F.Func.ObjName
-
-					//var blkMeta objectio.BlockObject
-
-					location := blk.MetaLocation()
-					var fs fileservice.FileService
-					fs, err = fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
-					if err != nil {
-						return nil, nil, err
-					}
 					if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) &&
 						(name == "count" || name == "min" || name == "max") {
+						var fs fileservice.FileService
+						fs, err = fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+						if err != nil {
+							return nil, nil, err
+						}
 						objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 						if err != nil {
 							partialresults = nil
