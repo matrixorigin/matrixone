@@ -18,7 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,7 +41,12 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
-
+	ap.ctr.uafs = make([]func(v *vector.Vector, w *vector.Vector) error, len(ap.Es))
+	for i, e := range ap.Es {
+		if e.Typ.Id != 0 {
+			ap.ctr.uafs[i] = vector.GetUnionAllFunction(plan.MakeTypeByPlan2Expr(e), proc.Mp())
+		}
+	}
 	return err
 }
 
@@ -76,7 +83,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		arg.buf.Vecs[i] = vec
 	}
 
-	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.buf, bat)
+	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.ctr.uafs, arg.buf, bat)
 	if err != nil {
 		return result, err
 	}

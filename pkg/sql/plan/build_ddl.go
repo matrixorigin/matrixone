@@ -172,19 +172,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
-func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, error) {
-	streamName := string(stmt.StreamName.ObjectName)
+func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
+	streamName := string(stmt.SourceName.ObjectName)
 	createStream := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
-			TableType: catalog.SystemStreamRel,
+			TableType: catalog.SystemSourceRel,
 			Name:      streamName,
 		},
 	}
-	if len(stmt.StreamName.SchemaName) == 0 {
+	if len(stmt.SourceName.SchemaName) == 0 {
 		createStream.Database = ctx.DefaultDatabase()
 	} else {
-		createStream.Database = string(stmt.StreamName.SchemaName)
+		createStream.Database = string(stmt.SourceName.SchemaName)
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
@@ -193,30 +193,19 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
 	}
 
-	if stmt.AsSource != nil {
-		return nil, moerr.NewNYI(ctx.GetContext(), "create stream as : '%v'", stmt.AsSource)
-		//tableDef, err := genViewTableDef(ctx, stmt.AsSource)
-		//if err != nil {
-		//	return nil, err
-		//}
-		//
-		//createStream.TableDef.Cols = tableDef.Cols
-		//createStream.TableDef.ViewSql = tableDef.ViewSql
-		//createStream.TableDef.Defs = tableDef.Defs
-	} else {
-		if err := buildStreamDefs(stmt, ctx, createStream); err != nil {
-			return nil, err
-		}
+	if err := buildSourceDefs(stmt, ctx, createStream); err != nil {
+		return nil, err
 	}
+
 	var properties []*plan.Property
 	properties = append(properties, &plan.Property{
 		Key:   catalog.SystemRelAttr_Kind,
-		Value: catalog.SystemStreamRel,
+		Value: catalog.SystemSourceRel,
 	})
 	configs := make(map[string]interface{})
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
-		case *tree.CreateStreamWithOption:
+		case *tree.CreateSourceWithOption:
 			key := strings.ToLower(string(opt.Key))
 			val := opt.Val.(*tree.NumVal).OrigString()
 			properties = append(properties, &plan.Property{
@@ -248,7 +237,7 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
-func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream *plan.CreateTable) error {
+func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream *plan.CreateTable) error {
 	colMap := make(map[string]*ColDef)
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
@@ -284,7 +273,7 @@ func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream 
 				}
 			}
 			createStream.TableDef.Cols = append(createStream.TableDef.Cols, col)
-		case *tree.CreateStreamWithOption:
+		case *tree.CreateSourceWithOption:
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "stream def: '%v'", def)
 		}
