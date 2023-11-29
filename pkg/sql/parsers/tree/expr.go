@@ -1640,16 +1640,6 @@ func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
 }
 
 func (s SampleExpr) Valid() error {
-	// todo: this check does not work now. should add more rules into parser. but it's ok for now.
-	if len(s.columns) > 1 {
-		for _, col := range s.columns {
-			if _, ok := col.(UnqualifiedStar); ok {
-				return moerr.NewSyntaxErrorNoCtx(
-					"sample(expr list, N rows / K percent) supports only one '*' in expr list.")
-			}
-		}
-	}
-
 	if s.typ == SampleRows {
 		if s.n < 1 || s.n > 1000 {
 			return moerr.NewSyntaxErrorNoCtx("sample(expr list, N rows) requires N between 1 and 1000.")
@@ -1678,25 +1668,27 @@ const (
 	SamplePercent sampleType = 1
 )
 
-func NewSampleRowsFuncExpression(number int, columns Exprs) (*SampleExpr, error) {
+func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs) (*SampleExpr, error) {
 	return &SampleExpr{
 		typ:     SampleRows,
 		n:       number,
 		k:       0,
+		isStar:  isStar,
 		columns: columns,
 	}, nil
 }
 
-func NewSamplePercentFuncExpression1(percent int64, columns Exprs) (*SampleExpr, error) {
+func NewSamplePercentFuncExpression1(percent int64, isStar bool, columns Exprs) (*SampleExpr, error) {
 	return &SampleExpr{
 		typ:     SamplePercent,
 		n:       0,
 		k:       float64(percent),
+		isStar:  isStar,
 		columns: columns,
 	}, nil
 }
 
-func NewSamplePercentFuncExpression2(percent float64, columns Exprs) (*SampleExpr, error) {
+func NewSamplePercentFuncExpression2(percent float64, isStar bool, columns Exprs) (*SampleExpr, error) {
 	if nan := math.IsNaN(percent); nan {
 		return nil, moerr.NewSyntaxErrorNoCtx("sample(expr, K percent) requires K between 0.00 and 100.00")
 	}
@@ -1706,6 +1698,7 @@ func NewSamplePercentFuncExpression2(percent float64, columns Exprs) (*SampleExp
 		typ:     SamplePercent,
 		n:       0,
 		k:       k,
+		isStar:  isStar,
 		columns: columns,
 	}, nil
 }

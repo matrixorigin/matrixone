@@ -124,6 +124,7 @@ func New(
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
+	c.metaTables = make(map[string]struct{})
 	return c
 }
 
@@ -164,6 +165,8 @@ func (c *Compile) clear() {
 	c.cnList = nil
 	c.stmt = nil
 	c.startAt = time.Time{}
+	c.metaTables = nil
+	c.needLockMeta = false
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -224,6 +227,21 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 				zap.String("error", err.Error()))
 		}
 	}()
+
+	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
+			if qry.Query.StmtType == plan.Query_SELECT {
+				for _, n := range qry.Query.Nodes {
+					if n.NodeType == plan.Node_LOCK_OP {
+						c.needLockMeta = true
+						break
+					}
+				}
+			} else {
+				c.needLockMeta = true
+			}
+		}
+	}
 
 	// with values
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
@@ -481,6 +499,10 @@ func (c *Compile) ifNeedRerun(err error) bool {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
+	err := c.lockMetaTables()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -622,6 +644,42 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		}
 	}
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
+}
+
+func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if !c.needLockMeta {
+		return
+	}
+
+	if objRes.SchemaName == catalog.MO_CATALOG && (objRes.ObjName == catalog.MO_DATABASE || objRes.ObjName == catalog.MO_TABLES || objRes.ObjName == catalog.MO_COLUMNS) {
+		// do not lock meta table for meta table
+	} else {
+		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
+		c.metaTables[key] = struct{}{}
+	}
+}
+
+func (c *Compile) lockMetaTables() error {
+	lockLen := len(c.metaTables)
+	if lockLen == 0 {
+		return nil
+	}
+
+	tables := make([]string, 0, lockLen)
+	for table := range c.metaTables {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+
+	for _, table := range tables {
+		names := strings.SplitN(table, " ", 2)
+
+		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
+		if err != nil {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
+	return nil
 }
 
 func (c *Compile) cnListStrategy() {
@@ -916,6 +974,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		c.appendMetaTables(n.ObjRef)
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -923,8 +982,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
-		ss, err := c.compileStreamScan(ctx, n)
+	case plan.Node_SOURCE_SCAN:
+		ss, err := c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1019,6 +1078,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
+	case plan.Node_PARTITION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss))), nil
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1062,6 +1130,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
@@ -1179,6 +1248,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
+		c.appendMetaTables(n.ObjRef)
 		curr := c.anal.curr
 		n.NotCacheable = true
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1470,8 +1540,8 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
@@ -1497,7 +1567,7 @@ func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Stream,
+			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -1799,7 +1869,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1809,7 +1878,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1833,51 +1901,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 				panic(e)
 			}
 		}
-		// defs has no rowid
-		defs, err := rel.TableDefs(ctx)
-		if err != nil {
-			panic(err)
-		}
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			} else if c, ok := def.(*engine.ConstraintDef); ok {
-				for _, ct := range c.Cts {
-					switch k := ct.(type) {
-					case *engine.PrimaryKeyDef:
-						pkey = k.Pkey
-					}
-				}
-			}
-		}
-		tblDef = &plan.TableDef{
-			Cols:          cols,
-			Name2ColIndex: name2index,
-			Version:       n.TableDef.Version,
-			Name:          n.TableDef.Name,
-			TableType:     n.TableDef.GetTableType(),
-			Pkey:          pkey,
-		}
+		tblDef = rel.GetTableDef(ctx)
 	}
 
 	// prcoess partitioned table
@@ -2300,6 +2324,31 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("join typ '%v'", node.JoinType)))
 	}
 	return rs
+}
+
+func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		c.anal.isFirst = currentFirstFlag
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Partition,
+		Idx: c.anal.curr,
+		Arg: constructPartition(n),
+	}
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
@@ -3796,6 +3845,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
+	var shuffleRangeUint64 []uint64
+	var shuffleRangeInt64 []int64
+	var init bool
+	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3811,7 +3864,27 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
+		if !init {
+			init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			}
+		}
+		if shuffleRangeUint64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+		} else if shuffleRangeInt64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+		} else {
+			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		}
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil

@@ -4923,7 +4923,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
 	infos = append(infos, []*pkgcatalog.BlockInfo{info})
-	err = blockio.BlockPrefetch(colIdxs, fs, infos)
+	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
@@ -8053,7 +8053,6 @@ func TestDeduplication(t *testing.T) {
 	seg, err := tbl.CreateSegment(
 		txn,
 		catalog.ES_Appendable,
-		dataFactory.MakeSegmentFactory(),
 		new(objectio.CreateSegOpt).WithId(segmentIDs[0]))
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)

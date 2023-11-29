@@ -179,7 +179,8 @@ func TestNewMOCollector(t *testing.T) {
 	stub1 := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
 	defer stub1.Reset()
 
-	collector := NewMOCollector(ctx)
+	cfg := getDummyOBCollectorConfig()
+	collector := NewMOCollector(ctx, WithOBCollectorConfig(cfg))
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 
@@ -255,8 +256,7 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	})
 	defer bhStub.Reset()
 
-	cfg := &config.OBCollectorConfig{}
-	cfg.SetDefaultValues()
+	cfg := getDummyOBCollectorConfig()
 	cfg.ShowStatsInterval.Duration = 5 * time.Second
 	cfg.BufferCnt = 2
 	collector := NewMOCollector(ctx, WithOBCollectorConfig(cfg))
@@ -280,10 +280,17 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 
 	// make 2/2 buffer hang.
 	<-batchFlowC
+	t.Log("done 2rd buffer fill, then send the last elem")
+
 	// send 7th elem, it will hang, wait for buffer slot
-	go collector.Collect(ctx, newDummy(7))
+	go func() {
+		t.Log("dummy hung goroutine started.")
+		collector.Collect(ctx, newDummy(7))
+		t.Log("dummy hung goroutine finished.")
+	}()
 	// reset
 	bhStub.Reset()
+	t.Log("done all dummy action, then do check result")
 
 	select {
 	case <-signalC:
@@ -325,8 +332,7 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 	ch := make(chan string)
 	triggerSignalFunc := func(holder *bufferHolder) {}
 
-	cfg := &config.OBCollectorConfig{}
-	cfg.SetDefaultValues()
+	cfg := getDummyOBCollectorConfig()
 	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
 
 	tests := []struct {
@@ -359,11 +365,19 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 	}
 }
 
+func getDummyOBCollectorConfig() *config.OBCollectorConfig {
+	cfg := &config.OBCollectorConfig{}
+	cfg.SetDefaultValues()
+	cfg.ExporterCntPercent = maxPercentValue
+	cfg.GeneratorCntPercent = maxPercentValue
+	cfg.CollectorCntPercent = maxPercentValue
+	return cfg
+}
+
 func TestMOCollector_DiscardableCollect(t *testing.T) {
 
 	ctx := context.TODO()
-	cfg := &config.OBCollectorConfig{}
-	cfg.SetDefaultValues()
+	cfg := getDummyOBCollectorConfig()
 	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
 	elem := newDummy(1)
 	for i := 0; i < defaultQueueSize; i++ {

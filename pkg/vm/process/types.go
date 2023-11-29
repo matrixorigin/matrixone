@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -97,27 +98,28 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account        string
-	User           string
-	Host           string
-	Role           string
-	ConnectionID   uint64
-	AccountId      uint32
-	RoleId         uint32
-	UserId         uint32
-	LastInsertID   uint64
-	Database       string
-	Version        string
-	TimeZone       *time.Location
-	StorageEngine  engine.Engine
-	QueryId        []string
-	ResultColTypes []types.Type
-	SeqCurValues   map[uint64]string
-	SeqDeleteKeys  []uint64
-	SeqAddValues   map[uint64]string
-	SeqLastValue   []string
-	SqlHelper      sqlHelper
-	Buf            *buffer.Buffer
+	Account              string
+	User                 string
+	Host                 string
+	Role                 string
+	ConnectionID         uint64
+	AccountId            uint32
+	RoleId               uint32
+	UserId               uint32
+	LastInsertID         uint64
+	Database             string
+	Version              string
+	TimeZone             *time.Location
+	StorageEngine        engine.Engine
+	QueryId              []string
+	ResultColTypes       []types.Type
+	SeqCurValues         map[uint64]string
+	SeqDeleteKeys        []uint64
+	SeqAddValues         map[uint64]string
+	SeqLastValue         []string
+	SqlHelper            sqlHelper
+	Buf                  *buffer.Buffer
+	SourceInMemScanBatch []*kafka.Message
 }
 
 // AnalyzeInfo  analyze information for query

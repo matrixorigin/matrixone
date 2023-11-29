@@ -62,11 +62,12 @@ const (
 	MergeOffset
 	MergeRecursive
 	MergeCTE
+	Partition
 
 	Deletion
 	Insert
 	External
-	Stream
+	Source
 
 	Minus
 	Intersect
@@ -174,7 +175,7 @@ type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {
 	switch ins.Op {
-	case Order, MergeOrder:
+	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
 		return true

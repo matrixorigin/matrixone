@@ -376,12 +376,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}
 
-	if len(usage) == 0 && ses.isInternal {
-		// no valid usage info from the checkpoints.
-		// for internal `show accounts`, should leave the result empty
-		return
-	}
-
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)

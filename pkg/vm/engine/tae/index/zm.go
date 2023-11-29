@@ -547,12 +547,15 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 }
 
 func (zm ZM) HasPrefix(s []byte) bool {
-	zmin, zmax := zm.GetMinBuf(), zm.GetMaxBuf()
-
+	zmin := zm.GetMinBuf()
+	if len(zmin) > len(s) {
+		zmin = zmin[:len(s)]
+	}
 	if bytes.Compare(zmin, s) > 0 {
 		return false
 	}
 
+	zmax := zm.GetMaxBuf()
 	if len(s) > len(zmax) {
 		s = s[:len(zmax)]
 	}
