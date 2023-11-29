@@ -92,13 +92,16 @@ const (
 
 	// supporting `show accounts` by recording extra
 	// account related info in checkpoint
-	SEGStorageUsageIDX
+
+	StorageUsageInsIDX
 
 	ObjectInfoIDX
 	TNObjectInfoIDX
+
+	StorageUsageDelIDX
 )
 
-const MaxIDX = TNObjectInfoIDX + 1
+const MaxIDX = StorageUsageDelIDX + 1
 
 const (
 	Checkpoint_Meta_TID_IDX                 = 2
@@ -402,7 +405,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 		err = collector.PostLoop(c)
 
 		if collectUsage {
-			// collecting usage only happened when do ckp
+			// collecting usage happens only when do ckp
 			FillUsageBatOfIncremental(c, collector, fs)
 		}
 

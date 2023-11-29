@@ -186,13 +186,13 @@ func handleStorageUsageResponse(
 		}
 
 		ckpData, err := logtail.LoadSpecifiedCkpBatch(
-			ctx, location, version, logtail.SEGStorageUsageIDX, fs,
+			ctx, location, version, logtail.StorageUsageInsIDX, fs,
 		)
 		if err != nil {
 			return nil, err
 		}
 
-		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
+		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 		accIDVec := vector.MustFixedCol[uint64](
 			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
 		)

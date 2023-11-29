@@ -50,7 +50,7 @@ type UsageData = [UsageMAX]interface{}
 // the returned order:
 // [account_id_vec, db_id_vec, tbl_id_vec, obj_id_vec, size_vec]
 func getStorageUsageBatVectors(data *CheckpointData) []*vector.Vector {
-	storageUsageBax := data.bats[SEGStorageUsageIDX]
+	storageUsageBax := data.bats[StorageUsageInsIDX]
 
 	accIDVec := storageUsageBax.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
 	dbIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
@@ -167,7 +167,7 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 
 	for idx := range locations {
 		incrData, err := LoadSpecifiedCkpBatch(
-			ctx, locations[idx], versions[idx], SEGStorageUsageIDX, fs,
+			ctx, locations[idx], versions[idx], StorageUsageInsIDX, fs,
 		)
 		if err != nil {
 			logutil.Warn(fmt.Sprintf("[storage usage]: load increment checkpoint failed: %v", err))
