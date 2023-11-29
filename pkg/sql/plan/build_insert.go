@@ -42,7 +42,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if t.TableType == catalog.SystemStreamRel {
+	if t.TableType == catalog.SystemSourceRel {
 		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
