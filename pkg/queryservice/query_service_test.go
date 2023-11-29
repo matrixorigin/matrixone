@@ -17,6 +17,7 @@ package queryservice
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -127,10 +129,10 @@ func TestQueryService(t *testing.T) {
 		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod(10))
+			req := svc.NewRequest(pb.CmdMethod(math.MaxInt32))
 			_, err := svc.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
-			assert.Equal(t, "not supported: 10 not support in current service", err.Error())
+			assert.Equal(t, "internal error: unsupported method 2147483647", err.Error())
 		})
 	})
 }
@@ -156,6 +158,7 @@ func TestQueryServiceKillConn(t *testing.T) {
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc QueryService, addr string)) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
 	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
 		time.Now().Nanosecond(), cn.ServiceID)
 
