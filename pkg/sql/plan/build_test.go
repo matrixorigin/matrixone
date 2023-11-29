@@ -836,6 +836,7 @@ func TestDdl(t *testing.T) {
 		"alter table nation drop foreign key fk1", //key not exists
 		"alter table nation add FOREIGN KEY fk_t1(col_not_exist) REFERENCES nation2(n_nationkey)",
 		"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(col_not_exist)",
+		"create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key)",
 	}
 	runTestShouldError(mock, t, sqls)
 }

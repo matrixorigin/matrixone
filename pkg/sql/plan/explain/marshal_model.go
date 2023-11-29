@@ -197,7 +197,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_TABLE_SCAN:        "Table Scan",
 	plan2.Node_FUNCTION_SCAN:     "Function Scan",
 	plan2.Node_EXTERNAL_SCAN:     "External Scan",
-	plan2.Node_STREAM_SCAN:       "Stream Scan",
+	plan2.Node_SOURCE_SCAN:       "Source Scan",
 	plan2.Node_MATERIAL_SCAN:     "Material Scan",
 	plan2.Node_PROJECT:           "Project",
 	plan2.Node_EXTERNAL_FUNCTION: "External Function",
