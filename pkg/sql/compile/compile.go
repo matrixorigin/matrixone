@@ -3351,7 +3351,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
-			fmt.Println("!!!", name)
 			switch name {
 			case "starcount", "count":
 				partialresults = append(partialresults, int64(0))
@@ -3417,7 +3416,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 						name := agg.F.Func.ObjName
 						switch name {
 						case "starcount":
-							fmt.Println("???", name)
 							partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
 						case "count":
 							partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
