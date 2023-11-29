@@ -34,7 +34,7 @@ import (
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 1024
+const maxRowThenUnusePkFilterExpr = 16384
 
 type dmlSelectInfo struct {
 	typ string
