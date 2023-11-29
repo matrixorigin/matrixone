@@ -228,4 +228,19 @@ a    b    c
 select * from vec_table where b= "[1,2,3]";
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
+create table vec_table1(a int, b vecf32(3), c vecf64(3));
+insert into vec_table1 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table1;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+create table vec_table2(a int primary key, b vecf32(3), c vecf64(3));
+insert into vec_table2 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table2;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+create table vec_table3(a int unique key, b vecf32(3), c vecf64(3));
+insert into vec_table3 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table3;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
 drop database vecdb;
