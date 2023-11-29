@@ -24,6 +24,11 @@ import (
 
 var _ vm.Operator = new(Argument)
 
+const (
+	retrieve = 0
+	end      = 1
+)
+
 type Argument struct {
 	TblDef *plan.TableDef
 	Offset int64
@@ -37,6 +42,8 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 	buf      *batch.Batch
+
+	status int
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
