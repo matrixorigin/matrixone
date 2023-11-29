@@ -33,8 +33,9 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 	length := v.Length()
 	bitSize := uint64(bf.bitmap.Len())
 	step := hashmap.UnitLimit
+	lastSeed := len(bf.hashSeed) - 1
 
-	var i, j, n int
+	var i, j, n, k, idx int
 	getIdxVal := func(v uint64) uint64 {
 		if v >= bitSize {
 			return v % bitSize
@@ -49,21 +50,29 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 		if n > step {
 			n = step
 		}
-
-		for j = 0; j < n; j++ {
-			bf.keys[j] = bf.keys[j][:0]
-		}
 		encodeHashKeys(bf.keys, v, i, n)
 
-		var idx int
-		for _, seed := range bf.hashSeed {
-			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, seed)
+		idx = 0
+		for k = 0; k < lastSeed; k++ {
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
 			for j = 0; j < n; j++ {
 				bf.addVals[idx] = getIdxVal(bf.states[j][0])
-				bf.addVals[idx+1] = getIdxVal(bf.states[j][1])
-				bf.addVals[idx+2] = getIdxVal(bf.states[j][2])
-				idx += 3
+				idx++
+				bf.addVals[idx] = getIdxVal(bf.states[j][1])
+				idx++
+				bf.addVals[idx] = getIdxVal(bf.states[j][2])
+				idx++
 			}
+		}
+		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
+		for j = 0; j < n; j++ {
+			bf.addVals[idx] = getIdxVal(bf.states[j][0])
+			idx++
+			bf.addVals[idx] = getIdxVal(bf.states[j][1])
+			idx++
+			bf.addVals[idx] = getIdxVal(bf.states[j][2])
+			idx++
+			bf.keys[j] = bf.keys[j][:0]
 		}
 		bf.bitmap.AddMany(bf.addVals[:idx])
 	}
@@ -130,9 +139,6 @@ func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 			n = step
 		}
 
-		for j = 0; j < n; j++ {
-			bf.keys[j] = bf.keys[j][:0]
-		}
 		encodeHashKeys(bf.keys, v, i, n)
 
 		for k = 0; k < lastSeed; k++ {
@@ -150,6 +156,7 @@ func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 			bf.vals[j][idx] = getIdxVal(bf.states[j][0])
 			bf.vals[j][idx+1] = getIdxVal(bf.states[j][1])
 			bf.vals[j][idx+2] = getIdxVal(bf.states[j][2])
+			bf.keys[j] = bf.keys[j][:0]
 			callBack(j, i)
 		}
 	}

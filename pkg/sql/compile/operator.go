@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -565,6 +566,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 func constructFuzzyFilter(n, left, right *plan.Node) *fuzzyfilter.Argument {
 	var typ types.T
 	pkName := n.TableDef.Pkey.PkeyColName
+	var pkTyp types.Type
 	if pkName == catalog.CPrimaryKeyColName {
 		typ = types.T(n.TableDef.Pkey.CompPkeyCol.Typ.GetId())
 	} else {
@@ -572,6 +574,7 @@ func constructFuzzyFilter(n, left, right *plan.Node) *fuzzyfilter.Argument {
 		for _, c := range cols {
 			if c.Name == pkName {
 				typ = types.T(c.Typ.GetId())
+				pkTyp = plan2.MakeTypeByPlan2Type(c.Typ)
 			}
 		}
 	}
@@ -580,6 +583,7 @@ func constructFuzzyFilter(n, left, right *plan.Node) *fuzzyfilter.Argument {
 		T:      typ,
 		N:      left.Stats.Cost + right.Stats.Cost,
 		PkName: pkName,
+		PkTyp:  pkTyp,
 	}
 }
 

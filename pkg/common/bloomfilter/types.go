@@ -21,17 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
-const (
-	add = iota
-	test
-	testAndAdd
-)
-
-type TaggedFunc struct {
-	fn  func(int, int)
-	typ int
-}
-
 type BloomFilter struct {
 	bitmap   *bitmap.Bitmap
 	hashSeed []uint64

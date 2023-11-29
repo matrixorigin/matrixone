@@ -112,12 +112,17 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			}
 
 			if bat == nil {
+				if err := generateRbat(proc, arg); err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
 				arg.ctr.state = Probe
 				continue
 			}
-			rowCnt := bat.RowCount()
-			if rowCnt == 0 {
-				return result, nil
+
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
+				continue
 			}
 
 			pkCol := bat.GetVector(0)
@@ -147,16 +152,9 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 				return result, nil
 			}
 
-			rowCnt := bat.RowCount()
-			if rowCnt == 0 {
-				return result, nil
-			}
-
-			if arg.rbat == nil {
-				if err := generateRbat(proc, arg, bat); err != nil {
-					result.Status = vm.ExecStop
-					return result, err
-				}
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
+				continue
 			}
 
 			pkCol := bat.GetVector(0)
@@ -190,12 +188,17 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 			}
 
 			if bat == nil {
+				if err := generateRbat(proc, arg); err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
 				arg.ctr.state = Probe
 				continue
 			}
-			rowCnt := bat.RowCount()
-			if rowCnt == 0 {
-				return result, nil
+
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
+				continue
 			}
 
 			pkCol := bat.GetVector(0)
@@ -225,16 +228,9 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 				return result, nil
 			}
 
-			rowCnt := bat.RowCount()
-			if rowCnt == 0 {
-				return result, nil
-			}
-
-			if arg.rbat == nil {
-				if err := generateRbat(proc, arg, bat); err != nil {
-					result.Status = vm.ExecStop
-					return result, err
-				}
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
+				continue
 			}
 
 			pkCol := bat.GetVector(0)
@@ -261,9 +257,9 @@ func appendCollisionKey(proc *process.Process, arg *Argument, idx int, bat *batc
 }
 
 // rbat will contain the keys that have hash collisions
-func generateRbat(proc *process.Process, arg *Argument, bat *batch.Batch) error {
+func generateRbat(proc *process.Process, arg *Argument) error {
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, proc.GetVector(*bat.GetVector(0).GetType()))
+	rbat.SetVector(0, proc.GetVector(arg.PkTyp))
 	arg.rbat = rbat
 	return nil
 }

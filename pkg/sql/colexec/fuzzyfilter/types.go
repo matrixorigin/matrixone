@@ -37,6 +37,7 @@ type Argument struct {
 	N      float64
 	T      types.T
 	PkName string
+	PkTyp  types.Type
 
 	useRoaring bool
 
@@ -66,6 +67,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.bloomFilter != nil {
 		arg.bloomFilter.Clean()
+		arg.bloomFilter = nil
 	}
 	if arg.roaringFilter != nil {
 		arg.roaringFilter = nil
