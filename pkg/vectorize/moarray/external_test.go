@@ -714,6 +714,31 @@ func TestCosineSimilarity(t *testing.T) {
 			args: args{argLeftF64: []float64{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}, argRightF64: []float64{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}},
 			want: 1,
 		},
+		{
+			name: "Test2.c - float64",
+			args: args{argLeftF64: []float64{0.8166459, 0.66616553, 0.4886152}, argRightF64: []float64{0.8166459, 0.66616553, 0.4886152}},
+			want: 1,
+		},
+		{
+			name: "Test2.d - float64",
+			args: args{argLeftF64: []float64{8.5606893, 6.7903588, 821.977768}, argRightF64: []float64{8.5606893, 6.7903588, 821.977768}},
+			want: 1,
+		},
+		{
+			name: "Test2.e - float64",
+			args: args{argLeftF64: []float64{0.9260021, 0.26637346, 0.06567037}, argRightF64: []float64{0.9260021, 0.26637346, 0.06567037}},
+			want: 1,
+		},
+		{
+			name: "Test2.f - float64",
+			args: args{argLeftF64: []float64{0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764}, argRightF64: []float64{0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764}},
+			want: 1,
+		},
+		{
+			name: "Test2.g - float64",
+			args: args{argLeftF64: []float64{0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881}, argRightF64: []float64{0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881}},
+			want: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
