@@ -16,7 +16,7 @@ package ctl
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +56,7 @@ func handleGetProtocolVersion(proc *process.Process,
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	versions := make(map[string]int64, len(addrs))
+	versions := make([]string, 0, len(addrs))
 	for i, addr := range addrs {
 		req := qs.NewRequest(querypb.CmdMethod_GetProtocolVersion)
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
@@ -64,18 +64,13 @@ func handleGetProtocolVersion(proc *process.Process,
 		if err != nil {
 			return Result{}, err
 		}
-		versions[nodeIds[i]] = resp.GetProtocolVersion.Version
+		versions = append(versions, fmt.Sprintf("%s:%d", nodeIds[i], resp.GetProtocolVersion.Version))
 		qs.Release(resp)
-	}
-
-	bytes, err := json.Marshal(versions)
-	if err != nil {
-		return Result{}, err
 	}
 
 	return Result{
 		Method: GetProtocolVersionMethod,
-		Data:   string(bytes),
+		Data:   strings.Join(versions, "\n"),
 	}, nil
 }
 
@@ -116,7 +111,7 @@ func handleSetProtocolVersion(proc *process.Process,
 	}
 
 	if service == cn && targets != nil {
-		versions := make(map[string]int64, len(targets))
+		versions := make([]string, 0, len(targets))
 		for _, target := range targets {
 			resp, err := transferToCN(qs, target, version)
 			if err != nil {
@@ -125,17 +120,12 @@ func handleSetProtocolVersion(proc *process.Process,
 			if resp == nil {
 				return Result{}, moerr.NewInternalErrorNoCtx("no such cn service")
 			}
-			versions[target] = resp.SetProtocolVersion.Version
-		}
-
-		bytes, err := json.Marshal(versions)
-		if err != nil {
-			return Result{}, err
+			versions = append(versions, fmt.Sprintf("%s:%d", target, resp.SetProtocolVersion.Version))
 		}
 
 		return Result{
 			Method: SetProtocolVersionMethod,
-			Data:   string(bytes),
+			Data:   strings.Join(versions, "\n"),
 		}, nil
 	}
 

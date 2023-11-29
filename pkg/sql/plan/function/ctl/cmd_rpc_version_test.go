@@ -15,12 +15,12 @@
 package ctl
 
 import (
-	"encoding/json"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"testing"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -55,17 +55,13 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 		qs.Close()
 	}()
 
-	version := map[string]int64{
-		id: defines.MORPCLatestVersion,
-	}
-	bytes, err := json.Marshal(version)
-	require.NoError(t, err)
+	version := fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion)
 
 	ret, err := handleGetProtocolVersion(arguments.proc, arguments.service, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, ret, Result{
 		Method: GetProtocolVersionMethod,
-		Data:   string(bytes),
+		Data:   version,
 	})
 }
 
@@ -98,8 +94,6 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	}()
 
 	for _, c := range cases {
-		bytes, err := json.Marshal(map[string]int64{id: c.version})
-		require.NoError(t, err)
 		var parameter string
 		if c.service == tn {
 			parameter = fmt.Sprintf("%d", c.version)
@@ -116,7 +110,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 		}
 		require.Equal(t, ret, Result{
 			Method: SetProtocolVersionMethod,
-			Data:   string(bytes),
+			Data:   fmt.Sprintf("%s:%d", id, c.version),
 		})
 		requireVersionValue(t, c.version)
 	}
