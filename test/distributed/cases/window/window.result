@@ -2936,12 +2936,32 @@ insert into td(d) select d+3000 from td;
 select count(*) from td;
 count(*)
 20971520
-select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-[unknown result because it is related to issue#10381]
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-[unknown result because it is related to issue#10381]
+[unknown result because it is related to issue#13008]
+select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
+sum(d) over (order by d rows between 10 preceding and 10 following)
+66
+78
+91
+105
+120
+136
+153
+171
+190
+210
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
-[unknown result because it is related to issue#10381]
+d    min(d) over (partition by d % 7 order by d rows between 2 preceding and 1 following)
+7    7
+14    7
+21    7
+28    14
+35    21
+35    28
+42    35
+42    35
+49    42
+49    42
 drop table td;
 drop table if exists `c`;
 create table `c` (
@@ -4060,33 +4080,68 @@ null
 drop table time01;
 drop table if exists window01;
 create table window01(col1 int, col2 varchar(20));
-[unknown result because it is related to issue#12639]
 insert into window01 values(1,'老师');
-[unknown result because it is related to issue#12639]
 insert into window01 values(2,'医生');
-[unknown result because it is related to issue#12639]
 insert into window01 values(3,'工人');
-[unknown result because it is related to issue#12639]
 insert into window01 values(10,'学生');
-[unknown result because it is related to issue#12639]
 insert into window01 values(20,'学生');
-[unknown result because it is related to issue#12639]
 insert into window01 values(12,'学生');
-[unknown result because it is related to issue#12639]
 insert into window01 values(21,'老师');
-[unknown result because it is related to issue#12639]
 insert into window01 values(100,'老师');
-[unknown result because it is related to issue#12639]
 insert into window01 values(200,'工人');
-[unknown result because it is related to issue#12639]
 select col2, avg(col1) over (partition by col2 order by col1 desc) from window01;
-[unknown result because it is related to issue#12639]
+col2    avg(col1) over (partition by col2 order by col1 desc)
+医生    2.0
+学生    20.0
+学生    16.0
+学生    14.0
+工人    200.0
+工人    101.5
+老师    100.0
+老师    60.5
+老师    40.666666666666664
 select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from window01;
-[unknown result because it is related to issue#12639]
+col2    col1    sum(col1) over (partition by col2 order by col1 desc)
+医生    2    2
+学生    20    20
+学生    12    32
+学生    10    42
+工人    200    200
+工人    3    203
+老师    100    100
+老师    21    121
+老师    1    122
 select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
-[unknown result because it is related to issue#12639]
+col2    col1    min(col1) over (partition by col2 order by col1 desc)
+医生    2    2
+学生    20    20
+学生    12    12
+学生    10    10
+工人    200    200
+工人    3    3
+老师    100    100
+老师    21    21
+老师    1    1
 select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
-[unknown result because it is related to issue#12639]
+col2    col1    max(col1) over (partition by col2 order by col1 desc)
+医生    2    2
+学生    20    20
+学生    12    20
+学生    10    20
+工人    200    200
+工人    3    200
+老师    100    100
+老师    21    100
+老师    1    100
 select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
-[unknown result because it is related to issue#12639]
+col2    col1    count(col1) over (partition by col2 order by col1 desc)
+医生    2    1
+学生    20    1
+学生    12    2
+学生    10    3
+工人    200    1
+工人    3    2
+老师    100    1
+老师    21    2
+老师    1    3
 drop database test;

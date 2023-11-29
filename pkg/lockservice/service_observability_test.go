@@ -179,7 +179,7 @@ func TestIterLocks(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err = s.Lock(ctx, table, rows, txn4, exclusiveOpts)
+				_, err := s.Lock(ctx, table, rows, txn4, exclusiveOpts)
 				require.NoError(t, err)
 				require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
 			}()
@@ -188,7 +188,7 @@ func TestIterLocks(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err = s.Lock(ctx, table, rangeRows, txn5, exclusiveOpts)
+				_, err := s.Lock(ctx, table, rangeRows, txn5, exclusiveOpts)
 				require.NoError(t, err)
 				require.NoError(t, s.Unlock(ctx, txn5, timestamp.Timestamp{}))
 			}()

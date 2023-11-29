@@ -485,6 +485,8 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
+	int64 nullcnt=10;
+	repeated double ranges	= 11;
 }
 
 message Stats {
@@ -631,7 +633,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
-		STREAM_SCAN = 6;
+		SOURCE_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
@@ -802,6 +804,7 @@ message Node {
 	SampleFuncSpec sample_func = 51;
 
 	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
 }
 
 message ExternScan {

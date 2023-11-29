@@ -1456,8 +1456,8 @@ github.com/mailru/easyjson v0.7.6/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJ
 github.com/marstr/guid v1.1.0/go.mod h1:74gB1z2wpxxInTG6yaqA7KrtM0NZ+RbrcqDvYHefzho=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004 h1:HwxzjxWB6oYwdA4gBXDgjjZiwpGKzBUfpGNzDbuJMwo=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
-github.com/matrixorigin/goetty/v2 v2.0.0-20230811091418-ff72333eabdc h1:8TnqMJjZh1RAcb/V5pRV2z2PBdx5b0qV50itcuxOfG8=
-github.com/matrixorigin/goetty/v2 v2.0.0-20230811091418-ff72333eabdc/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca h1:Umz9yzhDh/wxoZxUePptSGZN9fim7cq9u0EowC/QYo0=
+github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/matrixorigin/gosigar v0.14.3-0.20231121102214-89a79017cdcd h1:YuVxj5IXtF/sznOW1LDbW+TN8LDFpsOf9Fhn7Fzj0eM=
 github.com/matrixorigin/gosigar v0.14.3-0.20231121102214-89a79017cdcd/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=

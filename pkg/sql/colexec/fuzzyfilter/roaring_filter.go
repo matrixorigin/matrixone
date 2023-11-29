@@ -28,7 +28,7 @@ type canUseRoaring interface {
 type roaringFilter struct {
 	b *roaring.Bitmap
 
-	addFunc  func(f *roaringFilter, v *vector.Vector)
+	addFunc        func(f *roaringFilter, v *vector.Vector)
 	testAndAddFunc func(f *roaringFilter, v *vector.Vector) (int, any)
 }
 
@@ -58,9 +58,9 @@ func newroaringFilter(t types.T) *roaringFilter {
 	}
 
 	f := &roaringFilter{
-		addFunc: add,
+		addFunc:        add,
 		testAndAddFunc: testAndAdd,
-		b: roaring.New(),
+		b:              roaring.New(),
 	}
 	return f
 }

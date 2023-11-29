@@ -34,8 +34,8 @@ type Argument struct {
 	ctr *container
 
 	// Number of items in the filter
-	N float64
-	T types.T
+	N      float64
+	T      types.T
 	PkName string
 
 	useRoaring bool
