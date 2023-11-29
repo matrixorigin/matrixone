@@ -15,6 +15,7 @@
 package mokafka
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -491,6 +492,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	return b, nil
 }
 func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
+	var buf bytes.Buffer
 
 	for colIdx, typ := range typs {
 		id := typ.Oid
@@ -728,14 +730,20 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = val
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			val, ok := fieldValue.(string)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected string type for column %d but got %T", colIdx, fieldValue)
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%s", v)
 			}
-			err := vector.SetStringAt(vec, rowIdx, val, mp)
+			buf.WriteString(strVal)
+			bs := buf.Bytes()
+			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
 			if err != nil {
 				return err
 			}
+			buf.Reset()
 
 		case types.T_json:
 			val, ok := fieldValue.([]byte)
