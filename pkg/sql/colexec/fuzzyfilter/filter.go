@@ -60,10 +60,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		rowCount = 10000
 	}
 
-	arg.useRoaring = IfCanUseRoaringFilter(arg.T)
+	arg.useRoaring = IfCanUseRoaringFilter(arg.PkTyp.Oid)
 
 	if arg.useRoaring {
-		arg.roaringFilter = newroaringFilter(arg.T)
+		arg.roaringFilter = newroaringFilter(arg.PkTyp.Oid)
 	} else {
 		//@see https://hur.st/bloomfilter/
 		var probability float64

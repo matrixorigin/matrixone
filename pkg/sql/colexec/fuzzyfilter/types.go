@@ -35,7 +35,6 @@ type Argument struct {
 
 	// Number of items in the filter
 	N      float64
-	T      types.T
 	PkName string
 	PkTyp  types.Type
 
