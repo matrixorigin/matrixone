@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"go.uber.org/zap"
 )
 
 func getQueryResultDir() string {
@@ -94,12 +95,13 @@ func initQueryResulConfig(ses *Session) error {
 	}
 	ses.createdTime = time.Now()
 	ses.expiredTime = ses.createdTime.Add(time.Hour * time.Duration(p))
-	return nil
+	return err
 }
 
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
+		logInfo(ses, ses.GetDebugString(), "save query result", zap.Float64(" current result size %f is larger than the limitResultSize", s))
 		return nil
 	}
 	fs := ses.GetParameterUnit().FileService
@@ -122,7 +124,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 		return err
 	}
 	ses.curResultSize = s
-	return nil
+	return err
 }
 
 func saveQueryResultMeta(ses *Session) error {
@@ -160,7 +162,7 @@ func saveQueryResultMeta(ses *Session) error {
 
 	st, err := simpleAstMarshal(ses.ast)
 	if err != nil {
-		return nil
+		return err
 	}
 	m := &catalog.Meta{
 		QueryId:     ses.tStmt.StatementID,
@@ -199,7 +201,7 @@ func saveQueryResultMeta(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	return err
 }
 
 func buildColumnMap(rs *plan.ResultColDef) string {
