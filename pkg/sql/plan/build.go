@@ -100,8 +100,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
-	case *tree.CreateStream:
-		return buildCreateStream(stmt, ctx)
+	case *tree.CreateSource:
+		return buildCreateSource(stmt, ctx)
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
