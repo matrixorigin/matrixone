@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -491,41 +493,91 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
 
 	for colIdx, typ := range typs {
-		fieldValue, ok := getter.GetFieldValue(attrKeys[colIdx])
-		if !ok {
-			return moerr.NewInternalError(ctx, "field not found: %s", attrKeys[colIdx])
-		}
-
 		id := typ.Oid
 		vec := bat.Vecs[colIdx]
+		fieldValue, ok := getter.GetFieldValue(attrKeys[colIdx])
+		if !ok || fieldValue == nil {
+			nulls.Add(vec.GetNulls(), uint64(rowIdx))
+			continue
+		}
 		switch id {
+		case types.T_bool:
+			var val bool
+			switch v := fieldValue.(type) {
+			case bool:
+				val = v
+			case int8, int16, int32, int64:
+				val = v != 0
+			case float32, float64:
+				val = v != 0.0
+			case string:
+				var err error
+				val, err = strconv.ParseBool(v)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			default:
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			cols := vector.MustFixedCol[bool](vec)
+			cols[rowIdx] = val
+		case types.T_int8:
+		case types.T_int16:
 		case types.T_int32:
 			var val int32
 			switch v := fieldValue.(type) {
 			case int32:
 				val = v
+			case int16:
+				val = int32(v)
+			case int8:
+				val = int32(v)
+			case int64:
+				// todo: handle the overflow
+				val = int32(v)
+			case float32:
+				val = int32(v)
 			case float64:
 				val = int32(v)
-			// You can add more type cases if necessary
+			case string:
+				parsedValue, err := strconv.ParseInt(v, 10, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int32(parsedValue)
 			default:
-				return moerr.NewInternalError(ctx, "expected int32 compatible type for column %d but got %T", colIdx, fieldValue)
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
 			cols := vector.MustFixedCol[int32](vec)
 			cols[rowIdx] = val
 		case types.T_int64:
 			var val int64
 			switch v := fieldValue.(type) {
+			case int8:
+				val = int64(v)
+			case int16:
+				val = int64(v)
+			case int32:
+				val = int64(v)
 			case int64:
 				val = v
+			case float32:
+				val = int64(v)
 			case float64:
 				val = int64(v)
-			// Add more type cases if necessary
-			default:
-				return moerr.NewInternalError(ctx, "expected int64 compatible type for column %d but got %T", colIdx, fieldValue)
+			case string:
+				parsedValue, _ := strconv.ParseInt(v, 10, 64)
+				val = parsedValue
 			}
 			cols := vector.MustFixedCol[int64](vec)
 			cols[rowIdx] = val
-
+		case types.T_uint8:
+		case types.T_uint16:
+		case types.T_uint32:
 		case types.T_uint64:
 			val, ok := fieldValue.(uint64)
 			if !ok {
@@ -533,7 +585,8 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			}
 			cols := vector.MustFixedCol[uint64](vec)
 			cols[rowIdx] = val
-
+		case types.T_uint128:
+		case types.T_float32:
 		case types.T_float64:
 			val, ok := fieldValue.(float64)
 			if !ok {
@@ -552,14 +605,6 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				return err
 			}
 
-		case types.T_bool:
-			val, ok := fieldValue.(bool)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected bool type for column %d but got %T", colIdx, fieldValue)
-			}
-			cols := vector.MustFixedCol[bool](vec)
-			cols[rowIdx] = val
-
 		case types.T_json:
 			val, ok := fieldValue.([]byte)
 			if !ok || len(val) == 0 {
@@ -573,7 +618,9 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			if err != nil {
 				return err
 			}
-
+		case types.T_date:
+		case types.T_time:
+		case types.T_timestamp:
 		case types.T_datetime:
 			val, ok := fieldValue.(string)
 			if !ok {
@@ -591,7 +638,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			}
 
 		default:
-			return moerr.NewInternalError(ctx, "the value type %s is not supported now", *vec.GetType())
+			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 		}
 	}
 	return nil
