@@ -122,5 +122,29 @@ select * from vec_table where b> "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";
 
+-- create table with PK or UK or No Key (https://github.com/matrixorigin/matrixone/issues/13038)
+create table vec_table1(a int, b vecf32(3), c vecf64(3));
+insert into vec_table1 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table1;
+create table vec_table2(a int primary key, b vecf32(3), c vecf64(3));
+insert into vec_table2 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table2;
+create table vec_table3(a int unique key, b vecf32(3), c vecf64(3));
+insert into vec_table3 values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table3;
+
+-- Scalar Null check
+select summation(null);
+select l1_norm(null);
+select l2_norm(null);
+select vector_dims(null);
+select inner_product(null, "[1,2,3]");
+select cosine_similarity(null, "[1,2,3]");
+select l2_distance(null, "[1,2,3]");
+select cosine_distance(null, "[1,2,3]");
+select normalize_l2(null);
+select cast(null as vecf32(3));
+select cast(null as vecf64(3));
+
 -- post
 drop database vecdb;
