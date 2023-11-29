@@ -1873,25 +1873,11 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	hasPrefix := func(b1, b2 []byte) uint8 {
-		if len(b1) >= len(b2) && bytes.Equal(b1[:len(b2)], b2) {
-			return 1
-		}
-		return 0
-	}
-
-	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, hasPrefix)
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasPrefix)
 }
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	isEqualSuffix := func(b1, b2 []byte) uint8 {
-		if len(b1) >= len(b2) && bytes.Equal(b1[len(b1)-len(b2):], b2) {
-			return 1
-		}
-		return 0
-	}
-
-	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
+	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2

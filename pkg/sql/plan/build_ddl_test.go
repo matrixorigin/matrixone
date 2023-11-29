@@ -109,6 +109,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
+	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 

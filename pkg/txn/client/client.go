@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	gotrace "runtime/trace"
 	"sync"
@@ -168,6 +169,26 @@ type txnClient struct {
 		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
 		waitActiveTxns []*txnOperator
+	}
+}
+
+func (client *txnClient) GetState() TxnState {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	at := make([]string, 0, len(client.mu.activeTxns))
+	for k := range client.mu.activeTxns {
+		at = append(at, hex.EncodeToString([]byte(k)))
+	}
+	wt := make([]string, 0, len(client.mu.waitActiveTxns))
+	for _, v := range client.mu.waitActiveTxns {
+		wt = append(wt, hex.EncodeToString(v.txnID))
+	}
+	return TxnState{
+		State:          int(client.mu.state),
+		Users:          client.mu.users,
+		ActiveTxns:     at,
+		WaitActiveTxns: wt,
+		LatestTS:       client.timestampWaiter.LatestTS(),
 	}
 }
 
@@ -508,18 +529,14 @@ func (client *txnClient) AbortAllRunningTxn() {
 	}
 
 	for _, op := range ops {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 	}
 	for _, op := range waitOps {
-		tempWorkspace := op.workspace
-
-		op.workspace = nil
+		op.cannotCleanWorkspace = true
 		_ = op.Rollback(context.Background())
-		op.workspace = tempWorkspace
+		op.cannotCleanWorkspace = false
 		op.notifyActive()
 	}
 

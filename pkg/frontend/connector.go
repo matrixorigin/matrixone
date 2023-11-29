@@ -23,7 +23,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -33,6 +35,57 @@ const (
 	defaultConnectorTaskMaxRetryTimes = 10
 	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
 )
+
+func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *tree.CreateTable) error {
+	ts := mce.routineMgr.getParameterUnit().TaskService
+	if ts == nil {
+		return moerr.NewInternalError(ctx, "no task service is found")
+	}
+	dbName := string(st.Table.Schema())
+	tableName := string(st.Table.Name())
+	_, tableDef := mce.ses.GetTxnCompileCtx().Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, tableName)
+	}
+	options := make(map[string]string)
+	ses := mce.GetSession()
+
+	//get query optimizer and execute Optimize
+	generatedPlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return err
+	}
+	query := generatedPlan.GetQuery()
+	if query != nil { // Checking if query is not nil
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_SOURCE_SCAN {
+				//collect the stream tableDefs
+				streamTableDef := node.TableDef.Defs
+				for _, def := range streamTableDef {
+					if propertiesDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+						for _, property := range propertiesDef.Properties.Properties {
+							options[property.Key] = property.Value
+						}
+					}
+				}
+			}
+		}
+	}
+
+	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
+	if err := createConnector(
+		ctx,
+		mce.ses.GetTenantInfo().TenantID,
+		mce.ses.GetTenantName(),
+		mce.ses.GetUserName(),
+		ts,
+		dbName+"."+tableName,
+		options,
+	); err != nil {
+		return err
+	}
+	return nil
+}
 
 func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
 	ts := mce.routineMgr.getParameterUnit().TaskService
@@ -98,7 +151,6 @@ func duplicate(t pb.DaemonTask, options map[string]string) bool {
 		checkFields := []string{
 			moconnector.OptConnectorType,
 			moconnector.OptConnectorTopic,
-			moconnector.OptConnectorPartition,
 			moconnector.OptConnectorServers,
 		}
 		for _, field := range checkFields {
@@ -158,7 +210,7 @@ func createConnector(
 }
 
 func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
-	//todo: handle Create connector
+	//todo: handle Drop connector
 	return nil
 }
 

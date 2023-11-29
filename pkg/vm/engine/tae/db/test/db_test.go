@@ -4923,7 +4923,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
 	infos = append(infos, []*pkgcatalog.BlockInfo{info})
-	err = blockio.BlockPrefetch(colIdxs, fs, infos)
+	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
@@ -8053,7 +8053,6 @@ func TestDeduplication(t *testing.T) {
 	seg, err := tbl.CreateSegment(
 		txn,
 		catalog.ES_Appendable,
-		dataFactory.MakeSegmentFactory(),
 		new(objectio.CreateSegOpt).WithId(segmentIDs[0]))
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)
@@ -8662,21 +8661,22 @@ func TestEstimateMemSize(t *testing.T) {
 		testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
 		txn, rel := tae.GetRelation()
 		blk := testutil.GetOneBlockMeta(rel)
-		size1 := blk.GetBlockData().EstimateMemSize()
+		size1, ds1 := blk.GetBlockData().EstimateMemSize()
 		schema50rowSize = size1
 
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(&blk.ID, 1))
 		require.NoError(t, err)
-		size2 := blk.GetBlockData().EstimateMemSize()
+		size2, ds2 := blk.GetBlockData().EstimateMemSize()
 
 		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(&blk.ID, 5))
 		require.NoError(t, err)
-		size3 := blk.GetBlockData().EstimateMemSize()
-		require.Less(t, size1, size2)
-		require.Less(t, size2, size3)
+		size3, ds3 := blk.GetBlockData().EstimateMemSize()
+		// require.Less(t, size1, size2)
+		// require.Less(t, size2, size3)
 		require.NoError(t, txn.Rollback(ctx))
-		size4 := blk.GetBlockData().EstimateMemSize()
+		size4, ds4 := blk.GetBlockData().EstimateMemSize()
 		t.Log(size1, size2, size3, size4)
+		t.Log(ds1, ds2, ds3, ds4)
 	}
 
 	{
@@ -8685,20 +8685,22 @@ func TestEstimateMemSize(t *testing.T) {
 		testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schemaBig, bat, false)
 		txn, rel := tae.GetRelation()
 		blk := testutil.GetOneBlockMeta(rel)
-		size1 := blk.GetBlockData().EstimateMemSize()
+		size1, d1 := blk.GetBlockData().EstimateMemSize()
 
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(&blk.ID, 1))
 		require.NoError(t, err)
 
-		size2 := blk.GetBlockData().EstimateMemSize()
+		size2, d2 := blk.GetBlockData().EstimateMemSize()
 
 		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(&blk.ID, 5))
 		require.NoError(t, err)
-		size3 := blk.GetBlockData().EstimateMemSize()
+		size3, d3 := blk.GetBlockData().EstimateMemSize()
 
 		t.Log(size1, size2, size3)
-		require.Less(t, size1, size2)
-		require.Less(t, size2, size3)
+		t.Log(d1, d2, d3)
+		require.Equal(t, size1, size2)
+		require.Equal(t, size2, size3)
+		require.Less(t, d1, d2)
 		require.Less(t, schema50rowSize, size1)
 		require.NoError(t, txn.Commit(ctx))
 	}

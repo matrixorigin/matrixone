@@ -75,16 +75,16 @@ select distinct(substr(vc,3)) from t1 order by 1;
 -- @label:bvt
 select endswith(c,'a'),endswith(vc,'a') from t1;
 select endswith(c,'y'),endswith(vc,'e') from t1;
-select * from t1 where endswith(c,'y') = 1;
-select * from t1 where endswith(c,'y') = 1 and endswith(vc,'ge') = 1;
+select * from t1 where endswith(c,'y');
+select * from t1 where endswith(c,'y') and endswith(vc,'ge');
 
 -- @case
 -- @desc:test for startswith
 -- @label:bvt
 select startswith(c,'B'),startswith(vc,'A') from t1;
 select startswith(c,'y'),startswith(vc,'e') from t1;
-select * from t1 where startswith(c,'B') = 1;
-select * from t1 where startswith(c,'B') = 1 and startswith(vc,'A') = 1;
+select * from t1 where startswith(c,'B');
+select * from t1 where startswith(c,'B') and startswith(vc,'A');
 
 -- @case
 -- @desc:test for lpad

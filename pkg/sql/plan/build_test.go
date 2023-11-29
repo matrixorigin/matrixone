@@ -70,13 +70,17 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name"
 	// sql := "update nation set n_name ='a' where n_nationkey > 10"
 	// sql := "update dept set deptno = 11 where deptno = 10"
-	sql := "prepare stmt1 from update nation set n_name = ? where n_nationkey = ?"
+	sqls := []string{"prepare stmt1 from update nation set n_name = ? where n_nationkey = ?",
+		"prepare stmt1 from insert into  nation values (?, ?, ?, ?) ON DUPLICATE KEY UPDATE n_name=?"}
 	mock := NewMockOptimizer(true)
-	logicPlan, err := runOneStmt(mock, t, sql)
-	if err != nil {
-		t.Fatalf("%+v", err)
+
+	for _, sql := range sqls {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		outPutPlan(logicPlan, true, t)
 	}
-	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -832,6 +836,7 @@ func TestDdl(t *testing.T) {
 		"alter table nation drop foreign key fk1", //key not exists
 		"alter table nation add FOREIGN KEY fk_t1(col_not_exist) REFERENCES nation2(n_nationkey)",
 		"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(col_not_exist)",
+		"create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
