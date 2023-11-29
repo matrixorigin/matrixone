@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +60,8 @@ type compactBlockTask struct {
 	scopes    []common.ID
 	mapping   []int32
 	deletes   *nulls.Bitmap
+
+	Stats []objectio.ObjectStats
 }
 
 func NewCompactBlockTask(
@@ -68,9 +71,10 @@ func NewCompactBlockTask(
 	rt *dbutils.Runtime,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:  txn,
-		meta: meta,
-		rt:   rt,
+		txn:   txn,
+		meta:  meta,
+		rt:    rt,
+		Stats: make([]objectio.ObjectStats, 0),
 	}
 	dbId := meta.GetSegment().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
@@ -393,6 +397,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}
+	task.Stats = append(task.Stats, ioTask.Stats)
 
 	err = newBlkData.Init()
 	return
