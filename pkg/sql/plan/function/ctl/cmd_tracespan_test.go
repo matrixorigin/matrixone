@@ -74,7 +74,7 @@ func initRuntime(uuids []string, queryAddress []string) {
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(cns, nil))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {

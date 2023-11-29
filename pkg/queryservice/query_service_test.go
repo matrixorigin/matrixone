@@ -158,7 +158,7 @@ func TestQueryServiceKillConn(t *testing.T) {
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc QueryService, addr string)) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
 		time.Now().Nanosecond(), cn.ServiceID)
 

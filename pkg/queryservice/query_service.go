@@ -16,7 +16,6 @@ package queryservice
 
 import (
 	"context"
-	"math"
 	"time"
 
 	"github.com/pkg/errors"
@@ -38,8 +37,8 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_GetCacheInfo:       defines.MORPCVersion1,
 	pb.CmdMethod_SyncCommit:         defines.MORPCVersion1,
 	pb.CmdMethod_GetCommit:          defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion: math.MinInt64, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion: math.MinInt64,
+	pb.CmdMethod_GetProtocolVersion: defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion: defines.MORPCMinVersion,
 }
 
 // QueryService is used to send query request to another CN service.
