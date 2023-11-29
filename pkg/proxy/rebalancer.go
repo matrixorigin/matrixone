@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +45,12 @@ type rebalancer struct {
 	scaling *scaling
 	// queue takes the tunnels which need to do migration.
 	queue chan *tunnel
+	mu    struct {
+		sync.Mutex
+		// inflight is the tunnels which are in the queue or is being
+		// rebalanced. The same tunnel should not be added to the queue.
+		inflight map[*tunnel]struct{}
+	}
 	// If disabled is true, rebalance does nothing.
 	disabled bool
 	// interval indicates that how often the rebalance is act.
@@ -89,6 +97,7 @@ func newRebalancer(
 		mc:          mc,
 		queue:       make(chan *tunnel, defaultQueueSize),
 	}
+	r.mu.inflight = make(map[*tunnel]struct{})
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -141,10 +150,19 @@ func (r *rebalancer) rebalanceByHash(hash LabelHash) {
 	// Collect the tunnels that need to migrate.
 	tuns := r.collectTunnels(hash)
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Put the tunnels to the queue.
 	for _, t := range tuns {
+		// If the tunnel is inflight, do NOT enqueue it.
+		_, ok := r.mu.inflight[t]
+		if ok {
+			continue
+		}
+
 		select {
 		case r.queue <- t:
+			r.mu.inflight[t] = struct{}{}
 		default:
 			r.logger.Info("rebalance queue is full")
 		}
@@ -159,10 +177,23 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 	// emptyCNs are the fallback CN UUIDs that used to serve the connections when there is no CN match the label hash
 	emptyCNs := make(map[string]struct{})
 
-	r.mc.GetCNService(li.genSelector(), func(s metadata.CNService) bool {
+	notEmptyCns := make(map[string]struct{})
+
+	selector := li.genSelector()
+	appendFn := func(s *metadata.CNService) {
+		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
-			cns[s.ServiceID] = struct{}{}
-		} else {
+			notEmptyCns[s.ServiceID] = struct{}{}
+		}
+	}
+	if li.isSuperTenant() {
+		disttae.SelectForSuperTenant(selector, "", nil, appendFn)
+	} else {
+		disttae.SelectForCommonTenant(selector, nil, appendFn)
+	}
+
+	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if len(s.Labels) == 0 {
 			emptyCNs[s.ServiceID] = struct{}{}
 		}
 		return true
@@ -198,7 +229,7 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 		if ts.count() > upperLimit {
 			ret = append(ret, pickTunnels(ts, ts.count()-upperLimit)...)
 		}
-		if _, ok := emptyCNs[uuid]; ok && len(cns) > 0 {
+		if _, ok := emptyCNs[uuid]; ok && len(notEmptyCns) > 0 {
 			// when there ARE selected CNs, migrate tunnels (if any) in empty CNs to the selected CNs
 			ret = append(ret, pickTunnels(ts, ts.count())...)
 		}
@@ -216,6 +247,11 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 					r.logger.Error("failed to do transfer", zap.Error(err))
 				}
 			}
+
+			// After transfer the tunnel, remove it from the inflight map.
+			r.mu.Lock()
+			delete(r.mu.inflight, tun)
+			r.mu.Unlock()
 		case <-ctx.Done():
 			r.logger.Info("rebalancer transfer ended.")
 			return
