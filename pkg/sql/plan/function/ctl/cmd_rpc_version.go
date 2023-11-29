@@ -122,6 +122,9 @@ func handleSetProtocolVersion(proc *process.Process,
 			if err != nil {
 				return Result{}, err
 			}
+			if resp == nil {
+				return Result{}, moerr.NewInternalErrorNoCtx("no such cn service")
+			}
 			versions[target] = resp.SetProtocolVersion.Version
 		}
 
@@ -181,6 +184,9 @@ func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
 		})
 	if err != nil {
 		return Result{}, err
+	}
+	if resp == nil {
+		return Result{}, moerr.NewInternalErrorNoCtx("no such tn service")
 	}
 	defer qs.Release(resp)
 	return Result{
