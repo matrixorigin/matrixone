@@ -834,7 +834,6 @@ func FixProjectionResult(proc *process.Process,
 					return 0, err
 				}
 				dupSize += newVec.Size()
-				dupSize += newVec.Size()
 			}
 
 			finalVectors = append(finalVectors, newVec)
