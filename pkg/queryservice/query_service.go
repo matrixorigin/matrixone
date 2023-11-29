@@ -16,6 +16,7 @@ package queryservice
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/pkg/errors"
@@ -23,8 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
+
+var methodVersions = map[pb.CmdMethod]int64{
+	pb.CmdMethod_ShowProcessList:    defines.MORPCVersion1,
+	pb.CmdMethod_AlterAccount:       defines.MORPCVersion1,
+	pb.CmdMethod_KillConn:           defines.MORPCVersion1,
+	pb.CmdMethod_TraceSpan:          defines.MORPCVersion1,
+	pb.CmdMethod_GetLockInfo:        defines.MORPCVersion1,
+	pb.CmdMethod_GetTxnInfo:         defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheInfo:       defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:         defines.MORPCVersion1,
+	pb.CmdMethod_GetCommit:          defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion: math.MinInt64, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion: math.MinInt64,
+}
 
 // QueryService is used to send query request to another CN service.
 type QueryService interface {
@@ -84,6 +100,7 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		handler:   h,
 		pool:      pool,
 	}
+	qs.initHandleFunc()
 	return qs, nil
 }
 
@@ -92,12 +109,20 @@ func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context
 	s.handler.RegisterHandleFunc(uint32(method), h, async)
 }
 
+func (s *queryService) initHandleFunc() {
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+}
+
 // SendMessage implements the QueryService interface.
 func (s *queryService) SendMessage(
 	ctx context.Context, address string, req *pb.Request,
 ) (*pb.Response, error) {
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
+	}
+	if err := checkMethodVersion(ctx, req); err != nil {
+		return nil, err
 	}
 	f, err := s.client.Send(ctx, address, req)
 	if err != nil {
@@ -226,4 +251,19 @@ func RequestMultipleCn(ctx context.Context,
 		nodesLeft--
 	}
 	return retErr
+}
+
+func checkMethodVersion(ctx context.Context, req *pb.Request) error {
+	if version, ok := methodVersions[req.GetCmdMethod()]; !ok {
+		return moerr.NewInternalError(ctx, "unsupported method %s", req.GetCmdMethod().String())
+	} else {
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
+		if !ok {
+			return moerr.NewInternalError(ctx, "failed to get protocol version")
+		}
+		if v.(int64) < version {
+			return moerr.NewInternalError(ctx, "unsupported protocol version %d", version)
+		}
+	}
+	return nil
 }

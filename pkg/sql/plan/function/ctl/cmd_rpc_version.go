@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,10 +36,12 @@ func handleGetProtocolVersion(proc *process.Process,
 	qs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
+	var nodeIds []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),
 		func(c metadata.CNService) bool {
 			addrs = append(addrs, c.QueryAddress)
+			nodeIds = append(nodeIds, c.ServiceID)
 			return true
 		})
 	mc.GetTNService(
@@ -46,21 +49,22 @@ func handleGetProtocolVersion(proc *process.Process,
 		func(d metadata.TNService) bool {
 			if d.QueryAddress != "" {
 				addrs = append(addrs, d.QueryAddress)
+				nodeIds = append(nodeIds, d.ServiceID)
 			}
 			return true
 		})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	versions := make(map[string]string, len(addrs))
-	for _, addr := range addrs {
+	versions := make(map[string]int64, len(addrs))
+	for i, addr := range addrs {
 		req := qs.NewRequest(querypb.CmdMethod_GetProtocolVersion)
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
 		resp, err := qs.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
-		versions[addr] = resp.GetProtocolVersion.Version
+		versions[nodeIds[i]] = resp.GetProtocolVersion.Version
 		qs.Release(resp)
 	}
 
@@ -101,55 +105,47 @@ func handleSetProtocolVersion(proc *process.Process,
 	parameter string,
 	sender requestSender) (Result, error) {
 	qs := proc.QueryService
-	mc := clusterservice.GetMOCluster()
-	var addrs []string
-	mc.GetCNService(
-		clusterservice.NewSelector(),
-		func(c metadata.CNService) bool {
-			addrs = append(addrs, c.QueryAddress)
-			return true
-		})
-	mc.GetTNService(
-		clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			if d.QueryAddress != "" {
-				addrs = append(addrs, d.QueryAddress)
-			}
-			return true
-		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	versions := make(map[string]string, len(addrs))
-	for _, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
-		req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
-			Version: parameter,
-		}
-
-		resp, err := qs.SendMessage(ctx, addr, req)
-		if err != nil {
-			return Result{}, err
-		}
-		versions[addr] = resp.SetProtocolVersion.Version
-		qs.Release(resp)
-	}
-
-	bytes, err := json.Marshal(versions)
+	targets, version, err := checkProtocolParameter(parameter)
 	if err != nil {
 		return Result{}, err
 	}
+	if service == tn && targets == nil {
+		// set protocol version for tn node
+		// there only exist one tn node, so we don't need to specify the uuid
+		return transferToTN(qs, version)
+	}
 
-	return Result{
-		Method: SetProtocolVersionMethod,
-		Data:   string(bytes),
-	}, nil
+	if service == cn && targets != nil {
+		versions := make(map[string]int64, len(targets))
+		for _, target := range targets {
+			resp, err := transferToCN(qs, target, version)
+			if err != nil {
+				return Result{}, err
+			}
+			versions[target] = resp.SetProtocolVersion.Version
+		}
+
+		bytes, err := json.Marshal(versions)
+		if err != nil {
+			return Result{}, err
+		}
+
+		return Result{
+			Method: SetProtocolVersionMethod,
+			Data:   string(bytes),
+		}, nil
+	}
+
+	return Result{}, moerr.NewInternalError(proc.Ctx, "unsupported cmd")
 }
 
 func checkProtocolParameter(param string) ([]string, int64, error) {
 	param = strings.ToLower(param)
 	// [uuids]:version
 	args := strings.Split(param, ":")
+	if len(args) > 2 {
+		return nil, 0, moerr.NewInternalErrorNoCtx("cmd invalid, too many ':'")
+	}
 	version, err := strconv.ParseInt(args[len(args)-1], 10, 64)
 	if err != nil {
 		return nil, 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected version number")
@@ -159,8 +155,56 @@ func checkProtocolParameter(param string) ([]string, int64, error) {
 		arg := args[0]
 		targets := strings.Split(arg, ",")
 		return targets, version, nil
-
 	}
 
 	return nil, version, nil
+}
+
+func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
+	var addr string
+	var resp *querypb.Response
+	var err error
+	clusterservice.GetMOCluster().GetTNService(
+		clusterservice.NewSelector(),
+		func(t metadata.TNService) bool {
+			if t.QueryAddress == "" {
+				return true
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
+				Version: version,
+			}
+			resp, err = qs.SendMessage(ctx, addr, req)
+			return true
+		})
+	if err != nil {
+		return Result{}, err
+	}
+	defer qs.Release(resp)
+	return Result{
+		Method: SetProtocolVersionMethod,
+		Data:   strconv.FormatInt(resp.SetProtocolVersion.Version, 10),
+	}, nil
+}
+
+func transferToCN(qs queryservice.QueryService, target string, version int64) (resp *querypb.Response, err error) {
+	clusterservice.GetMOCluster().GetCNService(
+		clusterservice.NewServiceIDSelector(target),
+		func(cn metadata.CNService) bool {
+			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
+				Version: version,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			return true
+		})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }

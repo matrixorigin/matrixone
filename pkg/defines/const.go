@@ -40,5 +40,5 @@ const (
 )
 
 const (
-	MORPCVersion1 = "v1"
+	MORPCVersion1 int64 = 1
 )
