@@ -21,12 +21,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
@@ -38,8 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ValueType string
@@ -741,44 +741,138 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			bs := buf.Bytes()
 			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
 			if err != nil {
-				return err
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
 			buf.Reset()
 
 		case types.T_json:
-			val, ok := fieldValue.([]byte)
-			if !ok || len(val) == 0 {
-				strVal, strOk := fieldValue.(string)
-				if !strOk {
-					return moerr.NewInternalError(ctx, "expected bytes or string type for JSON column %d but got %T", colIdx, fieldValue)
-				}
-				val = []byte(strVal)
-			}
-			err := vector.SetBytesAt(vec, rowIdx, val, mp)
+			var jsonBytes []byte
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			byteJson, err := types.ParseStringToByteJson(valueStr)
 			if err != nil {
-				return err
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			jsonBytes, err = types.EncodeJson(byteJson)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
 		case types.T_date:
-		case types.T_time:
-		case types.T_timestamp:
-		case types.T_datetime:
-			val, ok := fieldValue.(string)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected string type for Datetime column %d but got %T", colIdx, fieldValue)
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDateCast(valueStr)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
-			cols := vector.MustFixedCol[types.Datetime](vec)
-			if len(val) == 0 {
-				cols[rowIdx] = types.Datetime(0)
-			} else {
-				d, err := types.ParseDatetime(val, vec.GetType().Scale)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, fieldValue)
-				}
-				cols[rowIdx] = d
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		case types.T_time:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseTime(valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+		case types.T_timestamp:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			t := time.Local
+			d, err := types.ParseTimestamp(t, valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+		case types.T_datetime:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDatetime(valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
 
+		case types.T_enum:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := strconv.ParseUint(valueStr, 10, 16)
+			if err == nil {
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				f, err := strconv.ParseFloat(valueStr, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+					return err
+				}
+			}
+		case types.T_decimal64:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := types.ParseDecimal64(valueStr, vec.GetType().Width, vec.GetType().Scale)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		case types.T_decimal128:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDecimal128(valueStr, vec.GetType().Width, vec.GetType().Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		case types.T_uuid:
+
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := types.ParseUuid(valueStr)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
 		default:
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
+			continue
 		}
 	}
 	return nil
