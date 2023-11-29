@@ -146,5 +146,8 @@ select normalize_l2(null);
 select cast(null as vecf32(3));
 select cast(null as vecf64(3));
 
+-- Precision issue for Cosine Similarity/Distance
+select cosine_similarity("[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]", "[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]");
+
 -- post
 drop database vecdb;

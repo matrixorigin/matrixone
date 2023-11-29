@@ -154,6 +154,15 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		cosineSimilarity = -1.0
 	}
 
+	// NOTE: Downcast the float64 cosine_similarity to float32 to avoid precision issues.
+	// - Without downcasting, we get the following results:
+	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
+	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   0.9999999999999998
+	// - With downcasting, we get the following results:
+	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
+	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   1
+	cosineSimilarity = float64(float32(cosineSimilarity))
+
 	return cosineSimilarity, nil
 }
 
