@@ -21,6 +21,10 @@ import (
 )
 
 func TestDoubleFree(t *testing.T) {
+	enableChecker = true
+	defer func() {
+		enableChecker = false
+	}()
 	c := newChecker[person](true)
 	p := &person{}
 	c.created(p)
@@ -35,6 +39,10 @@ func TestDoubleFree(t *testing.T) {
 }
 
 func TestLeakFree(t *testing.T) {
+	enableChecker = true
+	defer func() {
+		enableChecker = false
+	}()
 	c := newChecker[person](true)
 	p := &person{}
 	c.created(p)

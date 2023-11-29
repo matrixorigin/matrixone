@@ -61,6 +61,11 @@ func TestGetAndFree(t *testing.T) {
 }
 
 func TestCheckDoubleFree(t *testing.T) {
+	enableChecker = true
+	defer func() {
+		enableChecker = false
+	}()
+
 	for name, spi := range providers {
 		t.Run(name, func(t *testing.T) {
 			for key := range pools {
@@ -93,6 +98,11 @@ func TestCheckDoubleFree(t *testing.T) {
 }
 
 func TestCheckLeakFree(t *testing.T) {
+	enableChecker = true
+	defer func() {
+		enableChecker = false
+	}()
+
 	for name, spi := range providers {
 		// mpool not support leak free check
 		if spi == MpoolBased {
