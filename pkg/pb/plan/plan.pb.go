@@ -471,7 +471,7 @@ const (
 	Node_FUNCTION_SCAN Node_NodeType = 3
 	Node_EXTERNAL_SCAN Node_NodeType = 4
 	Node_MATERIAL_SCAN Node_NodeType = 5
-	Node_STREAM_SCAN   Node_NodeType = 6
+	Node_SOURCE_SCAN   Node_NodeType = 6
 	// Proj, for convenience
 	Node_PROJECT Node_NodeType = 10
 	// External function call (UDF)
@@ -530,7 +530,7 @@ var Node_NodeType_name = map[int32]string{
 	3:  "FUNCTION_SCAN",
 	4:  "EXTERNAL_SCAN",
 	5:  "MATERIAL_SCAN",
-	6:  "STREAM_SCAN",
+	6:  "SOURCE_SCAN",
 	10: "PROJECT",
 	11: "EXTERNAL_FUNCTION",
 	20: "MATERIAL",
@@ -577,7 +577,7 @@ var Node_NodeType_value = map[string]int32{
 	"FUNCTION_SCAN":     3,
 	"EXTERNAL_SCAN":     4,
 	"MATERIAL_SCAN":     5,
-	"STREAM_SCAN":       6,
+	"SOURCE_SCAN":       6,
 	"PROJECT":           10,
 	"EXTERNAL_FUNCTION": 11,
 	"MATERIAL":          20,

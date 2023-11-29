@@ -100,7 +100,11 @@ func TestMergeBlock(t *testing.T) {
 				string(catalog.EncodeBlockInfo(blkInfo2)),
 				string(catalog.EncodeBlockInfo(blkInfo3))},
 				nil),
-			testutil.MakeTextVector([]string{string(objectio.ZeroObjectStats[:])}, nil),
+			testutil.MakeTextVector([]string{
+				string(objectio.ZeroObjectStats[:]),
+				string(objectio.ZeroObjectStats[:]),
+				string(objectio.ZeroObjectStats[:])},
+				nil),
 		},
 		Cnt: 1,
 	}
@@ -134,7 +138,7 @@ func TestMergeBlock(t *testing.T) {
 		require.Equal(t, 2, len(result.Vecs))
 		//for i, vec := range result.Vecs {
 		require.Equal(t, 3, result.Vecs[0].Length(), fmt.Sprintf("column number: %d", 0))
-		require.Equal(t, 1, result.Vecs[1].Length(), fmt.Sprintf("column number: %d", 1))
+		require.Equal(t, 3, result.Vecs[1].Length(), fmt.Sprintf("column number: %d", 1))
 		//}
 	}
 	// Check UniqueTables

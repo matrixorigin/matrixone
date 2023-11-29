@@ -58,7 +58,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 	query := generatedPlan.GetQuery()
 	if query != nil { // Checking if query is not nil
 		for _, node := range query.Nodes {
-			if node.NodeType == plan.Node_STREAM_SCAN {
+			if node.NodeType == plan.Node_SOURCE_SCAN {
 				//collect the stream tableDefs
 				streamTableDef := node.TableDef.Defs
 				for _, def := range streamTableDef {
