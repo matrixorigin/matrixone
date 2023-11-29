@@ -14,7 +14,6 @@
 package mergeblock
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -184,8 +183,6 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 
 	// exist blk info, split it
 	if hasObject {
-		logutil.Info(fmt.Sprintf("tablIdx = %v; bat attr = %v; container.mp = %v; bat = %v",
-			tblIdx, bat.Attrs, arg.container.mp, bat))
 		if err := splitObjectStats(arg, proc, bat, blkInfosVec, tblIdx); err != nil {
 			return err
 		}
