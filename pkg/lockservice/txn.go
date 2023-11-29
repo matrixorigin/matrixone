@@ -163,7 +163,6 @@ func (txn *activeTxn) close(
 				table,
 				cs)
 			cs.close()
-			delete(txn.holdLocks, table)
 		}
 	}
 
@@ -176,7 +175,6 @@ func (txn *activeTxn) close(
 				table,
 				cs)
 			cs.close()
-			delete(txn.holdLocks, table)
 		}
 	}
 
@@ -185,6 +183,9 @@ func (txn *activeTxn) close(
 }
 
 func (txn *activeTxn) reset() {
+	for table := range txn.holdLocks {
+		delete(txn.holdLocks, table)
+	}
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]
