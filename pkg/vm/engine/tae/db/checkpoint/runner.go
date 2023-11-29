@@ -504,7 +504,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, r.rt.Fs.Service, true)
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
@@ -556,8 +556,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, in
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval,
-		r.rt.Fs.Service, checkpointMetaInfoFactory(r.GetAllCheckpoints()))
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return

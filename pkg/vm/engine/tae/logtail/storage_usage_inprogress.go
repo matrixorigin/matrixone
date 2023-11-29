@@ -18,11 +18,24 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/tidwall/btree"
+	"sync"
 	"time"
 )
+
+type UsageData_ struct {
+	accId uint32
+	dbId  uint64
+	tblId uint64
+	size  int64
+}
+
+func usageLess(a UsageData_, b UsageData_) bool {
+	return a.accId < b.accId && a.dbId < b.dbId && a.tblId < b.tblId
+}
 
 type StorageUsageCache struct {
 	// when two requests happens within [firstRequest, firstRequest + lazyThreshold],
@@ -31,7 +44,7 @@ type StorageUsageCache struct {
 	// the first requested time after an update
 	firstRequest time.Time
 	// accId -> dbId -> [tblId, size]
-	data map[uint32]map[uint64][2]uint64
+	data *btree.BTreeG[UsageData_]
 }
 
 type StorageUsageCacheOption = func(c *StorageUsageCache)
@@ -45,7 +58,7 @@ func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 
 func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	cache := new(StorageUsageCache)
-	cache.data = make(map[uint32]map[uint64][2]uint64)
+	cache.data = btree.NewBTreeG[UsageData_](usageLess)
 	for _, opt := range opts {
 		opt(cache)
 	}
@@ -64,18 +77,42 @@ const (
 )
 
 type TNUsageMemo struct {
-	cache   *StorageUsageCache
-	pending PendingUpdateType
+	sync.RWMutex
+	cache *StorageUsageCache
+	//pending PendingUpdateType
 }
 
 func NewTNUsageMemo() *TNUsageMemo {
 	memo := new(TNUsageMemo)
-	memo.pending = NUpdate
+	//memo.pending = NUpdate
 	memo.cache = NewStorageUsageCache()
 	return memo
 }
 
 var tnUsageMemo = NewTNUsageMemo()
+
+func (m *TNUsageMemo) EnterProcessing() {
+	m.Lock()
+}
+
+func (m *TNUsageMemo) LeaveProcessing() {
+	m.Unlock()
+}
+
+func (m *TNUsageMemo) Update(usage UsageData_, del bool) {
+	size := int64(0)
+	if old, found := m.cache.data.Get(usage); found {
+		size = old.size
+	}
+
+	if del {
+		usage.size = size - usage.size
+	} else {
+		usage.size = size + usage.size
+	}
+
+	m.cache.data.Set(usage)
+}
 
 func checkSegment_(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 	if !entry.IsSorted() || entry.IsAppendable() {
@@ -107,40 +144,50 @@ func getStorageUsageBatVectors_(bat *containers.Batch) []*vector.Vector {
 	}
 }
 
-func appendToStorageUsageBat_(positiveSize uint64, negativeSize uint64,
-	data *CheckpointData, entry *catalog.SegmentEntry, mp *mpool.MPool) {
+func appendToStorageUsageBat_(positiveSize int64, negativeSize int64,
+	data *CheckpointData, usage UsageData_, mp *mpool.MPool) {
 
-	tblId := entry.GetTable().GetID()
-	dbId := entry.GetTable().GetDB().GetID()
-	accId := uint64(entry.GetTable().GetDB().GetTenantID())
-
-	appendFunc := func(vecs []*vector.Vector, size uint64) {
-		vector.AppendFixed[uint64](vecs[UsageAccID], accId, false, mp)
-		vector.AppendFixed[uint64](vecs[UsageDBID], dbId, false, mp)
-		vector.AppendFixed[uint64](vecs[UsageTblID], tblId, false, mp)
-		vector.AppendFixed[uint64](vecs[UsageSize], size, false, mp)
+	appendFunc := func(vecs []*vector.Vector, size int64) {
+		vector.AppendFixed[int64](vecs[UsageSize], size, false, mp)
+		vector.AppendFixed[uint32](vecs[UsageAccID], usage.accId, false, mp)
+		vector.AppendFixed[uint64](vecs[UsageDBID], usage.dbId, false, mp)
+		vector.AppendFixed[uint64](vecs[UsageTblID], usage.tblId, false, mp)
 	}
 
 	if positiveSize != 0 {
 		insVecs := getStorageUsageBatVectors_(data.bats[StorageUsageInsIDX])
 		appendFunc(insVecs, positiveSize)
+		tnUsageMemo.Update(UsageData_{
+			usage.accId, usage.dbId,
+			usage.tblId, positiveSize}, false)
 	}
 
 	if negativeSize != 0 {
 		delVecs := getStorageUsageBatVectors_(data.bats[StorageUsageDelIDX])
 		appendFunc(delVecs, negativeSize)
+		tnUsageMemo.Update(UsageData_{
+			usage.accId, usage.dbId,
+			usage.tblId, positiveSize}, true)
+	}
+}
+
+func segEntryToUsageData(entry *catalog.SegmentEntry) UsageData_ {
+	return UsageData_{
+		size:  0,
+		tblId: entry.GetTable().GetID(),
+		dbId:  entry.GetTable().GetDB().GetID(),
+		accId: entry.GetTable().GetDB().GetTenantID(),
 	}
 }
 
 func traverseCatalog_(
 	c *catalog.Catalog,
 	collector *BaseCollector,
-	fs fileservice.FileService,
 	mp *mpool.MPool) {
 
 	var lastEntry *catalog.SegmentEntry
-	positiveSize := uint64(0)
-	negativeSize := uint64(0)
+	positiveSize := int64(0)
+	negativeSize := int64(0)
 
 	isSameTable := func(current *catalog.SegmentEntry) bool {
 		if lastEntry == nil {
@@ -159,7 +206,9 @@ func traverseCatalog_(
 
 		// table changed, append the previous table's usage info to batch
 		if !isSameTable(entry) {
-			appendToStorageUsageBat_(positiveSize, negativeSize, collector.data, entry, mp)
+			appendToStorageUsageBat_(
+				positiveSize, negativeSize, collector.data,
+				segEntryToUsageData(entry), mp)
 			lastEntry = entry
 			negativeSize = 0
 			positiveSize = 0
@@ -171,10 +220,10 @@ func traverseCatalog_(
 
 		if node.HasDropCommitted() {
 			// deleted segment
-			negativeSize += uint64(node.BaseNode.ObjectStats.Size())
+			negativeSize += int64(node.BaseNode.ObjectStats.Size())
 		} else if node.IsCommitted() {
 			// flushed already
-			positiveSize += uint64(node.BaseNode.ObjectStats.Size())
+			positiveSize += int64(node.BaseNode.ObjectStats.Size())
 		}
 
 		return nil
@@ -183,5 +232,91 @@ func traverseCatalog_(
 	c.RecurLoop(processor)
 
 	// deal with the last table's usage info
-	appendToStorageUsageBat_(positiveSize, negativeSize, collector.data, lastEntry, mp)
+	appendToStorageUsageBat_(
+		positiveSize, negativeSize, collector.data,
+		segEntryToUsageData(lastEntry), mp)
+}
+
+func FillUsageBatOfIncremental_(c *catalog.Catalog, collector *IncrementalCollector) {
+	start := time.Now()
+
+	tnUsageMemo.EnterProcessing()
+	defer func() {
+		tnUsageMemo.LeaveProcessing()
+		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	traverseCatalog_(c, collector.BaseCollector, collector.Allocator())
+}
+
+func applyDeletesOnTNUsageMemo(collector *GlobalCollector) {
+	var dbs []*catalog.DBEntry
+	for _, del := range collector.deletes_ {
+		switch e := del.(type) {
+		case *catalog.DBEntry:
+			dbs = append(dbs, e)
+		case *catalog.TableEntry:
+			tnUsageMemo.cache.data.Delete(UsageData_{
+				e.GetDB().GetTenantID(),
+				e.GetDB().GetID(), e.GetID(), 0})
+		case *catalog.SegmentEntry:
+			e.RLock()
+			node := e.GetLatestNodeLocked()
+			e.RUnlock()
+
+			tnUsageMemo.Update(UsageData_{
+				e.GetTable().GetDB().GetTenantID(),
+				e.GetTable().GetDB().GetID(),
+				e.GetTable().GetID(),
+				int64(node.BaseNode.ObjectStats.Size())}, true)
+		}
+	}
+
+	iter := tnUsageMemo.cache.data.Iter()
+	var tbls []uint64
+	for _, db := range dbs {
+		if found := iter.Seek(UsageData_{
+			db.GetTenantID(), db.ID, 0, 0}); !found {
+			continue
+		}
+
+		tbls = append(tbls, iter.Item().tblId)
+		for iter.Next() {
+			tbls = append(tbls, iter.Item().tblId)
+		}
+
+		for idx := 0; idx < len(tbls); idx++ {
+			tnUsageMemo.cache.data.Delete(UsageData_{
+				db.GetTenantID(), db.ID, tbls[idx], 0,
+			})
+		}
+
+		tbls = tbls[:0]
+	}
+}
+
+func replayTNUsageMemoOnGCKP(collector *GlobalCollector) {
+	iter := tnUsageMemo.cache.data.Iter()
+	for iter.Next() {
+		usage := iter.Item()
+		appendToStorageUsageBat_(
+			usage.size, 0,
+			collector.data, usage, collector.Allocator())
+	}
+}
+
+func FillUsageBatOfGlobal_(
+	c *catalog.Catalog,
+	collector *GlobalCollector) {
+	start := time.Now()
+
+	tnUsageMemo.EnterProcessing()
+	defer func() {
+		tnUsageMemo.LeaveProcessing()
+		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	applyDeletesOnTNUsageMemo(collector)
+	replayTNUsageMemoOnGCKP(collector)
+
 }
