@@ -110,7 +110,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol, true)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol, true, nil)
 	return err
 }
 
@@ -189,7 +189,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false, true)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false, true, nil)
 
 	return err
 }
@@ -366,7 +366,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, false, _checkInsertPKDupForHiddenIndexTable)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, false, _checkInsertPKDupForHiddenIndexTable, nil)
 						if err != nil {
 							return err
 						}
@@ -852,6 +852,7 @@ func makeInsertPlan(
 	pkFilterExprs []*Expr,
 	isInsertWithoutAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool,
+	indexSourceColTypes []*plan.Type,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -928,7 +929,11 @@ func makeInsertPlan(
 				}
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, false, _checkInsertPkDupForHiddenTable)
+				colTypes := make([]*plan.Type, len(tableDef.Cols))
+				for i := range tableDef.Cols {
+					colTypes[i] = tableDef.Cols[i].Typ
+				}
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, false, _checkInsertPkDupForHiddenTable, colTypes)
 				if err != nil {
 					return err
 				}
@@ -1031,7 +1036,15 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				colTypes := string("")
+				for i := range indexSourceColTypes {
+					if types.T(indexSourceColTypes[i].Id).IsDecimal() {
+						colTypes = colTypes + string(byte(indexSourceColTypes[i].Scale))
+					} else {
+						colTypes = colTypes + "0"
+					}
+				}
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
 				if err != nil {
 					return err
 				}
@@ -1288,7 +1301,15 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				colTypes := string("")
+				for i := range indexSourceColTypes {
+					if types.T(indexSourceColTypes[i].Id).IsDecimal() {
+						colTypes = colTypes + string(byte(indexSourceColTypes[i].Scale))
+					} else {
+						colTypes = colTypes + "0"
+					}
+				}
+				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
 				if err != nil {
 					return err
 				}
@@ -1454,8 +1475,15 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-
-				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				colTypes := string("")
+				for i := range indexSourceColTypes {
+					if types.T(indexSourceColTypes[i].Id).IsDecimal() {
+						colTypes = colTypes + string(byte(indexSourceColTypes[i].Scale))
+					} else {
+						colTypes = colTypes + "0"
+					}
+				}
+				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
 				if err != nil {
 					return err
 				}
