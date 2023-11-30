@@ -71,7 +71,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	logutil.Infof("buildResultScan : get save query result path is %s", path)
+	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.ToString())
 	if len(path) == 0 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "empty %s", "query result")
 	}
