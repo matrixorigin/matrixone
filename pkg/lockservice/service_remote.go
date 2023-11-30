@@ -17,11 +17,11 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap"
