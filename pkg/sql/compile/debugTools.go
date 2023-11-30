@@ -67,7 +67,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.PreInsertUnique:         "pre insert uk",
 	vm.PreInsertSecondaryIndex: "pre insert 2nd",
 	vm.External:                "external",
-	vm.Stream:                  "stream",
+	vm.Source:                  "source",
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",

@@ -437,6 +437,7 @@ func init() {
 		"storage":                    STORAGE,
 		"straight_join":              STRAIGHT_JOIN,
 		"stream":                     STREAM,
+		"source":                     SOURCE,
 		"super":                      SUPER,
 		"table":                      TABLE,
 		"tables":                     TABLES,

@@ -14,33 +14,28 @@
 
 package tree
 
-type CreateStream struct {
+type CreateSource struct {
 	statementImpl
 	Replace     bool
-	Source      bool
 	IfNotExists bool
-	StreamName  *TableName
+	SourceName  *TableName
 	Defs        TableDefs
 	ColNames    IdentifierList
-	AsSource    *Select
 	Options     []TableOption
 }
 
-func (node *CreateStream) Format(ctx *FmtCtx) {
+func (node *CreateSource) Format(ctx *FmtCtx) {
 	ctx.WriteString("create")
 	if node.Replace {
 		ctx.WriteString(" or replace")
 	}
 	if node.Defs != nil {
-		if node.Source {
-			ctx.WriteString(" source")
-		}
-		ctx.WriteString(" stream")
+		ctx.WriteString(" source")
 		if node.IfNotExists {
 			ctx.WriteString(" if not exists")
 		}
 		ctx.WriteByte(' ')
-		node.StreamName.Format(ctx)
+		node.SourceName.Format(ctx)
 
 		ctx.WriteString(" (")
 		for i, def := range node.Defs {
@@ -63,12 +58,12 @@ func (node *CreateStream) Format(ctx *FmtCtx) {
 		}
 		return
 	}
-	ctx.WriteString(" stream")
+	ctx.WriteString(" source")
 	if node.IfNotExists {
 		ctx.WriteString(" if not exists")
 	}
 	ctx.WriteByte(' ')
-	node.StreamName.Format(ctx)
+	node.SourceName.Format(ctx)
 	if node.Options != nil {
 		prefix := " with ("
 		for _, t := range node.Options {
@@ -78,20 +73,18 @@ func (node *CreateStream) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteByte(')')
 	}
-	ctx.WriteString(" as ")
-	node.AsSource.Format(ctx)
 }
 
-func (node *CreateStream) GetStatementType() string { return "Create Stream" }
-func (node *CreateStream) GetQueryType() string     { return QueryTypeDDL }
+func (node *CreateSource) GetStatementType() string { return "Create Source" }
+func (node *CreateSource) GetQueryType() string     { return QueryTypeDDL }
 
-type CreateStreamWithOption struct {
+type CreateSourceWithOption struct {
 	createOptionImpl
 	Key Identifier
 	Val Expr
 }
 
-func (node *CreateStreamWithOption) Format(ctx *FmtCtx) {
+func (node *CreateSourceWithOption) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(node.Key))
 	ctx.WriteString(" = ")
 	node.Val.Format(ctx)
