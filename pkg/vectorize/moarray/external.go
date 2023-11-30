@@ -155,8 +155,7 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
-	// 1.0 or -1.0 to avoid precision issue. This is similar to Clamping with
-	// tolerance of float32's precision.
+	// 1.0 or -1.0 to avoid precision issue.
 	//
 	//  Example for corner case:
 	// - cosine_similarity(a,a) = 1:
