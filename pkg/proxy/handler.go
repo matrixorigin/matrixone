@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"github.com/fagongzi/goetty/v2"
@@ -159,9 +160,9 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Debug("server conn created")
 	defer func() { _ = sc.Close() }()
 
-	h.logger.Debug("build connection successfully",
-		zap.String("client", cc.RawConn().RemoteAddr().String()),
-		zap.String("server", sc.RawConn().RemoteAddr().String()),
+	h.logger.Info("build connection",
+		zap.String("client->proxy", fmt.Sprintf("%s -> %s", cc.RawConn().RemoteAddr(), cc.RawConn().LocalAddr())),
+		zap.String("proxy->server", fmt.Sprintf("%s -> %s", sc.RawConn().LocalAddr(), sc.RawConn().RemoteAddr())),
 	)
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
