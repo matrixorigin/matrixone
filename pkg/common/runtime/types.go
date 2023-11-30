@@ -43,6 +43,7 @@ const (
 	// EnableCheckInvalidRCErrors enable check rc errors
 	EnableCheckInvalidRCErrors = "enable-check-rc-invalid-error"
 
+	// MOProtocolVersion is the protocol version of the MO services
 	MOProtocolVersion = "protocol-version"
 )
 
