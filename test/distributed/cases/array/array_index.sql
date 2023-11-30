@@ -111,7 +111,31 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 drop table if exists tbl;
 create table tbl(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
 
--- 11.
+-- 11. Delete column having IVFFLAT index
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx10 using ivfflat (b));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
+alter table tbl drop column b;
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
+
+-- 12. Drop IVFFLAT index
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx11 using ivfflat (b));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
+alter table tbl drop index idx11;
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
 
 -- post
 drop database vecdb2;
