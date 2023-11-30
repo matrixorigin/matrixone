@@ -227,12 +227,17 @@ func makePlan2StringConstExpr(v string, isBin ...bool) *plan.Expr_C {
 var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
 
 func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
+	width := int32(utf8.RuneCountInString(v))
+	id := int32(types.T_varchar)
+	if width == 0 {
+		id = int32(types.T_char)
+	}
 	return &plan.Expr{
 		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: &plan.Type{
-			Id:          int32(types.T_char),
+			Id:          id,
 			NotNullable: true,
-			Width:       int32(utf8.RuneCountInString(v)),
+			Width:       width,
 		},
 	}
 }
