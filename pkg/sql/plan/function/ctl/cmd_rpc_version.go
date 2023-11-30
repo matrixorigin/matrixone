@@ -70,7 +70,7 @@ func handleGetProtocolVersion(proc *process.Process,
 
 	return Result{
 		Method: GetProtocolVersionMethod,
-		Data:   strings.Join(versions, "\n"),
+		Data:   strings.Join(versions, ", "),
 	}, nil
 }
 
@@ -125,7 +125,7 @@ func handleSetProtocolVersion(proc *process.Process,
 
 		return Result{
 			Method: SetProtocolVersionMethod,
-			Data:   strings.Join(versions, "\n"),
+			Data:   strings.Join(versions, ", "),
 		}, nil
 	}
 
