@@ -1229,7 +1229,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for _, id := range req.AccIds {
-		size := memo.GatherAccountSize(uint32(id))
+		size, _ := memo.GatherAccountSize(uint32(id))
 		resp.AccIds = append(resp.AccIds, id)
 		resp.Sizes = append(resp.Sizes, size)
 	}

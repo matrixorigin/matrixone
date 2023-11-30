@@ -210,7 +210,7 @@ func getStorageUsageBatVectors_(bat *containers.Batch) []*vector.Vector {
 	sizeVec := bat.GetVectorByName(CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
 	return []*vector.Vector{
-		accIDVec, dbIDVec, tblIDVec, sizeVec,
+		accIDVec, dbIDVec, tblIDVec, nil, sizeVec,
 	}
 }
 
