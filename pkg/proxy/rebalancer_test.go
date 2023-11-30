@@ -45,11 +45,12 @@ func testRebalancer(
 }
 
 func TestCollectTunnels(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	hc := &mockHAKeeperClient{}
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
-	rt := runtime.DefaultRuntime()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -124,8 +125,8 @@ func TestCollectTunnels(t *testing.T) {
 }
 
 func TestCollectTunnels_Mixed(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -145,6 +146,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		hc := &mockHAKeeperClient{}
 		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 		defer mc.Close()
+		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 		shared01 := prepareCN("shared01", hc, ha, reqLabel, nil)
 		shared02 := prepareCN("shared02", hc, ha, reqLabel, nil)
@@ -169,6 +171,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		hc := &mockHAKeeperClient{}
 		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 		defer mc.Close()
+		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 		_ = prepareCN("shared01", hc, ha, reqLabel, nil)
 		_ = prepareCN("shared02", hc, ha, reqLabel, nil)
@@ -195,6 +198,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		hc := &mockHAKeeperClient{}
 		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 		defer mc.Close()
+		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 		shared01 := prepareCN("shared01", hc, ha, reqLabel, nil)
 		shared02 := prepareCN("shared02", hc, ha, reqLabel, nil)
@@ -220,6 +224,7 @@ func TestCollectTunnels_Mixed(t *testing.T) {
 		hc := &mockHAKeeperClient{}
 		mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 		defer mc.Close()
+		rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 		shared01 := prepareCN("shared01", hc, ha, reqLabel, nil)
 		_ = prepareCN("shared02", hc, ha, reqLabel, nil)
