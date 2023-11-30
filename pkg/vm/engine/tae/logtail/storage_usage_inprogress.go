@@ -27,22 +27,29 @@ import (
 )
 
 type UsageData_ struct {
-	accId uint32
-	dbId  uint64
-	tblId uint64
-	size  int64
+	AccId uint32
+	DbId  uint64
+	TblId uint64
+	Size  int64
 }
 
 func usageLess(a UsageData_, b UsageData_) bool {
-	return a.accId < b.accId && a.dbId < b.dbId && a.tblId < b.tblId
+	if a.AccId < b.AccId {
+		return true
+	}
+
+	if a.DbId < b.DbId {
+		return true
+	}
+
+	return a.TblId < b.TblId
 }
 
 type StorageUsageCache struct {
-	// when two requests happens within [firstRequest, firstRequest + lazyThreshold],
+	// when two requests happens within [lastUpdate, lastUpdate + lazyThreshold],
 	// it will reuse the cached result, no new query to TN.
 	lazyThreshold time.Duration
-	// the first requested time after an update
-	firstRequest time.Time
+	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
 	data *btree.BTreeG[UsageData_]
 }
@@ -65,6 +72,45 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	return cache
 }
 
+func (c StorageUsageCache) IsExpired() bool {
+	if c.lastUpdate.IsZero() || c.lazyThreshold == 0 {
+		return true
+	}
+
+	return time.Since(c.lastUpdate).Seconds() >= c.lazyThreshold.Seconds()
+}
+
+func (c StorageUsageCache) SetUpdateTime(t time.Time) {
+	c.lastUpdate = t
+}
+
+func (c StorageUsageCache) Update(usage UsageData_) {
+	c.data.Set(usage)
+}
+
+func (c StorageUsageCache) GatherAccountSize(id uint32) (size int64, exist bool) {
+	iter := c.data.Iter()
+	defer iter.Release()
+
+	piovt := UsageData_{AccId: id}
+
+	if found := iter.Seek(piovt); !found {
+		return
+	}
+
+	if iter.Item().AccId != id {
+		return
+	}
+
+	size += iter.Item().Size
+	for iter.Next() && iter.Item().AccId == id {
+		size += iter.Item().Size
+	}
+
+	exist = true
+	return
+}
+
 type PendingUpdateType = int
 
 const (
@@ -78,7 +124,8 @@ const (
 
 type TNUsageMemo struct {
 	sync.RWMutex
-	cache *StorageUsageCache
+	cache   *StorageUsageCache
+	pending bool
 	//pending PendingUpdateType
 }
 
@@ -91,6 +138,14 @@ func NewTNUsageMemo() *TNUsageMemo {
 
 var tnUsageMemo = NewTNUsageMemo()
 
+func GetTNUsageMemo() *TNUsageMemo {
+	return tnUsageMemo
+}
+
+func (m *TNUsageMemo) GetCacheIter() btree.IterG[UsageData_] {
+	return m.cache.data.Iter()
+}
+
 func (m *TNUsageMemo) EnterProcessing() {
 	m.Lock()
 }
@@ -99,19 +154,34 @@ func (m *TNUsageMemo) LeaveProcessing() {
 	m.Unlock()
 }
 
+func (m *TNUsageMemo) HasUpdate() bool {
+	return m.pending
+}
+
+func (m *TNUsageMemo) GatherAccountSize(id uint32) (size int64, exist bool) {
+	return m.cache.GatherAccountSize(id)
+}
+
+// Update does setting or updating
 func (m *TNUsageMemo) Update(usage UsageData_, del bool) {
+	m.pending = true
 	size := int64(0)
 	if old, found := m.cache.data.Get(usage); found {
-		size = old.size
+		size = old.Size
 	}
 
 	if del {
-		usage.size = size - usage.size
+		usage.Size = size - usage.Size
 	} else {
-		usage.size = size + usage.size
+		usage.Size = size + usage.Size
 	}
 
-	m.cache.data.Set(usage)
+	m.cache.Update(usage)
+}
+
+func (m *TNUsageMemo) Delete(usage UsageData_) {
+	m.pending = true
+	m.cache.data.Delete(usage)
 }
 
 func checkSegment_(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
@@ -149,34 +219,34 @@ func appendToStorageUsageBat_(positiveSize int64, negativeSize int64,
 
 	appendFunc := func(vecs []*vector.Vector, size int64) {
 		vector.AppendFixed[int64](vecs[UsageSize], size, false, mp)
-		vector.AppendFixed[uint32](vecs[UsageAccID], usage.accId, false, mp)
-		vector.AppendFixed[uint64](vecs[UsageDBID], usage.dbId, false, mp)
-		vector.AppendFixed[uint64](vecs[UsageTblID], usage.tblId, false, mp)
+		vector.AppendFixed[uint32](vecs[UsageAccID], usage.AccId, false, mp)
+		vector.AppendFixed[uint64](vecs[UsageDBID], usage.DbId, false, mp)
+		vector.AppendFixed[uint64](vecs[UsageTblID], usage.TblId, false, mp)
 	}
 
 	if positiveSize != 0 {
 		insVecs := getStorageUsageBatVectors_(data.bats[StorageUsageInsIDX])
 		appendFunc(insVecs, positiveSize)
 		tnUsageMemo.Update(UsageData_{
-			usage.accId, usage.dbId,
-			usage.tblId, positiveSize}, false)
+			usage.AccId, usage.DbId,
+			usage.TblId, positiveSize}, false)
 	}
 
 	if negativeSize != 0 {
 		delVecs := getStorageUsageBatVectors_(data.bats[StorageUsageDelIDX])
 		appendFunc(delVecs, negativeSize)
 		tnUsageMemo.Update(UsageData_{
-			usage.accId, usage.dbId,
-			usage.tblId, positiveSize}, true)
+			usage.AccId, usage.DbId,
+			usage.TblId, positiveSize}, true)
 	}
 }
 
 func segEntryToUsageData(entry *catalog.SegmentEntry) UsageData_ {
 	return UsageData_{
-		size:  0,
-		tblId: entry.GetTable().GetID(),
-		dbId:  entry.GetTable().GetDB().GetID(),
-		accId: entry.GetTable().GetDB().GetTenantID(),
+		Size:  0,
+		TblId: entry.GetTable().GetID(),
+		DbId:  entry.GetTable().GetDB().GetID(),
+		AccId: entry.GetTable().GetDB().GetTenantID(),
 	}
 }
 
@@ -256,7 +326,7 @@ func applyDeletesOnTNUsageMemo(collector *GlobalCollector) {
 		case *catalog.DBEntry:
 			dbs = append(dbs, e)
 		case *catalog.TableEntry:
-			tnUsageMemo.cache.data.Delete(UsageData_{
+			tnUsageMemo.Delete(UsageData_{
 				e.GetDB().GetTenantID(),
 				e.GetDB().GetID(), e.GetID(), 0})
 		case *catalog.SegmentEntry:
@@ -272,17 +342,24 @@ func applyDeletesOnTNUsageMemo(collector *GlobalCollector) {
 		}
 	}
 
-	iter := tnUsageMemo.cache.data.Iter()
+	var iter btree.IterG[UsageData_]
 	var tbls []uint64
 	for _, db := range dbs {
+		iter.Release()
+		iter = tnUsageMemo.cache.data.Iter()
+
 		if found := iter.Seek(UsageData_{
 			db.GetTenantID(), db.ID, 0, 0}); !found {
 			continue
 		}
 
-		tbls = append(tbls, iter.Item().tblId)
-		for iter.Next() {
-			tbls = append(tbls, iter.Item().tblId)
+		if iter.Item().DbId != db.ID {
+			continue
+		}
+
+		tbls = append(tbls, iter.Item().TblId)
+		for iter.Next() && iter.Item().DbId == db.ID {
+			tbls = append(tbls, iter.Item().TblId)
 		}
 
 		for idx := 0; idx < len(tbls); idx++ {
@@ -300,9 +377,10 @@ func replayTNUsageMemoOnGCKP(collector *GlobalCollector) {
 	for iter.Next() {
 		usage := iter.Item()
 		appendToStorageUsageBat_(
-			usage.size, 0,
+			usage.Size, 0,
 			collector.data, usage, collector.Allocator())
 	}
+	iter.Release()
 }
 
 func FillUsageBatOfGlobal_(

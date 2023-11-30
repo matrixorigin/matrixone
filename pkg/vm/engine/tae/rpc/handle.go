@@ -1218,38 +1218,23 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
-//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
-//	processor := new(catalog2.LoopProcessor)
-//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
-//
-//		return nil
-//	}
-//
-//	h.db.Catalog.RecurLoop(processor)
-//}
-
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	memo := logtail.GetTNUsageMemo()
 
-	// get all checkpoints.
-	//var ckp *checkpoint.CheckpointEntry
-	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
-	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	for idx := range allCkp {
-		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-			Version:  allCkp[idx].GetVersion(),
-			Location: allCkp[idx].GetLocation(),
-		})
+	memo.EnterProcessing()
+	defer memo.LeaveProcessing()
+
+	if !memo.HasUpdate() {
+		resp.Succeed = true
+		return nil, nil
 	}
 
-	resp.Succeed = true
-
-	// TODO
-	// exist a gap!
-	// collecting block entries that have been not been checkpoint yet
-	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
-	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
-	//}
+	for _, id := range req.AccIds {
+		size := memo.GatherAccountSize(uint32(id))
+		resp.AccIds = append(resp.AccIds, id)
+		resp.Sizes = append(resp.Sizes, size)
+	}
 
 	return nil, nil
 }
