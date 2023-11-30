@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 	"time"
 
@@ -25,6 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap"
 )
+
+var methodVersions = map[pb.Method]int64{
+	pb.Method_Lock:              defines.MORPCVersion1,
+	pb.Method_ForwardLock:       defines.MORPCVersion1,
+	pb.Method_Unlock:            defines.MORPCVersion1,
+	pb.Method_GetTxnLock:        defines.MORPCVersion1,
+	pb.Method_GetWaitingList:    defines.MORPCVersion1,
+	pb.Method_KeepRemoteLock:    defines.MORPCVersion1,
+	pb.Method_GetBind:           defines.MORPCVersion1,
+	pb.Method_KeepLockTableBind: defines.MORPCVersion1,
+	pb.Method_ForwardUnlock:     defines.MORPCVersion1,
+}
 
 func (s *service) initRemote() {
 	rpcClient, err := NewClient(s.cfg.RPC)
