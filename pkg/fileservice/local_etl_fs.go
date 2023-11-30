@@ -36,13 +36,39 @@ type LocalETLFS struct {
 
 	sync.RWMutex
 	dirFiles map[string]*os.File
-
-	createTempDirOnce sync.Once
 }
 
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
+
+	// get absolute path
+	if rootPath != "" {
+		var err error
+		rootPath, err = filepath.Abs(rootPath)
+		if err != nil {
+			return nil, err
+		}
+
+		// ensure dir
+		f, err := os.Open(rootPath)
+		if os.IsNotExist(err) {
+			// not exists, create
+			err := os.MkdirAll(rootPath, 0755)
+			if err != nil {
+				return nil, err
+			}
+
+		} else if err != nil {
+			// stat error
+			return nil, err
+
+		} else {
+			defer f.Close()
+		}
+
+	}
+
 	return &LocalETLFS{
 		name:     name,
 		rootPath: rootPath,
@@ -52,13 +78,6 @@ func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
 
 func (l *LocalETLFS) Name() string {
 	return l.name
-}
-
-func (l *LocalETLFS) ensureTempDir() (err error) {
-	l.createTempDirOnce.Do(func() {
-		err = os.MkdirAll(filepath.Join(l.rootPath, ".tmp"), 0755)
-	})
-	return
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
@@ -106,12 +125,9 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	r := newIOEntriesReader(ctx, vector.Entries)
 
 	// write
-	if err := l.ensureTempDir(); err != nil {
-		return err
-	}
 	f, err := os.CreateTemp(
-		filepath.Join(l.rootPath, ".tmp"),
-		"*.tmp",
+		l.rootPath,
+		".tmp.*",
 	)
 	if err != nil {
 		return err
