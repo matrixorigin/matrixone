@@ -123,6 +123,12 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 	statsIdx := 0
 
 	for idx := 0; idx < len(tblIdx); idx++ {
+		if tblIdx[idx] < 0 {
+			// will the data and blk infos mixed together in one batch?
+			// batch [ data | data | blk info | blk info | .... ]
+			continue
+		}
+
 		blkInfo := catalog.DecodeBlockInfo(blkVec.GetBytesAt(idx))
 		if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
 			continue
