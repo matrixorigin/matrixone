@@ -21,6 +21,11 @@ import (
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1297,4 +1303,186 @@ func ListTnService(appendFn func(service *metadata.TNService)) {
 		}
 		return true
 	})
+}
+
+// util function for object stats
+
+// UnfoldBlkInfoFromObjStats constructs a block info list from the given object stats.
+// this unfolds all block info at one operation, if an object contains a great many of blocks,
+// this operation is memory sensitive, we recommend another way, StatsBlkIter or ForEach.
+func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.BlockInfo) {
+	if stats.IsZero() {
+		return blks
+	}
+
+	name := stats.ObjectName()
+	blkCnt := uint16(stats.BlkCnt())
+	rowTotalCnt := stats.Rows()
+	accumulate := uint32(0)
+
+	for idx := uint16(0); idx < blkCnt; idx++ {
+		blkRows := uint32(options.DefaultBlockMaxRows)
+		if idx == blkCnt-1 {
+			blkRows = rowTotalCnt - accumulate
+		}
+		accumulate += blkRows
+		loc := objectio.BuildLocation(name, stats.Extent(), blkRows, idx)
+		blks = append(blks, catalog.BlockInfo{
+			BlockID:   *objectio.BuildObjectBlockid(name, idx),
+			MetaLoc:   catalog.ObjectLocation(loc),
+			SegmentID: name.SegmentId(),
+		})
+	}
+
+	return blks
+}
+
+// ForeachBlkInObjStatsList receives an object info list,
+// and visits each blk of these object info by OnBlock,
+// until the onBlock returns false or all blks have been enumerated.
+// when onBlock returns a false,
+// the next argument decides whether continue onBlock on the next stats or exit foreach completely.
+func ForeachBlkInObjStatsList(
+	next bool,
+	dataMeta objectio.ObjectDataMeta,
+	onBlock func(blk *catalog.BlockInfo) bool,
+	objects ...objectio.ObjectStats,
+) {
+	stop := false
+	objCnt := len(objects)
+
+	for idx := 0; idx < objCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&objects[idx], dataMeta)
+		for iter.Next() {
+			blk := iter.Entry()
+			if !onBlock(blk) {
+				stop = true
+				break
+			}
+		}
+
+		if stop && next {
+			stop = false
+		}
+	}
+}
+
+type StatsBlkIter struct {
+	name       objectio.ObjectName
+	extent     objectio.Extent
+	blkCnt     uint16
+	totalRows  uint32
+	cur        int
+	accRows    uint32
+	curBlkRows uint32
+	meta       objectio.ObjectDataMeta
+}
+
+func NewStatsBlkIter(stats *objectio.ObjectStats, meta objectio.ObjectDataMeta) *StatsBlkIter {
+	return &StatsBlkIter{
+		name:       stats.ObjectName(),
+		blkCnt:     uint16(stats.BlkCnt()),
+		extent:     stats.Extent(),
+		cur:        -1,
+		accRows:    0,
+		totalRows:  stats.Rows(),
+		curBlkRows: options.DefaultBlockMaxRows,
+		meta:       meta,
+	}
+}
+
+func (i *StatsBlkIter) Next() bool {
+	if i.cur >= 0 {
+		i.accRows += i.curBlkRows
+	}
+	i.cur++
+	return i.cur < int(i.blkCnt)
+}
+
+func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	// assume that all blks have DefaultBlockMaxRows, except the last one
+	if i.meta.IsEmpty() {
+		if i.cur == int(i.blkCnt-1) {
+			i.curBlkRows = i.totalRows - i.accRows
+		}
+	} else {
+		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
+	}
+
+	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
+	blk := &catalog.BlockInfo{
+		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		SegmentID: i.name.SegmentId(),
+		MetaLoc:   catalog.ObjectLocation(loc),
+	}
+	return blk
+}
+
+func ForeachSnapshotObjects(
+	ts timestamp.Timestamp,
+	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	tableSnapshot *logtailreplay.PartitionState,
+	uncommitted ...objectio.ObjectStats,
+) (err error) {
+	// process all uncommitted objects first
+	for _, obj := range uncommitted {
+		info := logtailreplay.ObjectInfo{
+			ObjectStats: obj,
+		}
+		if err = onObject(info, false); err != nil {
+			return
+		}
+	}
+
+	// process all committed objects
+	if tableSnapshot == nil {
+		return
+	}
+
+	iter, err := tableSnapshot.NewObjectsIter(types.TimestampToTS(ts))
+	if err != nil {
+		return
+	}
+	defer iter.Close()
+	for iter.Next() {
+		obj := iter.Entry()
+		if err = onObject(obj.ObjectInfo, true); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func ConstructObjStatsByLoadObjMeta(
+	ctx context.Context, metaLoc objectio.Location,
+	fs fileservice.FileService) (stats objectio.ObjectStats, dataMeta objectio.ObjectDataMeta, err error) {
+
+	// 1. load object meta
+	var meta objectio.ObjectMeta
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs); err != nil {
+		logutil.Error("fast load object meta failed when split object stats. ", zap.Error(err))
+		return
+	}
+	dataMeta = meta.MustDataMeta()
+
+	// 2. construct an object stats
+	objectio.SetObjectStatsObjectName(&stats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&stats, metaLoc.Extent())
+	objectio.SetObjectStatsBlkCnt(&stats, dataMeta.BlockCount())
+
+	sortKeyIdx := dataMeta.BlockHeader().SortKey()
+	objectio.SetObjectStatsSortKeyZoneMap(&stats, dataMeta.MustGetColumn(sortKeyIdx).ZoneMap())
+
+	totalRows := uint32(0)
+	for idx := uint32(0); idx < dataMeta.BlockCount(); idx++ {
+		totalRows += dataMeta.GetBlockMeta(idx).GetRows()
+	}
+
+	objectio.SetObjectStatsRowCnt(&stats, totalRows)
+
+	return
 }

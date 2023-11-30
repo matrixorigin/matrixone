@@ -445,11 +445,7 @@ func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.Creat
 
 func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
-	var factory catalog.SegmentDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeSegmentFactory()
-	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory, opts); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, opts); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -659,14 +655,38 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	}
 	return tbl.localSegment.Append(data)
 }
-
-func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
+	return stats.Foreach(func(v any, isNull bool, row int) error {
+		s := objectio.ObjectStats(v.([]byte))
+		return tbl.addBlksWithMetaLoc(ctx, s)
+	}, nil)
+}
+func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.ObjectStats) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
 			v.Close()
 		}
 	}()
+	if tbl.localSegment != nil && tbl.localSegment.isStatsExisted(stats) {
+		return nil
+	}
+	metaLocs := make([]objectio.Location, 0)
+	blkCount := stats.BlkCnt()
+	totalRow := stats.Rows()
+	blkMaxRows := tbl.schema.BlockMaxRows
+	for i := uint16(0); i < uint16(blkCount); i++ {
+		var blkRow uint32
+		if totalRow > blkMaxRows {
+			blkRow = blkMaxRows
+		} else {
+			blkRow = totalRow
+		}
+		totalRow -= blkRow
+		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
+
+		metaLocs = append(metaLocs, metaloc)
+	}
 	if tbl.schema.HasPK() {
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
@@ -711,7 +731,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
 	}
-	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, metaLocs)
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, stats)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
@@ -1259,15 +1279,6 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					continue
 				}
 			}
-			segData := seg.GetSegmentData()
-			// TODO: Add a new batch dedup method later
-			if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-				return
-			}
-			if err == nil {
-				segIt.Next()
-				continue
-			}
 			var shouldSkip bool
 			err = nil
 			blkIt := seg.MakeBlockIt(false)
@@ -1344,7 +1355,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 				continue
 			}
 		}
-		segData := seg.GetSegmentData()
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
@@ -1355,14 +1365,6 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			colV.ApplyDeletes()
 			pks = colV.Orphan()
 			defer pks.Close()
-		}
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return err
-		}
-		if err == nil {
-			segIt.Next()
-			continue
 		}
 		var shouldSkip bool
 		err = nil

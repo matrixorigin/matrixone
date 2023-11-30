@@ -1,0 +1,6 @@
+select mo_cpu("total") >= mo_cpu("available");
+mo_cpu(total) >= mo_cpu(available)
+true
+select mo_memory("total") >= mo_memory("available");
+mo_memory(total) >= mo_memory(available)
+true

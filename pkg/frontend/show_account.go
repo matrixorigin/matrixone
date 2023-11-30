@@ -376,12 +376,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}
 
-	if len(usage) == 0 && ses.isInternal {
-		// no valid usage info from the checkpoints.
-		// for internal `show accounts`, should leave the result empty
-		return
-	}
-
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
@@ -518,18 +512,33 @@ func getTableStats(ctx context.Context, bh *BackgroundHandler, accountId int32) 
 // mergeOutputResult merges the result set from mo_account and the table status
 // into the final output format
 func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *batch.Batch, rsOfEachAccount []*batch.Batch) error {
-	outputBatch.Vecs[finalIdxOfAccountName] = rsOfMoAccount.Vecs[idxOfAccountName]
+	var err error
+	mp := ses.GetMemPool()
+	outputBatch.Vecs[finalIdxOfAccountName], err = rsOfMoAccount.Vecs[idxOfAccountName].Dup(mp)
+	if err != nil {
+		return err
+	}
 	outputBatch.Vecs[finalIdxOfAdminName] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfAdminName].GetType())
-	outputBatch.Vecs[finalIdxOfCreated] = rsOfMoAccount.Vecs[idxOfCreated]
-	outputBatch.Vecs[finalIdxOfStatus] = rsOfMoAccount.Vecs[idxOfStatus]
-	outputBatch.Vecs[finalIdxOfSuspendedTime] = rsOfMoAccount.Vecs[idxOfSuspendedTime]
+	outputBatch.Vecs[finalIdxOfCreated], err = rsOfMoAccount.Vecs[idxOfCreated].Dup(mp)
+	if err != nil {
+		return err
+	}
+	outputBatch.Vecs[finalIdxOfStatus], err = rsOfMoAccount.Vecs[idxOfStatus].Dup(mp)
+	if err != nil {
+		return err
+	}
+	outputBatch.Vecs[finalIdxOfSuspendedTime], err = rsOfMoAccount.Vecs[idxOfSuspendedTime].Dup(mp)
+	if err != nil {
+		return err
+	}
 	outputBatch.Vecs[finalIdxOfDBCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfDBCount].GetType())
 	outputBatch.Vecs[finalIdxOfTableCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfTableCount].GetType())
 	outputBatch.Vecs[finalIdxOfSize] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfSize].GetType())
-	outputBatch.Vecs[finalIdxOfComment] = rsOfMoAccount.Vecs[idxOfComment]
+	outputBatch.Vecs[finalIdxOfComment], err = rsOfMoAccount.Vecs[idxOfComment].Dup(mp)
+	if err != nil {
+		return err
+	}
 
-	var err error
-	mp := ses.GetMemPool()
 	for _, bat := range rsOfEachAccount {
 		err = outputBatch.Vecs[finalIdxOfAdminName].UnionOne(bat.Vecs[idxOfAdminName], 0, mp)
 		if err != nil {

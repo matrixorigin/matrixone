@@ -782,7 +782,9 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 
 // FixProjectionResult set result vector for rbat.
 // sbat is the source batch.
-func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
+func FixProjectionResult(proc *process.Process,
+	executors []ExpressionExecutor,
+	uafs []func(v, w *vector.Vector) error,
 	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
@@ -805,21 +807,26 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 					sbat.ReplaceVector(oldVec, nil)
 				} else {
 					newVec = proc.GetVector(*oldVec.GetType())
-					err = vector.GetUnionAllFunction(*oldVec.GetType(), proc.Mp())(newVec, oldVec)
+					err = uafs[i](newVec, oldVec)
 					if err != nil {
 						for j := range finalVectors {
 							finalVectors[j].Free(proc.Mp())
 						}
 						return 0, err
 					}
-					dupSize += newVec.Size()
 				}
+				dupSize += newVec.Size()
 			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
 				// if projection, we can get the result directly
 				newVec = functionExpr.resultVector.GetResultVector()
 				functionExpr.resultVector.SetResultVector(nil)
 			} else {
-				newVec, err = oldVec.Dup(proc.Mp())
+				if uafs[i] != nil {
+					newVec = proc.GetVector(*oldVec.GetType())
+					err = uafs[i](newVec, oldVec)
+				} else {
+					newVec, err = oldVec.Dup(proc.Mp())
+				}
 				if err != nil {
 					for j := range finalVectors {
 						finalVectors[j].Free(proc.Mp())
@@ -1051,8 +1058,10 @@ func GetExprZoneMap(
 
 		} else {
 			args := t.F.Args
-			// `in` is special.
-			if t.F.Func.ObjName == "in" {
+
+			// Some expressions need to be handled specifically
+			switch t.F.Func.ObjName {
+			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
@@ -1078,6 +1087,18 @@ func GetExprZoneMap(
 				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
+				return zms[expr.AuxId]
+
+			case "startswith":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				s := []byte(args[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval)
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.HasPrefix(s))
 				return zms[expr.AuxId]
 			}
 

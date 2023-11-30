@@ -195,6 +195,9 @@ const (
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
 	BlockMeta_Partition       = "%!%mo__meta_partition"
+
+	ObjectMeta_ObjectStats = "object_stats"
+
 	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
 	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
 	BlockMetaOffset    = "%!%mo__meta_offset"
@@ -208,7 +211,7 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
-	SystemStreamRel       = "s"
+	SystemSourceRel       = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"

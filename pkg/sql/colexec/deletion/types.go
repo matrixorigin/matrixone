@@ -150,7 +150,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) erro
 		}
 		for i, delBatch := range delBatches {
 			collectBatchInfo(proc, arg, delBatch, 0, i, 1)
-			delBatch.Clean(proc.Mp())
+			proc.PutBatch(delBatch)
 		}
 	} else {
 		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
@@ -192,7 +192,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
-		blkInfos, err := s3writer.WriteEndBlocks(proc)
+		blkInfos, _, err := s3writer.WriteEndBlocks(proc)
 		if err != nil {
 			return 0, err
 		}

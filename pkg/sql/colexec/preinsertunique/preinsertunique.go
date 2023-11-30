@@ -42,13 +42,14 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	analy := proc.GetAnalyze(arg.info.Idx)
-	analy.Start()
-	defer analy.Stop()
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
+	analy := proc.GetAnalyze(arg.info.Idx)
+	analy.Start()
+	defer analy.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
@@ -93,7 +94,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(rowIdInBat)).GetType()))
+		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
 		err := arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
 			return result, err

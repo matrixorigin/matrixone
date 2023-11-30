@@ -16,6 +16,8 @@ package cache
 
 import (
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 
@@ -514,22 +516,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 			copy(item.Rowids[i][:], col.rowid[:])
 		}
 		item.Defs = defs
-		item.TableDef = getTableDef(item.Name, defs)
-		item.TableDef.Version = item.Version
-		// add Constraint
-		if len(item.Constraint) != 0 {
-			c := new(engine.ConstraintDef)
-			err := c.UnmarshalBinary(item.Constraint)
-			if err != nil {
-				return
-			}
-			for _, ct := range c.Cts {
-				switch k := ct.(type) {
-				case *engine.PrimaryKeyDef:
-					item.TableDef.Pkey = k.Pkey
-				}
-			}
-		}
+		item.TableDef = getTableDef(item, defs)
 	}
 }
 
@@ -594,6 +581,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	return &engine.AttributeDef{Attr: attr}
 }
 
+/*
 // getTableDef only return all cols and their index.
 func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 	var cols []*plan.ColDef
@@ -629,6 +617,7 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 		Name2ColIndex: name2index,
 	}
 }
+*/
 
 // GetSchemaVersion returns the version of table
 func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
@@ -638,4 +627,148 @@ func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
 // addTableItem inserts a new table item.
 func (c *tableCache) addTableItem(item *TableItem) {
 	c.data.Set(item)
+}
+
+func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
+	var clusterByDef *plan.ClusterByDef
+	var cols []*plan.ColDef
+	var defs []*plan.TableDef_DefType
+	var properties []*plan.Property
+	var TableType string
+	var Createsql string
+	var partitionInfo *plan.PartitionByDef
+	var viewSql *plan.ViewDef
+	var foreignKeys []*plan.ForeignKeyDef
+	var primarykey *plan.PrimaryKeyDef
+	var indexes []*plan.IndexDef
+	var refChildTbls []uint64
+
+	i := int32(0)
+	name2index := make(map[string]int32)
+	for _, def := range coldefs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			name2index[attr.Attr.Name] = i
+			cols = append(cols, &plan.ColDef{
+				ColId: attr.Attr.ID,
+				Name:  attr.Attr.Name,
+				Typ: &plan.Type{
+					Id:          int32(attr.Attr.Type.Oid),
+					Width:       attr.Attr.Type.Width,
+					Scale:       attr.Attr.Type.Scale,
+					AutoIncr:    attr.Attr.AutoIncrement,
+					Table:       tblItem.Name,
+					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:  attr.Attr.EnumVlaues,
+				},
+				Primary:   attr.Attr.Primary,
+				Default:   attr.Attr.Default,
+				OnUpdate:  attr.Attr.OnUpdate,
+				Comment:   attr.Attr.Comment,
+				ClusterBy: attr.Attr.ClusterBy,
+				Hidden:    attr.Attr.IsHidden,
+				Seqnum:    uint32(attr.Attr.Seqnum),
+			})
+			if attr.Attr.ClusterBy {
+				clusterByDef = &plan.ClusterByDef{
+					Name: attr.Attr.Name,
+				}
+			}
+			i++
+		}
+	}
+
+	if tblItem.Comment != "" {
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_Comment,
+			Value: tblItem.Comment,
+		})
+	}
+
+	if tblItem.Partitioned > 0 {
+		p := &plan.PartitionByDef{}
+		err := p.UnMarshalPartitionInfo(([]byte)(tblItem.Partition))
+		if err != nil {
+			//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+			return nil
+		}
+		partitionInfo = p
+	}
+
+	if tblItem.ViewDef != "" {
+		viewSql = &plan.ViewDef{
+			View: tblItem.ViewDef,
+		}
+	}
+
+	if len(tblItem.Constraint) > 0 {
+		c := &engine.ConstraintDef{}
+		err := c.UnmarshalBinary(tblItem.Constraint)
+		if err != nil {
+			//panic(fmt.Sprintf("cannot unmarshal table constraint information: %s", err))
+			return nil
+		}
+		for _, ct := range c.Cts {
+			switch k := ct.(type) {
+			case *engine.IndexDef:
+				indexes = k.Indexes
+			case *engine.ForeignKeyDef:
+				foreignKeys = k.Fkeys
+			case *engine.RefChildTableDef:
+				refChildTbls = k.Tables
+			case *engine.PrimaryKeyDef:
+				primarykey = k.Pkey
+			case *engine.StreamConfigsDef:
+				properties = append(properties, k.Configs...)
+			}
+		}
+	}
+
+	properties = append(properties, &plan.Property{
+		Key:   catalog.SystemRelAttr_Kind,
+		Value: tblItem.Kind,
+	})
+	TableType = tblItem.Kind
+
+	if tblItem.CreateSql != "" {
+		properties = append(properties, &plan.Property{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: tblItem.CreateSql,
+		})
+		Createsql = tblItem.CreateSql
+	}
+
+	if len(properties) > 0 {
+		defs = append(defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
+
+	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
+		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
+	}
+	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
+		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+	}
+
+	return &plan.TableDef{
+		TblId:         tblItem.Id,
+		Name:          tblItem.Name,
+		Cols:          cols,
+		Name2ColIndex: name2index,
+		Defs:          defs,
+		TableType:     TableType,
+		Createsql:     Createsql,
+		Pkey:          primarykey,
+		ViewSql:       viewSql,
+		Partition:     partitionInfo,
+		Fkeys:         foreignKeys,
+		RefChildTbls:  refChildTbls,
+		ClusterBy:     clusterByDef,
+		Indexes:       indexes,
+		Version:       tblItem.Version,
+	}
 }

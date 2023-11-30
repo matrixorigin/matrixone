@@ -219,6 +219,9 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
+
+	needLockMeta bool
+	metaTables   map[string]struct{}
 }
 
 type runtimeFilterReceiver struct {

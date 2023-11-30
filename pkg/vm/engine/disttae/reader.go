@@ -71,11 +71,8 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
-	// TAG FOR bug:12797  need remove this tag after bug fixed
-	if ctotal > chit {
-		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-		blockio.RecordColumnSelectivity(chit, ctotal)
-	}
+	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	blockio.RecordColumnSelectivity(chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
@@ -341,10 +338,11 @@ func (r *blockReader) Read(
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -425,7 +423,7 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
-			txnTable.getTableDef(),
+			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
 			filterExpr,
@@ -508,11 +506,13 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 		}
 		ts := types.TimestampToTS(r.ts)
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
+		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
 

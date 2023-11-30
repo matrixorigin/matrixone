@@ -442,6 +442,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+	bool is_dynamic = 31;
+
 }
 
 message TableFunction{
@@ -481,6 +483,8 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
+	int64 nullcnt=10;
+	repeated double ranges	= 11;
 }
 
 message Stats {
@@ -627,7 +631,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
-		STREAM_SCAN = 6;
+		SOURCE_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
@@ -684,6 +688,7 @@ message Node {
 		//
 		TIME_WINDOW = 64;
 		Fill = 65;
+		PARTITION = 66;
 	}
 
 	enum JoinType {
@@ -794,6 +799,9 @@ message Node {
 
 	// sample function related.
 	SampleFuncSpec sample_func = 51;
+
+	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
 }
 
 message ExternScan {
@@ -803,6 +811,7 @@ message ExternScan {
     uint64 ignored_lines = 4;
     bytes  enclosed_by = 5;
     string terminated = 6;
+	string json_type = 7;
 }
 
 message LockTarget {

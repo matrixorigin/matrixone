@@ -33,8 +33,16 @@ type evalVector struct {
 	executor colexec.ExpressionExecutor
 }
 
+const (
+	receive = iota
+	eval
+	done
+	receiveAll
+)
+
 type container struct {
 	colexec.ReceiverOperator
+	status int
 
 	bat *batch.Batch
 

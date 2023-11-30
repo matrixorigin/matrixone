@@ -197,7 +197,7 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 				partitionBat.Clean(proc.Mp())
 				return result, err
 			}
-			partitionBat.Clean(proc.Mp())
+			proc.PutBatch(partitionBat)
 		}
 	} else {
 		// insert into table, insertBat will be deeply copied into txn's workspace.
@@ -217,11 +217,13 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 
 // Collect all partition subtables' s3writers  metaLoc information and output it
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, result *vm.CallResult) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	res := batch.NewWithSize(len(attrs))
 	res.SetAttributes(attrs)
 	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())
 	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
+	res.Vecs[2] = proc.GetVector(types.T_binary.ToType())
+
 	for _, w := range s3Writers {
 		//deep copy.
 		bat := w.GetBlockInfoBat()
