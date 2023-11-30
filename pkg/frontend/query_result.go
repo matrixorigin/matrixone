@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"go.uber.org/zap"
 )
 
 func getQueryResultDir() string {
@@ -94,17 +95,19 @@ func initQueryResulConfig(ses *Session) error {
 	}
 	ses.createdTime = time.Now()
 	ses.expiredTime = ses.createdTime.Add(time.Hour * time.Duration(p))
-	return nil
+	return err
 }
 
 func saveQueryResult(ses *Session, bat *batch.Batch) error {
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
+		logInfo(ses, ses.GetDebugString(), "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
 	fs := ses.GetParameterUnit().FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
+	logInfo(ses, ses.GetDebugString(), "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
@@ -122,7 +125,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 		return err
 	}
 	ses.curResultSize = s
-	return nil
+	return err
 }
 
 func saveQueryResultMeta(ses *Session) error {
@@ -160,7 +163,7 @@ func saveQueryResultMeta(ses *Session) error {
 
 	st, err := simpleAstMarshal(ses.ast)
 	if err != nil {
-		return nil
+		return err
 	}
 	m := &catalog.Meta{
 		QueryId:     ses.tStmt.StatementID,
@@ -199,7 +202,7 @@ func saveQueryResultMeta(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	return err
 }
 
 func buildColumnMap(rs *plan.ResultColDef) string {

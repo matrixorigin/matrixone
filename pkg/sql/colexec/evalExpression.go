@@ -782,7 +782,9 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 
 // FixProjectionResult set result vector for rbat.
 // sbat is the source batch.
-func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
+func FixProjectionResult(proc *process.Process,
+	executors []ExpressionExecutor,
+	uafs []func(v, w *vector.Vector) error,
 	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
@@ -805,21 +807,26 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 					sbat.ReplaceVector(oldVec, nil)
 				} else {
 					newVec = proc.GetVector(*oldVec.GetType())
-					err = vector.GetUnionAllFunction(*oldVec.GetType(), proc.Mp())(newVec, oldVec)
+					err = uafs[i](newVec, oldVec)
 					if err != nil {
 						for j := range finalVectors {
 							finalVectors[j].Free(proc.Mp())
 						}
 						return 0, err
 					}
-					dupSize += newVec.Size()
 				}
+				dupSize += newVec.Size()
 			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
 				// if projection, we can get the result directly
 				newVec = functionExpr.resultVector.GetResultVector()
 				functionExpr.resultVector.SetResultVector(nil)
 			} else {
-				newVec, err = oldVec.Dup(proc.Mp())
+				if uafs[i] != nil {
+					newVec = proc.GetVector(*oldVec.GetType())
+					err = uafs[i](newVec, oldVec)
+				} else {
+					newVec, err = oldVec.Dup(proc.Mp())
+				}
 				if err != nil {
 					for j := range finalVectors {
 						finalVectors[j].Free(proc.Mp())

@@ -31,10 +31,8 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.0-dev
+      - approved-reviews-by=sukki37
     actions:
-      request_reviews:
-        users:
-          - sukki37
       queue:
         name: release-1.0
         method: squash
@@ -50,10 +48,8 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
       - base=1.1-dev
+      - approved-reviews-by=sukki37
     actions:
-      request_reviews:
-        users:
-          - sukki37
       queue:
         name: release-1.1
         method: squash
@@ -63,6 +59,14 @@ pull_request_rules:
           {{ body | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
+
+  - name: Auto Request Reviewer
+    conditions:
+      - base!=main
+    actions:
+      request_reviews:
+        users:
+          - sukki37
 
   - name: Auto update branch
     conditions:
