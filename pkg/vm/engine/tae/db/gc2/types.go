@@ -16,6 +16,7 @@ package gc2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
 const (
@@ -80,3 +81,16 @@ var (
 		types.New(types.T_varchar, 5000, 0),
 	}
 )
+
+type Cleaner interface {
+	Replay() error
+	Process()
+	TryGC() error
+	AddChecker(checker func(item any) bool)
+	GetMaxConsumed() *checkpoint.CheckpointEntry
+	// for test
+	SetMinMergeCountForTest(count int)
+	GetMinMerged() *checkpoint.CheckpointEntry
+	CheckGC() error
+	GetInputs() *GCTable
+}

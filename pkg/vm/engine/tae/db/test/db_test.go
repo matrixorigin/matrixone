@@ -6046,7 +6046,8 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	cleaner := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager := gc2.NewDiskCleaner(cleaner)
 	manager.Start()
 	defer manager.Stop()
 
@@ -6072,24 +6073,25 @@ func TestGCWithCheckpoint(t *testing.T) {
 	num := len(entries)
 	assert.Greater(t, num, 0)
 	testutils.WaitExpect(5000, func() bool {
-		if manager.GetMaxConsumed() == nil {
+		if manager.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd()))
+	cleaner2 := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager2 := gc2.NewDiskCleaner(cleaner2)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
-		if manager2.GetMaxConsumed() == nil {
+		if manager2.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
-	tables1 := manager.GetInputs()
-	tables2 := manager2.GetInputs()
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetCleaner().GetInputs()
+	tables2 := manager2.GetCleaner().GetInputs()
 	assert.True(t, tables1.Compare(tables2))
 }
 
@@ -6100,7 +6102,8 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	cleaner := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager := gc2.NewDiskCleaner(cleaner)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6129,24 +6132,25 @@ func TestGCDropDB(t *testing.T) {
 	num := len(entries)
 	assert.Greater(t, num, 0)
 	testutils.WaitExpect(5000, func() bool {
-		if manager.GetMaxConsumed() == nil {
+		if manager.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd()))
+	cleaner2 := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager2 := gc2.NewDiskCleaner(cleaner2)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
-		if manager2.GetMaxConsumed() == nil {
+		if manager2.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
-	tables1 := manager.GetInputs()
-	tables2 := manager2.GetInputs()
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetCleaner().GetInputs()
+	tables2 := manager2.GetCleaner().GetInputs()
 	assert.True(t, tables1.Compare(tables2))
 	tae.Restart(ctx)
 }
@@ -6158,7 +6162,8 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	cleaner := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager := gc2.NewDiskCleaner(cleaner)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6202,24 +6207,25 @@ func TestGCDropTable(t *testing.T) {
 	num := len(entries)
 	assert.Greater(t, num, 0)
 	testutils.WaitExpect(10000, func() bool {
-		if manager.GetMaxConsumed() == nil {
+		if manager.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc2.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetCleaner().GetMaxConsumed().GetEnd()))
+	cleaner2 := gc2.NewCheckpointCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner)
+	manager2 := gc2.NewDiskCleaner(cleaner2)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
-		if manager2.GetMaxConsumed() == nil {
+		if manager2.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		return entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd())
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
-	tables1 := manager.GetInputs()
-	tables2 := manager2.GetInputs()
+	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetCleaner().GetMaxConsumed().GetEnd()))
+	tables1 := manager.GetCleaner().GetInputs()
+	tables2 := manager2.GetCleaner().GetInputs()
 	assert.True(t, tables1.Compare(tables2))
 	tae.Restart(ctx)
 }
@@ -6911,7 +6917,7 @@ func TestAppendAndGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -6952,27 +6958,27 @@ func TestAppendAndGC(t *testing.T) {
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.CheckGC()
+	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetMinMerged() != nil
+		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
-	minMerged := db.DiskCleaner.GetMinMerged()
+	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetMinMerged() != nil
+		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
 	tae.Restart(ctx)
 	db = tae.DB
-	db.DiskCleaner.SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetMaxConsumed() == nil {
+		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false
 		}
-		return db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd())
+		return db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd())
 	})
-	assert.True(t, db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd()))
-	err = db.DiskCleaner.CheckGC()
+	assert.True(t, db.DiskCleaner.GetCleaner().GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd()))
+	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 
 }
@@ -6988,7 +6994,7 @@ func TestAppendAndGC2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -7029,7 +7035,7 @@ func TestAppendAndGC2(t *testing.T) {
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.CheckGC()
+	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
 }
 

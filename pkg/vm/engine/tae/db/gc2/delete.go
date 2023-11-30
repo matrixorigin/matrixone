@@ -31,11 +31,11 @@ type GCWorker struct {
 	// The status of GCWorker, only one delete worker can be running
 	state CleanerState
 
-	cleaner *DiskCleaner
+	cleaner *checkpointCleaner
 	fs      *objectio.ObjectFS
 }
 
-func NewGCWorker(fs *objectio.ObjectFS, cleaner *DiskCleaner) *GCWorker {
+func NewGCWorker(fs *objectio.ObjectFS, cleaner *checkpointCleaner) *GCWorker {
 	return &GCWorker{
 		state:   Idle,
 		fs:      fs,
