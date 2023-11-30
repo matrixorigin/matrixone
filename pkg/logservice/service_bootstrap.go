@@ -51,23 +51,34 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
 
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
+	if err != nil {
+		s.runtime.SubLogger(runtime.SystemInit).Error("failed to get file service instance", zap.Error(err))
+		return err
+	}
+
 	var nextID uint64
 	var nextIDByKey map[string]uint64
 	backup, err := s.getBackupData(ctx)
 	if err != nil {
+		s.runtime.SubLogger(runtime.SystemInit).Error("failed to get backup data", zap.Error(err))
 		return err
 	}
 	if backup != nil { // We are trying to restore from a backup.
 		// If a backup has already been issued, ignore this time.
-		_, err := s.fileService.StatFile(ctx, restoredTagFile)
+		_, err := fs.StatFile(ctx, restoredTagFile)
 		if s.cfg.BootstrapConfig.Restore.Force || // force is true, we do restore whatever.
 			(err != nil && moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
+			s.runtime.SubLogger(runtime.SystemInit).Info("restore hakeeper data",
+				zap.Uint64("next ID", backup.NextID),
+				zap.Any("next ID by key", backup.NextIDByKey),
+			)
 			// Restored tag file does not exist, we can do backup.
 			nextID = backup.NextID
 			nextIDByKey = backup.NextIDByKey
 
 			// After backup, create a restore file.
-			if err := s.fileService.Write(ctx, fileservice.IOVector{
+			if err := fs.Write(ctx, fileservice.IOVector{
 				FilePath: restoredTagFile,
 				Entries: []fileservice.IOEntry{
 					{
@@ -77,6 +88,8 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 					},
 				},
 			}); err != nil {
+				s.runtime.SubLogger(runtime.SystemInit).Error("failed to write restore tag file",
+					zap.Error(err))
 				return err
 			}
 		}
@@ -103,13 +116,27 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 }
 
 func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.LocalFileServiceName)
-	if err != nil {
-		return nil, err
-	}
 	filePath := s.cfg.BootstrapConfig.Restore.FilePath
 	if filePath == "" {
 		return nil, nil
+	}
+
+	path, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fsName := defines.LocalFileServiceName
+	if path.Service != "" {
+		fsName = path.Service
+	}
+
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, fsName)
+	if err != nil {
+		s.runtime.SubLogger(runtime.SystemInit).Error("failed to get file service instance %s",
+			zap.String("fileservice name", fsName),
+			zap.Error(err))
+		return nil, err
 	}
 
 	st, err := fs.StatFile(ctx, filePath)
