@@ -375,9 +375,9 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
-	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
-	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
-	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
 
 	for idx := 0; idx < len(stateCol); idx++ {
 		var objEntry ObjectEntry
@@ -398,9 +398,9 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
-	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
-	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
-	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
+	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
+	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
+	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
 
 	for idx := 0; idx < len(stateCol); idx++ {
 		var objEntry ObjectEntry
