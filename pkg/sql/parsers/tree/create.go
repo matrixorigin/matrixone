@@ -187,9 +187,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
 
-		if node.Options != nil {
+		if node.DTOptions != nil {
 			prefix := " with ("
-			for _, t := range node.Options {
+			for _, t := range node.DTOptions {
 				ctx.WriteString(prefix)
 				t.Format(ctx)
 				prefix = ", "

@@ -629,7 +629,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			default:
 				strVal = fmt.Sprintf("%v", v)
 			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 128)
+			parsedValue, err := strconv.ParseInt(strVal, 10, 64)
 			if err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
@@ -993,6 +993,8 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 	var additionalAllowedKeys = []string{
 		PartitionKey,
 		RelkindKey,
+		ProtobufMessagekey,
+		ProtobufSchemaKey,
 	}
 
 	// Create a set of allowed keys
