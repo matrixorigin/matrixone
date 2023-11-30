@@ -447,7 +447,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) fu
 
 		if collectUsage {
 			// collecting usage happens only when do ckp
-			FillUsageBatOfIncremental_(c, collector)
+			FillUsageBatOfIncremental_(collector)
 		}
 
 		data = collector.OrphanData()
@@ -484,7 +484,7 @@ func GlobalCheckpointDataFactory(
 		}
 		err = collector.PostLoop(c)
 
-		FillUsageBatOfGlobal_(c, collector)
+		FillUsageBatOfGlobal_(collector)
 
 		data = collector.OrphanData()
 
@@ -679,13 +679,18 @@ type BaseCollector struct {
 	start, end types.TS
 
 	data *CheckpointData
-	// to identify increment or global
-	isGlobal bool
+
 	// to prefetch object meta when fill in object info batch
 
 	// true for prefech object meta
 	isPrefetch bool
-	Objects    []*catalog.ObjectEntry
+	// for storage usage
+	Usage struct {
+		// db, tbl deletes
+		Deletes    []interface{}
+		SegInserts []UsageData_
+		SegDeletes []UsageData_
+	}
 }
 
 type IncrementalCollector struct {
@@ -699,8 +704,6 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			data:          NewCheckpointData(common.CheckpointAllocator),
 			start:         start,
 			end:           end,
-			isGlobal:      false,
-			Objects:       make([]*catalog.ObjectEntry, 0),
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -727,18 +730,6 @@ func NewBackupCollector(start, end types.TS) *IncrementalCollector {
 type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
-	// [0]. not used
-	// [3]. if a Object has been deleted, should record its id
-	// [2]. if a table has been deleted, should record its id
-	// [1]. if a db has been deleted, should record its id
-	// [0]. account's placeholder
-	deletes  [UsageMAX]map[interface{}]struct{}
-	deletes_ []interface{}
-}
-
-// GetDeletes only for test
-func (collector *GlobalCollector) GetDeletes() [UsageMAX]map[interface{}]struct{} {
-	return collector.deletes
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
@@ -748,14 +739,8 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			LoopProcessor: new(catalog.LoopProcessor),
 			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
-			isGlobal:      true,
-			Objects:       make([]*catalog.ObjectEntry, 0),
 		},
 		versionThershold: versionThresholdTS,
-	}
-
-	for i := uint8(0); i < UsageMAX; i++ {
-		collector.deletes[i] = make(map[interface{}]struct{})
 	}
 
 	collector.DatabaseFn = collector.VisitDB
@@ -2582,6 +2567,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			created = true
 		}
 		if dropped {
+			collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
@@ -2617,8 +2603,6 @@ func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.Ba
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.deletes[UsageDBID][entry.GetID()] = struct{}{}
-		collector.deletes_ = append(collector.deletes_, entry)
 		return nil
 	}
 	return collector.BaseCollector.VisitDB(entry)
@@ -2698,6 +2682,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			tblNode.TxnMVCCNode.AppendTuple(tableColInsTxnBat)
 		}
 		if dropped {
+			collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 			tableDelTxnBat.GetVectorByName(
 				SnapshotAttr_DBID).Append(entry.GetDB().GetID(), false)
 			tableDelTxnBat.GetVectorByName(
@@ -2735,8 +2720,6 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.deletes[UsageTblID][entry.GetID()] = struct{}{}
-		collector.deletes_ = append(collector.deletes_, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().BaseEntryImpl) {
@@ -2869,6 +2852,32 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 				common.DefaultAllocator,
 			)
 		}
+
+		// collect usage info
+		if objNode.HasDropCommitted() {
+			// deleted and non-append, record into the usage del bat
+			if !entry.IsAppendable() && objNode.IsCommitted() {
+				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes,
+					UsageData_{
+						Size:  int64(objNode.BaseNode.Size()),
+						TblId: entry.GetTable().GetID(),
+						DbId:  entry.GetTable().GetDB().GetID(),
+						AccId: entry.GetTable().GetDB().GetTenantID(),
+					})
+			}
+		} else {
+			// create and non-append, record into the usage ins bat
+			if !entry.IsAppendable() && objNode.IsCommitted() {
+				collector.Usage.SegInserts = append(collector.Usage.SegInserts,
+					UsageData_{
+						Size:  int64(objNode.BaseNode.Size()),
+						TblId: entry.GetTable().GetID(),
+						DbId:  entry.GetTable().GetDB().GetID(),
+						AccId: entry.GetTable().GetDB().GetTenantID(),
+					})
+			}
+		}
+
 	}
 	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
@@ -2892,8 +2901,6 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.deletes[UsageObjID][entry.ID] = struct{}{}
-		collector.deletes_ = append(collector.deletes_, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
