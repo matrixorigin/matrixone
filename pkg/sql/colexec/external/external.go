@@ -836,6 +836,9 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 			res = append(res, NULL_FLAG)
 			continue
 		}
+		if idx > len(cols) {
+			return nil, moerr.NewWrongValueCountOnRow(ctx, 0)
+		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
 			res = append(res, fmt.Sprintf("%v", val))
