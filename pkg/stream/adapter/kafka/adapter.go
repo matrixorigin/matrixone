@@ -50,6 +50,10 @@ const (
 
 	DatabaseKey = "database"
 
+	TimeWindowKey = "timeWindow"
+
+	BufferLimitKey = "bufferLimit"
+
 	TableKey = "table"
 
 	ValueKey = "value"

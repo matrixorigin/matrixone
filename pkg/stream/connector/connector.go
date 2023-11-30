@@ -18,6 +18,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -29,6 +30,24 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 )
+
+func getBufferLimit(bufferLimitStr string) int {
+	bufferLimit, err := strconv.Atoi(bufferLimitStr) // Convert the string to an integer
+	if err != nil {
+		// Handle the error, perhaps set to default if the conversion fails
+		bufferLimit = 1
+	}
+	return bufferLimit
+}
+
+func getTimeWindow(timeWindowStr string) int {
+	timeWindow, err := strconv.Atoi(timeWindowStr) // Convert the string to an integer
+	if err != nil {
+		// Handle the error, perhaps set to default if the conversion fails
+		timeWindow = 1000 // 1second, 1000ms
+	}
+	return timeWindow
+}
 
 func KafkaSinkConnectorExecutor(
 	logger *zap.Logger,
@@ -56,20 +75,9 @@ func KafkaSinkConnectorExecutor(
 		fullTableName := details.Connector.TableName
 		// Set database and table name for options.
 		ss := strings.Split(fullTableName, ".")
-		options["database"] = ss[0]
-		options["table"] = ss[1]
-		bufferLimitString, exists := options["buffer_size"]
-		var bufferLimit int // Declare bufferLimit outside the if/else scope
-		if !exists {
-			bufferLimit = 1 // Assign default value if the key does not exist
-		} else {
-			var err error
-			bufferLimit, err = strconv.Atoi(bufferLimitString) // Convert the string to an integer
-			if err != nil {
-				// Handle the error, perhaps set to default if the conversion fails
-				bufferLimit = 1
-			}
-		}
+		options[mokafka.DatabaseKey] = ss[0]
+		options[mokafka.TableKey] = ss[1]
+		bufferLimit := getBufferLimit(options[mokafka.BufferLimitKey])
 
 		c, err := NewKafkaMoConnector(logger, options, ieFactory(), bufferLimit)
 		if err != nil {
@@ -134,7 +142,7 @@ func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.In
 	if err := kmc.validateParams(); err != nil {
 		return nil, err
 	}
-	kmc.converter = newSQLConverter(options["database"], options["table"])
+	kmc.converter = newSQLConverter(options[mokafka.DatabaseKey], options[mokafka.TableKey])
 
 	// Create a Kafka consumer using the provided options
 	kafkaAdapter, err := mokafka.NewKafkaAdapter(convertToKafkaConfig(options))
@@ -205,12 +213,19 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	}
 	// Continuously listen for messages
 	var buffered_messages []*kafka.Message
+	timeWindow := getTimeWindow(k.options[mokafka.TimeWindowKey])
+	var timer *time.Timer
+	timer = time.NewTimer(time.Duration(timeWindow) * time.Millisecond)
+	timerRunning := false
+	var mutex sync.Mutex
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 
 		case <-k.cancelC:
+			timer.Stop()
 			return ct.Close()
 
 		case <-k.pauseC:
@@ -236,12 +251,34 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 				if e.Value == nil {
 					continue
 				}
+				mutex.Lock()
 				buffered_messages = append(buffered_messages, e)
+
+				// Start the timer if it's not already running
+				if !timerRunning {
+					timer.Stop()
+					timer = time.AfterFunc(time.Duration(timeWindow)*time.Millisecond, func() {
+						mutex.Lock()
+						if len(buffered_messages) > 0 {
+							k.insertRow(buffered_messages)
+							buffered_messages = buffered_messages[:0]
+						}
+						timerRunning = false
+						mutex.Unlock()
+					})
+					timerRunning = true
+				}
+
+				// Flush the buffer if the limit is reached
 				if len(buffered_messages) >= k.bufferLimit {
+					if timerRunning {
+						timer.Stop()
+						timerRunning = false
+					}
 					k.insertRow(buffered_messages)
 					buffered_messages = buffered_messages[:0]
 				}
-
+				mutex.Unlock()
 			case kafka.Error:
 				// Handle the error accordingly.
 				k.logger.Error("got error message", zap.Error(e))

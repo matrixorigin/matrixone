@@ -99,16 +99,21 @@ const (
 
 	OptConnectorRel       = "relkind"
 	OptConnectorPartition = "partition"
+
+	OptConnectorBufferLimit = "bufferLimit"
+	OptConnectorTimeWindow  = "timeWindow"
 )
 
 var ConnectorOptConstraint = map[string]OptConstraint{
-	OptConnectorType:      enumOpt(SourceKafka),
-	OptConnectorServers:   addressOpt,
-	OptConnectorTopic:     stringOpt,
-	OptConnectorValue:     enumOpt(FormatJson),
-	OptConnectorSql:       stringOpt,
-	OptConnectorRel:       stringOpt,
-	OptConnectorPartition: integerOpt,
+	OptConnectorType:        enumOpt(SourceKafka),
+	OptConnectorServers:     addressOpt,
+	OptConnectorTopic:       stringOpt,
+	OptConnectorValue:       enumOpt(FormatJson),
+	OptConnectorSql:         stringOpt,
+	OptConnectorRel:         stringOpt,
+	OptConnectorPartition:   integerOpt,
+	OptConnectorBufferLimit: integerOpt,
+	OptConnectorTimeWindow:  integerOpt,
 }
 
 var ConnectorEssentialOpts = map[string]struct{}{

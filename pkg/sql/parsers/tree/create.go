@@ -156,6 +156,7 @@ type CreateTable struct {
 	Param           *ExternParam
 	AsSource        *Select
 	IsDynamicTable  bool
+	DTOptions       []TableOption
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -185,6 +186,16 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsDynamicTable {
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
+
+		if node.Options != nil {
+			prefix := " with ("
+			for _, t := range node.Options {
+				ctx.WriteString(prefix)
+				t.Format(ctx)
+				prefix = ", "
+			}
+			ctx.WriteByte(')')
+		}
 	} else {
 
 		ctx.WriteString(" (")
@@ -198,7 +209,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 
-	if node.Options != nil {
+	if node.Options != nil && !node.IsDynamicTable {
 		prefix := " "
 		for _, t := range node.Options {
 			ctx.WriteString(prefix)
