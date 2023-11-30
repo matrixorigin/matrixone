@@ -44,6 +44,7 @@ const (
 	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
 	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
 	ObjectAttr_State                            = catalog.ObjectAttr_State
+	ObjectAttr_Sorted                           = catalog.ObjectAttr_Sorted
 	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
 	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
 	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
@@ -297,6 +298,7 @@ var (
 	ObjectInfoAttr = []string{
 		ObjectAttr_ObjectStats,
 		ObjectAttr_State, // entry_state, true for appendable
+		ObjectAttr_Sorted,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 		EntryNode_CreateAt,
@@ -307,6 +309,7 @@ var (
 	}
 	ObjectInfoTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_bool, 0, 0),
 		types.New(types.T_bool, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),

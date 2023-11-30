@@ -536,6 +536,11 @@ func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *cat
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
+	sorted := false
+	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+		sorted = true
+	}
+	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
 }
 
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
