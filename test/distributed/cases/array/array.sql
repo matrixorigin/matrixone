@@ -159,8 +159,10 @@ INSERT INTO `t9` VALUES (1,NULL,NULL);
 INSERT INTO `t9` VALUES (2,'[0.8166459, 0.66616553, 0.4886152]',NULL);
 INSERT INTO `t9` VALUES (3,'[8.5606893, 6.7903588, 821.977768]','[0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]');
 INSERT INTO `t9` VALUES (4,'[0.9260021, 0.26637346, 0.06567037]','[0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]');
-select cosine_similarity(b,b), cosine_similarity(c,c) from t8;
+select cosine_similarity(b,b), cosine_similarity(c,c) from t9;
 
+-- Except
+select * from t8 except select * from t9;
 
 -- post
 drop database vecdb;
