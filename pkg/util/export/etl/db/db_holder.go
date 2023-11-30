@@ -85,7 +85,11 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func CloseDBConn() {
-	dbConn := db.Load().(*sql.DB)
+	dbVal := db.Load()
+	if dbVal == nil {
+		return
+	}
+	dbConn := dbVal.(*sql.DB)
 	if dbConn != nil {
 		dbConn.Close()
 	}
