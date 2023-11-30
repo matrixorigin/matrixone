@@ -1160,7 +1160,6 @@ func makeInsertPlan(
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
 			builder.appendStep(lastNodeId)
-			ReCalcNodeStats(lastNodeId, builder, true, true, true)
 		}
 	}
 
