@@ -117,7 +117,7 @@ func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
-	groupId := configs["topic"] + "-" + configs["database"] + "-" + configs["table"]
+	groupId := configs[mokafka.TopicKey] + "-" + configs[mokafka.DatabaseKey] + "-" + configs[mokafka.TableKey] + "-" + configs[mokafka.PartitionKey]
 	kafkaConfigs.SetKey("group.id", groupId)
 	return kafkaConfigs
 }
@@ -187,14 +187,23 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "Kafka Adapter Consumer not initialized")
 	}
 	// Define the topic to consume from
-	topic := k.options["topic"]
+	topic := k.options[mokafka.TopicKey]
 
 	// Subscribe to the topic
-	if err := ct.Subscribe(topic, nil); err != nil {
-		return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
+	if k.options[mokafka.PartitionKey] != "" {
+		partition, err := strconv.Atoi(k.options[mokafka.PartitionKey])
+		if err != nil {
+			return moerr.NewInternalError(ctx, "Invalid partition")
+		}
+		if err := ct.Assign([]kafka.TopicPartition{{Topic: &topic, Partition: int32(partition)}}); err != nil {
+			return moerr.NewInternalError(ctx, "Failed to assign partition")
+		}
+	} else {
+		if err := ct.Subscribe(topic, nil); err != nil {
+			return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
+		}
 	}
 	// Continuously listen for messages
-
 	var buffered_messages []*kafka.Message
 	for {
 		select {

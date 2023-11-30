@@ -47,6 +47,11 @@ type ValueType string
 const (
 	TypeKey  = "type"
 	TopicKey = "topic"
+
+	DatabaseKey = "database"
+
+	TableKey = "table"
+
 	ValueKey = "value"
 
 	PartitionKey        = "partition"
