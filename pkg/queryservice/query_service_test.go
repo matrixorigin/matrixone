@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -157,6 +158,7 @@ func TestQueryServiceKillConn(t *testing.T) {
 func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc QueryService, addr string)) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
 		time.Now().Nanosecond(), cn.ServiceID)
 

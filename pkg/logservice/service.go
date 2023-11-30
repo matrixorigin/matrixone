@@ -193,7 +193,6 @@ func NewService(
 	}
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
-
 	return service, nil
 }
 
