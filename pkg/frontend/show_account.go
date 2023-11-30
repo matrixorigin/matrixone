@@ -217,6 +217,7 @@ func updateStorageUsageCache(accIds []int32, sizes []int64) {
 			Size:  sizes[x],
 		})
 	}
+
 	cnUsageCache.SetUpdateTime(time.Now())
 }
 
@@ -227,6 +228,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 		return nil, nil
 	}
 
+	fmt.Println("--------------- cache: \n", cnUsageCache.String())
 	// step 1: check cache
 	if usage, succeed := checkStorageUsageCache(accIds); succeed {
 		return usage, nil
@@ -241,6 +243,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	usage := response.(*db.StorageUsageResp)
 
 	updateStorageUsageCache(usage.AccIds, usage.Sizes)
+	fmt.Println("--------------- cache: \n", cnUsageCache.String())
 
 	// step 2: handling these pulled data
 	return handleStorageUsageResponse(ctx, usage)

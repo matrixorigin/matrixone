@@ -244,6 +244,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
+
+	// use to reply the storage usage data stored in ckps into TN usage cache
+	var usageDatas []*logtail.CheckpointData
+	var usageVers []uint32
+
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
@@ -251,6 +256,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if err != nil {
 			return
 		}
+
+		usageVers = append(usageVers, maxGlobal.version)
+		usageDatas = append(usageDatas, datas[globalIdx])
+
 		if maxTs.Less(maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
@@ -284,6 +293,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if err != nil {
 			return
 		}
+
+		usageVers = append(usageVers, checkpointEntry.version)
+		usageDatas = append(usageDatas, datas[i])
+
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
@@ -301,6 +314,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
+
+	// replying the usage data into tn usage cache
+	logtail.GetTNUsageMemo().EstablishFromCKPs(usageDatas, usageVers)
+
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
