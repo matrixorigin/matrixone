@@ -247,7 +247,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var newFkeys []*plan.ForeignKeyDef
 
 	var addIndex []*plan.IndexDef
-	var dropIndex []*plan.IndexDef
+	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
 
 	var alterKind []api.AlterKind
@@ -273,10 +273,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
-				for i, indexdef := range tableDef.Indexes {
+				var notDroppedIndex []*plan.IndexDef
+				for _, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
-						dropIndex = append(dropIndex, indexdef)
-						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
+						dropIndexMap[indexdef.IndexName] = true
+
 						//1. drop index table
 						if indexdef.TableExist {
 							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName, nil); err != nil {
@@ -292,9 +293,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if err != nil {
 							return err
 						}
-						break
+					} else {
+						notDroppedIndex = append(notDroppedIndex, indexdef)
 					}
 				}
+				// Avoid modifying slice directly during iteration
+				tableDef.Indexes = notDroppedIndex
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
 				alterKind = append(alterKind, api.AlterKind_DropColumn)
 				var idx int
@@ -522,14 +526,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			for in := range dropIndex {
-				for i, idx := range t.Indexes {
-					if dropIndex[in].IndexName == idx.IndexName {
-						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
-						break
-					}
+			// NOTE: using map and remainingIndexes slice here to avoid "Modifying a Slice During Iteration".
+			var remainingIndexes []*plan.IndexDef
+			for _, idx := range t.Indexes {
+				if !dropIndexMap[idx.IndexName] {
+					remainingIndexes = append(remainingIndexes, idx)
 				}
 			}
+			t.Indexes = remainingIndexes
+
 			t.Indexes = append(t.Indexes, addIndex...)
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {

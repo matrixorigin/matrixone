@@ -388,7 +388,8 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				// ivf index
 				if len(indexInfo.Parts) == 0 {
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					// remove 3 index records: metadata, centroids, entries
+					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
 				}
 			}
 		}
