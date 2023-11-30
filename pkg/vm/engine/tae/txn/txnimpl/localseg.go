@@ -262,7 +262,11 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 
 	if shouldCreateNewSeg() {
 		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(sid))
+		if err != nil {
+			return
+		}
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
+		err = seg.nseg.UpdateStats(stats)
 		if err != nil {
 			return
 		}
