@@ -45,9 +45,12 @@ import (
 type ValueType string
 
 const (
-	TypeKey             = "type"
-	TopicKey            = "topic"
-	ValueKey            = "value"
+	TypeKey  = "type"
+	TopicKey = "topic"
+	ValueKey = "value"
+
+	PartitionKey        = "partition"
+	RelkindKey          = "relkind"
 	BootstrapServersKey = "bootstrap.servers"
 	ProtobufSchemaKey   = "protobuf.schema"
 	ProtobufMessagekey  = "protobuf.message"
@@ -99,7 +102,7 @@ type KafkaAdapterInterface interface {
 	CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error
 	DescribeTopicDetails(ctx context.Context, topicName string) (*kafka.TopicMetadata, error)
 	ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error)
-	ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error)
+	ReadMessagesFromTopic(topic string, offset int64, limit int64, configs map[string]interface{}) ([]*kafka.Message, error)
 	GetSchemaForTopic(topic string, isKey bool) (schemaregistry.SchemaMetadata, error)
 
 	GetKafkaConsumer() (*kafka.Consumer, error)
@@ -248,7 +251,7 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 	return messages, nil
 }
 
-func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error) {
+func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64, configs map[string]interface{}) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
 		return nil, moerr.NewInternalError(context.Background(), "consumer not initialized")
 	}
@@ -265,7 +268,22 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 	}
 
 	var messages []*kafka.Message
-	for _, p := range topicMetadata.Partitions {
+	var partitions []kafka.PartitionMetadata
+	if configs[PartitionKey] != nil {
+		partition, err := strconv.Atoi(configs[PartitionKey].(string))
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range topicMetadata.Partitions {
+			if p.ID == int32(partition) {
+				partitions = append(partitions, p)
+				break
+			}
+		}
+	} else {
+		partitions = topicMetadata.Partitions
+	}
+	for _, p := range partitions {
 		// Fetch the high watermark for the partition
 		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(topic, p.ID, -1)
 		if err != nil {
@@ -461,7 +479,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 		}
 
 	case PROTOBUFSR:
-		schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
+		schema, err := ka.GetSchemaForTopic(configs[TopicKey].(string), false)
 		if err != nil {
 			return nil, err
 		}
@@ -948,6 +966,7 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
+	// each time we create a new consumer group for gather all messages
 	groupId := uuid.New().String()
 	kafkaConfigs.SetKey("group.id", groupId)
 
@@ -962,9 +981,30 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 		BootstrapServersKey,
 	}
 
+	var additionalAllowedKeys = []string{
+		PartitionKey,
+		RelkindKey,
+	}
+
+	// Create a set of allowed keys
+	allowedKeys := make(map[string]struct{})
+	for _, key := range requiredKeys {
+		allowedKeys[key] = struct{}{}
+	}
+	for _, key := range additionalAllowedKeys {
+		allowedKeys[key] = struct{}{}
+	}
+
 	for _, key := range requiredKeys {
 		if _, exists := configs[key]; !exists {
 			return moerr.NewInternalError(ctx, "missing required key: %s", key)
+		}
+	}
+
+	// Validate keys in configs
+	for key := range configs {
+		if _, ok := allowedKeys[key]; !ok {
+			return moerr.NewInternalError(ctx, "invalid key: %s", key)
 		}
 	}
 
@@ -1028,16 +1068,32 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	}
 	defer ka.Close()
 
-	meta, err := ka.DescribeTopicDetails(ctx, configs["topic"].(string))
+	meta, err := ka.DescribeTopicDetails(ctx, configs[TopicKey].(string))
 	if err != nil {
 		return 0, err
 	}
 
 	var totalSize int64
 	kaConsumer, _ := ka.GetKafkaConsumer()
-	for _, p := range meta.Partitions {
+
+	var partitions []kafka.PartitionMetadata
+	if configs[PartitionKey] != nil {
+		partition, err := strconv.Atoi(configs[PartitionKey].(string))
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range meta.Partitions {
+			if p.ID == int32(partition) {
+				partitions = append(partitions, p)
+				break
+			}
+		}
+	} else {
+		partitions = meta.Partitions
+	}
+	for _, p := range partitions {
 		// Fetch the high watermark for the partition
-		_, highwatermarkHigh, err := kaConsumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
+		_, highwatermarkHigh, err := kaConsumer.QueryWatermarkOffsets(configs[TopicKey].(string), p.ID, -1)
 		if err != nil {
 			return 0, err
 		}
@@ -1075,7 +1131,7 @@ func RetrieveData(ctx context.Context, msgs []*kafka.Message, configs map[string
 		messages = msgs
 	} else {
 		var err error
-		messages, err = ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
+		messages, err = ka.ReadMessagesFromTopic(configs[TopicKey].(string), offset, limit, configs)
 		if err != nil {
 			return nil, err
 		}
