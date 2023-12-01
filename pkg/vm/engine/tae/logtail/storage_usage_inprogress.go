@@ -83,12 +83,12 @@ func (u UsageData_) String() string {
 }
 
 func usageLess(a UsageData_, b UsageData_) bool {
-	if a.AccId < b.AccId {
-		return true
+	if a.AccId != b.AccId {
+		return a.AccId < b.AccId
 	}
 
-	if a.DbId < b.DbId {
-		return true
+	if a.DbId != b.DbId {
+		return a.DbId < b.DbId
 	}
 
 	return a.TblId < b.TblId
