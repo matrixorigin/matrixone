@@ -381,6 +381,12 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	//in this case:
+	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
+	// insert into t1 values (1,1,null);
+	// update t1 set b = b+1 where a = 1;
+	//    here MO will use 't1 left join hidden_tbl' to fetch the PK in hidden table to lock,
+	//    but the result will be ConstNull vector
 	if vec != nil && vec.IsConstNull() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
