@@ -91,6 +91,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
+		getLogger().Error("error in scope run suppressed to nil",
+			zap.String("sql", c.sql),
+			zap.String("error", err.Error()))
+
 		err = nil
 	default:
 	}
