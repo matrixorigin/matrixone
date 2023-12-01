@@ -124,11 +124,7 @@ func CnServerMessageHandler(
 			getLogger().Error("panic in cn message handler",
 				zap.String("error", err.Error()))
 
-			err2 := cs.Close()
-			if err2 != nil {
-				err = errors.Join(err, err2)
-			}
-
+			err = errors.Join(err, cs.Close())
 		}
 	}()
 
