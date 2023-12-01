@@ -364,15 +364,29 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		TableExist:         indexDef.TableExist,
 		IndexTableName:     indexDef.IndexTableName,
 		Comment:            indexDef.Comment,
+		Visible:            indexDef.Visible,
 		IndexAlgo:          indexDef.IndexAlgo,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 	}
 
+	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
+
 	newParts := make([]string, len(indexDef.Parts))
 	copy(newParts, indexDef.Parts)
 	newindexDef.Parts = newParts
 	return newindexDef
+}
+
+func DeepCopyIndexOption(indexOption *plan.IndexOption) *plan.IndexOption {
+	if indexOption == nil {
+		return nil
+	}
+	newIndexOption := &plan.IndexOption{
+		CreateExtraTable: indexOption.CreateExtraTable,
+	}
+
+	return newIndexOption
 }
 
 func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
