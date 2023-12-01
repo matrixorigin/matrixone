@@ -15,12 +15,22 @@
 package status
 
 type Status struct {
-	LogtailServerStatus LogtailServerStatus `json:"logtail_server_status"`
-	HAKeeperStatus      HAKeeperStatus      `json:"hakeeper_status"`
-	CNStatus            []CNStatus          `json:"cn_status"`
+	LogtailServerStatus LogtailServerStatus  `json:"logtail_server_status"`
+	HAKeeperStatus      HAKeeperStatus       `json:"hakeeper_status"`
+	CNUUIDStatus        map[string]*CNStatus `json:"cn_uuid_status"`
 }
 
 type CNStatus struct {
-	UUID            string          `json:"uuid"`
 	TxnClientStatus TxnClientStatus `json:"txn_client_status"`
+	LockStatus      LockStatus      `json:"lock_status"`
+}
+
+func (s *Status) fillCNStatus(cnInstances map[string]*CNInstance) {
+	s.CNUUIDStatus = make(map[string]*CNStatus, len(cnInstances))
+	for cn, item := range cnInstances {
+		cnStatus := &CNStatus{}
+		s.CNUUIDStatus[cn] = cnStatus
+		s.fillTxnClient(cnStatus, item.TxnClient)
+		s.fillLock(cnStatus, item.LockService)
+	}
 }
