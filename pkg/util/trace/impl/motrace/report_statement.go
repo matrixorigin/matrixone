@@ -60,30 +60,28 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+	// fixme: if recording status=Running entity, here has data-trace issue.
+	// Should clone the StatementInfo as new one.
 	if s, ok := i.(*StatementInfo); ok {
-		cloned := NewStatementInfo()
+		// process the execplan
+		s.ExecPlan2Stats(ctx)
+		// remove the plan
+		s.jsonByte = nil
+		s.FreeExecPlan()
 
-		// Copy the necessary data from s to cloned
-		// Note: This is a shallow copy. You need to decide which fields need to be copied based on your application's logic.
-		*cloned = *s
-
-		// Reset or reinitialize fields that should not be shared between the original and the clone
-		cloned.jsonByte = nil
-		cloned.FreeExecPlan()
-
-		cloned.TransactionID = NilTxnID
-		cloned.StatementTag = ""
-		cloned.StatementFingerprint = ""
-		cloned.Error = nil
-		cloned.AggrCount = 1
-		cloned.Database = ""
-		cloned.StmtBuilder.WriteString(cloned.Statement)
-		duration := cloned.Duration
-		cloned.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(cloned.statsArray.GetMemorySize() * float64(duration)))
-		cloned.RequestAt = cloned.ResponseAt.Truncate(windowSize)
-		cloned.ResponseAt = cloned.RequestAt.Add(windowSize)
-
-		return cloned
+		// remove the TransacionID
+		s.TransactionID = NilTxnID
+		s.StatementTag = ""
+		s.StatementFingerprint = ""
+		s.Error = nil
+		s.AggrCount = 1
+		s.Database = ""
+		s.StmtBuilder.WriteString(s.Statement)
+		duration := s.Duration
+		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
+		s.RequestAt = s.ResponseAt.Truncate(windowSize)
+		s.ResponseAt = s.RequestAt.Add(windowSize)
+		return s
 	}
 	return nil
 }
@@ -92,10 +90,6 @@ func StatementInfoUpdate(existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
-
-	e.updateMux.Lock()         // Lock before accessing / modifying the structure
-	defer e.updateMux.Unlock() // Unlock when the function exits
-
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
@@ -201,10 +195,7 @@ type StatementInfo struct {
 	mux sync.Mutex
 	// reported mark reported
 	// set by ReportStatement
-	reported  bool
-	reportMux sync.Mutex
-
-	updateMux sync.Mutex
+	reported bool
 	// exported mark exported
 	// set by FillRow or StatementInfoUpdate
 	exported bool
@@ -551,15 +542,6 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}
-	}
-	if s.reported {
-		return nil
-	}
-	s.reportMux.Lock()
-	defer s.reportMux.Unlock()
-	// check twice in case it has been reported already
-	if s.reported {
-		return nil
 	}
 
 	s.reported = true
