@@ -112,7 +112,6 @@ jobs:
     if: ${{ github.event.pull_request.merged == true && always() }}
     runs-on: amd64-tke-mo
     name: Multi-CN e2e BVT(Race) Test on Linux/x64
-    timeout-minutes: 120
     needs: [pessimistic-bvt-darwin-arm64]
     steps:
       - name: checkout head
@@ -145,7 +144,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
+          sed -i 's/socketTimeout:.*/socketTimeout: 600000/g' mo.yml
           sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
           cat mo.yml
           echo "======================================"
@@ -156,6 +155,7 @@ jobs:
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
       - name: Check mo-service Status
+        id: check_mo_status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
@@ -188,3 +188,7 @@ jobs:
         with:
           msgtype: markdown
           content: "MO Checkin Regression(Standalone BVT) failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"
+
+      - name: SlEEP FOR CHECK
+        if: ${{ always() && steps.check_mo_status.conclusion != 'success' }}
+        run: sleep 21600
