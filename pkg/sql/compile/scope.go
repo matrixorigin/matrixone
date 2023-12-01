@@ -199,14 +199,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 }
 
 // RemoteRun send the scope to a remote node for execution.
-// if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
-	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
-		return s.ParallelRun(c, s.IsRemote)
-	}
-
-	if !cnclient.IsCNClientReady() {
+	if !s.canRemote(c) || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -218,7 +212,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
-		// if context has done, it means other pipeline stop the query normally.
+		// if context has done, it means another pipeline stops the query.
 		// so there is no need to return the error again.
 		return nil
 
