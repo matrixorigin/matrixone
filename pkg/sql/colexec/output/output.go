@@ -40,6 +40,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
+	select {
+	case <-proc.Ctx.Done():
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, proc.Ctx.Err()
+	default:
+	}
+
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
