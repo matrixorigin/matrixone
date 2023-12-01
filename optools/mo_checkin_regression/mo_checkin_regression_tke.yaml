@@ -5,6 +5,7 @@ metadata:
   namespace: nsformocheckin
 spec:
   dn:
+    exportToPrometheus: true
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
     overlay:
@@ -17,6 +18,13 @@ spec:
       env:
       - name: GOMEMLIMIT
         value: "8000MiB"
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     cacheVolume:
       size: 100Gi
       storageClassName: cbs-hssd
@@ -40,6 +48,10 @@ spec:
       logtail-collect-interval = "2ms"
       logtail-response-send-timeout = "10s"
       max-logtail-fetch-failure = 5
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
     replicas: 1
     resources:
       requests:
@@ -50,6 +62,7 @@ spec:
         memory: 16Gi
   imageRepository: ccr.ccs.tencentyun.com/matrixone-dev/matrixone
   logService:
+    exportToPrometheus: true
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression-log: "true"
     overlay:
@@ -59,6 +72,13 @@ spec:
         operator: Exists    
       imagePullSecrets:
       - name: tke-registry
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     replicas: 3
     resources:
       requests:
@@ -84,7 +104,12 @@ spec:
       level = "info"
       format = "json"
       max-size = 512
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
   tp:
+    exportToPrometheus: true
     cacheVolume:
       size: 100Gi
       storageClassName: cbs-hssd
@@ -103,6 +128,10 @@ spec:
       busy-queue-size = 1
       [cn.ctl.address]
       listen-address = "0.0.0.0:19958"
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
     replicas: 2
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
@@ -116,6 +145,13 @@ spec:
       env:
       - name: GOMEMLIMIT
         value: "8000MiB"
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     resources:
       requests:
         cpu: 7
