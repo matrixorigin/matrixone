@@ -89,11 +89,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 	}
 
-	select {
-	case <-s.Proc.Ctx.Done():
-		err = nil
-	default:
-	}
+	// TODO: This is a temporary solution to debug the panic suppression in pipeline.
+	//select {
+	//case <-s.Proc.Ctx.Done():
+	//	err = nil
+	//default:
+	//}
 	return err
 }
 
