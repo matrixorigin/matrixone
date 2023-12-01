@@ -371,7 +371,7 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
-	if vec.IsConstNull() {
+	if vec != nil && vec.IsConstNull() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
