@@ -625,6 +625,11 @@ func (s *service) initLockService() {
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
+	}
 }
 
 // put the waiting-next type msg into client session's cache and return directly
