@@ -1332,8 +1332,8 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	castTypes := make([]types.T, len(inputs))
 	targetTypes := make([]types.Type, len(inputs))
 	for j := 0; j < len(inputs); j++ {
-		castTypes[j] = types.T_float64
-		targetTypes[j] = types.T_float64.ToType()
+		castTypes[j] = inputs[0].Oid
+		targetTypes[j] = inputs[0].Oid.ToType()
 	}
 	c, _ := tryToMatch(inputs, castTypes)
 	if c == matchFailed {
