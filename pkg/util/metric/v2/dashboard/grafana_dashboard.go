@@ -98,6 +98,10 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initProxyDashboard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -128,10 +129,13 @@ func newProxyHandler(
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
-
+	v2.ProxyConnectAcceptedCounter.Inc()
 	h.counterSet.connAccepted.Add(1)
 	h.counterSet.connTotal.Add(1)
-	defer h.counterSet.connTotal.Add(-1)
+	defer func() {
+		v2.ProxyConnectCurrentCounter.Inc()
+		h.counterSet.connTotal.Add(-1)
+	}()
 
 	// Create a new tunnel to manage client connection and server connection.
 	t := newTunnel(h.ctx, h.logger, h.counterSet)
