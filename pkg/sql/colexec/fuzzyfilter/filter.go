@@ -15,7 +15,6 @@ package fuzzyfilter
 
 import (
 	"bytes"
-	// "fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -61,6 +60,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 
 	arg.useRoaring = IfCanUseRoaringFilter(arg.PkTyp.Oid)
+
+	if err := generateRbat(proc, arg); err != nil {
+		return err
+	}
 
 	if arg.useRoaring {
 		arg.roaringFilter = newroaringFilter(arg.PkTyp.Oid)
@@ -112,10 +115,6 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			}
 
 			if bat == nil {
-				if err := generateRbat(proc, arg); err != nil {
-					result.Status = vm.ExecStop
-					return result, err
-				}
 				arg.ctr.state = Probe
 				continue
 			}
@@ -126,7 +125,14 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			}
 
 			pkCol := bat.GetVector(0)
-			arg.bloomFilter.Add(pkCol)
+			arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+				if exist {
+					if arg.collisionCnt < maxCheckDupCount {
+						appendCollisionKey(proc, arg, i, bat)
+						arg.collisionCnt++
+					}
+				}
+			})
 			proc.PutBatch(bat)
 			continue
 
@@ -138,6 +144,7 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			}
 
 			if bat == nil {
+				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if arg.rbat == nil || arg.collisionCnt == 0 {
 					result.Status = vm.ExecStop
@@ -159,7 +166,9 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 
 			pkCol := bat.GetVector(0)
 
-			arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
+			// arg.probeCnt += pkCol.Length()
+
+			arg.bloomFilter.Test(pkCol, func(exist bool, i int) {
 				if exist {
 					if arg.collisionCnt < maxCheckDupCount {
 						appendCollisionKey(proc, arg, i, bat)
@@ -202,9 +211,15 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 			}
 
 			pkCol := bat.GetVector(0)
-			arg.roaringFilter.addFunc(arg.roaringFilter, pkCol)
+
+			idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
 			proc.PutBatch(bat)
-			continue
+
+			if idx == -1 {
+				continue
+			} else {
+				return result, moerr.NewDuplicateEntry(proc.Ctx, valueToString(dupVal), arg.PkName)
+			}
 
 		case Probe:
 
@@ -214,6 +229,7 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 			}
 
 			if bat == nil {
+				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if arg.rbat == nil || arg.collisionCnt == 0 {
 					result.Status = vm.ExecStop
@@ -235,7 +251,9 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 
 			pkCol := bat.GetVector(0)
 
-			idx, dupVal := arg.roaringFilter.testAndAddFunc(arg.roaringFilter, pkCol)
+			// arg.probeCnt += pkCol.Length()
+
+			idx, dupVal := arg.roaringFilter.testFunc(arg.roaringFilter, pkCol)
 			proc.PutBatch(bat)
 
 			if idx == -1 {

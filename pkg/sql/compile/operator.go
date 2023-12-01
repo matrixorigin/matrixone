@@ -578,7 +578,8 @@ func constructFuzzyFilter(n, left, right *plan.Node) *fuzzyfilter.Argument {
 	}
 
 	return &fuzzyfilter.Argument{
-		N:      left.Stats.Cost + right.Stats.Cost,
+		// N:      left.Stats.Cost + right.Stats.Cost,
+		N:      right.Stats.Cost,
 		PkName: pkName,
 		PkTyp:  pkTyp,
 	}

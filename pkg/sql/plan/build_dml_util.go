@@ -1153,7 +1153,7 @@ func makeInsertPlan(
 			// fuzzy_filter
 			fuzzyFilterNode := &Node{
 				NodeType: plan.Node_FUZZY_FILTER,
-				Children: []int32{lastNodeId, tableScanId},
+				Children: []int32{tableScanId, lastNodeId}, // right table build hash
 				TableDef: tableDef,
 				ObjRef:   objRef,
 			}

@@ -46,6 +46,8 @@ type Argument struct {
 	collisionCnt int
 	rbat         *batch.Batch
 
+	probeCnt int
+
 	info     *vm.OperatorInfo
 	children []vm.Operator
 }
