@@ -256,7 +256,7 @@ type TxnStore interface {
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, metaLocs []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, stats containers.Vector) error
 
 	RangeDelete(
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,

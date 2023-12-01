@@ -215,7 +215,7 @@ func NewService(
 		panic(err)
 	}
 
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	return srv, nil
 }

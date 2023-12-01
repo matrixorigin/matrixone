@@ -5430,8 +5430,8 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 3 {
-				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() {
+			if len(inputs) == 4 {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() || !inputs[3].Oid.IsMySQLString() {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
 				return newCheckResultWithSuccess(1)
@@ -5484,6 +5484,7 @@ var supportedOthersBuiltIns = []FuncNew{
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 						sourceValues := vector.GenerateFunctionStrParameter(parameters[1])
 						columnNames := vector.GenerateFunctionStrParameter(parameters[2])
+						columnTypes := vector.GenerateFunctionStrParameter(parameters[3])
 						// do a safe check
 						if columnNames.WithAnyNullValue() {
 							return moerr.NewInternalError(proc.Ctx, "the third parameter of assert() should not be null")
@@ -5499,10 +5500,15 @@ var supportedOthersBuiltIns = []FuncNew{
 								if null1 || !flag {
 									value, null2 := sourceValues.GetStrValue(i)
 									col, _ := columnNames.GetStrValue(i)
+									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
 										tuples, _, err := types.DecodeTuple(value)
+										scales := make([]int32, len(coltypes))
+										for j := range coltypes {
+											scales[j] = int32(coltypes[j])
+										}
 										if err == nil { // complex key
-											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(), string(col))
+											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(scales), string(col))
 										}
 										return moerr.NewDuplicateEntry(proc.Ctx, string(value), string(col))
 									}
