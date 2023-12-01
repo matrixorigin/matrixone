@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"time"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -400,9 +401,9 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 	return insertMoIndexesSql, nil
 }
 
-func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) error {
+func genNewUniqueIndexDuplicateCheck(c *Compile, txn executor.TxnExecutor, database, table, cols string) error {
 	duplicateCheckSql := fmt.Sprintf(selectOriginTableConstraintFormat, cols, database, table, cols, cols)
-	res, err := c.runSqlWithResult(duplicateCheckSql)
+	res, err := txn.Exec(duplicateCheckSql)
 	if err != nil {
 		return err
 	}

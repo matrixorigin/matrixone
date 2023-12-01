@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"math"
 	"strings"
 
@@ -323,39 +324,46 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 			addIndex = append(addIndex, indexDef)
-			if indexDef.Unique {
-				// 0. check original data is not duplicated
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
-				if err != nil {
-					return err
-				}
-			}
-
-			//1. build and update constraint def
-			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
-			if err != nil {
-				return err
-			}
-			err = c.runSql(insertSql)
-			if err != nil {
-				return err
-			}
-			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist {
-				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				// 2. create index table from unique index object
-				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-				err = c.runSql(createSQL)
-				if err != nil {
-					return err
+			err = c.runTxn(func(txn executor.TxnExecutor) error {
+				if indexDef.Unique {
+					// 0. check original data is not duplicated
+					err = genNewUniqueIndexDuplicateCheck(c, txn, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+					if err != nil {
+						return err
+					}
 				}
 
-				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-				err = c.runSql(insertSQL)
+				//1. build and update constraint def
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
 				if err != nil {
 					return err
 				}
+				_, err = txn.Exec(insertSql)
+				if err != nil {
+					return err
+				}
+				//---------------------------------------------------------
+				if act.AddIndex.IndexTableExist {
+					def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+					// 2. create index table from unique index object
+					createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+					_, err = txn.Exec(createSQL)
+					if err != nil {
+						return err
+					}
+
+					// 3. insert data into index table for unique index object
+					insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
+					_, err = txn.Exec(insertSQL)
+					if err != nil {
+						return err
+					}
+
+				}
+				return nil
+			})
+			if err != nil {
+				return err
 			}
 		case *plan.AlterTable_Action_AlterIndex:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
@@ -984,62 +992,69 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 
-	if indexDef.Unique {
-		// 0. check original data is not duplicated
-		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+	err = c.runTxn(func(txn executor.TxnExecutor) error {
+		if indexDef.Unique {
+			// 0. check original data is not duplicated
+			err = genNewUniqueIndexDuplicateCheck(c, txn, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+			if err != nil {
+				return err
+			}
+		}
+
+		// build and create index table for unique/secondary index
+		if qry.TableExist {
+			def := qry.GetIndex().GetIndexTables()[0]
+			createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+			_, err = txn.Exec(createSQL)
+			if err != nil {
+				return err
+			}
+
+			insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
+			_, err = txn.Exec(insertSQL)
+			if err != nil {
+				return err
+			}
+		}
+		// build and update constraint def
+		defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
 		if err != nil {
 			return err
 		}
-	}
+		ct := defs[0].(*engine.ConstraintDef)
 
-	// build and create index table for unique/secondary index
-	if qry.TableExist {
-		def := qry.GetIndex().GetIndexTables()[0]
-		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-		err = c.runSql(createSQL)
+		tblDefs, err := r.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range tblDefs {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		newCt, err := makeNewCreateConstraint(oldCt, ct.Cts[0])
+		if err != nil {
+			return err
+		}
+		err = r.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
 			return err
 		}
 
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-		err = c.runSql(insertSQL)
+		// generate insert into mo_indexes metadata
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
 		if err != nil {
 			return err
 		}
-	}
-	// build and update constraint def
-	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
-	if err != nil {
-		return err
-	}
-	ct := defs[0].(*engine.ConstraintDef)
-
-	tblDefs, err := r.TableDefs(c.ctx)
-	if err != nil {
-		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range tblDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
+		_, err = txn.Exec(sql)
+		if err != nil {
+			return err
 		}
-	}
-	newCt, err := makeNewCreateConstraint(oldCt, ct.Cts[0])
-	if err != nil {
-		return err
-	}
-	err = r.UpdateConstraint(c.ctx, newCt)
-	if err != nil {
-		return err
-	}
 
-	// generate insert into mo_indexes metadata
-	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
-	if err != nil {
-		return err
-	}
-	err = c.runSql(sql)
+		return nil
+	})
 	if err != nil {
 		return err
 	}
