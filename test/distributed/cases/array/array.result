@@ -243,4 +243,63 @@ insert into vec_table3 values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table3;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
+select summation(null);
+summation(null)
+null
+select l1_norm(null);
+l1_norm(null)
+null
+select l2_norm(null);
+l2_norm(null)
+null
+select vector_dims(null);
+vector_dims(null)
+null
+select inner_product(null, "[1,2,3]");
+inner_product(null, [1,2,3])
+null
+select cosine_similarity(null, "[1,2,3]");
+cosine_similarity(null, [1,2,3])
+null
+select l2_distance(null, "[1,2,3]");
+l2_distance(null, [1,2,3])
+null
+select cosine_distance(null, "[1,2,3]");
+cosine_distance(null, [1,2,3])
+null
+select normalize_l2(null);
+normalize_l2(null)
+null
+select cast(null as vecf32(3));
+cast(null as vecf32(3))
+null
+select cast(null as vecf64(3));
+cast(null as vecf64(3))
+null
+create table t8(a int, b vecf32(3), c vecf32(5));
+INSERT INTO `t8` VALUES (1,NULL,NULL);
+INSERT INTO `t8` VALUES(2,'[0.8166459, 0.66616553, 0.4886152]',NULL);
+INSERT INTO `t8` VALUES(3,'[0.1726299, 3.2908857, 30.433094]','[0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]');
+INSERT INTO `t8` VALUES(4,'[8.560689, 6.790359, 821.9778]','[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]');
+select cosine_similarity(b,b), cosine_similarity(c,c) from t8;
+cosine_similarity(b, b)    cosine_similarity(c, c)
+null    null
+1.0    null
+1.0    1.0
+1.0    1.0
+create table t9(a int, b vecf64(3), c vecf64(5));
+INSERT INTO `t9` VALUES (1,NULL,NULL);
+INSERT INTO `t9` VALUES (2,'[0.8166459, 0.66616553, 0.4886152]',NULL);
+INSERT INTO `t9` VALUES (3,'[8.5606893, 6.7903588, 821.977768]','[0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]');
+INSERT INTO `t9` VALUES (4,'[0.9260021, 0.26637346, 0.06567037]','[0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]');
+select cosine_similarity(b,b), cosine_similarity(c,c) from t9;
+cosine_similarity(b, b)    cosine_similarity(c, c)
+null    null
+1.0    null
+1.0    1.0
+1.0    1.0
+select * from t8 except select * from t9;
+a    b    c
+3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
+4    [8.560689, 6.790359, 821.9778]    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
 drop database vecdb;
