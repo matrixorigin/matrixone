@@ -372,50 +372,46 @@ func (p *PartitionState) HandleLogtailEntry(
 }
 
 func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
-	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
 	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
 	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
 
-	for idx := 0; idx < len(statsCol); idx++ {
+	for idx := 0; idx < len(stateCol); idx++ {
 		var objEntry ObjectEntry
 
-		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
+		objEntry.Sorted = sortedCol[idx]
 
 		p.dataObjects.Set(objEntry)
 	}
 }
 
 func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
-	statsCol := vector.MustBytesCol(mustVectorFromProto(bat.Vecs[2]))
+	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
+	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[6]))
 	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
 	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[10]))
 
-	for idx := 0; idx < len(statsCol); idx++ {
+	for idx := 0; idx < len(stateCol); idx++ {
 		var objEntry ObjectEntry
 
-		objEntry.ObjectStats = objectio.ObjectStats(statsCol[idx])
+		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
-
-		if old, ok := p.dataObjects.Get(objEntry); ok {
-			// if overwritten delete
-			if !old.DeleteTime.IsEmpty() && deleteTSCol[idx].IsEmpty() {
-				logutil.Errorf("overwritten data objects delete time to 0-0:\n old: %s\n new: %s",
-					old.String(), objEntry.String())
-			}
-		}
+		objEntry.Sorted = sortedCol[idx]
 
 		p.dataObjects.Set(objEntry)
 	}
