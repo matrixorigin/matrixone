@@ -35,7 +35,7 @@ var (
 	internalProcesses = map[string]*process.Process{}
 )
 
-// LockTableWithUniqueID is similar to LockTable, but used to lock a table directly based on
+// LockTableWithUniqueID is similar to lockTable, but used to lock a table directly based on
 // a unique identifier, without using an external transaction.
 func LockTableWithUniqueID(
 	ctx context.Context,

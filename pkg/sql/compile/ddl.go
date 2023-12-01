@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"math"
 	"strings"
 
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1238,164 +1238,13 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) erro
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
-func doTruncateTable(
-	c *Compile,
-	dbName string,
-	tableName string,
-	tableId uint64,
-	partitionTableNames []string,
-	indexTableNames []string,
-	foreignTbl []uint64,
-	keepAutoIncrement bool,
-) error {
-	var dbSource engine.Database
-	var rel engine.Relation
-	var err error
-	var isTemp bool
-	var newTblId uint64
-	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-
-	if rel, err = dbSource.Relation(c.ctx, tableName, nil); err != nil {
-		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
-		if e != nil {
-			return err
-		}
-		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tableName), nil)
-		if e != nil {
-			return err
-		}
-		isTemp = true
-	}
-
-	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
-		var err error
-		if e := lockMoTable(c, dbName, tableName, lock.LockMode_Shared); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		// before dropping table, lock it.
-		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, false); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	if isTemp {
-		// memory engine truncate always return 0, so for temporary table, just use origin tableId as newTblId
-		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tableName))
-		newTblId = rel.GetTableID(c.ctx)
-	} else {
-		newTblId, err = dbSource.Truncate(c.ctx, tableName)
-	}
-
-	if err != nil {
-		return err
-	}
-
-	// Truncate Index Tables if needed
-	for _, name := range indexTableNames {
-		var err error
-		if isTemp {
-			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
-		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	//Truncate Partition subTable if needed
-	for _, name := range partitionTableNames {
-		var err error
-		if isTemp {
-			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
-		} else {
-			_, err = dbSource.Truncate(c.ctx, name)
-		}
-		if err != nil {
-			return err
-		}
-	}
-
-	// update tableDef of foreign key's table with new table id
-	for _, fTblId := range foreignTbl {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fTblId)
-		if err != nil {
-			return err
-		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
-		if err != nil {
-			return err
-		}
-		var oldCt *engine.ConstraintDef
-		for _, def := range fkTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				break
-			}
-		}
-		for _, ct := range oldCt.Cts {
-			if def, ok := ct.(*engine.RefChildTableDef); ok {
-				for idx, refTable := range def.Tables {
-					if refTable == tableId {
-						def.Tables[idx] = newTblId
-						break
-					}
-				}
-				break
-			}
-		}
-		if err != nil {
-			return err
-		}
-		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
-		if err != nil {
-			return err
-		}
-
-	}
-
-	if isTemp {
-		tableId = rel.GetTableID(c.ctx)
-	}
-	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
-		c.ctx,
-		tableId,
-		newTblId,
-		keepAutoIncrement,
-		c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-
-	// update index information in mo_catalog.mo_indexes
-	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newTblId, tableId)
-	err = c.runSql(updateSql)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 // TruncateTable Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
 	truncateTbl := s.Plan.GetDdl().GetTruncateTable()
-	return doTruncateTable(
-		c,
+	return deletion.TruncateTable(
+		c.ctx,
+		c.e,
+		c.proc,
 		truncateTbl.GetDatabase(),
 		truncateTbl.GetTable(),
 		truncateTbl.GetTableId(),
@@ -2345,85 +2194,6 @@ func getInterfaceValue[T constraints.Integer](val interface{}) T {
 	return 0
 }
 
-func doLockTable(
-	eng engine.Engine,
-	proc *process.Process,
-	rel engine.Relation,
-	defChanged bool) error {
-	id := rel.GetTableID(proc.Ctx)
-	defs, err := rel.GetPrimaryKeys(proc.Ctx)
-	if err != nil {
-		return err
-	}
-
-	if len(defs) != 1 {
-		panic("invalid primary keys")
-	}
-
-	err = lockop.LockTable(
-		eng,
-		proc,
-		id,
-		defs[0].Type,
-		defChanged)
-
-	return err
-}
-
-func lockTable(
-	ctx context.Context,
-	eng engine.Engine,
-	proc *process.Process,
-	rel engine.Relation,
-	dbName string,
-	partitionTableNames []string,
-	defChanged bool) error {
-
-	if len(partitionTableNames) == 0 {
-		return doLockTable(eng, proc, rel, defChanged)
-	}
-
-	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-
-	for _, tableName := range partitionTableNames {
-		pRel, pErr := dbSource.Relation(ctx, tableName, nil)
-		if pErr != nil {
-			return pErr
-		}
-		err = doLockTable(eng, proc, pRel, defChanged)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func lockRows(
-	eng engine.Engine,
-	proc *process.Process,
-	rel engine.Relation,
-	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-
-	if vec == nil || vec.Length() == 0 {
-		panic("lock rows is empty")
-	}
-
-	id := rel.GetTableID(proc.Ctx)
-
-	err := lockop.LockRows(
-		eng,
-		proc,
-		id,
-		vec,
-		*vec.GetType(),
-		lockMode)
-	return err
-}
-
 func maybeCreateAutoIncrement(
 	ctx context.Context,
 	db engine.Database,
@@ -2452,81 +2222,21 @@ func maybeCreateAutoIncrement(
 		txnOp)
 }
 
-func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
-	dbSource, err := c.e.Database(c.ctx, catalog.MO_CATALOG, c.proc.TxnOperator)
-	if err != nil {
-		return nil, err
-	}
-
-	rel, err := dbSource.Relation(c.ctx, tblName, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return rel, nil
-}
-
-func getLockVector(proc *process.Process, accountId uint32, names []string) (*vector.Vector, error) {
-	vecs := make([]*vector.Vector, len(names)+1)
-	defer func() {
-		for _, v := range vecs {
-			if v != nil {
-				proc.PutVector(v)
-			}
-		}
-	}()
-
-	// append account_id
-	accountIdVec := proc.GetVector(types.T_uint32.ToType())
-	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
-	if err != nil {
-		return nil, err
-	}
-	vecs[0] = accountIdVec
-	// append names
-	for i, name := range names {
-		nameVec := proc.GetVector(types.T_varchar.ToType())
-		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
-		vecs[i+1] = nameVec
-	}
-
-	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vecs, 1)
-	if err != nil {
-		return nil, err
-	}
-	return vec, nil
-}
-
 func lockMoDatabase(c *Compile, dbName string) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
-	if err != nil {
-		return err
-	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName})
-	if err != nil {
-		return err
-	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
-	return nil
+	return lockop.LockMoDatabase(c.ctx, c.e, c.proc, dbName)
+}
+
+func lockTable(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	dbName string,
+	partitionTableNames []string,
+	defChanged bool) error {
+	return lockop.LockTable(ctx, eng, proc, rel, dbName, partitionTableNames, defChanged)
 }
 
 func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
-	if err != nil {
-		return err
-	}
-	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName, tblName})
-	if err != nil {
-		return err
-	}
-	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
-		return err
-	}
-	return nil
+	return lockop.LockMoTable(c.ctx, c.e, c.proc, dbName, tblName, lockMode)
 }

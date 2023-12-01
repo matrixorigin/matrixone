@@ -269,9 +269,9 @@ func performLock(
 	return nil
 }
 
-// LockTable lock table, all rows in the table will be locked, and wait current txn
+// lockTable lock table, all rows in the table will be locked, and wait current txn
 // closed.
-func LockTable(
+func lockTable(
 	eng engine.Engine,
 	proc *process.Process,
 	tableID uint64,
@@ -619,7 +619,7 @@ func (arg *Argument) AddLockTargetWithMode(
 	return arg
 }
 
-// LockTable lock all table, used for delete, truncate and drop table
+// lockTable lock all table, used for delete, truncate and drop table
 func (arg *Argument) LockTable(
 	tableID uint64,
 	changeDef bool) *Argument {
@@ -629,7 +629,7 @@ func (arg *Argument) LockTable(
 		changeDef)
 }
 
-// LockTableWithMode is similar to LockTable, but with specify
+// LockTableWithMode is similar to lockTable, but with specify
 // lock mode
 func (arg *Argument) LockTableWithMode(
 	tableID uint64,

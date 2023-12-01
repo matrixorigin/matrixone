@@ -1132,20 +1132,16 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_DELETE:
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		if n.DeleteCtx.CanTruncate {
+			rs := c.newMergeScope(nil)
 			arg, err := constructDeletion(n, c.e, c.proc)
 			if err != nil {
 				return nil, err
 			}
-			ss := []*Scope{{
-				Magic: Deletion,
-				Plan:  c.pn,
-				Instructions: vm.Instructions{
-					{
-						Op:  vm.Deletion,
-						Arg: arg,
-					},
-				},
-			}}
+			rs.Instructions = append(rs.Instructions, vm.Instruction{
+				Op:  vm.Deletion,
+				Arg: arg,
+			})
+			ss := []*Scope{rs}
 			return ss, nil
 		}
 		curr := c.anal.curr
