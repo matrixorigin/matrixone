@@ -540,6 +540,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if s.User == db_holder.MOLoggerUser {
 		goto DiscardAndFreeL
 	}
+
+	// Filter out exported statement
+	if s.exported {
+		goto DiscardAndFreeL
+	}
+
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
