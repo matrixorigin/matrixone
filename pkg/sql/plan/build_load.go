@@ -154,7 +154,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	return pn, nil
 }
 
-
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
 	if param.Local {
 		return "", nil
