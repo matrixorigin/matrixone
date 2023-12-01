@@ -218,3 +218,15 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Equal(t, int64(8), memCache2.cache.Used())
 
 }
+
+func TestLocalFSEmptyRootPath(t *testing.T) {
+	fs, err := NewLocalFS(
+		context.Background(),
+		"test",
+		"",
+		CacheConfig{},
+		nil,
+	)
+	assert.Nil(t, err)
+	assert.NotNil(t, fs)
+}
