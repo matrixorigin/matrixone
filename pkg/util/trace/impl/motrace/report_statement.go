@@ -60,28 +60,54 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
-	// fixme: if recording status=Running entity, here has data-trace issue.
-	// Should clone the StatementInfo as new one.
+	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
-		// process the execplan
+
+		// execute the stat plan
 		s.ExecPlan2Stats(ctx)
-		// remove the plan
+
+		// remove the plan, s will be free
 		s.jsonByte = nil
 		s.FreeExecPlan()
 
-		// remove the TransacionID
-		s.TransactionID = NilTxnID
-		s.StatementTag = ""
-		s.StatementFingerprint = ""
-		s.Error = nil
-		s.AggrCount = 1
-		s.Database = ""
-		s.StmtBuilder.WriteString(s.Statement)
+		// copy value
+		stmt.StatementID = s.StatementID
+		stmt.SessionID = s.SessionID
+		stmt.Account = s.Account
+		stmt.User = s.User
+		stmt.Host = s.Host
+		stmt.RoleId = s.RoleId
+		stmt.StatementType = s.StatementType
+		stmt.QueryType = s.QueryType
+		stmt.SqlSourceType = s.SqlSourceType
+		stmt.Statement = s.Statement
+		stmt.StmtBuilder.WriteString(s.Statement)
+		stmt.Status = s.Status
+		stmt.Duration = s.Duration
+		stmt.ResultCount = s.ResultCount
+		stmt.RowsRead = s.RowsRead
+		stmt.BytesScan = s.BytesScan
+		stmt.ConnType = s.ConnType
+		stmt.statsArray = s.statsArray
+		stmt.RequestAt = s.RequestAt
+		stmt.ResponseAt = s.ResponseAt
+		stmt.end = s.end
+
+		// remove the TransactionID
+		stmt.TransactionID = NilTxnID
+		// modified value
+		stmt.StatementTag = ""
+		stmt.StatementFingerprint = ""
+		stmt.Error = nil
+		stmt.AggrCount = 1
+		stmt.Database = ""
 		duration := s.Duration
-		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
-		s.RequestAt = s.ResponseAt.Truncate(windowSize)
-		s.ResponseAt = s.RequestAt.Add(windowSize)
-		return s
+		stmt.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(stmt.statsArray.GetMemorySize() * float64(duration)))
+		stmt.RequestAt = stmt.ResponseAt.Truncate(windowSize)
+		stmt.ResponseAt = stmt.RequestAt.Add(windowSize)
+
+		// mark both statement export as true
+		return stmt
 	}
 	return nil
 }
@@ -120,6 +146,7 @@ func StatementInfoFilter(i Item) bool {
 		return false
 	}
 
+	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
 		return false
 	}
