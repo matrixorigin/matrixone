@@ -89,14 +89,6 @@ func IsCreateDropSequence(stmt tree.Statement) bool {
 	return false
 }
 
-func IsDropDatabase(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.DropDatabase:
-		return true
-	}
-	return false
-}
-
 /*
 NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
 in an active transaction.
@@ -109,7 +101,7 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsDropDatabase(stmt) || IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
 }
 
 /*
