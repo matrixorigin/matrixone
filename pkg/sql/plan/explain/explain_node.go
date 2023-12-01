@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"

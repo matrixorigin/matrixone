@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
