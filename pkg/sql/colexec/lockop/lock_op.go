@@ -371,6 +371,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if vec.IsConstNull() {
+		return false, false, timestamp.Timestamp{}, nil
+	}
+
 	if opts.maxCountPerLock == 0 {
 		opts.maxCountPerLock = int(lockService.GetConfig().MaxLockRowCount)
 	}
