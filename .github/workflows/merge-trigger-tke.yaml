@@ -309,7 +309,7 @@ jobs:
           ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
 
       - name: Check MO Status and Collect Trace
-        if: ${{ steps.step_ssb_test.conclusion != 'success' }}
+        if: ${{  always() && steps.step_ssb_test.conclusion != 'success' }}
         run: |
           set -x
           unset https_proxy
@@ -329,7 +329,7 @@ jobs:
           curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
 
       - uses: actions/upload-artifact@v3
-        if: ${{ steps.step_ssb_test.conclusion != 'success' }}
+        if: ${{ always() && steps.step_ssb_test.conclusion != 'success' }}
         with:
           name: mo-cluster-trace-${{ github.event.pull_request.number }}-ssb
           path: |
@@ -352,7 +352,7 @@ jobs:
           ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Check MO Status and Collect Trace
-        if: ${{ steps.load_tpch_data.conclusion != 'success' }}
+        if: ${{ always() && steps.load_tpch_data.conclusion != 'success' }}
         run: |
           set -x
           unset https_proxy
@@ -372,7 +372,7 @@ jobs:
           curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
 
       - uses: actions/upload-artifact@v3
-        if: ${{ steps.load_tpch_data.conclusion != 'success' }}
+        if: ${{ always() && steps.load_tpch_data.conclusion != 'success' }}
         with:
           name: mo-cluster-trace-${{ github.event.pull_request.number }}-load-tpch
           path: |
@@ -394,7 +394,7 @@ jobs:
           ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
 
       - name: Check MO Status and Collect Trace
-        if: ${{ steps.step_tpch_test.conclusion != 'success' }}
+        if: ${{ always() && steps.step_tpch_test.conclusion != 'success' }}
         run: |
           set -x
           unset https_proxy
@@ -414,7 +414,7 @@ jobs:
           curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
 
       - uses: actions/upload-artifact@v3
-        if: ${{ steps.step_tpch_test.conclusion != 'success' }}
+        if: ${{ always() && steps.step_tpch_test.conclusion != 'success' }}
         with:
           name: mo-cluster-trace-${{ github.event.pull_request.number }}-tpch
           path: |
