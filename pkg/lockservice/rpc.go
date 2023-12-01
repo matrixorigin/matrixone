@@ -81,7 +81,7 @@ func NewClient(cfg morpc.Config) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
-	if err := runtime.CheckMethodVersion(ctx, methodVersions, request); err != nil {
+	if err := checkMethodVersion(ctx, request); err != nil {
 		return nil, err
 	}
 	f, err := c.AsyncSend(ctx, request)
@@ -104,6 +104,10 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 		return nil, err
 	}
 	return resp, nil
+}
+
+func checkMethodVersion(ctx context.Context, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {

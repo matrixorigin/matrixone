@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/cache"
 )
 
-var methodVersion = map[cache.CmdMethod]int64{
+var methodVersions = map[cache.CmdMethod]int64{
 	cache.CmdMethod_RemoteRead: defines.MORPCVersion1,
 }
 
@@ -89,7 +89,7 @@ func (c *cacheClient) SendMessage(
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
 	}
-	if err := runtime.CheckMethodVersion(ctx, methodVersion, req); err != nil {
+	if err := checkMethodVersion(ctx, req); err != nil {
 		return nil, err
 	}
 	f, err := c.client.Send(ctx, address, req)
@@ -121,4 +121,8 @@ func (c *cacheClient) unwrapResponseError(resp *cache.Response) (*cache.Response
 		return nil, err
 	}
 	return resp, nil
+}
+
+func checkMethodVersion(ctx context.Context, req *cache.Request) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }
