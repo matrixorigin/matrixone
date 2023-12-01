@@ -28,6 +28,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+// 1. show accounts
+//
+//	internal `show accounts`       --------\
+//										    |<=====> cn cache <====> (missed or expired) ===> tn cache
+//  mysql client `show accounts`   --------/
+//
+//
+// 2. collecting storage usage
+//
+// when doing incremental ckp
+//
+//	1. collect phase:
+//		1. collect database deletes
+//  	2. collect table deletes
+//		3. collect segment deletes and inserts
+//
+//  2. apply phase
+//		1. apply all deletes to tn cache and ckp batch[StorageUsageDel]
+//		2. apply segment inserts to cache and batch[StorageUsageIns]
+//
+//
+// when doing global checkpoint
+//
+//	1. replay all changes stored in tn cache into the global ckp batch
+//
+//
+// when tn restart
+//
+//	1. replay all changes stored in ckp batches into the tn cache
+//
+//
+
 const (
 	UsageAccID uint8 = iota
 	UsageDBID
@@ -153,10 +185,6 @@ func GetTNUsageMemo() *TNUsageMemo {
 	return tnUsageMemo
 }
 
-func (m *TNUsageMemo) GetCacheIter() btree.IterG[UsageData_] {
-	return m.cache.data.Iter()
-}
-
 func (m *TNUsageMemo) EnterProcessing() {
 	m.Lock()
 }
@@ -263,6 +291,7 @@ func (m *TNUsageMemo) applySegInserts(inserts []UsageData_, ckpData *CheckpointD
 
 func (m *TNUsageMemo) applySegDeletes(deletes []UsageData_, ckpData *CheckpointData, mp *mpool.MPool) {
 	for _, usage := range deletes {
+		// can not delete a non-exist usage, right?
 		if _, exist := tnUsageMemo.cache.data.Get(usage); exist {
 			appendToStorageUsageBat_(ckpData, usage, true, mp)
 			tnUsageMemo.Update(usage, true)
@@ -279,11 +308,17 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
+// EstablishFromCKPs replays usage info stored in ckps into tn cache
 func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 
 	for x := range entries {
+		if vers[x] < CheckpointVersion9 {
+			// haven't StorageUsageIns batch
+			continue
+		}
+
 		insVecs := getStorageUsageBatVectors_(entries[x].bats[StorageUsageInsIDX])
 
 		for y := 0; y < insVecs[UsageAccID].Length(); y++ {
@@ -312,11 +347,6 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		}
 	}
 
-	iter := tnUsageMemo.cache.data.Iter()
-	for iter.Next() {
-		fmt.Println(iter.Item())
-	}
-	iter.Release()
 }
 
 // the returned order:
