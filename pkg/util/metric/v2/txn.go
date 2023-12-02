@@ -268,4 +268,16 @@ var (
 	TxnBlockReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("block-reader")
 	TxnMergeReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("merge-reader")
 	TxnBlockMergeReaderDurationHistogram = txnReaderDurationHistogram.WithLabelValues("block-merge-reader")
+
+	txnRangesSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_selectivity_percentage",
+			Help:      "Bucketed histogram of fast ranges selectivity percentage.",
+			Buckets:   prometheus.LinearBuckets(0, 0.05, 21),
+		}, []string{"type"})
+	TxnRangesBlockSelectivityHistogram     = txnRangesSelectivityHistogram.WithLabelValues("block_selectivity")
+	TxnFastRangesBlockSelectivityHistogram = txnRangesSelectivityHistogram.WithLabelValues("fast_block_selectivity")
+	TxnFastRangesZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_zm_selectivity")
 )

@@ -126,6 +126,8 @@ func initTxnMetrics() {
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
+
+	registry.MustRegister(txnRangesSelectivityHistogram)
 }
 
 func initRPCMetrics() {

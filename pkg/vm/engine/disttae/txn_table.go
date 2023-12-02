@@ -852,6 +852,7 @@ func (tbl *txnTable) rangesOnePart(
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
+	v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	return
 }
 
@@ -886,16 +887,24 @@ func (tbl *txnTable) tryFastRanges(
 		meta     objectio.ObjectDataMeta
 		bf       objectio.BloomFilter
 		blockCnt uint32
+		zmTotal  float64 = 1
+		zmHit    float64
 	)
+
+	defer func() {
+		v2.TxnFastRangesZMapSelectivityHistogram.Observe(zmHit / zmTotal)
+	}()
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			zmTotal++
 			blockCnt += obj.BlkCnt()
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
 				if !obj.SortKeyZoneMap().ContainsKey(val) {
+					zmHit++
 					return
 				}
 				zmCkecked = true
@@ -982,6 +991,7 @@ func (tbl *txnTable) tryFastRanges(
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
+	v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	return
 }
 
