@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -454,7 +455,7 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
 			err = e
 		} else {
-			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(), cols)
+			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(nil), cols)
 		}
 		return true
 	})
