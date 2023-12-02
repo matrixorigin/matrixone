@@ -607,7 +607,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts, client.WithLockService(s.lockService))
+		opts = append(opts,
+			client.WithLockService(s.lockService),
+			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+		)
 		c = client.NewTxnClient(
 			sender,
 			opts...)
@@ -622,6 +625,11 @@ func (s *service) initLockService() {
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
+	}
 }
 
 // put the waiting-next type msg into client session's cache and return directly
