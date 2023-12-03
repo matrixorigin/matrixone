@@ -14,6 +14,8 @@
 
 package defines
 
+import "math"
+
 // Header information.
 const (
 	OKHeader          byte = 0x00
@@ -40,5 +42,7 @@ const (
 )
 
 const (
-	MORPCVersion1 = "v1"
+	MORPCMinVersion    int64 = math.MinInt64
+	MORPCVersion1      int64 = 1
+	MORPCLatestVersion       = MORPCVersion1
 )

@@ -695,13 +695,48 @@ func TestCosineSimilarity(t *testing.T) {
 	}
 	tests := []testCase{
 		{
-			name: "Test1 - float32",
+			name: "Test1.a - float32",
 			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{1, 2, 3}},
 			want: 1,
 		},
 		{
-			name: "Test2 - float64",
+			name: "Test1.b - float32",
+			args: args{argLeftF32: []float32{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}, argRightF32: []float32{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}},
+			want: 1,
+		},
+		{
+			name: "Test2.a - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{1, 2, 3}},
+			want: 1,
+		},
+		{
+			name: "Test2.b - float64",
+			args: args{argLeftF64: []float64{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}, argRightF64: []float64{0.46323407, 23.498016, 563.923, 56.076736, 8732.958}},
+			want: 1,
+		},
+		{
+			name: "Test2.c - float64",
+			args: args{argLeftF64: []float64{0.8166459, 0.66616553, 0.4886152}, argRightF64: []float64{0.8166459, 0.66616553, 0.4886152}},
+			want: 1,
+		},
+		{
+			name: "Test2.d - float64",
+			args: args{argLeftF64: []float64{8.5606893, 6.7903588, 821.977768}, argRightF64: []float64{8.5606893, 6.7903588, 821.977768}},
+			want: 1,
+		},
+		{
+			name: "Test2.e - float64",
+			args: args{argLeftF64: []float64{0.9260021, 0.26637346, 0.06567037}, argRightF64: []float64{0.9260021, 0.26637346, 0.06567037}},
+			want: 1,
+		},
+		{
+			name: "Test2.f - float64",
+			args: args{argLeftF64: []float64{0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764}, argRightF64: []float64{0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764}},
+			want: 1,
+		},
+		{
+			name: "Test2.g - float64",
+			args: args{argLeftF64: []float64{0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881}, argRightF64: []float64{0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881}},
 			want: 1,
 		},
 	}
@@ -709,12 +744,12 @@ func TestCosineSimilarity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !reflect.DeepEqual(tt.want, gotRes) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !reflect.DeepEqual(tt.want, gotRes) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}
