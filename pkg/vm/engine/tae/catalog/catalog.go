@@ -44,11 +44,11 @@ import (
 const (
 	SnapshotAttr_TID             = "table_id"
 	SnapshotAttr_DBID            = "db_id"
-	SegmentAttr_ID               = "id"
-	SegmentAttr_CreateAt         = "create_at"
-	SegmentAttr_SegNode          = "seg_node"
+	ObjectAttr_ID               = "id"
+	ObjectAttr_CreateAt         = "create_at"
+	ObjectAttr_SegNode          = "seg_node"
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
-	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
+	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
 	SnapshotAttr_SchemaExtra     = "schema_extra"
 	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
 	AccountIDDbName              = "account_id_db_name"
@@ -156,7 +156,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		}
 		return nil
 	}
-	processor.SegmentFn = func(se *SegmentEntry) error {
+	processor.ObjectFn = func(se *ObjectEntry) error {
 		se.RLock()
 		needGC := se.DeleteBefore(ts)
 		se.RUnlock()
@@ -171,7 +171,7 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		needGC := be.DeleteBefore(ts)
 		be.RUnlock()
 		if needGC {
-			seg := be.segment
+			seg := be.object
 			seg.RemoveEntry(be)
 		}
 		return nil
@@ -198,8 +198,8 @@ func (catalog *Catalog) ReplayCmd(
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
 		catalog.onReplayUpdateTable(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Object:
-		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *SegmentNode])
-		catalog.onReplayUpdateSegment(cmd, dataFactory, observer)
+		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *ObjectNode])
+		catalog.onReplayUpdateObject(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Block:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
 		catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
@@ -405,7 +405,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.AcInfo.CreateAt = ins.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).Get(i).(types.Timestamp)
 		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
 		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
-		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
+		schema.ObjectMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_ObjectMaxBlock).Get(i).(uint16)
 		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
 		schema.MustRestoreExtra(extra)
 		schema.Finalize(true)
@@ -508,11 +508,11 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	tbl.Insert(un)
 
 }
-func (catalog *Catalog) onReplayUpdateSegment(
-	cmd *EntryCommand[*ObjectMVCCNode, *SegmentNode],
+func (catalog *Catalog) onReplayUpdateObject(
+	cmd *EntryCommand[*ObjectMVCCNode, *ObjectNode],
 	dataFactory DataFactory,
 	observer wal.ReplayObserver) {
-	catalog.OnReplaySegmentID(cmd.node.SortHint)
+	catalog.OnReplayObjectID(cmd.node.SortHint)
 
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
@@ -524,7 +524,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
-	seg, err := tbl.GetSegmentByID(cmd.ID.ObjectID())
+	seg, err := tbl.GetObjectByID(cmd.ID.ObjectID())
 	un := cmd.mvccNode
 	if un.Is1PC() {
 		if err := un.ApplyCommit(); err != nil {
@@ -532,11 +532,11 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		}
 	}
 	if err != nil {
-		seg = NewReplaySegmentEntry()
+		seg = NewReplayObjectEntry()
 		seg.ID = *cmd.ID.ObjectID()
 		seg.table = tbl
 		seg.Insert(un)
-		seg.SegmentNode = cmd.node
+		seg.ObjectNode = cmd.node
 		tbl.AddEntryLocked(seg)
 	} else {
 		node := seg.SearchNode(un)
@@ -548,7 +548,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 }
 
-func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch) {
+func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
 	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < dbidVec.Length(); i++ {
 		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -562,11 +562,11 @@ func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch) {
 		if !state {
 			entryState = ES_NotAppendable
 		}
-		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, entryState)
+		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState)
 	}
 }
 
-func (catalog *Catalog) onReplayCheckpointSegment(
+func (catalog *Catalog) onReplayCheckpointObject(
 	dbid, tbid uint64,
 	segid *types.Objectid,
 	segNode *ObjectMVCCNode,
@@ -584,15 +584,15 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	seg, _ := rel.GetSegmentByID(segid)
+	seg, _ := rel.GetObjectByID(segid)
 	if seg == nil {
-		seg = NewReplaySegmentEntry()
+		seg = NewReplayObjectEntry()
 		seg.ID = *segid
 		seg.table = rel
-		seg.SegmentNode = &SegmentNode{
+		seg.ObjectNode = &ObjectNode{
 			state:    state,
 			sorted:   rel.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
-			SortHint: catalog.NextSegment(),
+			SortHint: catalog.NextObject(),
 		}
 		rel.AddEntryLocked(seg)
 	}
@@ -610,9 +610,9 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 }
 
 // Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
-// Replay segment by block.
+// Replay Object by block.
 // Original Size, Compressed Size and Block Number is skipped.
-func (catalog *Catalog) replaySegmentByBlock(
+func (catalog *Catalog) replayObjectByBlock(
 	tbl *TableEntry,
 	blkID types.Blockid,
 	state EntryState,
@@ -622,14 +622,14 @@ func (catalog *Catalog) replaySegmentByBlock(
 	create, delete bool,
 	txn txnif.TxnReader,
 	dataFactory DataFactory) {
-	segmentID := blkID.Object()
-	seg, _ := tbl.GetSegmentByID(segmentID)
+	ObjectID := blkID.Object()
+	seg, _ := tbl.GetObjectByID(ObjectID)
 	// create
 	if create {
 		if seg == nil {
-			seg = NewSegmentEntryOnReplay(
+			seg = NewObjectEntryOnReplay(
 				tbl,
-				segmentID,
+				ObjectID,
 				start, end, state)
 			tbl.AddEntryLocked(seg)
 		}
@@ -667,7 +667,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
-	catalog.replaySegmentByBlock(
+	catalog.replayObjectByBlock(
 		tbl,
 		cmd.ID.BlockID,
 		cmd.node.state,
@@ -679,7 +679,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
-	seg, err := tbl.GetSegmentByID(cmd.ID.ObjectID())
+	seg, err := tbl.GetObjectByID(cmd.ID.ObjectID())
 	if err != nil {
 		panic(err)
 	}
@@ -712,7 +712,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.BlockNode = cmd.node
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
-	blk.segment = seg
+	blk.object = seg
 	if blk.blkData == nil {
 		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 	} else {
@@ -772,7 +772,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	catalog.replaySegmentByBlock(
+	catalog.replayObjectByBlock(
 		rel,
 		*blkid,
 		state,
@@ -784,7 +784,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		nil,
 		dataFactory)
-	seg, err := rel.GetSegmentByID(segid)
+	seg, err := rel.GetObjectByID(segid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
@@ -799,7 +799,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	if blk == nil {
 		blk = NewReplayBlockEntry()
 		blk.BlockNode = &BlockNode{}
-		blk.segment = seg
+		blk.object = seg
 		blk.ID = *blkid
 		blk.state = state
 		seg.ReplayAddEntryLocked(blk)
@@ -859,7 +859,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	catalog.replaySegmentByBlock(
+	catalog.replayObjectByBlock(
 		rel,
 		*blkid,
 		ES_Appendable, // state is not used when delete
@@ -871,7 +871,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		true,
 		nil,
 		nil)
-	seg, err := rel.GetSegmentByID(segid)
+	seg, err := rel.GetObjectByID(segid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)

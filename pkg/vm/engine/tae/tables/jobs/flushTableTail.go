@@ -93,13 +93,13 @@ func NewFlushTableTailTask(
 		dirtyEndTs: dirtyEndTs,
 	}
 	meta := blks[0]
-	dbId := meta.GetSegment().GetTable().GetDB().ID
+	dbId := meta.GetObject().GetTable().GetDB().ID
 	task.dbid = dbId
 	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	tableId := meta.GetSegment().GetTable().ID
+	tableId := meta.GetObject().GetTable().ID
 	rel, err := database.UnsafeGetRelation(tableId)
 	task.rel = rel
 	if err != nil {
@@ -109,8 +109,8 @@ func NewFlushTableTailTask(
 
 	for _, blk := range blks {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Segment
-		seg, err = rel.GetSegment(&meta.GetSegment().ID)
+		var seg handle.Object
+		seg, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
@@ -136,8 +136,8 @@ func NewFlushTableTailTask(
 	task.dirtyLen = len(tblEntry.DeletedDirties)
 	for _, blk := range tblEntry.DeletedDirties {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Segment
-		seg, err = rel.GetSegment(&meta.GetSegment().ID)
+		var seg handle.Object
+		seg, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
@@ -418,18 +418,18 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 	if len(readedBats) == 0 {
 		//just  soft delete all ablks and return
-		segmentsToDelete := make(map[types.Objectid]handle.Segment)
+		ObjectsToDelete := make(map[types.Objectid]handle.Object)
 		for _, blk := range task.ablksHandles {
-			seg := blk.GetSegment()
+			seg := blk.GetObject()
 			if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
 				return err
 			}
-			segmentsToDelete[*seg.GetID()] = seg
+			ObjectsToDelete[*seg.GetID()] = seg
 		}
-		// delete all segments
-		for _, seg := range segmentsToDelete {
+		// delete all Objects
+		for _, seg := range ObjectsToDelete {
 			tbl := seg.GetRelation()
-			if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
+			if err = tbl.SoftDeleteObject(seg.GetID()); err != nil {
 				return err
 			}
 		}
@@ -438,13 +438,13 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// create new object to hold merged blocks
-	var toSegmentEntry *catalog.SegmentEntry
-	var toSegmentHandle handle.Segment
-	if toSegmentHandle, err = task.rel.CreateNonAppendableSegment(false); err != nil {
+	var toObjectEntry *catalog.ObjectEntry
+	var toObjectHandle handle.Object
+	if toObjectHandle, err = task.rel.CreateNonAppendableObject(false); err != nil {
 		return
 	}
-	toSegmentEntry = toSegmentHandle.GetMeta().(*catalog.SegmentEntry)
-	toSegmentEntry.SetSorted()
+	toObjectEntry = toObjectHandle.GetMeta().(*catalog.ObjectEntry)
+	toObjectEntry.SetSorted()
 
 	// prepare merge
 	// pick the sort key or first column to run first merge, determing the ordering
@@ -495,7 +495,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	writtenBatches := make([]*containers.Batch, 0, len(orderedVecs))
 	task.createdBlkHandles = make([]handle.Block, 0, len(orderedVecs))
 	for i := range orderedVecs {
-		blk, err := toSegmentHandle.CreateNonAppendableBlock(
+		blk, err := toObjectHandle.CreateNonAppendableBlock(
 			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
@@ -532,7 +532,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// write!
-	name := objectio.BuildObjectNameWithObjectID(&toSegmentEntry.ID)
+	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -567,21 +567,21 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	toSegmentHandle.UpdateStats(writer.Stats())
+	toObjectHandle.UpdateStats(writer.Stats())
 
-	segmentsToDelete := make(map[types.Objectid]handle.Segment)
+	ObjectsToDelete := make(map[types.Objectid]handle.Object)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
-		seg := blk.GetSegment()
+		seg := blk.GetObject()
 		if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
 			return err
 		}
-		segmentsToDelete[*seg.GetID()] = seg
+		ObjectsToDelete[*seg.GetID()] = seg
 	}
-	// delete all segments
-	for _, seg := range segmentsToDelete {
+	// delete all Objects
+	for _, seg := range ObjectsToDelete {
 		tbl := seg.GetRelation()
-		if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
+		if err = tbl.SoftDeleteObject(seg.GetID()); err != nil {
 			return err
 		}
 	}
@@ -660,7 +660,7 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 		if err = task.ablksHandles[i].UpdateMetaLoc(metaLocABlk); err != nil {
 			return
 		}
-		if err = task.ablksHandles[i].GetSegment().UpdateStats(subtask.stat); err != nil {
+		if err = task.ablksHandles[i].GetObject().UpdateStats(subtask.stat); err != nil {
 			return
 		}
 		if subtask.delta == nil {

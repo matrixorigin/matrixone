@@ -149,7 +149,7 @@ func TestTable(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 	{
 		txn, _ := mgr.StartTxn(nil)
 		db, err := txn.CreateDatabase("db", "", "")
@@ -196,7 +196,7 @@ func TestAppend(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
@@ -215,7 +215,7 @@ func TestAppend(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
 	assert.Equal(t, int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, int(brows), int(tbl.localSegment.index.Count()))
+	assert.Equal(t, int(brows), int(tbl.localObject.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[0])
 	assert.NotNil(t, err)
@@ -225,14 +225,14 @@ func TestAppend(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	assert.Equal(t, 2*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 2*int(brows), int(tbl.localSegment.index.Count()))
+	assert.Equal(t, 2*int(brows), int(tbl.localObject.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[2])
 	assert.Nil(t, err)
 	err = tbl.Append(context.Background(), bats[2])
 	assert.Nil(t, err)
 	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 3*int(brows), int(tbl.localSegment.index.Count()))
+	assert.Equal(t, 3*int(brows), int(tbl.localObject.index.Count()))
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -314,7 +314,7 @@ func TestLoad(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(14, 13)
 	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 60000)
 	defer bat.Close()
@@ -347,7 +347,7 @@ func TestNodeCommand(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(14, 13)
 	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 15000)
 	defer bat.Close()
@@ -364,7 +364,7 @@ func TestNodeCommand(t *testing.T) {
 	err = tbl.RangeDeleteLocalRows(100, 200)
 	assert.NoError(t, err)
 
-	for i, inode := range tbl.localSegment.nodes {
+	for i, inode := range tbl.localObject.nodes {
 		cmd, err := inode.MakeCommand(uint32(i))
 		assert.NoError(t, err)
 		assert.NotNil(t, cmd.(*AppendCmd).Data)
@@ -593,7 +593,7 @@ func TestTransaction3(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSegment1(t *testing.T) {
+func TestObject1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
@@ -610,7 +610,7 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateSegment(false)
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
@@ -620,23 +620,23 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segIt := rel.MakeSegmentIt()
+	segIt := rel.MakeObjectIt()
 	cnt := 0
 	for segIt.Valid() {
-		iseg := segIt.GetSegment()
+		iseg := segIt.GetObject()
 		t.Log(iseg.String())
 		cnt++
 		segIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
-	_, err = rel.CreateSegment(false)
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 
-	segIt = rel.MakeSegmentIt()
+	segIt = rel.MakeObjectIt()
 	cnt = 0
 	for segIt.Valid() {
-		iseg := segIt.GetSegment()
+		iseg := segIt.GetObject()
 		t.Log(iseg.String())
 		cnt++
 		segIt.Next()
@@ -646,10 +646,10 @@ func TestSegment1(t *testing.T) {
 	txn3, _ := mgr.StartTxn(nil)
 	db, _ = txn3.GetDatabase(name)
 	rel, _ = db.GetRelationByName(schema.Name)
-	segIt = rel.MakeSegmentIt()
+	segIt = rel.MakeObjectIt()
 	cnt = 0
 	for segIt.Valid() {
-		iseg := segIt.GetSegment()
+		iseg := segIt.GetObject()
 		t.Log(iseg.String())
 		cnt++
 		segIt.Next()
@@ -659,10 +659,10 @@ func TestSegment1(t *testing.T) {
 	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
 
-	segIt = rel.MakeSegmentIt()
+	segIt = rel.MakeObjectIt()
 	cnt = 0
 	for segIt.Valid() {
-		iseg := segIt.GetSegment()
+		iseg := segIt.GetObject()
 		t.Log(iseg.String())
 		cnt++
 		segIt.Next()
@@ -670,7 +670,7 @@ func TestSegment1(t *testing.T) {
 	assert.Equal(t, 1, cnt)
 }
 
-func TestSegment2(t *testing.T) {
+func TestObject2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
@@ -686,15 +686,15 @@ func TestSegment2(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	segCnt := 10
 	for i := 0; i < segCnt; i++ {
-		_, err := rel.CreateSegment(false)
+		_, err := rel.CreateObject(false)
 		assert.Nil(t, err)
 	}
 
-	it := rel.MakeSegmentIt()
+	it := rel.MakeObjectIt()
 	cnt := 0
 	for it.Valid() {
 		cnt++
-		// iseg := it.GetSegment()
+		// iseg := it.GetObject()
 		it.Next()
 	}
 	assert.Equal(t, segCnt, cnt)
@@ -717,7 +717,7 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateNonAppendableSegment(false)
+	seg, _ := rel.CreateNonAppendableObject(false)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {
@@ -738,10 +738,10 @@ func TestBlock1(t *testing.T) {
 	txn2, _ := mgr.StartTxn(nil)
 	db, _ = txn2.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
-	segIt := rel.MakeSegmentIt()
+	segIt := rel.MakeObjectIt()
 	cnt = 0
 	for segIt.Valid() {
-		seg = segIt.GetSegment()
+		seg = segIt.GetObject()
 		it = seg.MakeBlockIt()
 		for it.Valid() {
 			cnt++
@@ -764,7 +764,7 @@ func TestDedup1(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 20
-	schema.SegmentMaxBlocks = 4
+	schema.ObjectMaxBlocks = 4
 	cnt := uint64(10)
 	rows := uint64(schema.BlockMaxRows) / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))

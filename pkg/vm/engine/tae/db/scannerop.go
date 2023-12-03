@@ -33,8 +33,8 @@ type ScannerOp interface {
 }
 
 // segHelper holds some temp statistics and founds deletable segemnts of a table.
-// If a segment has no any non-dropped blocks, it can be deleted. Except the
-// segment has the max segment id, appender may creates block in it.
+// If a Object has no any non-dropped blocks, it can be deleted. Except the
+// Object has the max Object id, appender may creates block in it.
 type segHelper struct {
 	// Statistics
 	segHasNonDropBlk     bool
@@ -42,16 +42,16 @@ type segHelper struct {
 	segIsSorted          bool
 	isCreating           bool
 
-	// Found deletable segments
+	// Found deletable Objects
 	maxSegId    uint64
-	segCandids  []*catalog.SegmentEntry // appendable
-	nsegCandids []*catalog.SegmentEntry // non-appendable
+	segCandids  []*catalog.ObjectEntry // appendable
+	nsegCandids []*catalog.ObjectEntry // non-appendable
 }
 
 func newSegHelper() *segHelper {
 	return &segHelper{
-		segCandids:  make([]*catalog.SegmentEntry, 0),
-		nsegCandids: make([]*catalog.SegmentEntry, 0),
+		segCandids:  make([]*catalog.ObjectEntry, 0),
+		nsegCandids: make([]*catalog.ObjectEntry, 0),
 	}
 }
 
@@ -70,13 +70,13 @@ func (d *segHelper) resetForNewSeg() {
 	d.segRowDel = 0
 }
 
-// call this when a non dropped block was found when iterating blocks of a segment,
-// which make the builder skip this segment
+// call this when a non dropped block was found when iterating blocks of a Object,
+// which make the builder skip this Object
 func (d *segHelper) hintNonDropBlock() {
 	d.segHasNonDropBlk = true
 }
 
-func (d *segHelper) push(entry *catalog.SegmentEntry) {
+func (d *segHelper) push(entry *catalog.ObjectEntry) {
 	isAppendable := entry.IsAppendable()
 	if isAppendable && d.maxSegId < entry.SortHint {
 		d.maxSegId = entry.SortHint
@@ -92,8 +92,8 @@ func (d *segHelper) push(entry *catalog.SegmentEntry) {
 	}
 }
 
-// copy out segment entries expect the one with max segment id.
-func (d *segHelper) finish() []*catalog.SegmentEntry {
+// copy out Object entries expect the one with max Object id.
+func (d *segHelper) finish() []*catalog.ObjectEntry {
 	sort.Slice(d.segCandids, func(i, j int) bool { return d.segCandids[i].SortHint < d.segCandids[j].SortHint })
 	if last := len(d.segCandids) - 1; last >= 0 && d.segCandids[last].SortHint == d.maxSegId {
 		d.segCandids = d.segCandids[:last]
@@ -101,7 +101,7 @@ func (d *segHelper) finish() []*catalog.SegmentEntry {
 	if len(d.segCandids) == 0 && len(d.nsegCandids) == 0 {
 		return nil
 	}
-	ret := make([]*catalog.SegmentEntry, len(d.segCandids)+len(d.nsegCandids))
+	ret := make([]*catalog.ObjectEntry, len(d.segCandids)+len(d.nsegCandids))
 	copy(ret[:len(d.segCandids)], d.segCandids)
 	copy(ret[len(d.segCandids):], d.nsegCandids)
 	return ret
@@ -114,7 +114,7 @@ type MergeTaskBuilder struct {
 	name string
 	tbl  *catalog.TableEntry
 
-	segmentHelper *segHelper
+	ObjectHelper *segHelper
 	objPolicy     merge.Policy
 	executor      *merge.MergeExecutor
 
@@ -127,7 +127,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
-		segmentHelper: newSegHelper(),
+		ObjectHelper: newSegHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
 		executor:      merge.NewMergeExecutor(db.Runtime),
 	}
@@ -135,13 +135,13 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
 	op.BlockFn = op.onBlock
-	op.SegmentFn = op.onSegment
-	op.PostSegmentFn = op.onPostSegment
+	op.ObjectFn = op.onObject
+	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
 	return op
 }
 
-func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, segs []*catalog.SegmentEntry) error {
+func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, segs []*catalog.ObjectEntry) error {
 	// stop new merge task
 	s.suspend.Store(true)
 	defer s.suspend.Store(false)
@@ -174,7 +174,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return
 	}
-	delSegs := s.segmentHelper.finish()
+	delSegs := s.ObjectHelper.finish()
 	s.executor.ExecuteFor(s.tbl, delSegs, s.objPolicy)
 }
 
@@ -185,7 +185,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.tbl = entry
 		s.name = entry.GetLastestSchema().Name
 	}
-	s.segmentHelper.reset()
+	s.ObjectHelper.reset()
 	s.objPolicy.ResetForTable(entry)
 }
 
@@ -227,33 +227,33 @@ func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err erro
 	return
 }
 
-func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
-	if !segmentEntry.IsActive() {
+func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error) {
+	if !objectEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	segmentEntry.RLock()
-	defer segmentEntry.RUnlock()
+	objectEntry.RLock()
+	defer objectEntry.RUnlock()
 
 	// Skip uncommitted entries
-	if !segmentEntry.IsCommitted() || !catalog.ActiveSegmentWithNoTxnFilter(segmentEntry.BaseEntryImpl) {
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 
-	s.segmentHelper.resetForNewSeg()
-	s.segmentHelper.segIsSorted = segmentEntry.IsSortedLocked()
+	s.ObjectHelper.resetForNewSeg()
+	s.ObjectHelper.segIsSorted = objectEntry.IsSortedLocked()
 	return
 }
 
-func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) {
-	s.segmentHelper.push(seg)
+func (s *MergeTaskBuilder) onPostObject(seg *catalog.ObjectEntry) (err error) {
+	s.ObjectHelper.push(seg)
 
-	if !seg.IsSorted() || s.segmentHelper.isCreating {
+	if !seg.IsSorted() || s.ObjectHelper.isCreating {
 		return nil
 	}
-	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
-	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
-	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
+	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
+	seg.Stat.SetRows(s.ObjectHelper.segRowCnt)
+	seg.Stat.SetRemainingRows(s.ObjectHelper.segRowCnt - s.ObjectHelper.segRowDel)
 
 	seg.LoadObjectInfo()
 
@@ -261,17 +261,17 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	return nil
 }
 
-// for sorted segments, we just collect the rows and dels on this segment
-// for non-sorted segments, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
+// for sorted Objects, we just collect the rows and dels on this Object
+// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
 func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	if !entry.IsActive() {
 		return
 	}
 	// it has active blk, this seg can't be deleted
-	s.segmentHelper.hintNonDropBlock()
+	s.ObjectHelper.hintNonDropBlock()
 
 	// this blk is not in a s3 object
-	if !s.segmentHelper.segIsSorted {
+	if !s.ObjectHelper.segIsSorted {
 		return
 	}
 
@@ -281,11 +281,11 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	// Skip uncommitted entries and appendable block
 	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) {
 		// txn appending metalocs
-		s.segmentHelper.isCreating = true
+		s.ObjectHelper.isCreating = true
 		return
 	}
 	if !catalog.NonAppendableBlkFilter(entry) {
-		panic("append block in sorted segment")
+		panic("append block in sorted Object")
 	}
 
 	// nblks in appenable segs or non-sorted non-appendable segs
@@ -294,7 +294,7 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	rows := entry.GetBlockData().Rows()
 	dels := entry.GetBlockData().GetTotalChanges()
 	entry.RLock()
-	s.segmentHelper.segRowCnt += rows
-	s.segmentHelper.segRowDel += dels
+	s.ObjectHelper.segRowCnt += rows
+	s.ObjectHelper.segRowDel += dels
 	return nil
 }

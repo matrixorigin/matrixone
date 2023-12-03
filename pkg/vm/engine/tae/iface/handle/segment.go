@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type SegmentIt interface {
+type ObjectIt interface {
 	Iterator
-	GetSegment() Segment
+	GetObject() Object
 }
 
-type SegmentReader interface {
+type ObjectReader interface {
 	io.Closer
 	GetID() *types.Objectid
 	IsUncommitted() bool
@@ -43,7 +43,7 @@ type SegmentReader interface {
 	BatchDedup(pks containers.Vector) error
 }
 
-type SegmentWriter interface {
+type ObjectWriter interface {
 	io.Closer
 	String() string
 	Update(blk uint64, row uint32, col uint16, v any) error
@@ -63,7 +63,7 @@ type SegmentWriter interface {
 	UpdateStats(objectio.ObjectStats) error
 }
 
-type Segment interface {
-	SegmentReader
-	SegmentWriter
+type Object interface {
+	ObjectReader
+	ObjectWriter
 }

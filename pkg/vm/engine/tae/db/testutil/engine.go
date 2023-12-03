@@ -326,7 +326,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 
 	for id, offsets := range idOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.ObjectID())
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(e.t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(e.t, err)
@@ -589,12 +589,12 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	collector := logtail.NewIncrementalCollector(start, end)
 	p := &catalog.LoopProcessor{}
 	p.BlockFn = func(be *catalog.BlockEntry) error {
-		if be.GetSegment().GetTable().ID != tid {
+		if be.GetObject().GetTable().ID != tid {
 			return nil
 		}
 		return collector.VisitBlk(be)
 	}
-	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		if se.GetTable().ID != tid {
 			return nil
 		}
@@ -723,7 +723,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 
 func (e *TestEngine) CheckObjectInfo() {
 	p := &catalog.LoopProcessor{}
-	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
 			assert.NoError(e.t, err)

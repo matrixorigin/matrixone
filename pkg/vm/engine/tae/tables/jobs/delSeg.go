@@ -27,11 +27,11 @@ import (
 
 type delSegTask struct {
 	*tasks.BaseTask
-	delSegs []*catalog.SegmentEntry
+	delSegs []*catalog.ObjectEntry
 	txn     txnif.AsyncTxn
 }
 
-func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.SegmentEntry) *delSegTask {
+func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.ObjectEntry) *delSegTask {
 	task := &delSegTask{
 		delSegs: delSegs,
 		txn:     txn,
@@ -50,7 +50,7 @@ func (t *delSegTask) String() string {
 
 func (t *delSegTask) Execute(ctx context.Context) (err error) {
 	tdesc := t.String()
-	logutil.Info("Mergeblocks delete merged segments [Start]", zap.String("task", tdesc))
+	logutil.Info("Mergeblocks delete merged Objects [Start]", zap.String("task", tdesc))
 	dbId := t.delSegs[0].GetTable().GetDB().ID
 	database, err := t.txn.GetDatabaseByID(dbId)
 	if err != nil {
@@ -62,10 +62,10 @@ func (t *delSegTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	for _, entry := range t.delSegs {
-		if err = rel.SoftDeleteSegment(&entry.ID); err != nil {
+		if err = rel.SoftDeleteObject(&entry.ID); err != nil {
 			return
 		}
 	}
-	logutil.Info("Mergeblocks delete merged segments [Done]", zap.String("task", tdesc))
+	logutil.Info("Mergeblocks delete merged Objects [Done]", zap.String("task", tdesc))
 	return
 }

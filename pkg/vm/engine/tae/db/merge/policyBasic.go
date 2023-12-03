@@ -95,7 +95,7 @@ type Basic struct {
 	id      uint64
 	schema  *catalog.Schema
 	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.SegmentEntry]
+	objHeap *heapBuilder[*catalog.ObjectEntry]
 	accBuf  []int
 
 	config         *BasicPolicyConfig
@@ -104,8 +104,8 @@ type Basic struct {
 
 func NewBasicPolicy() *Basic {
 	return &Basic{
-		objHeap: &heapBuilder[*catalog.SegmentEntry]{
-			items: make(itemSet[*catalog.SegmentEntry], 0, 32),
+		objHeap: &heapBuilder[*catalog.ObjectEntry]{
+			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
 		},
 		accBuf:         make([]int, 1, 32),
 		configProvider: NewCustomConfigProvider(),
@@ -113,7 +113,7 @@ func NewBasicPolicy() *Basic {
 }
 
 // impl Policy for Basic
-func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
+func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
 	rowsLeftOnSeg := obj.Stat.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
@@ -127,7 +127,7 @@ func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
 	}
 
 	if iscandidate() {
-		o.objHeap.pushWithCap(&mItem[*catalog.SegmentEntry]{
+		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
 			row:   rowsLeftOnSeg,
 			entry: obj,
 		}, o.config.MergeMaxOneRun)
@@ -169,7 +169,7 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
+func (o *Basic) Revise(cpu, mem int64) []*catalog.ObjectEntry {
 	segs := o.objHeap.finish()
 	sort.Slice(segs, func(i, j int) bool {
 		return segs[i].Stat.GetRemainingRows() < segs[j].Stat.GetRemainingRows()
@@ -179,7 +179,7 @@ func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	return segs
 }
 
-func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
+func (o *Basic) optimize(segs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	// segs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, seg := range segs {
@@ -216,11 +216,11 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 	return segs
 }
 
-func (o *Basic) controlMem(segs []*catalog.SegmentEntry, mem int64) []*catalog.SegmentEntry {
+func (o *Basic) controlMem(segs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	needPopout := func(ss []*catalog.SegmentEntry) bool {
+	needPopout := func(ss []*catalog.ObjectEntry) bool {
 		_, esize := estimateMergeConsume(ss)
 		return esize > int(2*mem/3)
 	}
@@ -264,7 +264,7 @@ func determineObjectMinRows(schema *catalog.Schema) int {
 		return runtimeMinRows
 	}
 	// the max rows of a full object
-	objectFullRows := int(schema.SegmentMaxBlocks) * int(schema.BlockMaxRows)
+	objectFullRows := int(schema.ObjectMaxBlocks) * int(schema.BlockMaxRows)
 	// we want every object has at least 5 blks rows
 	objectMinRows := constMergeMinBlks * int(schema.BlockMaxRows)
 	if objectFullRows < objectMinRows { // for small config in unit test

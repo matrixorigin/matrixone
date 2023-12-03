@@ -168,7 +168,7 @@ func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 	return
 }
 
-type SegmentNode struct {
+type ObjectNode struct {
 	state    EntryState
 	IsLocal  bool   // this segment is hold by a localsegment
 	SortHint uint64 // sort segment by create time, make iteration on segment determined
@@ -185,7 +185,7 @@ const (
 )
 
 // not marshal nextObjectIdx
-func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 	_, err = r.Read(types.EncodeInt8((*int8)(&node.state)))
 	if err != nil {
 		return
@@ -209,7 +209,7 @@ func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
+func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
 	_, err = w.Write(types.EncodeInt8((*int8)(&node.state)))
 	if err != nil {
 		return
@@ -232,12 +232,12 @@ func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += 1
 	return
 }
-func (node *SegmentNode) String() string {
+func (node *ObjectNode) String() string {
 	sorted := "US"
 	if node.sorted {
 		sorted = "S"
 	}
-	return fmt.Sprintf("%s/%d/%d", sorted, node.SortHint, node.nextObjectIdx)
+	return fmt.Sprintf("%s/%d", sorted, node.SortHint)
 }
 
 type BlockNode struct {

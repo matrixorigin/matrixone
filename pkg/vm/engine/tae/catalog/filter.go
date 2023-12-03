@@ -18,7 +18,7 @@ func ActiveWithNoTxnFilter(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
-func ActiveSegmentWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
+func ActiveObjectWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 

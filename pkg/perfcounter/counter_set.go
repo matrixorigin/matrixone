@@ -109,7 +109,7 @@ type TAECounterSet struct {
 		DeleteIncrementalEntry  stats.Counter
 	}
 
-	Segment struct {
+	Object struct {
 		Create              stats.Counter
 		CreateNonAppendable stats.Counter
 		SoftDelete          stats.Counter

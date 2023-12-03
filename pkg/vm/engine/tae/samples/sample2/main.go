@@ -60,7 +60,7 @@ func main() {
 
 	schema := catalog.MockSchemaAll(10, 3)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 	batchCnt := uint32(10)
 	batchRows := schema.BlockMaxRows * 1 / 2 * batchCnt
 	{
@@ -116,9 +116,9 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		segIt := rel.MakeSegmentIt()
+		segIt := rel.MakeObjectIt()
 		for segIt.Valid() {
-			seg := segIt.GetSegment()
+			seg := segIt.GetObject()
 			logutil.Info(seg.String())
 			blkIt := seg.MakeBlockIt()
 			for blkIt.Valid() {

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -76,18 +75,18 @@ func NewCompactBlockTask(
 		rt:    rt,
 		Stats: make([]objectio.ObjectStats, 0),
 	}
-	dbId := meta.GetSegment().GetTable().GetDB().ID
+	dbId := meta.GetObject().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	tableId := meta.GetSegment().GetTable().ID
+	tableId := meta.GetObject().GetTable().ID
 	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
-	seg, err := rel.GetSegment(&meta.GetSegment().ID)
+	seg, err := rel.GetObject(&meta.GetObject().ID)
 	if err != nil {
 		return
 	}
@@ -181,7 +180,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	}()
 	now := time.Now()
-	seg := task.compacted.GetSegment()
+	seg := task.compacted.GetObject()
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
@@ -198,7 +197,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
-	err = seg.GetRelation().SoftDeleteSegment(seg.GetID())
+	err = seg.GetRelation().SoftDeleteObject(seg.GetID())
 	if err != nil {
 		return
 	}
@@ -207,10 +206,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 
 	if !empty {
 		createOnSeg := seg
-		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
-		// double the threshold to make more room for creating new appendable segment during appending, just a piece of defensive code
+		curSeg := seg.GetMeta().(*catalog.ObjectEntry)
+		// double the threshold to make more room for creating new appendable Object during appending, just a piece of defensive code
 		// check GetAppender function in tableHandle
-		if curSeg.GetNextObjectIndex() > options.DefaultObejctPerSegment*2 {
+		if curSeg.GetNextObjectIndex() > 2 {
 			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
 			if nextSeg.ID == curSeg.ID {
 				// we can't create appendable seg here because compaction can be rollbacked.
@@ -219,7 +218,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.String(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {
+			if createOnSeg, err = task.compacted.GetObject().GetRelation().GetObject(&nextSeg.ID); err != nil {
 				return err
 			} else {
 				defer createOnSeg.Close()
@@ -233,7 +232,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
-	table := task.meta.GetSegment().GetTable()
+	table := task.meta.GetObject().GetTable()
 	// write old block
 	var deletes *containers.Batch
 	// write ablock
@@ -279,7 +278,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
-		if err = task.compacted.GetSegment().UpdateStats(ablockTask.stat); err != nil {
+		if err = task.compacted.GetObject().UpdateStats(ablockTask.stat); err != nil {
 			return err
 		}
 		if deletes != nil {
@@ -361,16 +360,16 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		common.AnyField("createdRows", rows),
 		common.DurationField(time.Since(now)))
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.CompactBlock.Add(1)
+		counter.TAE.Object.CompactBlock.Add(1)
 	})
 	return
 }
 
 func (task *compactBlockTask) createAndFlushNewBlock(
-	seg handle.Segment,
+	seg handle.Object,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
-	seg, err = seg.GetRelation().CreateNonAppendableSegment(false)
+	seg, err = seg.GetRelation().CreateNonAppendableObject(false)
 	if err != nil {
 		return
 	}
@@ -408,7 +407,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}
-	if err = newBlk.GetSegment().UpdateStats(ioTask.stat); err != nil {
+	if err = newBlk.GetObject().UpdateStats(ioTask.stat); err != nil {
 		return
 	}
 	task.Stats = append(task.Stats, ioTask.Stats)

@@ -104,7 +104,7 @@ const (
 	Checkpoint_Meta_Insert_Block_LOC_IDX    = 3
 	Checkpoint_Meta_CN_Delete_Block_LOC_IDX = 4
 	Checkpoint_Meta_Delete_Block_LOC_IDX    = 5
-	Checkpoint_Meta_Segment_LOC_IDX         = 6
+	Checkpoint_Meta_Object_LOC_IDX         = 6
 )
 
 // for ver1-3
@@ -113,8 +113,8 @@ const (
 	Checkpoint_Meta_Insert_Block_End_IDX   = 4
 	Checkpoint_Meta_Delete_Block_Start_IDX = 5
 	Checkpoint_Meta_Delete_Block_End_IDX   = 6
-	Checkpoint_Meta_Segment_Start_IDX      = 7
-	Checkpoint_Meta_Segment_End_IDX        = 8
+	Checkpoint_Meta_Object_Start_IDX      = 7
+	Checkpoint_Meta_Object_End_IDX        = 8
 )
 
 type checkpointDataItem struct {
@@ -639,7 +639,7 @@ type BaseCollector struct {
 
 	// true for prefech object meta
 	isPrefetch bool
-	segments   []*catalog.SegmentEntry
+	Objects   []*catalog.ObjectEntry
 }
 
 type IncrementalCollector struct {
@@ -654,12 +654,12 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			start:         start,
 			end:           end,
 			isGlobal:      false,
-			segments:      make([]*catalog.SegmentEntry, 0),
+			Objects:      make([]*catalog.ObjectEntry, 0),
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
-	collector.SegmentFn = collector.VisitSeg
+	collector.ObjectFn = collector.VisitSeg
 	collector.BlockFn = collector.VisitBlk
 	return collector
 }
@@ -674,7 +674,7 @@ func NewBackupCollector(start, end types.TS) *IncrementalCollector {
 		},
 	}
 	collector.BlockFn = collector.VisitBlkForBackup
-	collector.SegmentFn = collector.VisitSegForBackup
+	collector.ObjectFn = collector.VisitSegForBackup
 	return collector
 }
 
@@ -682,7 +682,7 @@ type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
 	// [0]. not used
-	// [3]. if a segment has been deleted, should record its id
+	// [3]. if a Object has been deleted, should record its id
 	// [2]. if a table has been deleted, should record its id
 	// [1]. if a db has been deleted, should record its id
 	// [0]. account's placeholder
@@ -702,7 +702,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
 			isGlobal:      true,
-			segments:      make([]*catalog.SegmentEntry, 0),
+			Objects:      make([]*catalog.ObjectEntry, 0),
 		},
 		versionThershold: versionThresholdTS,
 	}
@@ -713,7 +713,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
-	collector.SegmentFn = collector.VisitSeg
+	collector.ObjectFn = collector.VisitSeg
 	collector.BlockFn = collector.VisitBlk
 	return collector
 }
@@ -726,9 +726,9 @@ func (data *CheckpointData) ApplyReplayTo(
 	ins, colins, tnins, del, tndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, tnins, del, tndel, dataFactory)
 	objectInfo := data.GetTNObjectBatchs()
-	c.OnReplaySegmentBatch(objectInfo)
+	c.OnReplayObjectBatch(objectInfo)
 	objectInfo = data.GetObjectBatchs()
-	c.OnReplaySegmentBatch(objectInfo)
+	c.OnReplayObjectBatch(objectInfo)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetBlkBatchs()
@@ -966,7 +966,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 	blkIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX]
 	blkCNIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX]
 	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
-	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX]
+	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_LOC_IDX]
 
 	var i int
 	if version <= CheckpointVersion4 {
@@ -1036,8 +1036,8 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 	blkInsEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_End_IDX]
 	blkDelStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_Start_IDX]
 	blkDelEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_End_IDX]
-	segDelStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_Start_IDX]
-	segDelEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_End_IDX]
+	segDelStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_Start_IDX]
+	segDelEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_End_IDX]
 	for i := 0; i < length; i++ {
 		insStart := vector.GetFixedAt[int32](blkInsStart, i)
 		insEnd := vector.GetFixedAt[int32](blkInsEnd, i)
@@ -1097,7 +1097,7 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX] = insVec
 	data.bats[MetaIDX].Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX] = cnInsVec
 	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX] = delVec
-	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX] = segVec
+	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_LOC_IDX] = segVec
 	return
 }
 
@@ -1375,7 +1375,7 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 			data.closeVector(MetaIDX, Checkpoint_Meta_Insert_Block_LOC_IDX, m)
 			data.closeVector(MetaIDX, Checkpoint_Meta_CN_Delete_Block_LOC_IDX, m)
 			data.closeVector(MetaIDX, Checkpoint_Meta_Delete_Block_LOC_IDX, m)
-			data.closeVector(MetaIDX, Checkpoint_Meta_Segment_LOC_IDX, m)
+			data.closeVector(MetaIDX, Checkpoint_Meta_Object_LOC_IDX, m)
 		}
 	}
 }
@@ -1503,7 +1503,7 @@ func (data *CheckpointData) prepareMeta() {
 		}
 	}
 }
-func (data *CheckpointData) resetSegmentMeta() {
+func (data *CheckpointData) resetObjectMeta() {
 	for _, meta := range data.meta {
 		meta.tables[ObjectInfo] = nil
 	}
@@ -2498,7 +2498,7 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 		return err
 	}
 	p := &catalog.LoopProcessor{}
-	p.SegmentFn = collector.VisitSeg
+	p.ObjectFn = collector.VisitSeg
 	err = c.RecurLoop(p)
 	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
@@ -2627,7 +2627,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			tableColInsTxnBat.GetVectorByName(
 				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchema().BlockMaxRows, false)
 			tableColInsTxnBat.GetVectorByName(
-				SnapshotAttr_SegmentMaxBlock).Append(entry.GetLastestSchema().SegmentMaxBlocks, false)
+				SnapshotAttr_ObjectMaxBlock).Append(entry.GetLastestSchema().ObjectMaxBlocks, false)
 			tableColInsTxnBat.GetVectorByName(
 				SnapshotAttr_SchemaExtra).Append(tblNode.BaseNode.Schema.MustGetExtraBytes(), false)
 
@@ -2690,7 +2690,7 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
-func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) error {
+func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) error {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
@@ -2702,7 +2702,7 @@ func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) e
 
 	if collector.isPrefetch {
 		if needPrefetch {
-			collector.segments = append(collector.segments, entry)
+			collector.Objects = append(collector.Objects, entry)
 		}
 	} else {
 		if needPrefetch {
@@ -2717,11 +2717,11 @@ func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) e
 			if collector.data.bats[TNObjectInfoIDX] != nil {
 				collector.data.bats[TNObjectInfoIDX].Close()
 			}
-			collector.data.resetSegmentMeta()
-			if collector.segments == nil {
-				collector.segments = make([]*catalog.SegmentEntry, 0)
+			collector.data.resetObjectMeta()
+			if collector.Objects == nil {
+				collector.Objects = make([]*catalog.ObjectEntry, 0)
 			}
-			collector.segments = append(collector.segments, entry)
+			collector.Objects = append(collector.Objects, entry)
 		} else {
 			err := collector.fillObjectInfoBatch(entry, mvccNodes)
 			if err != nil {
@@ -2736,18 +2736,18 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	logutil.Infof("checkpoint %v->%v, start to load object meta, total %d objects",
 		collector.start.ToString(),
 		collector.end.ToString(),
-		len(collector.segments))
+		len(collector.Objects))
 	t0 := time.Now()
 	batchCnt := 100
 	i := 0
-	for idx := 1; idx <= len(collector.segments); idx++ {
+	for idx := 1; idx <= len(collector.Objects); idx++ {
 
-		seg := collector.segments[idx-1]
+		seg := collector.Objects[idx-1]
 		blk := seg.GetFirstBlkEntry()
 		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 
 		for idx%batchCnt == 0 && i < idx {
-			seg := collector.segments[i]
+			seg := collector.Objects[i]
 			seg.RLock()
 			mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
 			seg.RUnlock()
@@ -2762,8 +2762,8 @@ func (collector *BaseCollector) loadObjectInfo() error {
 			i++
 		}
 	}
-	for ; i < len(collector.segments); i++ {
-		seg := collector.segments[i]
+	for ; i < len(collector.Objects); i++ {
+		seg := collector.Objects[i]
 		seg.RLock()
 		mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
 		seg.RUnlock()
@@ -2779,11 +2779,11 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	logutil.Infof("checkpoint %v->%v, load %d object meta takes %v",
 		collector.start.ToString(),
 		collector.end.ToString(),
-		len(collector.segments),
+		len(collector.Objects),
 		time.Since(t0))
 	return nil
 }
-func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.SegmentEntry, mvccNodes []*catalog.MVCCNode[*catalog.ObjectMVCCNode]) error {
+func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, mvccNodes []*catalog.MVCCNode[*catalog.ObjectMVCCNode]) error {
 	if len(mvccNodes) == 0 {
 		return nil
 	}
@@ -2820,22 +2820,22 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.SegmentEntry,
 	return nil
 }
 
-func (collector *BaseCollector) VisitSegForBackup(entry *catalog.SegmentEntry) (err error) {
+func (collector *BaseCollector) VisitSegForBackup(entry *catalog.ObjectEntry) (err error) {
 	entry.RLock()
 	if entry.GetCreatedAtLocked().Greater(collector.start) {
 		entry.RUnlock()
 		return nil
 	}
 	entry.RUnlock()
-	return collector.visitSegmentEntry(entry)
+	return collector.visitObjectEntry(entry)
 }
 
-func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
-	collector.visitSegmentEntry(entry)
+func (collector *BaseCollector) VisitSeg(entry *catalog.ObjectEntry) (err error) {
+	collector.visitObjectEntry(entry)
 	return nil
 }
 
-func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
+func (collector *GlobalCollector) VisitSeg(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
 		collector.deletes[UsageObjID][entry.ID] = struct{}{}
 		return nil
@@ -2947,13 +2947,13 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 				)
 				vector.AppendFixed(
 					blkTNMetaDelTxnDBIDVec,
-					entry.GetSegment().GetTable().GetDB().GetID(),
+					entry.GetObject().GetTable().GetDB().GetID(),
 					false,
 					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaDelTxnTIDVec,
-					entry.GetSegment().GetTable().GetID(),
+					entry.GetObject().GetTable().GetID(),
 					false,
 					collector.data.allocator,
 				)
@@ -3013,7 +3013,7 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 				)
 				vector.AppendFixed(
 					blkTNMetaInsSegIDVec,
-					*entry.GetSegment().ID.Segment(),
+					*entry.GetObject().ID.Segment(),
 					false,
 					collector.data.allocator,
 				)
@@ -3032,13 +3032,13 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 				)
 				vector.AppendFixed(
 					blkTNMetaInsTxnDBIDVec,
-					entry.GetSegment().GetTable().GetDB().GetID(),
+					entry.GetObject().GetTable().GetDB().GetID(),
 					false,
 					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsTxnTIDVec,
-					entry.GetSegment().GetTable().GetID(),
+					entry.GetObject().GetTable().GetID(),
 					false,
 					collector.data.allocator,
 				)
@@ -3073,13 +3073,13 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 
 				vector.AppendFixed(
 					blkMetaDelTxnDBIDVec,
-					entry.GetSegment().GetTable().GetDB().GetID(),
+					entry.GetObject().GetTable().GetDB().GetID(),
 					false,
 					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaDelTxnTIDVec,
-					entry.GetSegment().GetTable().GetID(),
+					entry.GetObject().GetTable().GetID(),
 					false,
 					collector.data.allocator,
 				)
@@ -3132,7 +3132,7 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 				)
 				vector.AppendFixed(
 					blkCNMetaInsSegIDVec,
-					*entry.GetSegment().ID.Segment(),
+					*entry.GetObject().ID.Segment(),
 					false,
 					collector.data.allocator,
 				)
@@ -3203,7 +3203,7 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 				)
 				vector.AppendFixed(
 					blkMetaInsSegIDVec,
-					*entry.GetSegment().ID.Segment(),
+					*entry.GetObject().ID.Segment(),
 					false,
 					collector.data.allocator,
 				)
@@ -3224,13 +3224,13 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 
 				vector.AppendFixed(
 					blkMetaInsTxnDBIDVec,
-					entry.GetSegment().GetTable().GetDB().GetID(),
+					entry.GetObject().GetTable().GetDB().GetID(),
 					false,
 					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsTxnTIDVec,
-					entry.GetSegment().GetTable().GetID(),
+					entry.GetObject().GetTable().GetID(),
 					false,
 					collector.data.allocator,
 				)
@@ -3253,7 +3253,7 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 	}
 	insEnd := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delEnd := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
-	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
+	collector.data.UpdateBlkMeta(entry.GetObject().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 }
 
 func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
@@ -3276,13 +3276,13 @@ func (collector *GlobalCollector) VisitBlk(entry *catalog.BlockEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
 		return nil
 	}
-	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().BaseEntryImpl) {
+	if collector.isEntryDeletedBeforeThreshold(entry.GetObject().BaseEntryImpl) {
 		return nil
 	}
-	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().BaseEntryImpl) {
+	if collector.isEntryDeletedBeforeThreshold(entry.GetObject().GetTable().BaseEntryImpl) {
 		return nil
 	}
-	if collector.isEntryDeletedBeforeThreshold(entry.GetSegment().GetTable().GetDB().BaseEntryImpl) {
+	if collector.isEntryDeletedBeforeThreshold(entry.GetObject().GetTable().GetDB().BaseEntryImpl) {
 		return nil
 	}
 	return collector.BaseCollector.VisitBlk(entry)

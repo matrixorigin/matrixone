@@ -73,13 +73,13 @@ func appendToStorageUsageVectors(data UsageData, vecs []*vector.Vector, mp *mpoo
 	vector.AppendFixed(vecs[UsageSize], data[UsageSize].(uint64), false, mp)
 }
 
-func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
+func checkObject(entry *catalog.ObjectEntry, collector *BaseCollector) bool {
 	if !entry.IsSorted() || entry.IsAppendable() || entry.HasDropCommitted() {
 		return false
 	}
 
 	// the incremental ckp should consider the time range.
-	// we only collect the segments which updates happened in [start, end]
+	// we only collect the Objects which updates happened in [start, end]
 	entry.RLock()
 	cnt := len(entry.ClonePreparedInRange(collector.start, collector.end))
 	entry.RUnlock()
@@ -89,7 +89,7 @@ func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 	return true
 }
 
-func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry, mp *mpool.MPool) {
+func fillUsageBat(collector *BaseCollector, entry *catalog.ObjectEntry, mp *mpool.MPool) {
 	vecs := getStorageUsageBatVectors(collector.data)
 	accId := uint64(entry.GetTable().GetDB().GetTenantID())
 	dbId := entry.GetTable().GetDB().GetID()
@@ -205,12 +205,12 @@ func traverseCatalog(
 	mp *mpool.MPool,
 ) (loaded int) {
 	processor := new(catalog.LoopProcessor)
-	var segs []*catalog.SegmentEntry
+	var segs []*catalog.ObjectEntry
 
 	// need to accelerate the load process through prefetch,
-	// so we collect valid segments first
-	processor.SegmentFn = func(entry *catalog.SegmentEntry) error {
-		if checkSegment(entry, collector) {
+	// so we collect valid Objects first
+	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
+		if checkObject(entry, collector) {
 			segs = append(segs, entry)
 		}
 		return nil
@@ -237,7 +237,7 @@ func traverseCatalog(
 		}
 	}
 
-	// deal with the left segments
+	// deal with the left Objects
 	for ; i < len(segs); i++ {
 		fillUsageBat(collector, segs[i], mp)
 	}

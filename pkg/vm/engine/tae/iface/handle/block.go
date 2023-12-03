@@ -79,7 +79,7 @@ type BlockReader interface {
 
 	IsAppendableBlock() bool
 
-	GetSegment() Segment
+	GetObject() Object
 
 	GetTotalChanges() int
 }

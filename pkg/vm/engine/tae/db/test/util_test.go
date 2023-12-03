@@ -94,18 +94,18 @@ func TestAOT2(t *testing.T) {
 	assert.Equal(t, 42, rows)
 }
 
-func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
+func createAndWriteSingleNAObject(t *testing.T, ctx context.Context,
 	rel handle.Relation, fs *objectio.ObjectFS) {
-	segHandle, err := rel.CreateNonAppendableSegment(false)
+	segHandle, err := rel.CreateNonAppendableObject(false)
 	require.Nil(t, err)
 
-	segEntry := segHandle.GetMeta().(*catalog.SegmentEntry)
+	segEntry := segHandle.GetMeta().(*catalog.ObjectEntry)
 	segEntry.SetSorted()
 
 	schema := rel.Schema().(*catalog.Schema)
 	vecs := make([]containers.Vector, len(schema.ColDefs))
 	seqNums := make([]uint16, len(schema.ColDefs))
-	// mock data for segment
+	// mock data for Object
 	writtenBatches := make([]*containers.Batch, 0, len(schema.ColDefs))
 	for idx, def := range schema.ColDefs {
 		vecs[idx] = containers.MockVector(types.T_uint64.ToType(), 100, false, nil)
@@ -142,13 +142,13 @@ func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
 	}
 }
 
-// create segments for tables
-func createAndWriteBatchNASegment(t *testing.T, ctx context.Context, segCnts []int,
+// create Objects for tables
+func createAndWriteBatchNAObject(t *testing.T, ctx context.Context, segCnts []int,
 	rels []handle.Relation, fs *objectio.ObjectFS) {
 
 	for idx, rel := range rels {
 		for i := 0; i < segCnts[idx]; i++ {
-			createAndWriteSingleNASegment(t, ctx, rel, fs)
+			createAndWriteSingleNAObject(t, ctx, rel, fs)
 		}
 	}
 }
@@ -173,17 +173,17 @@ func createTAE(t *testing.T, ctx context.Context) *db.DB {
 	return testutil.InitTestDB(ctx, "logtail", t, nil)
 }
 
-func createTablesAndSegments(t *testing.T, ctx context.Context, tae *db.DB, dbName string, tblCnt int) {
+func createTablesAndObjects(t *testing.T, ctx context.Context, tae *db.DB, dbName string, tblCnt int) {
 	// table count
 	relCnt := tblCnt
 	naSegCnts := make([]int, relCnt)
 	for i := 0; i < relCnt; i++ {
-		// generating the count of non appendable segment for each table
+		// generating the count of non appendable Object for each table
 		naSegCnts[i] = rand.Int()%50 + 1
 	}
 
 	rels := createTables(t, tae, dbName, 10, relCnt)
-	createAndWriteBatchNASegment(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
+	createAndWriteBatchNAObject(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
 }
 
 // test plan:
@@ -195,19 +195,19 @@ func Test_FillUsageBatOfIncrement(t *testing.T) {
 	tae := createTAE(t, ctx)
 	defer tae.Close()
 
-	createTablesAndSegments(t, ctx, tae, "testdb", 10)
+	createTablesAndObjects(t, ctx, tae, "testdb", 10)
 	collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 	collector.BlockFn = nil
 	collector.DatabaseFn = nil
 	collector.TableFn = nil
-	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		require.NotNil(t, segment.GetFirstBlkEntry())
-		if !segment.IsAppendable() {
-			require.Equal(t, true, segment.Stat.GetLoaded())
-			require.NotEqual(t, int(0), segment.Stat.GetOriginSize())
-			require.NotEqual(t, int(0), segment.Stat.GetCompSize())
-			require.Equal(t, 0, segment.Stat.GetRows())
-			require.Equal(t, 0, segment.Stat.GetRemainingRows())
+	collector.ObjectFn = func(Object *catalog.ObjectEntry) error {
+		require.NotNil(t, Object.GetFirstBlkEntry())
+		if !Object.IsAppendable() {
+			require.Equal(t, true, Object.Stat.GetLoaded())
+			require.NotEqual(t, int(0), Object.Stat.GetOriginSize())
+			require.NotEqual(t, int(0), Object.Stat.GetCompSize())
+			require.Equal(t, 0, Object.Stat.GetRows())
+			require.Equal(t, 0, Object.Stat.GetRemainingRows())
 		}
 
 		return nil
@@ -215,7 +215,7 @@ func Test_FillUsageBatOfIncrement(t *testing.T) {
 
 	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 
-	// after `FillUsageBatOfIncremental`, all non-appendable segment should be loaded
+	// after `FillUsageBatOfIncremental`, all non-appendable Object should be loaded
 	tae.Catalog.RecurLoop(collector)
 
 	storageUsageBat := collector.OrphanData().GetBatches()[logtail.SEGStorageUsageIDX]
@@ -239,7 +239,7 @@ func Benchmark_FillSEGStorageUsageBatOfIncrement(b *testing.B) {
 	collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 
 	for i := 0; i < b.N; i++ {
-		createAndWriteBatchNASegment(t, ctx, []int{100}, rels, tae.Runtime.Fs)
+		createAndWriteBatchNAObject(t, ctx, []int{100}, rels, tae.Runtime.Fs)
 		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 	}
 }
@@ -250,13 +250,13 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 	rels := createTables(t, tae, "testdb", 10, 3)
 	var entries []*checkpoint.CheckpointEntry
 	for i := 0; i < cnt; i++ {
-		// 3 tables, each table has 10 non-appendable segment
-		createAndWriteBatchNASegment(t, ctx, []int{10, 10, 10}, rels, tae.Runtime.Fs)
+		// 3 tables, each table has 10 non-appendable Object
+		createAndWriteBatchNAObject(t, ctx, []int{10, 10, 10}, rels, tae.Runtime.Fs)
 		collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 		//collector.BlockFn = nil
 		//collector.DatabaseFn = nil
 		//collector.TableFn = nil
-		//collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
+		//collector.ObjectFn = func(Object *catalog.ObjectEntry) error {
 		//	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 		//	return nil
 		//}

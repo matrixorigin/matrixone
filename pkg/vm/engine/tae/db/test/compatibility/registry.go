@@ -61,7 +61,7 @@ func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
 
 type schemaCfg struct {
 	blockMaxRows     uint32
-	segmentMaxBlocks uint16
+	ObjectMaxBlocks uint16
 	colCnt           int
 	pkIdx            int
 }
@@ -95,7 +95,7 @@ func (pc PrepareCase) GetEngine(t *testing.T) *testutil.TestEngine {
 func (pc PrepareCase) GetSchema(t *testing.T) *catalog.Schema {
 	schema := catalog.MockSchemaAll(pc.schemaCfg.colCnt, pc.schemaCfg.pkIdx)
 	schema.BlockMaxRows = pc.schemaCfg.blockMaxRows
-	schema.SegmentMaxBlocks = pc.schemaCfg.segmentMaxBlocks
+	schema.ObjectMaxBlocks = pc.schemaCfg.ObjectMaxBlocks
 	ver, err := ReadPrepareVersion()
 	if err != nil {
 		t.Error(err)

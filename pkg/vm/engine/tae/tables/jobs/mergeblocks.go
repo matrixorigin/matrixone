@@ -39,20 +39,20 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
-// into a new non-appendable segment.
-var CompactSegmentTaskFactory = func(
+// CompactObjectTaskFactory merge non-appendable blocks of an appendable-Object
+// into a new non-appendable Object.
+var CompactObjectTaskFactory = func(
 	mergedBlks []*catalog.BlockEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		mergedSegs := make([]*catalog.SegmentEntry, 1)
-		mergedSegs[0] = mergedBlks[0].GetSegment()
+		mergedSegs := make([]*catalog.ObjectEntry, 1)
+		mergedSegs[0] = mergedBlks[0].GetObject()
 		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt)
 	}
 }
 
-var MergeBlocksIntoSegmentTaskFctory = func(
-	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry,
+var MergeBlocksIntoObjectTaskFctory = func(
+	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
@@ -64,9 +64,9 @@ type mergeBlocksTask struct {
 	*tasks.BaseTask
 	txn           txnif.AsyncTxn
 	rt            *dbutils.Runtime
-	toSegEntry    *catalog.SegmentEntry
-	createdSegs   []*catalog.SegmentEntry
-	mergedSegs    []*catalog.SegmentEntry
+	toSegEntry    *catalog.ObjectEntry
+	createdSegs   []*catalog.ObjectEntry
+	mergedSegs    []*catalog.ObjectEntry
 	mergedBlks    []*catalog.BlockEntry
 	createdBlks   []*catalog.BlockEntry
 	transMappings *txnentries.BlkTransferBooking
@@ -78,7 +78,7 @@ type mergeBlocksTask struct {
 
 func NewMergeBlocksTask(
 	ctx *tasks.Context, txn txnif.AsyncTxn,
-	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry,
+	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.ObjectEntry, toSegEntry *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
@@ -91,18 +91,18 @@ func NewMergeBlocksTask(
 		toSegEntry:  toSegEntry,
 	}
 	task.transMappings = txnentries.NewBlkTransferBooking(len(task.mergedBlks))
-	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID
+	dbId := mergedBlks[0].GetObject().GetTable().GetDB().ID
 	database, err := txn.GetDatabaseByID(dbId)
 	if err != nil {
 		return
 	}
-	relId := mergedBlks[0].GetSegment().GetTable().ID
+	relId := mergedBlks[0].GetObject().GetTable().ID
 	task.rel, err = database.GetRelationByID(relId)
 	if err != nil {
 		return
 	}
 	for _, meta := range mergedBlks {
-		seg, err := task.rel.GetSegment(&meta.GetSegment().ID)
+		seg, err := task.rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return nil, err
 		}
@@ -256,13 +256,13 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	if length == 0 {
 		// all is deleted, nothing to merge, just delete
 		for _, compacted := range task.compacted {
-			seg := compacted.GetSegment()
+			seg := compacted.GetObject()
 			if err = seg.SoftDeleteBlock(compacted.ID()); err != nil {
 				return err
 			}
 		}
 		for _, entry := range task.mergedSegs {
-			if err = task.rel.SoftDeleteSegment(&entry.ID); err != nil {
+			if err = task.rel.SoftDeleteObject(&entry.ID); err != nil {
 				return err
 			}
 		}
@@ -270,16 +270,16 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		return nil
 	}
 
-	var toSegEntry handle.Segment
+	var toSegEntry handle.Object
 	if task.toSegEntry == nil {
-		if toSegEntry, err = task.rel.CreateNonAppendableSegment(false); err != nil {
+		if toSegEntry, err = task.rel.CreateNonAppendableObject(false); err != nil {
 			return err
 		}
-		task.toSegEntry = toSegEntry.GetMeta().(*catalog.SegmentEntry)
+		task.toSegEntry = toSegEntry.GetMeta().(*catalog.ObjectEntry)
 		task.toSegEntry.SetSorted()
 		task.createdSegs = append(task.createdSegs, task.toSegEntry)
 	} else {
-		panic("warning: merge to a existing segment")
+		panic("warning: merge to a existing Object")
 	}
 
 	to := make([]uint32, 0)
@@ -401,13 +401,13 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	phaseNumber = 6
 	for _, compacted := range task.compacted {
-		seg := compacted.GetSegment()
+		seg := compacted.GetObject()
 		if err = seg.SoftDeleteBlock(compacted.ID()); err != nil {
 			return err
 		}
 	}
 	for _, entry := range task.mergedSegs {
-		if err = task.rel.SoftDeleteSegment(&entry.ID); err != nil {
+		if err = task.rel.SoftDeleteObject(&entry.ID); err != nil {
 			return err
 		}
 	}
@@ -441,7 +441,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		common.DurationField(time.Since(now)))
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.MergeBlocks.Add(1)
+		counter.TAE.Object.MergeBlocks.Add(1)
 	})
 	return err
 }

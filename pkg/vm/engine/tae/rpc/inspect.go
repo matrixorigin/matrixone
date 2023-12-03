@@ -254,7 +254,7 @@ func (c *infoArg) Run() error {
 type manuallyMergeArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	objects []*catalog.SegmentEntry
+	objects []*catalog.ObjectEntry
 }
 
 func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -281,18 +281,18 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 	if len(dedup) < 2 {
 		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
 	}
-	segs := make([]*catalog.SegmentEntry, 0, len(objects))
+	segs := make([]*catalog.ObjectEntry, 0, len(objects))
 	for o := range dedup {
 		parts := strings.Split(o, "_")
 		uid, err := types.ParseUuid(parts[0])
 		if err != nil {
 			return err
 		}
-		segments, err := c.tbl.GetSegmentsByID(&uid)
+		objects, err := c.tbl.GetObjectsByID(&uid)
 		if err != nil {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
-		for _, seg := range segments {
+		for _, seg := range objects {
 			if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
@@ -517,7 +517,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	sentry, err := tbl.GetSegmentByID(objid)
+	sentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
 		return nil, err
 	}

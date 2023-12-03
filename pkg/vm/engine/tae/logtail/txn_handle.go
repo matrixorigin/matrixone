@@ -99,7 +99,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 		b.visitTable,
 		b.rotateTable,
 		b.visitMetadata,
-		b.visitSegment,
+		b.visitObject,
 		b.visitAppend,
 		b.visitDelete)
 	b.BuildResp()
@@ -109,8 +109,8 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 	return logtails, b.Close
 }
 
-func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
-	seg := iseg.(*catalog.SegmentEntry)
+func (b *TxnLogtailRespBuilder) visitObject(iseg any) {
+	seg := iseg.(*catalog.ObjectEntry)
 	node := seg.GetLatestNodeLocked()
 	if seg.IsAppendable() && node.BaseNode.IsEmpty() {
 		return

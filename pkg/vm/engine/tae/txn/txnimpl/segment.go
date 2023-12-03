@@ -25,15 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-// var newSegmentCnt atomic.Int64
-// var getSegmentCnt atomic.Int64
-// var putSegmentCnt atomic.Int64
+// var newObjectCnt atomic.Int64
+// var getObjectCnt atomic.Int64
+// var putObjectCnt atomic.Int64
 // func GetStatsString() string {
 // 	return fmt.Sprintf(
 // 		"NewSeg: %d, GetSeg: %d, PutSeg: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
-// 		newSegmentCnt.Load(),
-// 		getSegmentCnt.Load(),
-// 		putSegmentCnt.Load(),
+// 		newObjectCnt.Load(),
+// 		getObjectCnt.Load(),
+// 		putObjectCnt.Load(),
 // 		newBlockCnt.Load(),
 // 		getBlockCnt.Load(),
 // 		putBlockCnt.Load())
@@ -42,34 +42,34 @@ import (
 var (
 	_segPool = sync.Pool{
 		New: func() any {
-			// newSegmentCnt.Add(1)
-			return &txnSegment{}
+			// newObjectCnt.Add(1)
+			return &txnObject{}
 		},
 	}
 )
 
-type txnSegment struct {
-	txnbase.TxnSegment
-	entry *catalog.SegmentEntry
+type txnObject struct {
+	txnbase.TxnObject
+	entry *catalog.ObjectEntry
 	table *txnTable
 }
 
-type segmentIt struct {
+type ObjectIt struct {
 	sync.RWMutex
-	linkIt *common.GenericSortedDListIt[*catalog.SegmentEntry]
-	curr   *catalog.SegmentEntry
+	linkIt *common.GenericSortedDListIt[*catalog.ObjectEntry]
+	curr   *catalog.ObjectEntry
 	table  *txnTable
 	err    error
 }
 
-type composedSegmentIt struct {
-	*segmentIt
-	uncommitted *catalog.SegmentEntry
+type composedObjectIt struct {
+	*ObjectIt
+	uncommitted *catalog.ObjectEntry
 }
 
-func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
-	it := &segmentIt{
-		linkIt: table.entry.MakeSegmentIt(true),
+func newObjectItOnSnap(table *txnTable) handle.ObjectIt {
+	it := &ObjectIt{
+		linkIt: table.entry.MakeObjectIt(true),
 		table:  table,
 	}
 	var err error
@@ -94,9 +94,9 @@ func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
 	return it
 }
 
-func newSegmentIt(table *txnTable) handle.SegmentIt {
-	it := &segmentIt{
-		linkIt: table.entry.MakeSegmentIt(true),
+func newObjectIt(table *txnTable) handle.ObjectIt {
+	it := &ObjectIt{
+		linkIt: table.entry.MakeObjectIt(true),
 		table:  table,
 	}
 	var err error
@@ -118,27 +118,27 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	if table.localSegment != nil {
-		cit := &composedSegmentIt{
-			segmentIt:   it,
-			uncommitted: table.localSegment.entry,
+	if table.localObject != nil {
+		cit := &composedObjectIt{
+			ObjectIt:   it,
+			uncommitted: table.localObject.entry,
 		}
 		return cit
 	}
 	return it
 }
 
-func (it *segmentIt) Close() error { return nil }
+func (it *ObjectIt) Close() error { return nil }
 
-func (it *segmentIt) GetError() error { return it.err }
-func (it *segmentIt) Valid() bool {
+func (it *ObjectIt) GetError() error { return it.err }
+func (it *ObjectIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
 	return it.linkIt.Valid()
 }
 
-func (it *segmentIt) Next() {
+func (it *ObjectIt) Next() {
 	var err error
 	var valid bool
 	for {
@@ -163,96 +163,96 @@ func (it *segmentIt) Next() {
 	}
 }
 
-func (it *segmentIt) GetSegment() handle.Segment {
-	return newSegment(it.table, it.curr)
+func (it *ObjectIt) GetObject() handle.Object {
+	return newObject(it.table, it.curr)
 }
 
-func (cit *composedSegmentIt) GetSegment() handle.Segment {
+func (cit *composedObjectIt) GetObject() handle.Object {
 	if cit.uncommitted != nil {
-		return newSegment(cit.table, cit.uncommitted)
+		return newObject(cit.table, cit.uncommitted)
 	}
-	return cit.segmentIt.GetSegment()
+	return cit.ObjectIt.GetObject()
 }
 
-func (cit *composedSegmentIt) Valid() bool {
+func (cit *composedObjectIt) Valid() bool {
 	if cit.err != nil {
 		return false
 	}
 	if cit.uncommitted != nil {
 		return true
 	}
-	return cit.segmentIt.Valid()
+	return cit.ObjectIt.Valid()
 }
 
-func (cit *composedSegmentIt) Next() {
+func (cit *composedObjectIt) Next() {
 	if cit.uncommitted != nil {
 		cit.uncommitted = nil
 		return
 	}
-	cit.segmentIt.Next()
+	cit.ObjectIt.Next()
 }
 
-func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
-	seg := _segPool.Get().(*txnSegment)
-	// getSegmentCnt.Add(1)
+func newObject(table *txnTable, meta *catalog.ObjectEntry) *txnObject {
+	seg := _segPool.Get().(*txnObject)
+	// getObjectCnt.Add(1)
 	seg.Txn = table.store.txn
 	seg.table = table
 	seg.entry = meta
 	return seg
 }
 
-func (seg *txnSegment) reset() {
+func (seg *txnObject) reset() {
 	seg.entry = nil
 	seg.table = nil
-	seg.TxnSegment.Reset()
+	seg.TxnObject.Reset()
 }
 
-func (seg *txnSegment) Close() (err error) {
+func (seg *txnObject) Close() (err error) {
 	seg.reset()
 	_segPool.Put(seg)
-	// putSegmentCnt.Add(1)
+	// putObjectCnt.Add(1)
 	return
 }
 
-func (seg *txnSegment) GetMeta() any           { return seg.entry }
-func (seg *txnSegment) String() string         { return seg.entry.String() }
-func (seg *txnSegment) GetID() *types.Objectid { return &seg.entry.ID }
-func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
+func (seg *txnObject) GetMeta() any           { return seg.entry }
+func (seg *txnObject) String() string         { return seg.entry.String() }
+func (seg *txnObject) GetID() *types.Objectid { return &seg.entry.ID }
+func (seg *txnObject) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
 
-func (seg *txnSegment) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (seg *txnObject) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.entry.AsCommonID(), opts)
 }
 
-func (seg *txnSegment) IsUncommitted() bool {
+func (seg *txnObject) IsUncommitted() bool {
 	return seg.entry.IsLocal
 }
 
-func (seg *txnSegment) IsAppendable() bool { return seg.entry.IsAppendable() }
+func (seg *txnObject) IsAppendable() bool { return seg.entry.IsAppendable() }
 
-func (seg *txnSegment) SoftDeleteBlock(id types.Blockid) (err error) {
+func (seg *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
 	return seg.Txn.GetStore().SoftDeleteBlock(fp)
 }
 
-func (seg *txnSegment) GetRelation() (rel handle.Relation) {
+func (seg *txnObject) GetRelation() (rel handle.Relation) {
 	return newRelation(seg.table)
 }
 
-func (seg *txnSegment) GetBlock(id types.Blockid) (blk handle.Block, err error) {
+func (seg *txnObject) GetBlock(id types.Blockid) (blk handle.Block, err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
 	return seg.Txn.GetStore().GetBlock(fp)
 }
 
-func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
+func (seg *txnObject) CreateBlock(is1PC bool) (blk handle.Block, err error) {
 	id := seg.entry.AsCommonID()
 	return seg.Txn.GetStore().CreateBlock(id, is1PC)
 }
 
-func (seg *txnSegment) UpdateStats(stats objectio.ObjectStats) error {
+func (seg *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 	id := seg.entry.AsCommonID()
-	return seg.Txn.GetStore().UpdateSegmentStats(id, &stats)
+	return seg.Txn.GetStore().UpdateObjectStats(id, &stats)
 }

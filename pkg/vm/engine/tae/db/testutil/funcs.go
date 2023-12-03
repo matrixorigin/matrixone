@@ -43,7 +43,7 @@ func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10
-		schema.SegmentMaxBlocks = 2
+		schema.ObjectMaxBlocks = 2
 		wg.Add(1)
 		_ = pool.Submit(func() {
 			defer wg.Done()
@@ -226,11 +226,11 @@ func ForEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func ForEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
-	it := rel.MakeSegmentIt()
+func ForEachObject(rel handle.Relation, fn func(seg handle.Object) error) {
+	it := rel.MakeObjectIt()
 	var err error
 	for it.Valid() {
-		seg := it.GetSegment()
+		seg := it.GetObject()
 		defer seg.Close()
 		if err = fn(seg); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
@@ -316,10 +316,10 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
-	var segs []*catalog.SegmentEntry
-	segIt := rel.MakeSegmentIt()
+	var segs []*catalog.ObjectEntry
+	segIt := rel.MakeObjectIt()
 	for segIt.Valid() {
-		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		seg := segIt.GetObject().GetMeta().(*catalog.ObjectEntry)
 		if !seg.IsAppendable() {
 			segs = append(segs, seg)
 		}
@@ -331,7 +331,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(&seg.ID)
+		segHandle, err := rel.GetObject(&seg.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback(context.Background())
@@ -346,7 +346,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 			metas = append(metas, meta)
 			it.Next()
 		}
-		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		segsToMerge := []*catalog.ObjectEntry{segHandle.GetMeta().(*catalog.ObjectEntry)}
 		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())

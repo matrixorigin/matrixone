@@ -459,7 +459,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		checkpoint:    ckp,
 	}
 	b.BlockFn = b.VisitBlk
-	b.SegmentFn = b.VisitSeg
+	b.ObjectFn = b.VisitSeg
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
@@ -496,14 +496,14 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
-func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
+func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.ObjectEntry) error {
 	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	e.RUnlock()
 
 	for _, node := range mvccNodes {
 		if node.HasDropCommitted() {
-			// send segment deletation event
+			// send Object deletation event
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
@@ -515,7 +515,7 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 	return nil
 }
 
-func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
 	if push {
 		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
@@ -604,7 +604,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*e.GetSegment().ID.Segment(), false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*e.GetObject().ID.Segment(), false)
 	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
 	// produced by flush table tail, it's safe to truncate mem data in CN
 	memTruncTs := node.Start

@@ -61,12 +61,12 @@ type blockIt struct {
 type relBlockIt struct {
 	sync.RWMutex
 	rel       handle.Relation
-	segmentIt handle.SegmentIt
+	ObjectIt handle.ObjectIt
 	blockIt   handle.BlockIt
 	err       error
 }
 
-func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
+func newBlockIt(table *txnTable, meta *catalog.ObjectEntry) *blockIt {
 	it := &blockIt{
 		table:  table,
 		linkIt: meta.MakeBlockIt(true),
@@ -136,7 +136,7 @@ func (it *blockIt) GetBlock() handle.Block {
 }
 
 func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
-	if meta.GetSegment().GetTable().GetDB().IsSystemDB() {
+	if meta.GetObject().GetTable().GetDB().IsSystemDB() {
 		return newSysBlock(table, meta)
 	}
 	return newBlock(table, meta)
@@ -148,7 +148,7 @@ func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 	blk.Txn = table.store.txn
 	blk.entry = meta
 	blk.table = table
-	blk.isUncommitted = meta.GetSegment().IsLocal
+	blk.isUncommitted = meta.GetObject().IsLocal
 	return blk
 }
 
@@ -187,7 +187,7 @@ func (blk *txnBlock) ID() types.Blockid       { return blk.entry.ID }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 
 func (blk *txnBlock) getDBID() uint64 {
-	return blk.entry.GetSegment().GetTable().GetDB().ID
+	return blk.entry.GetObject().GetTable().GetDB().ID
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
@@ -228,7 +228,7 @@ func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetBlockRows(blk.entry)
+		return blk.table.localObject.GetBlockRows(blk.entry)
 	}
 	return blk.entry.GetBlockData().Rows()
 }
@@ -239,7 +239,7 @@ func (blk *txnBlock) GetColumnDataByName(
 	schema := blk.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+		return blk.table.localObject.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx, mp)
 }
@@ -253,7 +253,7 @@ func (blk *txnBlock) GetColumnDataByNames(
 		attrIds[i] = schema.GetColIdx(attr)
 	}
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds, mp)
+		return blk.table.localObject.GetColumnDataByIds(blk.entry, attrIds, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds, mp)
 }
@@ -266,7 +266,7 @@ func (blk *txnBlock) GetColumnDataById(
 	ctx context.Context, colIdx int, mp *mpool.MPool,
 ) (*containers.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+		return blk.table.localObject.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx, mp)
 }
@@ -275,7 +275,7 @@ func (blk *txnBlock) GetColumnDataByIds(
 	ctx context.Context, colIdxes []int, mp *mpool.MPool,
 ) (*containers.BlockView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, mp)
+		return blk.table.localObject.GetColumnDataByIds(blk.entry, colIdxes, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes, mp)
 }
@@ -287,17 +287,17 @@ func (blk *txnBlock) Prefetch(idxes []int) error {
 		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
 	}
 	if blk.isUncommitted {
-		return blk.table.localSegment.Prefetch(blk.entry, seqnums)
+		return blk.table.localObject.Prefetch(blk.entry, seqnums)
 	}
 	return blk.entry.GetBlockData().Prefetch(seqnums)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().ID, entry, readed)
+	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetObject().GetTable().ID, entry, readed)
 }
 
-func (blk *txnBlock) GetSegment() (seg handle.Segment) {
-	seg = newSegment(blk.table, blk.entry.GetSegment())
+func (blk *txnBlock) GetObject() (seg handle.Object) {
+	seg = newObject(blk.table, blk.entry.GetObject())
 	return
 }
 
@@ -307,58 +307,58 @@ func (blk *txnBlock) GetByFilter(
 	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter, mp)
 }
 
-// newRelationBlockItOnSnap make a iterator on txn 's segments of snapshot, exclude segment of workspace
-// TODO: segmentit or tableit
+// newRelationBlockItOnSnap make a iterator on txn 's Objects of snapshot, exclude Object of workspace
+// TODO: Objectit or tableit
 func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 	it := new(relBlockIt)
-	segmentIt := rel.MakeSegmentItOnSnap()
-	if !segmentIt.Valid() {
-		it.err = segmentIt.GetError()
+	ObjectIt := rel.MakeObjectItOnSnap()
+	if !ObjectIt.Valid() {
+		it.err = ObjectIt.GetError()
 		return it
 	}
-	seg := segmentIt.GetSegment()
+	seg := ObjectIt.GetObject()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
-		segmentIt.Next()
-		if !segmentIt.Valid() {
-			it.err = segmentIt.GetError()
+		ObjectIt.Next()
+		if !ObjectIt.Valid() {
+			it.err = ObjectIt.GetError()
 			return it
 		}
 		seg.Close()
-		seg = segmentIt.GetSegment()
+		seg = ObjectIt.GetObject()
 		blockIt = seg.MakeBlockIt()
 	}
 	seg.Close()
 	it.blockIt = blockIt
-	it.segmentIt = segmentIt
+	it.ObjectIt = ObjectIt
 	it.rel = rel
 	it.err = blockIt.GetError()
 	return it
 }
 
-// TODO: segmentit or tableit
+// TODO: Objectit or tableit
 func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 	it := new(relBlockIt)
-	segmentIt := rel.MakeSegmentIt()
-	if !segmentIt.Valid() {
-		it.err = segmentIt.GetError()
+	ObjectIt := rel.MakeObjectIt()
+	if !ObjectIt.Valid() {
+		it.err = ObjectIt.GetError()
 		return it
 	}
-	seg := segmentIt.GetSegment()
+	seg := ObjectIt.GetObject()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
-		segmentIt.Next()
-		if !segmentIt.Valid() {
-			it.err = segmentIt.GetError()
+		ObjectIt.Next()
+		if !ObjectIt.Valid() {
+			it.err = ObjectIt.GetError()
 			return it
 		}
 		seg.Close()
-		seg = segmentIt.GetSegment()
+		seg = ObjectIt.GetObject()
 		blockIt = seg.MakeBlockIt()
 	}
 	seg.Close()
 	it.blockIt = blockIt
-	it.segmentIt = segmentIt
+	it.ObjectIt = ObjectIt
 	it.rel = rel
 	it.err = blockIt.GetError()
 	return it
@@ -371,11 +371,11 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	if it.segmentIt == nil {
+	if it.ObjectIt == nil {
 		return false
 	}
-	if !it.segmentIt.Valid() {
-		if err = it.segmentIt.GetError(); err != nil {
+	if !it.ObjectIt.Valid() {
+		if err = it.ObjectIt.GetError(); err != nil {
 			it.err = err
 		}
 		return false
@@ -390,11 +390,11 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	var seg handle.Segment
+	var seg handle.Object
 	for {
-		it.segmentIt.Next()
-		if !it.segmentIt.Valid() {
-			if err = it.segmentIt.GetError(); err != nil {
+		it.ObjectIt.Next()
+		if !it.ObjectIt.Valid() {
+			if err = it.ObjectIt.GetError(); err != nil {
 				it.err = err
 			}
 			return false
@@ -402,8 +402,8 @@ func (it *relBlockIt) Valid() bool {
 		if seg != nil {
 			seg.Close()
 		}
-		seg = it.segmentIt.GetSegment()
-		meta := seg.GetMeta().(*catalog.SegmentEntry)
+		seg = it.ObjectIt.GetObject()
+		meta := seg.GetMeta().(*catalog.ObjectEntry)
 		meta.RLock()
 		cnt := meta.BlockCnt()
 		meta.RUnlock()
@@ -430,19 +430,19 @@ func (it *relBlockIt) Next() {
 	if it.blockIt.Valid() {
 		return
 	}
-	it.segmentIt.Next()
-	if !it.segmentIt.Valid() {
+	it.ObjectIt.Next()
+	if !it.ObjectIt.Valid() {
 		return
 	}
-	seg := it.segmentIt.GetSegment()
+	seg := it.ObjectIt.GetObject()
 	it.blockIt = seg.MakeBlockIt()
 	for !it.blockIt.Valid() {
-		it.segmentIt.Next()
-		if !it.segmentIt.Valid() {
+		it.ObjectIt.Next()
+		if !it.ObjectIt.Valid() {
 			return
 		}
 		seg.Close()
-		seg = it.segmentIt.GetSegment()
+		seg = it.ObjectIt.GetObject()
 		it.blockIt = seg.MakeBlockIt()
 	}
 	seg.Close()

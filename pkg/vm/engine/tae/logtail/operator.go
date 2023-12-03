@@ -45,7 +45,7 @@ func NewBoundTableOperator(catalog *catalog.Catalog,
 	}
 }
 
-// Run takes a RespBuilder to visit every table/segment/block touched by all txn
+// Run takes a RespBuilder to visit every table/Object/block touched by all txn
 // in the Reader. During the visiting, RespBuiler will fetch information to return logtail entry
 func (c *BoundTableOperator) Run() error {
 	switch c.scope {
@@ -72,14 +72,14 @@ func (c *BoundTableOperator) processTableData() error {
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtySeg := range dirty.Segs {
-		seg, err := tbl.GetSegmentByID(dirtySeg.ID)
+		seg, err := tbl.GetObjectByID(dirtySeg.ID)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
 			}
 			return err
 		}
-		if err = c.visitor.OnSegment(seg); err != nil {
+		if err = c.visitor.OnObject(seg); err != nil {
 			return err
 		}
 		for id := range dirtySeg.Blks {

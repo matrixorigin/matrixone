@@ -35,7 +35,7 @@ import (
 // 2. Append data (append rows less than a block) and commit. Scan hidden column and check.
 // 3. Append data and the total rows is more than a block. Commit and then compact the full block.
 // 4. Scan hidden column and check.
-// 5. Append data and the total rows is more than a segment. Commit and then merge sort the full segment.
+// 5. Append data and the total rows is more than a Object. Commit and then merge sort the full Object.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -46,7 +46,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
@@ -163,7 +163,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
-			t.Log(meta.GetSegment().String())
+			t.Log(meta.GetObject().String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
 				rid := v.(types.Rowid)
 				bid, offset := rid.Decode()
@@ -198,7 +198,7 @@ func TestHidden2(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
@@ -287,15 +287,15 @@ func TestHidden2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeSegmentIt()
-		segs := make([]*catalog.SegmentEntry, 0)
+		it := rel.MakeObjectIt()
+		segs := make([]*catalog.ObjectEntry, 0)
 		for it.Valid() {
-			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
+			seg := it.GetObject().GetMeta().(*catalog.ObjectEntry)
 			segs = append(segs, seg)
 			it.Next()
 		}
 		for _, seg := range segs {
-			factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(seg, tae.Runtime)
+			factory, taskType, scopes, err := tables.BuildObjectCompactionTaskFactory(seg, tae.Runtime)
 			assert.NoError(t, err)
 			if factory == nil {
 				continue

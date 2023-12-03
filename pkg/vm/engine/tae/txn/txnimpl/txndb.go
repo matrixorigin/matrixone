@@ -298,35 +298,35 @@ func (db *txnDB) GetRelationByID(id uint64) (relation handle.Relation, err error
 	return
 }
 
-func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
+func (db *txnDB) GetObject(id *common.ID) (seg handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.GetSegment(id.ObjectID())
+	return table.GetObject(id.ObjectID())
 }
 
-func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (db *txnDB) CreateObject(tid uint64, is1PC bool) (seg handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateSegment(is1PC)
+	return table.CreateObject(is1PC)
 }
-func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (seg handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableSegment(is1PC, nil)
+	return table.CreateNonAppendableObject(is1PC, nil)
 }
 
-func (db *txnDB) UpdateSegmentStats(id *common.ID, stats *objectio.ObjectStats) error {
+func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
 	}
-	table.UpdateSegmentStats(id, stats)
+	table.UpdateObjectStats(id, stats)
 	return nil
 }
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
@@ -403,12 +403,12 @@ func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err 
 	}
 	return table.UpdateDeltaLoc(id, deltaLoc)
 }
-func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
+func (db *txnDB) SoftDeleteObject(id *common.ID) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.SoftDeleteSegment(id.ObjectID())
+	return table.SoftDeleteObject(id.ObjectID())
 }
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil

@@ -37,11 +37,11 @@ const (
 const (
 	SnapshotAttr_TID                            = catalog.SnapshotAttr_TID
 	SnapshotAttr_DBID                           = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID                              = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt                        = catalog.SegmentAttr_CreateAt
-	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
+	ObjectAttr_ID                              = catalog.ObjectAttr_ID
+	ObjectAttr_CreateAt                        = catalog.ObjectAttr_CreateAt
+	ObjectAttr_SegNode                         = catalog.ObjectAttr_SegNode
 	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
+	SnapshotAttr_ObjectMaxBlock                = catalog.SnapshotAttr_ObjectMaxBlock
 	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
 	ObjectAttr_State                            = catalog.ObjectAttr_State
 	ObjectAttr_Sorted                           = catalog.ObjectAttr_Sorted
@@ -112,12 +112,12 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, 0, 0),
 	}
-	SegmentSchemaAttr = []string{
-		SegmentAttr_ID,
-		SegmentAttr_CreateAt,
-		SegmentAttr_SegNode,
+	ObjectSchemaAttr = []string{
+		ObjectAttr_ID,
+		ObjectAttr_CreateAt,
+		ObjectAttr_SegNode,
 	}
-	SegmentSchemaTypes = []types.Type{
+	ObjectSchemaTypes = []types.Type{
 		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_blob, 0, 0),
@@ -168,7 +168,7 @@ var (
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 		SnapshotAttr_BlockMaxRow,
-		SnapshotAttr_SegmentMaxBlock,
+		SnapshotAttr_ObjectMaxBlock,
 		SnapshotAttr_SchemaExtra,
 	}
 	TblTNSchemaType = []types.Type{
@@ -184,7 +184,7 @@ var (
 		types.New(types.T_uint16, 0, 0),
 		types.New(types.T_varchar, 0, 0),
 	}
-	SegmentTNSchemaAttr = []string{
+	ObjectTNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
@@ -194,7 +194,7 @@ var (
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 	}
-	SegmentTNSchemaTypes = []types.Type{
+	ObjectTNSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
@@ -430,14 +430,14 @@ func init() {
 	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
 	DelSchema = catalog.NewEmptySchema("del")
 
-	SegSchema = catalog.NewEmptySchema("segment")
-	for i, colname := range SegmentSchemaAttr {
+	SegSchema = catalog.NewEmptySchema("Object")
+	for i, colname := range ObjectSchemaAttr {
 		if i == 0 {
-			if err := SegSchema.AppendPKCol(colname, SegmentSchemaTypes[i], 0); err != nil {
+			if err := SegSchema.AppendPKCol(colname, ObjectSchemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := SegSchema.AppendCol(colname, SegmentSchemaTypes[i]); err != nil {
+			if err := SegSchema.AppendCol(colname, ObjectSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
@@ -482,14 +482,14 @@ func init() {
 		}
 	}
 
-	SegTNSchema = catalog.NewEmptySchema("segment_dn")
-	for i, colname := range SegmentTNSchemaAttr {
+	SegTNSchema = catalog.NewEmptySchema("Object_dn")
+	for i, colname := range ObjectTNSchemaAttr {
 		if i == 0 {
-			if err := SegTNSchema.AppendPKCol(colname, SegmentTNSchemaTypes[i], 0); err != nil {
+			if err := SegTNSchema.AppendPKCol(colname, ObjectTNSchemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := SegTNSchema.AppendCol(colname, SegmentTNSchemaTypes[i]); err != nil {
+			if err := SegTNSchema.AppendCol(colname, ObjectTNSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

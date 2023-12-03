@@ -35,9 +35,9 @@ type mergeBlocksEntry struct {
 	sync.RWMutex
 	txn           txnif.AsyncTxn
 	relation      handle.Relation
-	droppedSegs   []*catalog.SegmentEntry
+	droppedSegs   []*catalog.ObjectEntry
 	deletes       []*nulls.Bitmap
-	createdSegs   []*catalog.SegmentEntry
+	createdSegs   []*catalog.ObjectEntry
 	droppedBlks   []*catalog.BlockEntry
 	createdBlks   []*catalog.BlockEntry
 	transMappings *BlkTransferBooking
@@ -52,7 +52,7 @@ type mergeBlocksEntry struct {
 func NewMergeBlocksEntry(
 	txn txnif.AsyncTxn,
 	relation handle.Relation,
-	droppedSegs, createdSegs []*catalog.SegmentEntry,
+	droppedSegs, createdSegs []*catalog.ObjectEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	transMappings *BlkTransferBooking,
 	mapping, fromAddr, toAddr []uint32,
@@ -146,7 +146,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	tblEntry := dropped.GetSegment().GetTable()
+	tblEntry := dropped.GetObject().GetTable()
 	isTransient := !tblEntry.GetLastestSchema().HasPK()
 	id := dropped.AsCommonID()
 	page := model.NewTransferHashPage(id, time.Now(), isTransient)
@@ -203,7 +203,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	delTbls := make([]*model.TransDels, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
-		seg, err := entry.relation.GetSegment(id.ObjectID())
+		seg, err := entry.relation.GetObject(id.ObjectID())
 		if err != nil {
 			return err
 		}

@@ -33,8 +33,8 @@ const (
 )
 
 type Policy interface {
-	OnObject(obj *catalog.SegmentEntry)
-	Revise(cpu, mem int64) []*catalog.SegmentEntry
+	OnObject(obj *catalog.ObjectEntry)
+	Revise(cpu, mem int64) []*catalog.ObjectEntry
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any

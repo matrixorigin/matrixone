@@ -39,7 +39,7 @@ func CreateRelation(
 		return
 	}
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
-	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
+	schema.ObjectMaxBlocks = options.DefaultBlocksPerObject
 	_, err = dbH.CreateRelationWithID(schema, id)
 	return err
 }

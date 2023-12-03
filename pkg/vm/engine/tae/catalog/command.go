@@ -125,7 +125,7 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Segment,
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *SegmentNode { return &SegmentNode{} },
+				func() *ObjectNode { return &ObjectNode{} },
 				IOET_WALTxnCommand_Segment_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
@@ -153,7 +153,7 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Object,
 				NewEmptyMVCCNodeFactory(NewEmptyObjectMVCCNode),
-				func() *SegmentNode { return &SegmentNode{} },
+				func() *ObjectNode { return &ObjectNode{} },
 				IOET_WALTxnCommand_Object_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
@@ -198,12 +198,12 @@ func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*Me
 	return impl
 }
 
-func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*ObjectMVCCNode, *SegmentNode] {
-	impl := &EntryCommand[*ObjectMVCCNode, *SegmentNode]{
+func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*ObjectMVCCNode, *ObjectNode] {
+	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     entry.SegmentNode,
+		node:     entry.ObjectNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

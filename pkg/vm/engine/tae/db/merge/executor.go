@@ -107,7 +107,7 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catalog.SegmentEntry) error {
+func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catalog.ObjectEntry) error {
 	mem := e.MemAvailBytes()
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
@@ -141,7 +141,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	return nil
 }
 
-func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog.SegmentEntry, policy Policy) {
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog.ObjectEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 	hasDelSeg := len(delSegs) > 0
 
@@ -166,7 +166,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 		segScopes[i] = *s.AsCommonID()
 	}
 
-	// remove stale segments only
+	// remove stale Objects only
 	if hasDelSeg && !hasMergeObjects {
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 			return jobs.NewDelSegTask(ctx, txn, delSegs), nil
@@ -179,7 +179,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 		return
 	}
 
-	// remove stale segments and mrege objects
+	// remove stale Objects and mrege objects
 	scopes := make([]common.ID, blkCnt)
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
@@ -201,7 +201,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
-	var delPrint []*catalog.SegmentEntry
+	var delPrint []*catalog.ObjectEntry
 	if delSegs != nil {
 		delPrint = delSegs[:originalDelCnt]
 	}
@@ -217,8 +217,8 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
-func expandObjectList(segs []*catalog.SegmentEntry) (
-	mblks []*catalog.BlockEntry, msegs []*catalog.SegmentEntry,
+func expandObjectList(segs []*catalog.ObjectEntry) (
+	mblks []*catalog.BlockEntry, msegs []*catalog.ObjectEntry,
 ) {
 	if len(segs) < 2 {
 		return
@@ -243,7 +243,7 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 	return
 }
 
-func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, osize, esize int) {
+func logMergeTask(name string, taskId uint64, dels, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
 	v2.TaskMergeScheduledByCounter.Inc()
 	v2.TaskMergedBlocksCounter.Add(float64(blkn))
 	v2.TasKMergedSizeCounter.Add(float64(osize))

@@ -44,7 +44,7 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	seg, err := rel.CreateNonAppendableSegment(false)
+	seg, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
 	blk, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
@@ -52,7 +52,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-	sseg, err := rel.GetSegment(seg.GetID())
+	sseg, err := rel.GetObject(seg.GetID())
 	assert.Nil(t, err)
 	t.Log(sseg.String())
 	err = sseg.SoftDeleteBlock(blk.Fingerprint().BlockID)
@@ -175,7 +175,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateNonAppendableSegment(false)
+		seg, err := rel.CreateNonAppendableObject(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 30; i++ {
@@ -191,7 +191,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ = tae.StartTxn(nil)
 		db, _ = txn.GetDatabase("db")
 		rel, _ = db.GetRelationByName(schema.Name)
-		seg, _ = rel.GetSegment(id.ObjectID())
+		seg, _ = rel.GetObject(id.ObjectID())
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))

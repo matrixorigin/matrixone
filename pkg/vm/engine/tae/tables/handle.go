@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type tableHandle struct {
@@ -41,7 +40,7 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
-	segMeta, _ := tableMeta.GetSegmentByID(id.ObjectID())
+	segMeta, _ := tableMeta.GetObjectByID(id.ObjectID())
 	blkMeta, _ := segMeta.GetBlockEntryByID(&id.BlockID)
 	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
@@ -50,23 +49,23 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 }
 
 func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err error) {
-	err = data.ErrAppendableSegmentNotFound
+	err = data.ErrAppendableObjectNotFound
 	h.block = nil
 	h.appender = nil
 	return
 }
 
 func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
-	var segEntry *catalog.SegmentEntry
+	var segEntry *catalog.ObjectEntry
 	if h.appender == nil {
 		segEntry = h.table.meta.LastAppendableSegmemt()
 		if segEntry == nil {
-			err = data.ErrAppendableSegmentNotFound
+			err = data.ErrAppendableObjectNotFound
 			return
 		}
 		blkEntry := segEntry.LastAppendableBlock()
 		if blkEntry == nil {
-			err = data.ErrAppendableSegmentNotFound
+			err = data.ErrAppendableObjectNotFound
 			return
 		}
 		h.block = blkEntry.GetBlockData().(*ablock)
@@ -78,10 +77,10 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 
 	// Instead in ThrowAppenderAndErr, check object index here because
 	// it is better to create new appendable early in some busy update workload case
-	if seg := h.block.meta.GetSegment(); seg.GetNextObjectIndex() >= options.DefaultObejctPerSegment {
+	if seg := h.block.meta.GetObject(); seg.GetNextObjectIndex() >= 1 {
 		logutil.Infof("%s create new seg due to large object index %d",
 			seg.ID.String(), seg.GetNextObjectIndex())
-		return nil, data.ErrAppendableSegmentNotFound
+		return nil, data.ErrAppendableObjectNotFound
 	}
 
 	dropped := h.block.meta.HasDropCommitted()

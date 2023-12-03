@@ -68,7 +68,7 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			segCnt := rand.Intn(5) + 1
 			for i := 0; i < segCnt; i++ {
-				seg, err := rel.CreateNonAppendableSegment(false)
+				seg, err := rel.CreateNonAppendableObject(false)
 				assert.Nil(t, err)
 				blkCnt := rand.Intn(5) + 1
 				for j := 0; j < blkCnt; j++ {
@@ -134,7 +134,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateNonAppendableSegment(false)
+	seg, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
 	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
@@ -162,7 +162,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
+	seg, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
@@ -173,7 +173,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.CreateSegment(false)
+	seg, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
 	assert.Nil(t, err)
@@ -214,7 +214,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateNonAppendableSegment(false)
+	seg, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
 	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
@@ -242,7 +242,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
+	seg, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
@@ -253,7 +253,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.CreateSegment(false)
+	seg, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -262,7 +262,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	err = rel.SoftDeleteSegment(seg.GetID())
+	err = rel.SoftDeleteObject(seg.GetID())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -292,7 +292,7 @@ func TestReplay1(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -301,7 +301,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateObject(false)
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
@@ -398,7 +398,7 @@ func TestReplay2(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 10000)
 	defer bat.Close()
 	bats := bat.Split(2)
@@ -438,7 +438,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	blkIterator := rel.MakeBlockIt()
 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	seg, err := rel.GetSegment(&blk.GetSegment().ID)
+	seg, err := rel.GetObject(&blk.GetObject().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk.ID)
 	assert.Nil(t, err)
@@ -461,7 +461,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segEntry, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(seg.GetID())
+	segEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(seg.GetID())
 	assert.Nil(t, err)
 	blkh, err := segEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
@@ -502,7 +502,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segEntry, err = rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(seg.GetID())
+	segEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(seg.GetID())
 	assert.Nil(t, err)
 	_, err = segEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
@@ -536,7 +536,7 @@ func TestReplay3(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -612,7 +612,7 @@ func TestReplayTableRows(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 4800)
 	defer bat.Close()
 	bats := bat.Split(3)
@@ -737,8 +737,8 @@ func TestReplay4(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	schema.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(4)
 
@@ -802,8 +802,8 @@ func TestReplay5(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	schema.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(8)
 
@@ -930,7 +930,7 @@ func TestReplay6(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -992,7 +992,7 @@ func TestReplay7(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 5
+	schema.ObjectMaxBlocks = 5
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*15+1))
 	defer bat.Close()
@@ -1021,7 +1021,7 @@ func TestReplay8(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
@@ -1176,7 +1176,7 @@ func TestReplay9(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 3)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+2))
 	defer bat.Close()
@@ -1273,7 +1273,7 @@ func TestReplay10(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 5
+	schema.ObjectMaxBlocks = 5
 	expr := &plan.Expr{}
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
@@ -1345,7 +1345,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateObject(false)
 	assert.NoError(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.NoError(t, err)
@@ -1360,7 +1360,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	err = rel.SoftDeleteSegment(seg.GetID())
+	err = rel.SoftDeleteObject(seg.GetID())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 

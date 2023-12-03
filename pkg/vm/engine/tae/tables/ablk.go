@@ -65,7 +65,7 @@ func newABlock(
 }
 
 func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
-	blk.meta.GetSegment().GetTable().AddRows(
+	blk.meta.GetObject().GetTable().AddRows(
 		uint64(n.GetMaxRow() - n.GetStartRow()),
 	)
 	return
@@ -74,7 +74,7 @@ func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
 func (blk *ablock) OnApplyDelete(
 	deleted uint64,
 	ts types.TS) (err error) {
-	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	blk.meta.GetObject().GetTable().RemoveRows(deleted)
 	return
 }
 

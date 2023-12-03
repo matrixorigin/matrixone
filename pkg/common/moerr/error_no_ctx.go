@@ -290,8 +290,8 @@ func NewTxnReadConflictNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTxnReadConflict, xmsg)
 }
 
-func NewAppendableSegmentNotFoundNoCtx() *Error {
-	return newError(Context(), ErrAppendableSegmentNotFound)
+func NewAppendableObjectNotFoundNoCtx() *Error {
+	return newError(Context(), ErrAppendableObjectNotFound)
 }
 
 func NewAppendableBlockNotFoundNoCtx() *Error {

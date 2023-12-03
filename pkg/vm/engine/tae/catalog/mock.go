@@ -128,7 +128,7 @@ func (it *mockSegIt) GetError() error            { return nil }
 func (it *mockSegIt) Valid() bool                { return false }
 func (it *mockSegIt) Next()                      {}
 func (it *mockSegIt) Close() error               { return nil }
-func (it *mockSegIt) GetSegment() handle.Segment { return nil }
+func (it *mockSegIt) GetObject() handle.Object { return nil }
 
 func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
@@ -202,11 +202,11 @@ func (h *mockDBHandle) GetCreateSql() string {
 	return h.entry.GetCreateSql()
 }
 
-func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
+func (h *mockTableHandle) MakeObjectIt() (it handle.ObjectIt) {
 	return new(mockSegIt)
 }
 
-func (h *mockTableHandle) MakeSegmentItOnSnap() (it handle.SegmentIt) {
+func (h *mockTableHandle) MakeObjectItOnSnap() (it handle.ObjectIt) {
 	return new(mockSegIt)
 }
 

@@ -216,7 +216,7 @@ func (d *dirtyCollector) IsCommitted(from, to types.TS) bool {
 	return reader.IsCommitted()
 }
 
-// DirtyCount returns unflushed table, segment, block count
+// DirtyCount returns unflushed table, Object, block count
 func (d *dirtyCollector) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	merged := d.GetAndRefreshMerged()
 	tblCnt = merged.tree.TableCount()
@@ -379,7 +379,7 @@ func (d *dirtyCollector) tryCompactTree(
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
-		seg *catalog.SegmentEntry
+		seg *catalog.ObjectEntry
 		blk *catalog.BlockEntry
 	)
 	for id, dirtyTable := range tree.Tables {
@@ -427,7 +427,7 @@ func (d *dirtyCollector) tryCompactTree(
 				dirtyTable.Shrink(id)
 				continue
 			}
-			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
+			if seg, err = tbl.GetObjectByID(dirtySeg.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
 					err = nil

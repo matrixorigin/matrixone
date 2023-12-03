@@ -59,7 +59,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	//100 segs, one seg contains 50 blocks, one block contains 10 rows.
 	taeBat := catalog.MockBatch(schema, 100*50*10)
 	defer taeBat.Close()
@@ -89,7 +89,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
-		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 		objNames = append(objNames, name)
 		writer, err := blockio.NewBlockWriterNew(fs, objNames[i], 0, nil)
 		assert.Nil(t, err)
@@ -222,7 +222,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	taeBat := catalog.MockBatch(schema, 40)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(4)
@@ -246,7 +246,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	moBats[3] = containers.ToCNBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
-	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	objName1 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err := blockio.NewBlockWriterNew(fs, objName1, 0, nil)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -277,7 +277,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	stats1 := writer.GetObjectStats()[objectio.SchemaData]
 
 	//write taeBats[3] into file service
-	objName2 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	objName2 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err = blockio.NewBlockWriterNew(fs, objName2, 0, nil)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(1)
@@ -469,7 +469,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
-	objName3 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	objName3 := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
 	writer, err = blockio.NewBlockWriterNew(fs, objName3, 0, nil)
 	assert.Nil(t, err)
 	for _, view := range physicals {
@@ -579,7 +579,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	//DDL
 	//create db;
 	dbName := "dbtest"
@@ -828,7 +828,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1128,7 +1128,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1447,7 +1447,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	dbName := "dbtest"
 	ac := AccessInfo{
 		accountId: 0,
@@ -1777,7 +1777,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 5
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	//5 segs, one seg contains 2 blocks, one block contains 10 rows.
 	rowCount := 100 * 2 * 5
 	taeBat := catalog.MockBatch(schema, rowCount)
@@ -1898,7 +1898,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	for id, offsets := range blkIDOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.ObjectID())
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
