@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
@@ -91,7 +92,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
-		err = nil
+		if err != nil && !strings.Contains(err.Error(), "panic") {
+			err = nil
+		}
 	default:
 	}
 	return err
