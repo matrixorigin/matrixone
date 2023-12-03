@@ -562,7 +562,6 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
 	defer func() {
-		v2.TxnTableRangeSizeHistogram.Observe(float64(len(ranges)))
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -853,6 +852,7 @@ func (tbl *txnTable) rangesOnePart(
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
 	if btotal > 0 {
+		v2.TxnRangeSizeHistogram.Observe(float64(bhit))
 		v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	}
 	return
@@ -996,6 +996,7 @@ func (tbl *txnTable) tryFastRanges(
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
 	if btotal > 0 {
+		v2.TxnFastRangeSizeHistogram.Observe(float64(bhit))
 		v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
 	}
 

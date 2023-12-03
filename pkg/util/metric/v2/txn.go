@@ -212,14 +212,17 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
-	TxnTableRangeSizeHistogram = prometheus.NewHistogram(
+	txnTableRangeSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "ranges_duration_size",
 			Help:      "Bucketed histogram of txn table ranges size.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 20),
-		})
+		}, []string{"type"})
+
+	TxnRangeSizeHistogram     = txnTableRangeSizeHistogram.WithLabelValues("ranges_len")
+	TxnFastRangeSizeHistogram = txnTableRangeSizeHistogram.WithLabelValues("fast_ranges_len")
 
 	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
