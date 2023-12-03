@@ -30,6 +30,7 @@ var (
 
 	defaultSPI    = SyncBased
 	enableChecker = false
+	enableVerbose = false
 )
 
 // SPI choose pool implementation

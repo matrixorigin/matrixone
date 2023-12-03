@@ -65,4 +65,12 @@ func init() {
 			enableChecker = true
 		}
 	}
+
+	enable, ok = os.LookupEnv("mo_reuse_enable_checker_verbose")
+	if ok {
+		switch strings.ToLower(enable) {
+		case "true":
+			enableVerbose = true
+		}
+	}
 }

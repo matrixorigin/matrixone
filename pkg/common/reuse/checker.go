@@ -35,8 +35,9 @@ type checker[T ReusableObject] struct {
 		sync.RWMutex
 		// we use uintptr as key, to check leak free in gc triggered.
 		// We cannot hold the *T in checker.
-		m     map[uintptr]step
-		stack map[uintptr]string
+		m             map[uintptr]step
+		createStack   map[uintptr]string
+		lastFreeStack map[uintptr]string
 	}
 }
 
@@ -45,7 +46,8 @@ func newChecker[T ReusableObject](enable bool) *checker[T] {
 		enable: enable,
 	}
 	c.mu.m = make(map[uintptr]step)
-	c.mu.stack = make(map[uintptr]string)
+	c.mu.createStack = make(map[uintptr]string)
+	c.mu.lastFreeStack = make(map[uintptr]string)
 	return c
 }
 
@@ -76,10 +78,13 @@ func (c *checker[T]) got(v *T) {
 
 	switch s {
 	case inUse:
-		panic(fmt.Sprintf("double got from pool for type: %T", v))
+		panic(fmt.Sprintf("double got from pool for type: %T, %+v \n create by: <<<%s>>>\n",
+			v, v, c.mu.createStack[k]))
 	}
 	c.mu.m[k] = inUse
-	c.mu.stack[k] = string(debug.Stack())
+	if enableVerbose {
+		c.mu.createStack[k] = string(debug.Stack())
+	}
 }
 
 func (c *checker[T]) free(v *T) {
@@ -99,9 +104,13 @@ func (c *checker[T]) free(v *T) {
 	switch s {
 	// the v is marked idle, means already free
 	case idle:
-		panic(fmt.Sprintf("double free for type: %T", v))
+		panic(fmt.Sprintf("double free for type: %T, %+v \n create by: <<<%s>>>\n last free by: <<<%s>>> \n",
+			v, v, c.mu.createStack[k], c.mu.lastFreeStack[k]))
 	}
 	c.mu.m[k] = idle
+	if enableVerbose {
+		c.mu.lastFreeStack[k] = string(debug.Stack())
+	}
 }
 
 func (c *checker[T]) gc(v *T) {
@@ -121,8 +130,8 @@ func (c *checker[T]) gc(v *T) {
 	switch s {
 	// the v is marked in use, but v is release by gc
 	case inUse:
-		panic(fmt.Sprintf("%d missing free for type: %T(%p), %+v, create by: \n<<<%s>>>\n",
-			k, v, v, v, c.mu.stack[k]))
+		panic(fmt.Sprintf("missing free for type: %T, %+v \n create by: <<<%s>>>\n",
+			v, v, c.mu.createStack[k]))
 	}
 
 	delete(c.mu.m, k)
