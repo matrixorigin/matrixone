@@ -205,6 +205,17 @@ type alterOptionImpl struct {
 	AlterTableOption
 }
 
+// second issue for 6b start
+
+// The new AlterTableAddPartitionClause
+type AlterTableAddPartitionClause struct {
+	alterOptionImpl
+	Typ          AlterTableOptionType
+	PartitionDef *PartitionDefinition
+}
+
+// second issue for 6b end
+
 type AlterOptionAlterIndex struct {
 	alterOptionImpl
 	Name       Identifier
@@ -502,6 +513,7 @@ const (
 	AlterTableOrderByColumn
 	AlterTableAddConstraint
 	AlterTableAddColumn
+	AlterTableAddPartition // New option for adding partitions for 6b issue 2
 )
 
 // ColumnPositionType is the type for ColumnPosition.
