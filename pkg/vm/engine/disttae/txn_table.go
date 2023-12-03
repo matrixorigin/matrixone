@@ -887,12 +887,14 @@ func (tbl *txnTable) tryFastRanges(
 		meta     objectio.ObjectDataMeta
 		bf       objectio.BloomFilter
 		blockCnt uint32
-		zmTotal  float64 = 1
+		zmTotal  float64
 		zmHit    float64
 	)
 
 	defer func() {
-		v2.TxnFastRangesZMapSelectivityHistogram.Observe(zmHit / zmTotal)
+		if zmTotal > 0 {
+			v2.TxnFastRangesZMapSelectivityHistogram.Observe(zmHit / zmTotal)
+		}
 	}()
 
 	if err = ForeachSnapshotObjects(
@@ -991,7 +993,10 @@ func (tbl *txnTable) tryFastRanges(
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
-	v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+	if btotal > 0 {
+		v2.TxnFastRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+	}
+
 	return
 }
 
