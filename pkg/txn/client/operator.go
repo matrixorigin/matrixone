@@ -100,6 +100,13 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+// WithTxnCNOpenlog set  txn openlog
+func WithTxnCNOpenlog() TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.openlog = true
+	}
+}
+
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
@@ -162,6 +169,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		openlog          bool
 		createBy         string
 		lockService      lockservice.LockService
 	}
@@ -235,6 +243,10 @@ func newTxnOperatorWithSnapshot(
 
 func (tc *txnOperator) isUserTxn() bool {
 	return tc.option.user
+}
+
+func (tc *txnOperator) IsOpenLog() bool {
+	return tc.option.openlog
 }
 
 func (tc *txnOperator) setWaitActive(v bool) {

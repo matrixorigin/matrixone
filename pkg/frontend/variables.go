@@ -3482,12 +3482,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("gtid_purged"),
 		Default:           "",
 	},
-	"transaction_operator_log": {
-		Name:              "transaction_operator_log",
-		Scope:             ScopeSession,
+	"transaction_operator_open_log": {
+		Name:              "transaction_operator_open_log",
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("transaction_operator_log"),
+		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
 }
