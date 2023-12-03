@@ -852,7 +852,9 @@ func (tbl *txnTable) rangesOnePart(
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
-	v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+	if btotal > 0 {
+		v2.TxnRangesBlockSelectivityHistogram.Observe(float64(bhit) / float64(btotal))
+	}
 	return
 }
 
