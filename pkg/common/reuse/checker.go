@@ -16,6 +16,8 @@ package reuse
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"unsafe"
 )
@@ -33,26 +35,22 @@ type checker[T ReusableObject] struct {
 		sync.RWMutex
 		// we use uintptr as key, to check leak free in gc triggered.
 		// We cannot hold the *T in checker.
-		m map[uintptr]step
+		m     map[uintptr]step
+		stack map[uintptr]string
 	}
 }
 
 func newChecker[T ReusableObject](enable bool) *checker[T] {
-	if !enableChecker {
-		enable = false
-	}
-
 	c := &checker[T]{
 		enable: enable,
 	}
-	if c.enable {
-		c.mu.m = make(map[uintptr]step)
-	}
+	c.mu.m = make(map[uintptr]step)
+	c.mu.stack = make(map[uintptr]string)
 	return c
 }
 
 func (c *checker[T]) created(v *T) {
-	if !c.enable {
+	if !enableChecker || !c.enable {
 		return
 	}
 
@@ -63,7 +61,7 @@ func (c *checker[T]) created(v *T) {
 }
 
 func (c *checker[T]) got(v *T) {
-	if !c.enable {
+	if !enableChecker || !c.enable {
 		return
 	}
 
@@ -81,10 +79,11 @@ func (c *checker[T]) got(v *T) {
 		panic(fmt.Sprintf("double got from pool for type: %T", v))
 	}
 	c.mu.m[k] = inUse
+	c.mu.stack[k] = string(debug.Stack())
 }
 
 func (c *checker[T]) free(v *T) {
-	if !c.enable {
+	if !enableChecker || !c.enable {
 		return
 	}
 
@@ -94,7 +93,7 @@ func (c *checker[T]) free(v *T) {
 	k := uintptr(unsafe.Pointer(v))
 	s, ok := c.mu.m[k]
 	if !ok {
-		panic("missing status")
+		return
 	}
 
 	switch s {
@@ -106,7 +105,7 @@ func (c *checker[T]) free(v *T) {
 }
 
 func (c *checker[T]) gc(v *T) {
-	if !c.enable {
+	if !enableChecker || !c.enable {
 		return
 	}
 
@@ -116,14 +115,39 @@ func (c *checker[T]) gc(v *T) {
 	k := uintptr(unsafe.Pointer(v))
 	s, ok := c.mu.m[k]
 	if !ok {
-		panic("missing status")
+		return
 	}
 
 	switch s {
 	// the v is marked in use, but v is release by gc
 	case inUse:
-		panic(fmt.Sprintf("missing free for type: %T, %+v", v, v))
+		panic(fmt.Sprintf("%d missing free for type: %T(%p), %+v, create by: \n<<<%s>>>\n",
+			k, v, v, v, c.mu.stack[k]))
 	}
 
 	delete(c.mu.m, k)
+}
+
+func RunReuseTests(fn func()) {
+	enableChecker = true
+	defer func() {
+		enableChecker = false
+	}()
+	fn()
+	v := &waiterGC{
+		data: make([]byte, 1024),
+	}
+	c := make(chan struct{})
+	runtime.SetFinalizer(
+		v,
+		func(v *waiterGC) {
+			close(c)
+		})
+	v = nil
+	debug.FreeOSMemory()
+	<-c
+}
+
+type waiterGC struct {
+	data []byte
 }

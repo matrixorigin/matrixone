@@ -24,7 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -369,7 +369,7 @@ func TestRangeLockWithConflict(t *testing.T) {
 						_, err := s.Lock(ctx, table, rows, txn2, option)
 						require.NoError(t, err)
 						defer func() {
-							assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 						}()
 
 						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
@@ -714,7 +714,7 @@ func TestManyRowLockWithConflict(t *testing.T) {
 						_, err := s.Lock(ctx, table, rows, txn2, option)
 						require.NoError(t, err)
 						defer func() {
-							assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 						}()
 
 						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
@@ -761,7 +761,7 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 						_, err := s.Lock(ctx, table, rows, txn2, option)
 						require.NoError(t, err)
 						defer func() {
-							assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 						}()
 
 						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
@@ -1434,24 +1434,22 @@ func runLockServiceTestsWithLevel(
 	fn func(*lockTableAllocator, []*service),
 	adjustConfig func(*Config)) {
 	defer leaktest.AfterTest(t.(testing.TB))()
-	RunLockServicesForTest(
-		level,
-		serviceIDs,
-		lockTableBindTimeout,
-		func(lta LockTableAllocator, ls []LockService) {
-			services := make([]*service, 0, len(ls))
-			for _, s := range ls {
-				services = append(services, s.(*service))
-			}
-			fn(lta.(*lockTableAllocator), services)
-		},
-		adjustConfig,
-	)
-}
 
-func TestUnsafeStringToByteSlice(t *testing.T) {
-	v := "abc"
-	assert.Equal(t, []byte(v), util.UnsafeStringToBytes(v))
+	reuse.RunReuseTests(func() {
+		RunLockServicesForTest(
+			level,
+			serviceIDs,
+			lockTableBindTimeout,
+			func(lta LockTableAllocator, ls []LockService) {
+				services := make([]*service, 0, len(ls))
+				for _, s := range ls {
+					services = append(services, s.(*service))
+				}
+				fn(lta.(*lockTableAllocator), services)
+			},
+			adjustConfig,
+		)
+	})
 }
 
 func waitWaiters(
