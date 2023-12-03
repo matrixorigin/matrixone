@@ -1057,7 +1057,6 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
-		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
@@ -1066,10 +1065,11 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 	}
-	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
-	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes         = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
+	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
+	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
+	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -4221,7 +4221,13 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			}
 		}
 
-		//  drop table mo_pubs
+		// drop table mo_mysql_compatibility_mode
+		err = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
+		if err != nil {
+			return err
+		}
+
+		// drop table mo_pubs
 		err = bh.Exec(deleteCtx, dropMoPubsSql)
 		if err != nil {
 			return err
@@ -4233,7 +4239,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			return err
 		}
 
-		//step 11: drop mo_catalog.mo_indexes under general tenant
+		// drop mo_catalog.mo_indexes under general tenant
 		err = bh.Exec(deleteCtx, dropMoIndexes)
 		if err != nil {
 			return err
@@ -4245,7 +4251,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			return err
 		}
 
-		//step 1 : delete the account in the mo_account of the sys account
+		// delete the account in the mo_account of the sys account
 		sql, err = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
 		if err != nil {
 			return err
@@ -4255,8 +4261,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			return err
 		}
 
-		//step 2: get all cluster table in the mo_catalog
-
+		// get all cluster table in the mo_catalog
 		sql = "show tables from mo_catalog;"
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
@@ -4279,7 +4284,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			}
 		}
 
-		//step3 : delete all data of the account in the cluster table
+		// delete all data of the account in the cluster table
 		for clusterTable := range clusterTables {
 			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 			bh.ClearExecResultSet()
@@ -4296,7 +4301,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		return err
 	}
 
-	//if drop the account, add the account to kill queue
+	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
@@ -5626,12 +5631,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
-	case *tree.CreateStream:
+	case *tree.CreateSource:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-		if st.StreamName != nil {
-			dbName = string(st.StreamName.SchemaName)
+		if st.SourceName != nil {
+			dbName = string(st.SourceName.SchemaName)
 		}
 	case *tree.CreateConnector:
 		objType = objectTypeDatabase

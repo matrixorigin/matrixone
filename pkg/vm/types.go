@@ -67,7 +67,7 @@ const (
 	Deletion
 	Insert
 	External
-	Stream
+	Source
 
 	Minus
 	Intersect
@@ -195,6 +195,11 @@ func (ins *Instruction) IsBrokenNode() bool {
 		return true
 	}
 	return false
+}
+
+func (ins *Instruction) CannotRemote() bool {
+	// todo: I think we should add more operators here.
+	return ins.Op == LockOp
 }
 
 type ModificationArgument interface {

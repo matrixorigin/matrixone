@@ -1767,6 +1767,26 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 23,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 

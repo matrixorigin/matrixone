@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -982,8 +983,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
-		ss, err := c.compileStreamScan(ctx, n)
+	case plan.Node_SOURCE_SCAN:
+		ss, err := c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1553,8 +1554,8 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
@@ -1580,7 +1581,7 @@ func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Stream,
+			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -3386,8 +3387,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					agg.F.Func.ObjName = "starcount"
-					continue
+					if _, ok := args.Expr.(*plan.Expr_C); ok {
+						if agg.F.Func.ObjName == "count" {
+							agg.F.Func.ObjName = "starcount"
+							continue
+						}
+					}
+					partialresults = nil
+					break
 				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
 				if len(n.TableDef.Cols) > 0 {
@@ -3395,6 +3402,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 			}
 			for _, buf := range ranges[1:] {
+				if partialresults == nil {
+					break
+				}
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)

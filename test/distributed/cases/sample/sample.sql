@@ -12,9 +12,7 @@ select sample (col3, 3 rows) from sample01;
 select sample (col3, 4 rows) as newCol3 from sample01;
 select sample (col3, 3 rows) as newCol3 from sample01 where col3 is not null;
 select sample (col3, 3 rows) from sample01 where col3 is null;
--- @bvt:issue#12991
 select sample (col2, 2 rows) from sample01 where col3 is null group by col1;
--- @bvt:issue
 select col1, sample(col2, 20 rows) from sample01 group by col1 order by col1;
 
 select sample (col1 * 3, 10 rows) as newCol1 from sample01 where col2 is not null;

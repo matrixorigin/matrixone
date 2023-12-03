@@ -480,3 +480,15 @@ func checkTableColumnNameValid(name string) bool {
 	}
 	return true
 }
+
+// Check the expr has paramExpr
+func checkExprHasParamExpr(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if _, ok := expr.(*tree.ParamExpr); ok {
+			return true
+		} else if e, ok := expr.(*tree.FuncExpr); ok {
+			return checkExprHasParamExpr(e.Exprs)
+		}
+	}
+	return false
+}

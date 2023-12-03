@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package stream
+package source
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -23,6 +23,11 @@ import (
 )
 
 var _ vm.Operator = new(Argument)
+
+const (
+	retrieve = 0
+	end      = 1
+)
 
 type Argument struct {
 	TblDef *plan.TableDef
@@ -37,6 +42,8 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 	buf      *batch.Batch
+
+	status int
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

@@ -86,6 +86,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 
 	var objNames []objectio.ObjectName
 	var blkMetas []string
+	var stats []objectio.ObjectStats
 	offset := 0
 	for i := 0; i < 100; i++ {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -109,6 +110,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 				blk.GetID())
 			assert.Nil(t, err)
 			blkMetas = append(blkMetas, metaLoc.String())
+			stats = append(stats, writer.GetObjectStats()[objectio.SchemaData])
 		}
 	}
 
@@ -169,8 +171,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	entries = append(entries, createTbEntries...)
 
 	//add 100 * 50 blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	offset = 0
@@ -178,6 +180,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		for i := 0; i < 50; i++ {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
+			metaLocBat.Vecs[1].Append([]byte(stats[offset+i][:]), false)
 		}
 		offset += 50
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
@@ -271,6 +274,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		blocks[1].GetID(),
 	).String()
 	assert.Nil(t, err)
+	stats1 := writer.GetObjectStats()[objectio.SchemaData]
 
 	//write taeBats[3] into file service
 	objName2 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -288,6 +292,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		uint32(taeBats[3].Vecs[0].Length()),
 		blocks[0].GetID(),
 	).String()
+	stats3 := writer.GetObjectStats()[objectio.SchemaData]
 	assert.Nil(t, err)
 
 	//create db;
@@ -344,6 +349,34 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	entries = append(entries, createTbEntries...)
+	err = handle.HandlePreCommit(
+		context.TODO(),
+		txn,
+		&api.PrecommitWriteCmd{
+			//UserId:    ac.userId,
+			//AccountId: ac.accountId,
+			//RoleId:    ac.roleId,
+			EntryList: entries,
+		},
+		new(api.SyncLogTailResp),
+	)
+	assert.Nil(t, err)
+	//t.FailNow()
+	_, err = handle.HandleCommit(context.TODO(), txn)
+	assert.Nil(t, err)
+	entries = entries[:0]
+
+	// set blockmaxrow as 10
+	p := &catalog.LoopProcessor{}
+	p.TableFn = func(te *catalog.TableEntry) error {
+		schema := te.GetLastestSchema()
+		if schema.Name == "tbtest" {
+			schema.BlockMaxRows = 10
+		}
+		return nil
+	}
+	handle.db.Catalog.RecurLoop(p)
+	txn = mock1PCTxn(handle.db)
 	//append data into "tbtest" table
 	insertEntry, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, "", moBats[2])
@@ -351,13 +384,15 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	entries = append(entries, insertEntry)
 
 	//add two non-appendable blocks from S3 into "tbtest" table
-	attrs := []string{catalog2.BlockMeta_MetaLoc}
-	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
+	attrs := []string{catalog2.BlockMeta_MetaLoc, catalog2.ObjectMeta_ObjectStats}
+	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0), types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 	vecOpts := containers.Options{}
 	vecOpts.Capacity = 0
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
+	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
+	metaLocBat1.Vecs[1].Append([]byte(stats1[:]), false)
 	metaLocMoBat1 := containers.ToCNBatch(metaLocBat1)
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
@@ -371,6 +406,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
+	metaLocBat2.Vecs[1].Append([]byte(stats3[:]), false)
 	metaLocMoBat2 := containers.ToCNBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName2.String(), metaLocMoBat2)
@@ -392,6 +428,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//t.FailNow()
 	_, err = handle.HandleCommit(context.TODO(), txn)
 	assert.Nil(t, err)
+	t.Log(handle.db.Catalog.SimplePPString(3))
 	//check rows of "tbtest" which should has three blocks.
 	txnR, err := handle.db.StartTxn(nil)
 	assert.NoError(t, err)

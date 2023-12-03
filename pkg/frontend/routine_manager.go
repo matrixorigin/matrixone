@@ -24,6 +24,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -47,6 +48,8 @@ type RoutineManager struct {
 	accountRoutine *AccountRoutineManager
 	baseService    BaseService
 	sessionManager *queryservice.SessionManager
+	// reportSystemStatusTime is the time when report system status last time.
+	reportSystemStatusTime atomic.Pointer[time.Time]
 }
 
 type AccountRoutineManager struct {
