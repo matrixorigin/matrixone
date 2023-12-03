@@ -87,7 +87,7 @@ not supported: median in distinct mode
 drop table if exists t1;
 create table t1 (a int,b varchar(10));
 select median(b) from t1;
-invalid argument aggregate function median, bad value [VARCHAR]
+invalid argument aggregate function median, bad value [CHAR]
 
 SELECT median(1);
 median(1)

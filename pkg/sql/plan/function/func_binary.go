@@ -1310,6 +1310,9 @@ type number interface {
 func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	tc := func(inputs []types.Type, t types.T) bool {
 		for _, input := range inputs {
+			if (input.Oid == types.T_char && t == types.T_varchar) || (input.Oid == types.T_varchar && t == types.T_char) {
+				continue
+			}
 			if input.Oid != t && input.Oid != types.T_any {
 				return false
 			}
@@ -1332,8 +1335,8 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	castTypes := make([]types.T, len(inputs))
 	targetTypes := make([]types.Type, len(inputs))
 	for j := 0; j < len(inputs); j++ {
-		castTypes[j] = inputs[0].Oid
-		targetTypes[j] = inputs[0].Oid.ToType()
+		castTypes[j] = types.T_float64
+		targetTypes[j] = types.T_float64.ToType()
 	}
 	c, _ := tryToMatch(inputs, castTypes)
 	if c == matchFailed {
