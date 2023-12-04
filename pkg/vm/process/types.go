@@ -48,6 +48,7 @@ const (
 // Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
+	StopWithSub(time.Duration)
 	Start()
 	Alloc(int64)
 	Input(*batch.Batch, bool)

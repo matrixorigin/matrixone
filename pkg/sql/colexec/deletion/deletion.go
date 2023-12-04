@@ -17,6 +17,7 @@ package deletion
 import (
 	"bytes"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -73,9 +74,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+
+	var childrenCallDuration time.Duration
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.StopWithSub(childrenCallDuration)
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
+			beforeChildrenCall := time.Now()
 			result, err := arg.children[0].Call(proc)
+			childrenCallDuration += time.Since(beforeChildrenCall)
+
 			if err != nil {
 				return result, err
 			}
@@ -167,6 +179,11 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	bat := result.Batch
 
 	var affectedRows uint64

@@ -65,9 +65,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
+
+	var childrenCallDuration time.Duration
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.StopWithSub(childrenCallDuration)
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
+
+			beforeChildrenCall := time.Now()
 			result, err := arg.children[0].Call(proc)
+			childrenCallDuration += time.Since(beforeChildrenCall)
+
 			if err != nil {
 				return result, err
 			}
@@ -161,6 +173,11 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err

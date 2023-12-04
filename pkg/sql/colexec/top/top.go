@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -64,9 +65,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
+
+	var childrenCallDuration time.Duration
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.StopWithSub(childrenCallDuration)
+	}()
 
 	if ap.Limit == 0 {
 		result := vm.NewCallResult()
@@ -76,7 +81,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
+
+			beforeChildrenCall := time.Now()
 			result, err := arg.children[0].Call(proc)
+			childrenCallDuration += time.Since(beforeChildrenCall)
+
 			if err != nil {
 				return result, err
 			}

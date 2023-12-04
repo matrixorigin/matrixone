@@ -52,6 +52,14 @@ func (a *analyze) Stop() {
 	}
 }
 
+// stop and subtract the duration of children-operator
+func (a *analyze) StopWithSub(d time.Duration) {
+	if a.analInfo != nil {
+		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
+		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait-d)/time.Nanosecond))
+	}
+}
+
 func (a *analyze) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
