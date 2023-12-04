@@ -58,21 +58,25 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	}
 	for i := 0; i < rowCount; i++ {
 		var rowValues string
+		var err error
 		for j := 0; j < columnCount; j++ {
-			val, err := obj.StringValueByName(ctx, uint64(i), colNames[j])
-			if err != nil {
-				return "", err // Handle the error appropriately
-			}
+			var val string
+			val, err = obj.StringValueByName(ctx, uint64(i), colNames[j])
 			// Enclose the value in single quotes if it is a string
 			rowValues += "'" + val + "'"
 			if j < columnCount-1 {
 				rowValues += ", "
 			}
 		}
-		if i > 0 {
-			values += ", "
+
+		if err == nil {
+			if i > 0 && len(values) > 0 {
+				values += ", "
+			}
+			values += fmt.Sprintf("(%s)", rowValues)
+		} else {
+			err = nil
 		}
-		values += fmt.Sprintf("(%s)", rowValues)
 	}
 	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES %s ",
 		c.dbName, c.tableName, fields, values)

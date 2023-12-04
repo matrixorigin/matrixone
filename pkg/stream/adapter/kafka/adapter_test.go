@@ -57,7 +57,7 @@ func (m *MockKafkaAdapter) ReadMessagesFromPartition(topic string, partition int
 	return nil, nil // Mocked response
 }
 
-func (m *MockKafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error) {
+func (m *MockKafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64, configs map[string]interface{}) ([]*kafka.Message, error) {
 	return nil, nil // Mocked response
 }
 
