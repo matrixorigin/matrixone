@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"os"
 	"path"
@@ -97,7 +96,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	trimInfo := names[1]
 	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
-	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]map[uint16]bool)
 	for i, name := range names {
@@ -128,9 +126,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		defer data.Close()
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
 		for _, location := range locations {
 			if files[location.Name().String()] == nil {
 				dentry, err := srcFs.StatFile(ctx, location.Name().String())

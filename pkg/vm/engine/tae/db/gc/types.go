@@ -16,6 +16,7 @@ package gc
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
 const (
@@ -44,20 +45,17 @@ const (
 	GCAttrBlockId    = "block_id"
 	GCAttrTableId    = "table_id"
 	GCAttrDBId       = "db_id"
+	GCAttrCommitTS   = "commit_ts"
 )
 
 var (
 	BlockSchemaAttr = []string{
-		GCAttrBlockId,
-		GCAttrTableId,
-		GCAttrDBId,
 		GCAttrObjectName,
+		GCAttrCommitTS,
 	}
 	BlockSchemaTypes = []types.Type{
-		types.New(types.T_Blockid, 0, 0),
-		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
 	}
 
 	DropTableSchemaAttr = []string{
@@ -83,3 +81,16 @@ var (
 		types.New(types.T_varchar, 5000, 0),
 	}
 )
+
+type Cleaner interface {
+	Replay() error
+	Process()
+	TryGC() error
+	AddChecker(checker func(item any) bool)
+	GetMaxConsumed() *checkpoint.CheckpointEntry
+	// for test
+	SetMinMergeCountForTest(count int)
+	GetMinMerged() *checkpoint.CheckpointEntry
+	CheckGC() error
+	GetInputs() *GCTable
+}
