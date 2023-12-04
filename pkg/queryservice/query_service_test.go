@@ -132,7 +132,7 @@ func TestQueryService(t *testing.T) {
 			req := svc.NewRequest(pb.CmdMethod(math.MaxInt32))
 			_, err := svc.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
-			assert.Equal(t, "internal error: unsupported method 2147483647", err.Error())
+			assert.Equal(t, "not supported: 2147483647 not support in current version", err.Error())
 		})
 	})
 }

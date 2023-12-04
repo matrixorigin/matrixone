@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"sync/atomic"
@@ -116,13 +117,13 @@ func CnServerMessageHandler(
 	udfService udf.Service,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
-	messageAcquirer func() morpc.Message) error {
+	messageAcquirer func() morpc.Message) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err := moerr.ConvertPanicError(ctx, e)
+			err = moerr.ConvertPanicError(ctx, e)
 			getLogger().Error("panic in cn message handler",
 				zap.String("error", err.Error()))
-			cs.Close()
+			err = errors.Join(err, cs.Close())
 		}
 	}()
 
@@ -136,7 +137,7 @@ func CnServerMessageHandler(
 		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
-	err := cnMessageHandle(&receiver)
+	err = cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
 	}

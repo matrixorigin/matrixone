@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math/rand"
 )
 
 func (arg *Argument) String(buf *bytes.Buffer) {
@@ -52,14 +53,15 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	switch arg.Type {
 	case sampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs), true)
+		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
 	case sampleByPercent:
 		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
 	case mergeSampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs), false)
+		arg.ctr.samplePool = newSamplePoolByRowsForMerge(proc, arg.Rows, len(arg.SampleExprs))
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
+	arg.ctr.samplePool.setPerfFields(arg.ctr.isGroupBy)
 
 	// sample column related.
 	arg.ctr.sampleExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.SampleExprs)
@@ -106,11 +108,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := result.Batch
 
 	ctr := arg.ctr
+	if ctr.workDone {
+		result.Batch = nil
+		return result, nil
+	}
+
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Output(true)
 		anal.Output(result.Batch, arg.info.IsLast)
 		arg.buf = result.Batch
 		result.Status = vm.ExecStop
+		ctr.workDone = true
 		return result, lastErr
 	}
 
@@ -132,7 +140,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	result.Batch, err = ctr.samplePool.Output(false)
+	// if the pool is full, there is a 50 % chance that we can stop the query for performance.
+	if ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
+		result.Batch, err = ctr.samplePool.Output(true)
+		result.Status = vm.ExecStop
+		ctr.workDone = true
+
+	} else {
+		result.Batch, err = ctr.samplePool.Output(false)
+	}
 	anal.Output(result.Batch, arg.info.IsLast)
 	arg.buf = result.Batch
 	return result, err
