@@ -131,7 +131,8 @@ type AnalyzeInfo struct {
 	// OutputRows, number of rows output by node
 	OutputRows int64
 	// TimeConsumed, time taken by the node in milliseconds
-	TimeConsumed int64
+	TimeConsumed      int64
+	TimeConsumedArray []int64
 	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
 	WaitTimeConsumed int64
 	// InputSize, data size accepted by node

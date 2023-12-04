@@ -1559,6 +1559,7 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
 		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
 		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		logutil.Infof("!!!!!!!!!!!!! merge analyze %v,%v", target.analInfos[i].TimeConsumed, n.TimeConsumed)
 		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
 		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
 		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
