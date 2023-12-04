@@ -160,16 +160,18 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	}
 
 	if th.ses != nil {
-		varVal, err := th.ses.getGlobalSystemVariableValue("transaction_operator_open_log")
+		varVal, err := th.ses.GetSessionVar("transaction_operator_open_log")
 		if err != nil {
 			return nil, nil, err
 		}
-		if val, ok := varVal.(uint8); ok {
-			if val == 1 {
-				opts = append(opts,
-					client.WithTxnCNOpenlog())
+		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("transaction_operator_open_log"); ok {
+			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
+				if svbt.IsTrue(varVal) {
+					opts = append(opts, client.WithTxnOpenLog())
+				}
 			}
 		}
+
 	}
 
 	th.txnOperator, err = th.txnClient.New(

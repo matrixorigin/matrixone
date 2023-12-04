@@ -3484,7 +3484,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	"transaction_operator_open_log": {
 		Name:              "transaction_operator_open_log",
-		Scope:             ScopeBoth,
+		Scope:             ScopeSession,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),

@@ -100,10 +100,12 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
-// WithTxnCNOpenlog set  txn openlog
-func WithTxnCNOpenlog() TxnOption {
+// WithTxnOpenLog set txn open log
+func WithTxnOpenLog() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.openlog = true
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		tc.mu.openlog = true
 	}
 }
 
@@ -169,7 +171,6 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
-		openlog          bool
 		createBy         string
 		lockService      lockservice.LockService
 	}
@@ -183,6 +184,7 @@ type txnOperator struct {
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
 		retry        bool
+		openlog      bool
 
 		lockSeq   uint64
 		waitLocks map[uint64]Lock
@@ -554,6 +556,18 @@ func (tc *txnOperator) IsRetry() bool {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.retry
+}
+
+func (tc *txnOperator) SetOpenLog(openlog bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.openlog = openlog
+}
+
+func (tc *txnOperator) IsOpenLog() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.openlog
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
