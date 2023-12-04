@@ -55,13 +55,11 @@ func TestHandleGetProtocolVersion(t *testing.T) {
 		qs.Close()
 	}()
 
-	version := fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion)
-
 	ret, err := handleGetProtocolVersion(arguments.proc, arguments.service, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, ret, Result{
 		Method: GetProtocolVersionMethod,
-		Data:   version,
+		Data:   fmt.Sprintf("%s:%d", id, defines.MORPCLatestVersion),
 	})
 }
 

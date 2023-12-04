@@ -54,9 +54,6 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
-	Deletion
-	Insert
-	InsertValues
 	TruncateTable
 	AlterView
 	AlterTable
@@ -133,6 +130,28 @@ type Scope struct {
 	BuildIdx       int
 	ShuffleCnt     int
 	PartialResults []any
+}
+
+// canRemote checks whether the current scope can be executed remotely.
+func (s *Scope) canRemote(c *Compile) bool {
+	// check the remote address.
+	// if it was empty or equal to the current address, return false.
+	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
+		return false
+	}
+	if isSameCN(c.addr, s.NodeInfo.Addr) {
+		return false
+	}
+
+	// some operators cannot be remote.
+	// todo: it is not a good way to check the operator type here.
+	//  cannot generate this remote pipeline if the operator type is not supported.
+	for _, op := range s.Instructions {
+		if op.CannotRemote() {
+			return false
+		}
+	}
+	return true
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
