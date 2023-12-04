@@ -17,6 +17,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -26,35 +28,39 @@ var _ vm.Operator = new(Argument)
 
 const (
 	Build = iota
+	HandleRuntimeFilter
 	Probe
 	End
 )
 
 type Argument struct {
-	ctr *container
+	state int
+	colexec.ReceiverOperator
 
-	// Number of items in the filter
+	// Estimates of the number of data items obtained from statistical information
 	N      float64
 	PkName string
 	PkTyp  types.Type
 
-	useRoaring bool
-
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
 
+	// probeCnt     int
 	collisionCnt int
 	rbat         *batch.Batch
 
-	probeCnt int
+	// about runtime filter
+	inFilterCardLimit    int64
+	pass2RuntimeFilter   *vector.Vector
+	RuntimeFilterSpecs   []*plan.RuntimeFilterSpec
+	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
 }
 
-type container struct {
-	colexec.ReceiverOperator
-	state int
+func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
+	arg.RuntimeFilterSenders = rfs
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -77,10 +83,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.rbat.Clean(proc.GetMPool())
 		arg.rbat = nil
 	}
-	ctr := arg.ctr
-	if ctr != nil {
-		ctr.FreeAllReg()
-	}
+
+	arg.FreeAllReg()
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

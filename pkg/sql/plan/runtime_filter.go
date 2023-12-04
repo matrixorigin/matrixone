@@ -33,43 +33,52 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		builder.pushdownRuntimeFilters(childID)
 	}
 
-	// Build runtime filters only for broadcast join
-	if node.NodeType != plan.Node_JOIN {
-		return
-	}
+	var (
+		leftChild  *Node
+		rightChild *Node
+	)
 
-	if node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_MARK {
-		return
-	}
-
-	if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
-		return
-	}
-
-	if node.Stats.HashmapStats.Shuffle {
-		leftChild := builder.qry.Nodes[node.Children[0]]
-		if leftChild.NodeType != plan.Node_TABLE_SCAN {
+	// Determine whether runtime.filter should be built
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		if node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_MARK {
+			return
+		}
+		if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
 			return
 		}
 
-		if leftChild.NodeType > 0 {
+		// Build runtime filters only for broadcast join for now
+		if node.Stats.HashmapStats.Shuffle {
+			leftChild := builder.qry.Nodes[node.Children[0]]
+			if leftChild.NodeType != plan.Node_TABLE_SCAN {
+				return
+			}
+
+			if leftChild.NodeType > 0 {
+				return
+			}
+
+			rfTag := builder.genNewTag()
+
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{Tag: rfTag})
+			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{Tag: rfTag})
+
 			return
 		}
 
-		rfTag := builder.genNewTag()
-
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{Tag: rfTag})
-		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{Tag: rfTag})
-
+	case plan.Node_FUZZY_FILTER:
+		// TODO: more comments here
+	default:
 		return
 	}
 
-	rightChild := builder.qry.Nodes[node.Children[1]]
+	rightChild = builder.qry.Nodes[node.Children[1]]
 	if rightChild.Stats.Selectivity > SelectivityThreshold {
 		return
 	}
 
-	leftChild := builder.qry.Nodes[node.Children[0]]
+	leftChild = builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
 	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Cost < MinProbeTableRows {
@@ -80,6 +89,8 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	if statsCache == nil {
 		return
 	}
+
+	// Build the runtime filter
 
 	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
@@ -236,4 +247,5 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		Expr: buildExpr,
 	})
 	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
+
 }

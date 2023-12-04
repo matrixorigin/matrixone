@@ -2572,7 +2572,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	rs := c.newMergeScope(left)
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
+	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,

@@ -1007,7 +1007,6 @@ func makeInsertPlan(
 	}
 
 	isUpdate := updateColLength > 0
-	// ifGoFuzzyFilter := !hasOnDup && !isInsertWithoutAutoPkCol && !isUpdate && updatePkCol && !builder.qry.LoadTag
 	// sink_scan -> Fuzzyfilter
 	// table_scan -----^
 
@@ -1084,6 +1083,9 @@ func makeInsertPlan(
 		}
 
 		if needCheck && useFuzzyFilter {
+
+			rfTag := builder.genNewTag()
+
 			// sink_scan
 			sinkScanNode := &Node{
 				NodeType:   plan.Node_SINK_SCAN,
@@ -1135,6 +1137,19 @@ func makeInsertPlan(
 						},
 					},
 				}},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
+					{
+						Tag: rfTag,
+						Expr: &plan.Expr{
+							Typ: DeepCopyType(pkTyp),
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									Name: tableDef.Pkey.PkeyColName,
+								},
+							},
+						},
+					},
+				},
 			}
 
 			var blockFilterList []*Expr
@@ -1156,6 +1171,20 @@ func makeInsertPlan(
 				Children: []int32{tableScanId, lastNodeId}, // right table build hash
 				TableDef: tableDef,
 				ObjRef:   objRef,
+				RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+					{
+						Tag: rfTag,
+						Expr: &plan.Expr{
+							Typ: DeepCopyType(pkTyp),
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: 0,
+								},
+							},
+						},
+					},
+				},
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
