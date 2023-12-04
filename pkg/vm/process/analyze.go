@@ -50,7 +50,7 @@ func (a *analyze) Stop() {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
 		time := int64((time.Since(a.start) - a.wait) / time.Nanosecond)
 		atomic.AddInt64(&a.analInfo.TimeConsumed, time)
-		//atomic.StoreInt64(&a.analInfo.TimeConsumedArray[a.idx], time)
+		//atomic.StoreInt64(&a.analInfo.TimeConsumedArray[], time)
 	}
 }
 
