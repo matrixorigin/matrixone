@@ -57,6 +57,9 @@ type Argument struct {
 }
 
 type container struct {
+	// safe check.
+	workDone bool
+
 	samplePool *sPool
 
 	isGroupBy     bool
