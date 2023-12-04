@@ -32,9 +32,9 @@ type mockActiveRoutine struct {
 
 func newMockActiveRoutine() *mockActiveRoutine {
 	return &mockActiveRoutine{
-		pauseC:  make(chan struct{}),
-		resumeC: make(chan struct{}),
-		cancelC: make(chan struct{}),
+		pauseC:  make(chan struct{}, 1),
+		resumeC: make(chan struct{}, 1),
+		cancelC: make(chan struct{}, 1),
 	}
 }
 
