@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type tableHandle struct {
@@ -77,7 +78,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 
 	// Instead in ThrowAppenderAndErr, check object index here because
 	// it is better to create new appendable early in some busy update workload case
-	if seg := h.block.meta.GetObject(); seg.GetNextObjectIndex() >= 1 {
+	if seg := h.block.meta.GetObject(); seg.GetNextObjectIndex() >= options.DefaultObjectPerSegment {
 		logutil.Infof("%s create new seg due to large object index %d",
 			seg.ID.String(), seg.GetNextObjectIndex())
 		return nil, data.ErrAppendableObjectNotFound

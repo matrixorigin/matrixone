@@ -28,8 +28,10 @@ import (
 const (
 	DefaultIndexCacheSize = 256 * mpool.MB
 
-	DefaultBlockMaxRows     = uint32(8192)
+	DefaultBlockMaxRows    = uint32(8192)
 	DefaultBlocksPerObject = uint16(256)
+
+	DefaultObjectPerSegment = uint16(512)
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute

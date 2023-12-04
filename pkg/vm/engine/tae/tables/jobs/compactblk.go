@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -209,7 +210,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		curSeg := seg.GetMeta().(*catalog.ObjectEntry)
 		// double the threshold to make more room for creating new appendable Object during appending, just a piece of defensive code
 		// check GetAppender function in tableHandle
-		if curSeg.GetNextObjectIndex() > 2 {
+		if curSeg.GetNextObjectIndex() > options.DefaultObjectPerSegment*2 {
 			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
 			if nextSeg.ID == curSeg.ID {
 				// we can't create appendable seg here because compaction can be rollbacked.
