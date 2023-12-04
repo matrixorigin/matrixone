@@ -245,10 +245,6 @@ func (tc *txnOperator) isUserTxn() bool {
 	return tc.option.user
 }
 
-func (tc *txnOperator) IsOpenLog() bool {
-	return tc.option.openlog
-}
-
 func (tc *txnOperator) setWaitActive(v bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
