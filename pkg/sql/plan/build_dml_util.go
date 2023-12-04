@@ -117,7 +117,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, true, nil)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil)
 	return err
 }
 
