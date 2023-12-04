@@ -453,6 +453,7 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 type analyze struct {
 	start    time.Time
 	wait     time.Duration
+	dopIdx   int
 	analInfo *AnalyzeInfo
 }
 
@@ -498,6 +499,7 @@ func (a *AnalyzeInfo) Reset() {
 	a.InputRows = 0
 	a.OutputRows = 0
 	a.TimeConsumed = 0
+	a.TimeConsumedArray = nil
 	a.WaitTimeConsumed = 0
 	a.InputSize = 0
 	a.OutputSize = 0
