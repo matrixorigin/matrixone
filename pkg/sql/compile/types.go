@@ -54,9 +54,6 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
-	Deletion
-	Insert
-	InsertValues
 	TruncateTable
 	AlterView
 	AlterTable
