@@ -119,13 +119,15 @@ func initTxnMetrics() {
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
-	registry.MustRegister(TxnTableRangeSizeHistogram)
+	registry.MustRegister(txnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
 	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
+
+	registry.MustRegister(txnRangesSelectivityHistogram)
 }
 
 func initRPCMetrics() {
