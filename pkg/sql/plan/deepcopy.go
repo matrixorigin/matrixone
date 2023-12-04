@@ -1052,26 +1052,33 @@ func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
 	return newClusterTable
 }
 
+func DeepCopySliceInt64(s []int64) []int64 {
+	result := make([]int64, 0, len(s))
+	result = append(result, s...)
+	return result
+}
+
 func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	if analyzeinfo == nil {
 		return nil
 	}
 
 	return &plan.AnalyzeInfo{
-		InputRows:        analyzeinfo.GetInputRows(),
-		OutputRows:       analyzeinfo.GetOutputRows(),
-		InputSize:        analyzeinfo.GetInputSize(),
-		OutputSize:       analyzeinfo.GetOutputSize(),
-		TimeConsumed:     analyzeinfo.GetTimeConsumed(),
-		MemorySize:       analyzeinfo.GetMemorySize(),
-		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
-		DiskIO:           analyzeinfo.GetDiskIO(),
-		S3IOByte:         analyzeinfo.GetS3IOByte(),
-		S3IOInputCount:   analyzeinfo.GetS3IOInputCount(),
-		S3IOOutputCount:  analyzeinfo.GetS3IOOutputCount(),
-		NetworkIO:        analyzeinfo.GetNetworkIO(),
-		ScanTime:         analyzeinfo.GetScanTime(),
-		InsertTime:       analyzeinfo.GetInsertTime(),
+		InputRows:         analyzeinfo.GetInputRows(),
+		OutputRows:        analyzeinfo.GetOutputRows(),
+		InputSize:         analyzeinfo.GetInputSize(),
+		OutputSize:        analyzeinfo.GetOutputSize(),
+		TimeConsumed:      analyzeinfo.GetTimeConsumed(),
+		TimeConsumedArray: DeepCopySliceInt64(analyzeinfo.GetTimeConsumedArray()),
+		MemorySize:        analyzeinfo.GetMemorySize(),
+		WaitTimeConsumed:  analyzeinfo.GetWaitTimeConsumed(),
+		DiskIO:            analyzeinfo.GetDiskIO(),
+		S3IOByte:          analyzeinfo.GetS3IOByte(),
+		S3IOInputCount:    analyzeinfo.GetS3IOInputCount(),
+		S3IOOutputCount:   analyzeinfo.GetS3IOOutputCount(),
+		NetworkIO:         analyzeinfo.GetNetworkIO(),
+		ScanTime:          analyzeinfo.GetScanTime(),
+		InsertTime:        analyzeinfo.GetInsertTime(),
 	}
 }
 
