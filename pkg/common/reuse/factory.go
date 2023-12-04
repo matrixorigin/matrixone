@@ -16,6 +16,7 @@ package reuse
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
@@ -29,8 +30,8 @@ var (
 	MpoolBased = SPI(1)
 
 	defaultSPI    = SyncBased
-	enableChecker = false
-	enableVerbose = false
+	enableChecker atomic.Bool
+	enableVerbose atomic.Bool
 )
 
 // SPI choose pool implementation

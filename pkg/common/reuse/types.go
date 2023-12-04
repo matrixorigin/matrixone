@@ -62,7 +62,7 @@ func init() {
 	if ok {
 		switch strings.ToLower(enable) {
 		case "true":
-			enableChecker = true
+			enableChecker.Store(true)
 		}
 	}
 
@@ -70,7 +70,7 @@ func init() {
 	if ok {
 		switch strings.ToLower(enable) {
 		case "true":
-			enableVerbose = true
+			enableVerbose.Store(true)
 		}
 	}
 }

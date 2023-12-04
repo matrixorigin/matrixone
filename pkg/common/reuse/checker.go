@@ -52,7 +52,7 @@ func newChecker[T ReusableObject](enable bool) *checker[T] {
 }
 
 func (c *checker[T]) created(v *T) {
-	if !enableChecker || !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -63,7 +63,7 @@ func (c *checker[T]) created(v *T) {
 }
 
 func (c *checker[T]) got(v *T) {
-	if !enableChecker || !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -82,13 +82,13 @@ func (c *checker[T]) got(v *T) {
 			v, v, c.mu.createStack[k]))
 	}
 	c.mu.m[k] = inUse
-	if enableVerbose {
+	if enableVerbose.Load() {
 		c.mu.createStack[k] = string(debug.Stack())
 	}
 }
 
 func (c *checker[T]) free(v *T) {
-	if !enableChecker || !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -108,13 +108,13 @@ func (c *checker[T]) free(v *T) {
 			v, v, c.mu.createStack[k], c.mu.lastFreeStack[k]))
 	}
 	c.mu.m[k] = idle
-	if enableVerbose {
+	if enableVerbose.Load() {
 		c.mu.lastFreeStack[k] = string(debug.Stack())
 	}
 }
 
 func (c *checker[T]) gc(v *T) {
-	if !enableChecker || !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -138,21 +138,22 @@ func (c *checker[T]) gc(v *T) {
 }
 
 func RunReuseTests(fn func()) {
-	enableChecker = true
+	enableChecker.Store(true)
 	defer func() {
-		enableChecker = false
+		enableChecker.Store(false)
 	}()
 	fn()
-	v := &waiterGC{
-		data: make([]byte, 1024),
-	}
 	c := make(chan struct{})
-	runtime.SetFinalizer(
-		v,
-		func(v *waiterGC) {
-			close(c)
-		})
-	v = nil
+	func() {
+		v := &waiterGC{
+			data: make([]byte, 1024),
+		}
+		runtime.SetFinalizer(
+			v,
+			func(v *waiterGC) {
+				close(c)
+			})
+	}()
 	debug.FreeOSMemory()
 	<-c
 }
