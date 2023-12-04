@@ -148,6 +148,10 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
+func (arg *Argument) IsMergeSampleByRow() bool {
+	return arg.Type == mergeSampleByRow
+}
+
 func (arg *Argument) IsByPercent() bool {
 	return arg.Type == sampleByPercent
 }

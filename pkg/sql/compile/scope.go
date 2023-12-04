@@ -706,23 +706,38 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				})
 			}
 		case vm.Sample:
-			flg = true
 			arg := in.Arg.(*sample.Argument)
-			s.Instructions = s.Instructions[i:]
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.Merge,
-				Idx: s.Instructions[0].Idx,
-				Arg: &merge.Argument{},
+			if !arg.IsMergeSampleByRow() {
+				flg = true
+
+				// if by percent, there is no need to do merge sample.
+				if arg.IsByPercent() {
+					s.Instructions = s.Instructions[i:]
+				} else {
+					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
+					s.Instructions[1] = vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: false,
+						Arg:     sample.NewMergeSample(arg),
+					}
+				}
+				s.Instructions[0] = vm.Instruction{
+					Op:  vm.Merge,
+					Idx: s.Instructions[0].Idx,
+					Arg: &merge.Argument{},
+				}
+
+				for j := range ss {
+					ss[j].appendInstruction(vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: in.IsFirst,
+						Arg:     arg.SimpleDup(),
+					})
+				}
 			}
 
-			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Sample,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg:     arg.SimpleDup(),
-				})
-			}
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
