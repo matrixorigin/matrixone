@@ -258,6 +258,9 @@ type SpanConfig struct {
 	// It will override Span ctx deadline setting, and start a goroutine to check ctx deadline
 	hungThreshold time.Duration
 	Extra         []zap.Field `json:"-"`
+
+	// ProfileSystemStatusFn is used to get status information.
+	ProfileSystemStatusFn func() ([]byte, error)
 }
 
 const (
@@ -269,6 +272,7 @@ const (
 	ProfileFlagMutex
 	ProfileFlagCpu
 	ProfileFlagTrace
+	ProfileFlagSystemStatus
 )
 
 func (c *SpanConfig) Reset() {
@@ -330,6 +334,11 @@ func (c *SpanConfig) ProfileCpuSecs() time.Duration {
 // ProfileTraceSecs return the value set by WithProfileTraceSecs
 func (c *SpanConfig) ProfileTraceSecs() time.Duration {
 	return c.profileTraceDur
+}
+
+// ProfileSystemStatus return the value set by WithProfileSystemStatus.
+func (c *SpanConfig) ProfileSystemStatus() bool {
+	return c.profileFlag&ProfileFlagSystemStatus > 0
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -440,6 +449,15 @@ func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagCpu
 		cfg.profileCpuDur = d
+	})
+}
+
+// WithProfileSystemStatus requests dump system status. It will trigger SystemStatus() in Span.End().
+// More details in MOSpan.doProfile.
+func WithProfileSystemStatus(f func() ([]byte, error)) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagSystemStatus
+		cfg.ProfileSystemStatusFn = f
 	})
 }
 
