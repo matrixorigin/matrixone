@@ -117,6 +117,7 @@ jobs:
           fi
       - name: Get MO Cluster Addr
         id: get_mo_addr
+        timeout-minutes: 2
         run: |
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
           echo mo_svc_ip=$mo_svc_ip
@@ -126,6 +127,7 @@ jobs:
           echo "cn_ips is $cn_ips"
           echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT
       - name: Prepare Data in cn-0
+        timeout-minutes: 5
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- bash -c '
           set -x;
@@ -155,6 +157,7 @@ jobs:
           exit 0;
           '
       - name: Prepare Data in cn-1
+        timeout-minutes: 5
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- bash -c '
           set -x;
@@ -277,6 +280,7 @@ jobs:
           ref: main
       
       - name: Create Account for Test
+        timeout-minutes: 2
         id: account_for_ssb_and_tpch
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
@@ -465,6 +469,7 @@ jobs:
           ref: main
           
       - name: Create Account for Test And Set PATH
+        timeout-minutes: 2
         id: account_for_sysbench
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
@@ -568,6 +573,7 @@ jobs:
           ref: main
           
       - name: Create Account for Test
+        timeout-minutes: 2
         id: account_for_tpcc
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account tpcc_test admin_name = 'admin' identified by '111' comment 'for tpcc test';"
