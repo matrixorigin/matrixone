@@ -60,10 +60,10 @@ func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
 }
 
 type schemaCfg struct {
-	blockMaxRows     uint32
+	blockMaxRows    uint32
 	ObjectMaxBlocks uint16
-	colCnt           int
-	pkIdx            int
+	colCnt          int
+	pkIdx           int
 }
 
 type PrepareCase struct {

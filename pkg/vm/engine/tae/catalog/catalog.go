@@ -42,21 +42,21 @@ import (
 // |(uint64)|(varchar)| (uint64) | (uint64) |  (varchar) |
 // +--------+---------+----------+----------+------------+
 const (
-	SnapshotAttr_TID             = "table_id"
-	SnapshotAttr_DBID            = "db_id"
+	SnapshotAttr_TID            = "table_id"
+	SnapshotAttr_DBID           = "db_id"
 	ObjectAttr_ID               = "id"
 	ObjectAttr_CreateAt         = "create_at"
 	ObjectAttr_SegNode          = "seg_node"
-	SnapshotAttr_BlockMaxRow     = "block_max_row"
+	SnapshotAttr_BlockMaxRow    = "block_max_row"
 	SnapshotAttr_ObjectMaxBlock = "Object_max_block"
-	SnapshotAttr_SchemaExtra     = "schema_extra"
-	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
-	AccountIDDbName              = "account_id_db_name"
-	ObjectAttr_ObjectStats       = "object_stats"
-	ObjectAttr_State             = "state"
-	ObjectAttr_Sorted            = "sorted"
-	EntryNode_CreateAt           = "create_at"
-	EntryNode_DeleteAt           = "delete_at"
+	SnapshotAttr_SchemaExtra    = "schema_extra"
+	AccountIDDbNameTblName      = "account_id_db_name_tbl_name"
+	AccountIDDbName             = "account_id_db_name"
+	ObjectAttr_ObjectStats      = "object_stats"
+	ObjectAttr_State            = "state"
+	ObjectAttr_Sorted           = "sorted"
+	EntryNode_CreateAt          = "create_at"
+	EntryNode_DeleteAt          = "delete_at"
 )
 
 type DataFactory interface {

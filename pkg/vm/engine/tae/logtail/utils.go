@@ -105,7 +105,7 @@ const (
 	Checkpoint_Meta_Insert_Block_LOC_IDX    = 3
 	Checkpoint_Meta_CN_Delete_Block_LOC_IDX = 4
 	Checkpoint_Meta_Delete_Block_LOC_IDX    = 5
-	Checkpoint_Meta_Object_LOC_IDX         = 6
+	Checkpoint_Meta_Object_LOC_IDX          = 6
 )
 
 // for ver1-3
@@ -114,8 +114,8 @@ const (
 	Checkpoint_Meta_Insert_Block_End_IDX   = 4
 	Checkpoint_Meta_Delete_Block_Start_IDX = 5
 	Checkpoint_Meta_Delete_Block_End_IDX   = 6
-	Checkpoint_Meta_Object_Start_IDX      = 7
-	Checkpoint_Meta_Object_End_IDX        = 8
+	Checkpoint_Meta_Object_Start_IDX       = 7
+	Checkpoint_Meta_Object_End_IDX         = 8
 )
 
 type checkpointDataItem struct {
@@ -644,7 +644,7 @@ type BaseCollector struct {
 
 	// true for prefech object meta
 	isPrefetch bool
-	Objects   []*catalog.ObjectEntry
+	Objects    []*catalog.ObjectEntry
 }
 
 type IncrementalCollector struct {
@@ -659,7 +659,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			start:         start,
 			end:           end,
 			isGlobal:      false,
-			Objects:      make([]*catalog.ObjectEntry, 0),
+			Objects:       make([]*catalog.ObjectEntry, 0),
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -707,7 +707,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
 			isGlobal:      true,
-			Objects:      make([]*catalog.ObjectEntry, 0),
+			Objects:       make([]*catalog.ObjectEntry, 0),
 		},
 		versionThershold: versionThresholdTS,
 	}

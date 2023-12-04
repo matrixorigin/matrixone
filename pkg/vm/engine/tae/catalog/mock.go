@@ -124,10 +124,10 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 	}
 }
 
-func (it *mockSegIt) GetError() error            { return nil }
-func (it *mockSegIt) Valid() bool                { return false }
-func (it *mockSegIt) Next()                      {}
-func (it *mockSegIt) Close() error               { return nil }
+func (it *mockSegIt) GetError() error          { return nil }
+func (it *mockSegIt) Valid() bool              { return false }
+func (it *mockSegIt) Next()                    {}
+func (it *mockSegIt) Close() error             { return nil }
 func (it *mockSegIt) GetObject() handle.Object { return nil }
 
 func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) {

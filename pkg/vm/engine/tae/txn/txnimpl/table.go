@@ -97,17 +97,17 @@ func newDeleteNode(node txnif.DeleteNode, idx int) *deleteNode {
 }
 
 type txnTable struct {
-	store        *txnStore
-	createEntry  txnif.TxnEntry
-	dropEntry    txnif.TxnEntry
+	store       *txnStore
+	createEntry txnif.TxnEntry
+	dropEntry   txnif.TxnEntry
 	localObject *localObject
-	deleteNodes  map[common.ID]*deleteNode
-	entry        *catalog.TableEntry
-	schema       *catalog.Schema
-	logs         []wal.LogEntry
+	deleteNodes map[common.ID]*deleteNode
+	entry       *catalog.TableEntry
+	schema      *catalog.Schema
+	logs        []wal.LogEntry
 
 	dedupedObjectHint uint64
-	dedupedBlockID     *types.Blockid
+	dedupedBlockID    *types.Blockid
 
 	txnEntries *txnEntries
 	csnStart   uint32

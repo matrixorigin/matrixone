@@ -68,18 +68,18 @@ func (rel *TxnRelation) Rows() int64                                            
 func (rel *TxnRelation) Size(attr string) int64                                   { return 0 }
 func (rel *TxnRelation) GetCardinality(attr string) int64                         { return 0 }
 func (rel *TxnRelation) Schema() any                                              { return nil }
-func (rel *TxnRelation) MakeObjectIt() handle.ObjectIt                          { return nil }
-func (rel *TxnRelation) MakeObjectItOnSnap() handle.ObjectIt                    { return nil }
+func (rel *TxnRelation) MakeObjectIt() handle.ObjectIt                            { return nil }
+func (rel *TxnRelation) MakeObjectItOnSnap() handle.ObjectIt                      { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                              { return nil }
 func (rel *TxnRelation) BatchDedup(containers.Vector) error                       { return nil }
 func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
 func (rel *TxnRelation) AddBlksWithMetaLoc(context.Context, containers.Vector) error {
 	return nil
 }
-func (rel *TxnRelation) GetMeta() any                                                    { return nil }
-func (rel *TxnRelation) GetDB() (handle.Database, error)                                 { return nil, nil }
+func (rel *TxnRelation) GetMeta() any                                                  { return nil }
+func (rel *TxnRelation) GetDB() (handle.Database, error)                               { return nil, nil }
 func (rel *TxnRelation) GetObject(id *types.Objectid) (seg handle.Object, err error)   { return }
-func (rel *TxnRelation) SoftDeleteObject(id *types.Objectid) (err error)                { return }
+func (rel *TxnRelation) SoftDeleteObject(id *types.Objectid) (err error)               { return }
 func (rel *TxnRelation) CreateObject(bool) (seg handle.Object, err error)              { return }
 func (rel *TxnRelation) CreateNonAppendableObject(bool) (seg handle.Object, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) {

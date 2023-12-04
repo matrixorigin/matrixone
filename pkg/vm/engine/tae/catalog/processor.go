@@ -31,11 +31,11 @@ type Processor interface {
 type LoopProcessor struct {
 	DatabaseFn     func(*DBEntry) error
 	TableFn        func(*TableEntry) error
-	ObjectFn      func(*ObjectEntry) error
+	ObjectFn       func(*ObjectEntry) error
 	BlockFn        func(*BlockEntry) error
 	PostDatabaseFn func(*DBEntry) error
 	PostTableFn    func(*TableEntry) error
-	PostObjectFn  func(*ObjectEntry) error
+	PostObjectFn   func(*ObjectEntry) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {

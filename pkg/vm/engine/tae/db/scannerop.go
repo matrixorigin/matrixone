@@ -115,8 +115,8 @@ type MergeTaskBuilder struct {
 	tbl  *catalog.TableEntry
 
 	ObjectHelper *segHelper
-	objPolicy     merge.Policy
-	executor      *merge.MergeExecutor
+	objPolicy    merge.Policy
+	executor     *merge.MergeExecutor
 
 	// concurrecy control
 	suspend    atomic.Bool
@@ -127,7 +127,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
-		ObjectHelper: newSegHelper(),
+		ObjectHelper:  newSegHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
 		executor:      merge.NewMergeExecutor(db.Runtime),
 	}

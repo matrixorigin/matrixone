@@ -120,7 +120,7 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 	}
 	if table.localObject != nil {
 		cit := &composedObjectIt{
-			ObjectIt:   it,
+			ObjectIt:    it,
 			uncommitted: table.localObject.entry,
 		}
 		return cit

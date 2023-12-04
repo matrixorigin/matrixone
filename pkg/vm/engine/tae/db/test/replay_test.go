@@ -1125,6 +1125,8 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	assert.NoError(t, err)
 
 	tae.Restart(ctx)
 
@@ -1146,8 +1148,6 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback(context.Background())
 
 	tae.CompactBlocks(false)
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
-	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
 	tae.Restart(ctx)

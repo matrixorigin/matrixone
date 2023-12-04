@@ -61,7 +61,7 @@ func NewBlockEntry(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-			object: object,
+		object: object,
 		BlockNode: &BlockNode{
 			state: state,
 		},
@@ -85,7 +85,7 @@ func NewBlockEntryWithMeta(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-			object: object,
+		object: object,
 		BlockNode: &BlockNode{
 			state: state,
 		},
@@ -102,7 +102,7 @@ func NewStandaloneBlock(object *ObjectEntry, id *objectio.Blockid, ts types.TS) 
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-			object: object,
+		object: object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},
@@ -121,7 +121,7 @@ func NewStandaloneBlockWithLoc(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-			object: object,
+		object: object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},
@@ -135,7 +135,7 @@ func NewSysBlockEntry(Object *ObjectEntry, id types.Blockid) *BlockEntry {
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-			object: Object,
+		object: Object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},

@@ -430,6 +430,7 @@ func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
 		startTSVec.GetAllocator(),
 	)
 }
+
 // In push model, logtail is prepared before committing txn,
 // un.End is txnif.Uncommit
 func (un *TxnMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, commitTS types.TS) {

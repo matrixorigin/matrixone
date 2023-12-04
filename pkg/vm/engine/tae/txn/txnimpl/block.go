@@ -60,10 +60,10 @@ type blockIt struct {
 
 type relBlockIt struct {
 	sync.RWMutex
-	rel       handle.Relation
+	rel      handle.Relation
 	ObjectIt handle.ObjectIt
-	blockIt   handle.BlockIt
-	err       error
+	blockIt  handle.BlockIt
+	err      error
 }
 
 func newBlockIt(table *txnTable, meta *catalog.ObjectEntry) *blockIt {

@@ -37,11 +37,11 @@ const (
 const (
 	SnapshotAttr_TID                            = catalog.SnapshotAttr_TID
 	SnapshotAttr_DBID                           = catalog.SnapshotAttr_DBID
-	ObjectAttr_ID                              = catalog.ObjectAttr_ID
-	ObjectAttr_CreateAt                        = catalog.ObjectAttr_CreateAt
-	ObjectAttr_SegNode                         = catalog.ObjectAttr_SegNode
+	ObjectAttr_ID                               = catalog.ObjectAttr_ID
+	ObjectAttr_CreateAt                         = catalog.ObjectAttr_CreateAt
+	ObjectAttr_SegNode                          = catalog.ObjectAttr_SegNode
 	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_ObjectMaxBlock                = catalog.SnapshotAttr_ObjectMaxBlock
+	SnapshotAttr_ObjectMaxBlock                 = catalog.SnapshotAttr_ObjectMaxBlock
 	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
 	ObjectAttr_State                            = catalog.ObjectAttr_State
 	ObjectAttr_Sorted                           = catalog.ObjectAttr_Sorted
