@@ -197,12 +197,15 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
 
 		txn := InitTxnHandler(eng, txnClient, nil, nil)
 		txn.ses = &Session{
 			requestCtx: ctx,
 			pu:         pu,
 			connectCtx: ctx,
+			gSysVars:   &gSys,
 		}
 		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
