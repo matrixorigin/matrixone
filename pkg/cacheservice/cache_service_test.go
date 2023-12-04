@@ -176,7 +176,7 @@ func TestCacheServerMain(t *testing.T) {
 			req := ct.NewRequest(pb.CmdMethod(10))
 			_, err := ct.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
-			assert.Equal(t, "not supported: 10 not support in current service", err.Error())
+			assert.Equal(t, "not supported: 10 not support in current version", err.Error())
 		})
 	})
 }
