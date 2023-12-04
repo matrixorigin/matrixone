@@ -245,6 +245,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
+	// Check if the current query has been canceled
 	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():

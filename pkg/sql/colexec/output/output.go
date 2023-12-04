@@ -40,6 +40,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Start()
 	defer anal.Stop()
 
+	// Check if the current query has been canceled
 	select {
 	case <-proc.Ctx.Done():
 		result.Batch = nil
