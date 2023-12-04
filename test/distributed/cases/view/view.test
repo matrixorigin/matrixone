@@ -76,3 +76,19 @@ create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;
 drop database test;
+
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1 (project_id varchar(64)   NOT NULL);
+
+drop table if exists t2;
+create table t2  (project_id varchar(64) NOT NULL, project_name varchar(255) NOT NULL);
+drop view if exists v1;
+create view v1 as select a.project_id as project_id, b.project_name as project_name from t1 a left join t2 b on a.project_id = b.project_id;
+desc v1;
+drop table t1;
+drop table t2;
+drop view v1;
+drop database test;

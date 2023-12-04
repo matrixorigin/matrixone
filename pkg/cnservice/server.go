@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -106,9 +107,6 @@ func NewService(
 	}
 	srv.initQueryService()
 
-	for _, opt := range options {
-		opt(srv)
-	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
@@ -216,6 +214,8 @@ func NewService(
 	if err != nil {
 		panic(err)
 	}
+
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	return srv, nil
 }
@@ -459,6 +459,11 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		s._hakeeperClient = client
 		s.initClusterService()
 		s.initLockService()
+
+		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+		if ok {
+			ss.(*status.Server).SetHAKeeperClient(client)
+		}
 	})
 	client = s._hakeeperClient
 	return
@@ -602,7 +607,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts, client.WithLockService(s.lockService))
+		opts = append(opts,
+			client.WithLockService(s.lockService),
+			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+		)
 		c = client.NewTxnClient(
 			sender,
 			opts...)
@@ -617,6 +625,11 @@ func (s *service) initLockService() {
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
+	}
 }
 
 // put the waiting-next type msg into client session's cache and return directly

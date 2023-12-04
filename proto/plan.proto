@@ -422,14 +422,12 @@ message TableDef {
 	string createsql 		= 6;
 	TableFunction tbl_func	= 7;
 	uint32 version 			= 8;
-	string parent_tbl_name  = 9;
 
 	PrimaryKeyDef pkey				= 11;
 	repeated IndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
-	repeated ColDef parent_unique_cols  = 16;
 
 	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
@@ -444,6 +442,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+	bool is_dynamic = 31;
+
 }
 
 message TableFunction{
@@ -483,6 +483,8 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
+	int64 nullcnt=10;
+	repeated double ranges	= 11;
 }
 
 message Stats {
@@ -629,7 +631,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
-		STREAM_SCAN = 6;
+		SOURCE_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
@@ -687,7 +689,6 @@ message Node {
 		TIME_WINDOW = 64;
 		Fill = 65;
 		PARTITION = 66;
-		FUZZY_FILTER = 67;
 	}
 
 	enum JoinType {
@@ -800,6 +801,7 @@ message Node {
 	SampleFuncSpec sample_func = 51;
 
 	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
 }
 
 message ExternScan {

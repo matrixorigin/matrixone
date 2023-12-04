@@ -168,7 +168,7 @@ import (
     zeroFillOpt bool
     ifNotExists bool
     defaultOptional bool
-    streamOptional bool
+    sourceOptional bool
     connectorOptional bool
     fullOpt bool
     boolVal bool
@@ -406,7 +406,7 @@ import (
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
-// Stream
+// Source
 %token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
 
 // Match
@@ -467,7 +467,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_stream_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
+%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -560,7 +560,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
+%type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -575,7 +575,7 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option stream_option
+%type <tableOption> table_option source_option
 %type <connectorOption> connector_option
 %type <connectorOptions> connector_option_list
 %type <from> from_clause from_opt
@@ -624,7 +624,7 @@ import (
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
-%type <streamOptional> replace_opt
+%type <sourceOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
 %type <indexCategory> index_prefix
@@ -3736,7 +3736,7 @@ drop_table_stmt:
     {
         $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
-|   DROP STREAM exists_opt table_name_list
+|   DROP SOURCE exists_opt table_name_list
     {
         $$ = &tree.DropTable{IfExists: $3, Names: $4}
     }
@@ -5243,7 +5243,7 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
-|   create_stream_stmt
+|   create_source_stmt
 |   create_connector_stmt
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
@@ -6380,37 +6380,15 @@ resume_daemon_task_stmt:
         }
     }
 
-create_stream_stmt:
-    CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+create_source_stmt:
+    CREATE replace_opt SOURCE not_exists_opt table_name '(' table_elem_list_opt ')' source_option_list_opt
     {
-        $$ = &tree.CreateStream {
+        $$ = &tree.CreateSource {
             Replace: $2,
-            Source: false,
             IfNotExists: $4,
-            StreamName: $5,
+            SourceName: $5,
             Defs: $7,
             Options: $9,
-        }
-    }
-|   CREATE replace_opt SOURCE STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
-    {
-        $$ = &tree.CreateStream {
-            Replace: $2,
-            Source: true,
-            IfNotExists: $5,
-            StreamName: $6,
-            Defs: $8,
-            Options: $10,
-        }
-    }
-|	CREATE replace_opt STREAM not_exists_opt table_name stream_option_list_opt AS select_stmt
-    {
-        $$ = &tree.CreateStream {
-            Replace: $2,
-            IfNotExists: $4,
-            StreamName: $5,
-            AsSource: $8,
-            Options: $6,
         }
     }
 
@@ -6455,6 +6433,16 @@ create_table_stmt:
             Options: $9,
             PartitionOption: $10,
             ClusterByOption: $11,
+        }
+    }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt source_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            Options: $8,
         }
     }
 load_param_opt_2:
@@ -7024,33 +7012,33 @@ connector_option:
              $$ = &tree.ConnectorOption{Key: tree.Identifier($1), Val: $3}
         }
 
-stream_option_list_opt:
+source_option_list_opt:
     {
         $$ = nil
     }
-|	WITH '(' stream_option_list ')'
+|	WITH '(' source_option_list ')'
 	{
 		$$ = $3
 	}
 
-stream_option_list:
-	stream_option
+source_option_list:
+	source_option
 	{
 		$$ = []tree.TableOption{$1}
 	}
-|	stream_option_list ',' stream_option
+|	source_option_list ',' source_option
 	{
 		$$ = append($1, $3)
 	}
 
-stream_option:
+source_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+        $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
     }
 |   STRING equal_opt literal
     {
-         $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1), Val: $3}
+         $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1), Val: $3}
     }
 
 table_option_list_opt:
@@ -8080,28 +8068,57 @@ function_call_window:
     }
 
 sample_function_expr:
+    SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
+    {
+	v := int($5.(int64))
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' FLOAT PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
     	v := int($5.(int64))
-    	val, err := tree.NewSampleRowsFuncExpression(v, $3)
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
     	if err != nil {
     	    yylex.Error(err.Error())
     	    return 1
     	}
     	$$ = val
     }
-|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT')'
+|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), $3)
+        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
             return 1
         }
         $$ = val
     }
-|   SAMPLE '(' expression_list ',' FLOAT PERCENT')'
+|   SAMPLE '(' expression_list ',' FLOAT PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), $3)
+        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
             return 1

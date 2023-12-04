@@ -254,3 +254,11 @@ func (m *WaitTxn) DebugString() string {
 		hex.EncodeToString(m.TxnID),
 		m.CreatedOn)
 }
+
+func (m Request) Name() string {
+	return "lockservice.request"
+}
+
+func (m Response) Name() string {
+	return "lockservice.response"
+}

@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -57,7 +58,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = TableScan
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
-	case plan.Node_STREAM_SCAN:
+	case plan.Node_SOURCE_SCAN:
 		pname = "Stream Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
@@ -133,8 +134,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
 		pname = "On Duplicate Key"
-	case plan.Node_FUZZY_FILTER:
-		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	default:
@@ -147,7 +146,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_STREAM_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())

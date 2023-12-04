@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"go.uber.org/zap"
@@ -48,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -89,7 +90,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -754,8 +754,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
-	case *fuzzyfilter.Argument:
-		in.FuzzyFilter = &pipeline.FuzzyFilter{}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
@@ -796,6 +794,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Shuffle.ShuffleColMax = t.ShuffleColMax
 		in.Shuffle.ShuffleColMin = t.ShuffleColMin
 		in.Shuffle.AliveRegCnt = t.AliveRegCnt
+		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
+		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -1103,7 +1103,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 		}
-	case *stream.Argument:
+	case *source.Argument:
 		in.StreamScan = &pipeline.StreamScan{
 			TblDef: t.TblDef,
 			Limit:  t.Limit,
@@ -1193,9 +1193,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateExpr: t.OnDuplicateExpr,
 			IsIgnore:        t.IsIgnore,
 		}
-	case vm.FuzzyFilter:
-		// t := opr.GetFuzzyFilter()
-		v.Arg = new(fuzzyfilter.Argument)
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
@@ -1213,11 +1210,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Shuffle:
 		t := opr.GetShuffle()
 		v.Arg = &shuffle.Argument{
-			ShuffleColIdx: t.ShuffleColIdx,
-			ShuffleType:   t.ShuffleType,
-			ShuffleColMin: t.ShuffleColMin,
-			ShuffleColMax: t.ShuffleColMax,
-			AliveRegCnt:   t.AliveRegCnt,
+			ShuffleColIdx:      t.ShuffleColIdx,
+			ShuffleType:        t.ShuffleType,
+			ShuffleColMin:      t.ShuffleColMin,
+			ShuffleColMax:      t.ShuffleColMax,
+			AliveRegCnt:        t.AliveRegCnt,
+			ShuffleRangeInt64:  t.ShuffleRangesInt64,
+			ShuffleRangeUint64: t.ShuffleRangesUint64,
 		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1535,9 +1534,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 				},
 			},
 		}
-	case vm.Stream:
+	case vm.Source:
 		t := opr.GetStreamScan()
-		v.Arg = &stream.Argument{
+		v.Arg = &source.Argument{
 			TblDef: t.TblDef,
 			Limit:  t.Limit,
 			Offset: t.Offset,

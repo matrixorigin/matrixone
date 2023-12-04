@@ -665,9 +665,10 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	}
 	//compact blocks
 	var newBlockFp1 *common.ID
+	var stats1 objectio.ObjectStats
 	var metaLoc1 objectio.Location
 	var newBlockFp2 *common.ID
-	var metaLoc2 objectio.Location
+	var stats2 objectio.ObjectStats
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
 		it := rel.MakeBlockIt()
@@ -685,9 +686,10 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = task2.WaitDone()
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetNewBlock().Fingerprint()
+		stats1 = task1.Stats[0]
 		metaLoc1 = task1.GetNewBlock().GetMetaLoc()
 		newBlockFp2 = task2.GetNewBlock().Fingerprint()
-		metaLoc2 = task2.GetNewBlock().GetMetaLoc()
+		stats2 = task2.Stats[0]
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -719,12 +721,18 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		schema.Name = "tb-1"
 		txn, _, rel := testutil.CreateRelationNoCommit(t, db, "db", schema, false)
 		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
-		err := rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc1})
+		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+		vec1.Append(stats1[:], false)
+		defer vec1.Close()
+		err := rel.AddBlksWithMetaLoc(context.Background(), vec1)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc2})
+		vec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+		vec2.Append(stats2[:], false)
+		defer vec1.Close()
+		err = rel.AddBlksWithMetaLoc(context.Background(), vec2)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
@@ -745,7 +753,11 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = rel.Append(context.Background(), bats[1])
 		assert.NotNil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc1, metaLoc2})
+		vec3 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+		vec3.Append(stats1[:], false)
+		vec3.Append(stats2[:], false)
+		defer vec1.Close()
+		err = rel.AddBlksWithMetaLoc(context.Background(), vec3)
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -4923,7 +4935,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
 	infos = append(infos, []*pkgcatalog.BlockInfo{info})
-	err = blockio.BlockPrefetch(colIdxs, fs, infos)
+	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
@@ -5708,7 +5720,6 @@ func TestMergeMemsize(t *testing.T) {
 	t.Log(wholebat.ApproxSize())
 	batCnt := 40
 	bats := wholebat.Split(batCnt)
-	metalocs := make([]objectio.Location, 0)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
@@ -5721,9 +5732,8 @@ func TestMergeMemsize(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, batCnt, len(blocks))
-	for _, blk := range blocks {
-		metalocs = append(metalocs, blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID()))
-	}
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 	{
 		txn, _ := tae.StartTxn(nil)
 		txn.SetDedupType(txnif.IncrementalDedup)
@@ -5731,9 +5741,10 @@ func TestMergeMemsize(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
+		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
+	statsVec.Close()
 
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	var metas []*catalog.BlockEntry
@@ -5786,8 +5797,9 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
-	blk := blocks[0]
-	metalocs := []objectio.Location{blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID())}
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+	defer statsVec.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
 		txn.SetDedupType(txnif.IncrementalDedup)
@@ -5795,7 +5807,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
+		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5871,7 +5883,8 @@ func TestAlwaysUpdate(t *testing.T) {
 	tae.BindSchema(schema)
 
 	bats := catalog.MockBatch(schema, 400*100).Split(100)
-	metalocs := make([]objectio.Location, 0, 100)
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
 	// write only one segment
 	for i := 0; i < 1; i++ {
 		objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -5885,11 +5898,7 @@ func TestAlwaysUpdate(t *testing.T) {
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
-		for _, blk := range blocks {
-			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID())
-			assert.Nil(t, err)
-			metalocs = append(metalocs, loc)
-		}
+		statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 	}
 
 	// var did, tid uint64
@@ -5901,7 +5910,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	tbl, err := db.CreateRelation(schema)
 	// tid = tbl.ID()
 	assert.NoError(t, err)
-	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
+	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -7827,7 +7836,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	tae.CreateRelAndAppend(datas[0], true)
 	datas = datas[1:]
 
-	blkMetas := make([]objectio.Location, 0)
+	statsVecs := make([]containers.Vector, 0)
 	for _, bat := range datas {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
@@ -7841,25 +7850,20 @@ func TestCommitS3Blocks(t *testing.T) {
 		blocks, _, err := writer.Sync(context.Background())
 		assert.Nil(t, err)
 		assert.Equal(t, 50, len(blocks))
-		for _, blk := range blocks {
-			metaLoc := blockio.EncodeLocation(
-				writer.GetName(),
-				blk.GetExtent(),
-				uint32(bat.Vecs[0].Length()),
-				blk.GetID())
-			assert.Nil(t, err)
-			blkMetas = append(blkMetas, metaLoc)
-		}
+		statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+		defer statsVec.Close()
+		statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
+		statsVecs = append(statsVecs, statsVec)
 	}
 
-	for _, meta := range blkMetas {
+	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{meta})
+		rel.AddBlksWithMetaLoc(context.Background(), vec)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
-	for _, meta := range blkMetas {
+	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		err := rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{meta})
+		err := rel.AddBlksWithMetaLoc(context.Background(), vec)
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7919,22 +7923,19 @@ func TestDedupSnapshot2(t *testing.T) {
 	blocks, _, err := writer.Sync(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
-	metaLoc := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		uint32(data.Vecs[0].Length()),
-		blocks[0].GetID())
-	assert.Nil(t, err)
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
+	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
+	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
-	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
+	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
 }
@@ -8029,15 +8030,12 @@ func TestDeduplication(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(blocks))
 
-	metaLoc := blockio.EncodeLocation(
-		writer.GetName(),
-		blocks[0].GetExtent(),
-		uint32(bats[0].Length()),
-		blocks[0].GetID(),
-	)
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
+	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
+	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -8070,7 +8068,7 @@ func TestDeduplication(t *testing.T) {
 		for j := 1; j < rows; j++ {
 			txn, _ := tae.StartTxn(nil)
 			database, _ := txn.GetDatabase("db")
-			rel, _ = database.GetRelationByName(schema.Name)
+			rel, _ := database.GetRelationByName(schema.Name)
 			_ = rel.Append(context.Background(), bats[j])
 			txns = append(txns, txn)
 		}

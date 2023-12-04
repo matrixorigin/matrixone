@@ -58,9 +58,6 @@ const (
 
 var (
 	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
-	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
-	fuzzyNonCompoundCheck = "select %s from %s.%s where %s in (%s) group by %s having count(*) > 1 limit 1;"
-	fuzzyCompoundCheck    = "select serial(%s) from %s.%s where %s group by serial(%s) having count(*) > 1 limit 1;"
 )
 
 var (
@@ -415,7 +412,7 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
 			err = e
 		} else {
-			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(), cols)
+			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(nil), cols)
 		}
 		return true
 	})

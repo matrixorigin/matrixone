@@ -154,6 +154,43 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		cosineSimilarity = -1.0
 	}
 
+	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
+	// 1.0 or -1.0 to avoid precision issue.
+	//
+	//  Example for corner case:
+	// - cosine_similarity(a,a) = 1:
+	// - Without downcasting check, we get the following results:
+	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
+	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   0.9999999999999998
+	// - With downcasting, we get the following results:
+	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
+	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   1
+	//
+	//  Reason:
+	// The reason for this check is
+	// 1. gonums mat.Dot, mat.Norm returns float64. In other databases, we mostly do float32 operations.
+	// 2. float64 operations are not exact.
+	// mysql> select 76586261.65813679/(8751.35770370157 *8751.35770370157);
+	//+-----------------------------------------------------------+
+	//| 76586261.65813679 / (8751.35770370157 * 8751.35770370157) |
+	//+-----------------------------------------------------------+
+	//|                                            1.000000000000 |
+	//+-----------------------------------------------------------+
+	//mysql> select cast(76586261.65813679 as double)/(8751.35770370157 * 8751.35770370157);
+	//+---------------------------------------------------------------------------+
+	//| cast(76586261.65813679 as double) / (8751.35770370157 * 8751.35770370157) |
+	//+---------------------------------------------------------------------------+
+	//|                                                        0.9999999999999996 |
+	//+---------------------------------------------------------------------------+
+	// 3. We only need to handle the case for 1.0 and -1.0 with float32 precision.
+	//    Rest of the cases can have float64 precision.
+	cosineSimilarityF32 := float32(cosineSimilarity)
+	if cosineSimilarityF32 == 1 {
+		cosineSimilarity = 1
+	} else if cosineSimilarityF32 == -1 {
+		cosineSimilarity = -1
+	}
+
 	return cosineSimilarity, nil
 }
 

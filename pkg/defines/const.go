@@ -14,6 +14,8 @@
 
 package defines
 
+import "math"
+
 // Header information.
 const (
 	OKHeader          byte = 0x00
@@ -37,4 +39,10 @@ const (
 	// When a TargetDN.address in TxnRequest is TEMPORARY_TABLE_TN_ADDR, this TxnRequest is for temporary table
 	// and execution flow will go to the func in handleTemp
 	TEMPORARY_TABLE_TN_ADDR = "%!%mo_temp_db_dn_address"
+)
+
+const (
+	MORPCMinVersion    int64 = math.MinInt64
+	MORPCVersion1      int64 = 1
+	MORPCLatestVersion       = MORPCVersion1
 )

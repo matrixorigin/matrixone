@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package stream
+package source
 
 import (
 	"bytes"
@@ -26,11 +26,11 @@ import (
 )
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("stream scan")
+	buf.WriteString("Source scan")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	_, span := trace.Start(proc.Ctx, "StreamPrepare")
+	_, span := trace.Start(proc.Ctx, "SourcePrepare")
 	defer span.End()
 
 	p := arg
@@ -58,7 +58,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	_, span := trace.Start(proc.Ctx, "StreamCall")
+	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 
 	if arg.buf != nil {
@@ -67,14 +67,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result := vm.NewCallResult()
 	var err error
-	arg.buf, err = mokafka.RetrieveData(proc.Ctx, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
-	if err != nil {
+
+	switch arg.status {
+	case retrieve:
+		arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.SourceInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+		if err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
+		arg.status = end
+		result.Batch = arg.buf
+		result.Status = vm.ExecNext
+	case end:
 		result.Status = vm.ExecStop
-		return result, err
 	}
 
-	result.Batch = arg.buf
-	//todo: change to process.ExecNext
-	result.Status = vm.ExecStop
 	return result, nil
 }

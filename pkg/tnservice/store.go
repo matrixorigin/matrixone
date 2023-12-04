@@ -17,9 +17,6 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"time"
 
@@ -34,12 +31,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -204,6 +205,10 @@ func NewService(
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
+	s.setupStatusServer()
+
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
 	return s, nil
 }
 
@@ -437,9 +442,7 @@ func (s *store) initQueryService(inStandalone bool) {
 }
 
 func (s *store) initQueryCommandHandler() {
-	if s.queryService != nil {
-		s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
-	}
+	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
 }
 
 func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -453,4 +456,12 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 	})
 
 	return nil
+}
+
+func (s *store) setupStatusServer() {
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetHAKeeperClient(s.hakeeperClient)
+	}
+
 }

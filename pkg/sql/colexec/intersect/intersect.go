@@ -131,7 +131,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 			}
 		}
-		btc.Clean(proc.Mp())
+		proc.PutBatch(btc)
 	}
 	return nil
 }
@@ -216,7 +216,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			}
 		}
 
-		btc.Clean(proc.Mp())
+		proc.PutBatch(btc)
 		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
 

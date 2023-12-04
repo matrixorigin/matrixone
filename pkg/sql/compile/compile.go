@@ -168,7 +168,6 @@ func (c *Compile) clear() {
 	c.startAt = time.Time{}
 	c.metaTables = nil
 	c.needLockMeta = false
-	c.fuzzy = nil
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -395,7 +394,7 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -409,24 +408,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 	var span trace.Span
 	var cc *Compile // compile structure for rerun.
-	result = &util2.RunResult{}
-	// var err error
+	var result = &util2.RunResult{}
+	var err error
 
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-		if cc != nil {
-			if cc.fuzzy != nil && cc.fuzzy.cnt > 0 && err == nil {
-				err = cc.fuzzy.backgroundSQLCheck(cc)
-			}
-		} else {
-			if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
-				err = c.fuzzy.backgroundSQLCheck(c)
-			}
-		}
-
 		putCompile(c)
 		putCompile(cc)
 
@@ -444,7 +432,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		c.fatalLog(0, err)
 
 		if !c.ifNeedRerun(err) {
-			return
+			return nil, err
 		}
 		v2.TxnStatementRetryCounter.Inc()
 
@@ -453,14 +441,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 		// clear the workspace of the failed statement
 		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-			err = e
-			return
+			return nil, e
 		}
 
 		// increase the statement id
 		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-			err = e
-			return
+			return nil, e
 		}
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
@@ -475,30 +461,29 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		}
 		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 			c.fatalLog(1, err)
-			return
+			return nil, err
 		}
 		if err = cc.runOnce(); err != nil {
 			c.fatalLog(1, err)
-			return
+			return nil, err
 		}
 		err = c.proc.TxnOperator.GetWorkspace().Adjust()
 		if err != nil {
 			c.fatalLog(1, err)
-			return
+			return nil, err
 		}
 		// set affectedRows to old compile to return
 		c.setAffectedRows(cc.getAffectedRows())
 	}
 
 	if c.shouldReturnCtxErr() {
-		err = c.proc.Ctx.Err()
-		return
+		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		err = c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return
+	return result, nil
 }
 
 // if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
@@ -998,8 +983,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
-		ss, err := c.compileStreamScan(ctx, n)
+	case plan.Node_SOURCE_SCAN:
+		ss, err := c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1207,19 +1192,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
-	case plan.Node_FUZZY_FILTER:
-		curr := c.anal.curr
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		ss, err = c.compileFuzzyFilter(n, ss, ns)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
 	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1569,8 +1541,8 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
@@ -1596,7 +1568,7 @@ func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Stream,
+			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -1898,7 +1870,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1908,7 +1879,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1932,51 +1902,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 				panic(e)
 			}
 		}
-		// defs has no rowid
-		defs, err := rel.TableDefs(ctx)
-		if err != nil {
-			panic(err)
-		}
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			} else if c, ok := def.(*engine.ConstraintDef); ok {
-				for _, ct := range c.Cts {
-					switch k := ct.(type) {
-					case *engine.PrimaryKeyDef:
-						pkey = k.Pkey
-					}
-				}
-			}
-		}
-		tblDef = &plan.TableDef{
-			Cols:          cols,
-			Name2ColIndex: name2index,
-			Version:       n.TableDef.Version,
-			Name:          n.TableDef.Name,
-			TableType:     n.TableDef.GetTableType(),
-			Pkey:          pkey,
-		}
+		tblDef = rel.GetTableDef(ctx)
 	}
 
 	// prcoess partitioned table
@@ -2610,48 +2536,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Arg: constructMergeLimit(n, c.proc),
 	}
 	return []*Scope{rs}
-}
-
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node) ([]*Scope, error) {
-	if len(ss) != 1 {
-		panic("fuzzy filter should have only one prescope")
-	}
-
-	arg := constructFuzzyFilter(ns[n.Children[0]])
-
-	ss[0].appendInstruction(vm.Instruction{
-		Op:  vm.FuzzyFilter,
-		Idx: c.anal.curr,
-		Arg: arg,
-	})
-
-	outData, err := newFuzzyCheck(n)
-	if err != nil {
-		return nil, err
-	}
-
-	// wrap the collision key into c.fuzzy, for more information,
-	// please refer fuzzyCheck.go
-	ss[0].appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: &output.Argument{
-			Data: outData,
-			Func: func(data any, bat *batch.Batch) error {
-				if bat == nil || bat.IsEmpty() {
-					return nil
-				}
-				c.fuzzy = data.(*fuzzyCheck)
-				// the batch will contain the key that fuzzyCheck
-				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
-					return err
-				}
-
-				return nil
-			},
-		},
-	})
-
-	return ss, nil
 }
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
@@ -3490,8 +3374,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					agg.F.Func.ObjName = "starcount"
-					continue
+					if _, ok := args.Expr.(*plan.Expr_C); ok {
+						if agg.F.Func.ObjName == "count" {
+							agg.F.Func.ObjName = "starcount"
+							continue
+						}
+					}
+					partialresults = nil
+					break
 				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
 				if len(n.TableDef.Cols) > 0 {
@@ -3499,6 +3389,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 			}
 			for _, buf := range ranges[1:] {
+				if partialresults == nil {
+					break
+				}
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)
@@ -3962,6 +3855,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
+	var shuffleRangeUint64 []uint64
+	var shuffleRangeInt64 []int64
+	var init bool
+	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3977,7 +3874,27 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
+		if !init {
+			init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			}
+		}
+		if shuffleRangeUint64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+		} else if shuffleRangeInt64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+		} else {
+			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		}
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil

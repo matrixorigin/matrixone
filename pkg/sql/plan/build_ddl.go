@@ -18,9 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
+
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,6 +32,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+	var tableDef plan.TableDef
+
+	// check view statement
+	var stmtPlan *Plan
+	var err error
+	switch s := stmt.Select.(type) {
+	case *tree.ParenSelect:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, s.Select, false)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		stmtPlan, err = runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	query := stmtPlan.GetQuery()
+	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
+	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+		cols[idx] = &plan.ColDef{
+			Name: strings.ToLower(query.Headings[idx]),
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  !expr.Typ.NotNullable,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	tableDef.Cols = cols
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            ctx.GetRootSql(),
+		DefaultDatabase: ctx.DefaultDatabase(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql = &plan.ViewDef{
+		View: string(viewData),
+	}
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+
+	return &tableDef, nil
+}
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
@@ -109,19 +172,19 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
-func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, error) {
-	streamName := string(stmt.StreamName.ObjectName)
+func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
+	streamName := string(stmt.SourceName.ObjectName)
 	createStream := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
-			TableType: catalog.SystemStreamRel,
+			TableType: catalog.SystemSourceRel,
 			Name:      streamName,
 		},
 	}
-	if len(stmt.StreamName.SchemaName) == 0 {
+	if len(stmt.SourceName.SchemaName) == 0 {
 		createStream.Database = ctx.DefaultDatabase()
 	} else {
-		createStream.Database = string(stmt.StreamName.SchemaName)
+		createStream.Database = string(stmt.SourceName.SchemaName)
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
@@ -130,30 +193,19 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
 	}
 
-	if stmt.AsSource != nil {
-		return nil, moerr.NewNYI(ctx.GetContext(), "create stream as : '%v'", stmt.AsSource)
-		//tableDef, err := genViewTableDef(ctx, stmt.AsSource)
-		//if err != nil {
-		//	return nil, err
-		//}
-		//
-		//createStream.TableDef.Cols = tableDef.Cols
-		//createStream.TableDef.ViewSql = tableDef.ViewSql
-		//createStream.TableDef.Defs = tableDef.Defs
-	} else {
-		if err := buildStreamDefs(stmt, ctx, createStream); err != nil {
-			return nil, err
-		}
+	if err := buildSourceDefs(stmt, ctx, createStream); err != nil {
+		return nil, err
 	}
+
 	var properties []*plan.Property
 	properties = append(properties, &plan.Property{
 		Key:   catalog.SystemRelAttr_Kind,
-		Value: catalog.SystemStreamRel,
+		Value: catalog.SystemSourceRel,
 	})
 	configs := make(map[string]interface{})
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
-		case *tree.CreateStreamWithOption:
+		case *tree.CreateSourceWithOption:
 			key := strings.ToLower(string(opt.Key))
 			val := opt.Val.(*tree.NumVal).OrigString()
 			properties = append(properties, &plan.Property{
@@ -185,7 +237,7 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
-func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream *plan.CreateTable) error {
+func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream *plan.CreateTable) error {
 	colMap := make(map[string]*ColDef)
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
@@ -221,7 +273,7 @@ func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream 
 				}
 			}
 			createStream.TableDef.Cols = append(createStream.TableDef.Cols, col)
-		case *tree.CreateStreamWithOption:
+		case *tree.CreateSourceWithOption:
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "stream def: '%v'", def)
 		}
@@ -595,7 +647,18 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt, ctx, createTable)
+	var err error
+	if stmt.IsDynamicTable {
+		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
+		if err != nil {
+			return nil, err
+		}
+
+		createTable.TableDef.Cols = tableDef.Cols
+		//createTable.TableDef.ViewSql = tableDef.ViewSql
+		//createTable.TableDef.Defs = tableDef.Defs
+	}
+	err = buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -893,6 +956,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", def.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", def.Name.Parts[0]))
+
 					}
 					pks = append(pks, def.Name.Parts[0])
 				case *tree.AttributeComment:

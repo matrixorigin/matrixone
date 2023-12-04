@@ -36,6 +36,7 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err

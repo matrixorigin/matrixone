@@ -241,7 +241,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_STREAM_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -448,7 +448,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			remapping.addColRef(globalRef)
-
+			if node.JoinType == plan.Node_RIGHT {
+				childProjList[i].Typ.NotNullable = false
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: childProjList[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -486,6 +488,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				}
 
 				remapping.addColRef(globalRef)
+
+				if node.JoinType == plan.Node_LEFT {
+					childProjList[i].Typ.NotNullable = false
+				}
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: childProjList[i].Typ,
@@ -665,9 +671,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 		increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 
+		// the result order of sample will follow [group by columns, sample columns, other columns].
+		// and the projection list needs to be based on the result order.
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+
+		for _, expr := range node.FilterList {
+			builder.remapHavingClause(expr, groupTag, sampleTag, int32(len(node.GroupBy)))
 		}
 
 		// deal with group col and sample col.
@@ -696,6 +708,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				},
 			})
 		}
+
+		offsetSize := int32(len(node.GroupBy))
 		for i, expr := range node.AggList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
@@ -715,13 +729,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
-						ColPos: int32(len(node.ProjectList)),
+						ColPos: int32(i) + offsetSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
 			})
 		}
 
+		offsetSize += int32(len(node.AggList))
 		childProjectionList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -734,7 +749,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
-						ColPos: int32(len(node.ProjectList)),
+						ColPos: int32(i) + offsetSize,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -1147,6 +1162,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		var newProjList []*plan.Expr
 		for _, needed := range neededProj {
 			expr := node.ProjectList[needed]
@@ -1154,6 +1170,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
+			}
+
+			switch ne := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				expr.Typ.NotNullable = childProjList[ne.Col.ColPos].Typ.NotNullable
 			}
 
 			globalRef := [2]int32{projectTag, needed}
@@ -1476,7 +1497,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.autoUseIndices(rootID)
+		rootID = builder.applyIndices(rootID)
 		ReCalcNodeStats(rootID, builder, true, true, true)
 
 		determineHashOnPK(rootID, builder)
@@ -3391,8 +3412,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, col)
-		} else if tableDef.TableType == catalog.SystemStreamRel {
-			nodeType = plan.Node_STREAM_SCAN
+		} else if tableDef.TableType == catalog.SystemSourceRel {
+			nodeType = plan.Node_SOURCE_SCAN
 		} else if tableDef.TableType == catalog.SystemViewRel {
 			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
 				currentDB := schema
@@ -3613,7 +3634,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 	var table string
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_STREAM_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SOURCE_SCAN {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
 		}
@@ -3897,7 +3918,7 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 			}
 		}
 		return false
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_STREAM_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN:
 		return onlyContainsTag(expr, node.BindingTags[0])
 	case plan.Node_JOIN:
 		if containsTag(expr, builder.qry.Nodes[node.Children[0]].BindingTags[0]) && containsTag(expr, builder.qry.Nodes[node.Children[1]].BindingTags[0]) {

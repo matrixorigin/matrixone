@@ -235,10 +235,19 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	start := time.Now()
 	defer func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.mu.inTransfer = false
+
+		duration := time.Since(start)
+		if duration > time.Second {
+			t.logger.Info("slow transfer for tunnel",
+				zap.Any("tunnel", t),
+				zap.Duration("transfer duration", duration),
+			)
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)

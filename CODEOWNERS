@@ -31,7 +31,6 @@
 /test @aressu1985 @heni02
 
 # cmd
-/cmd/mo-dump @daviszhen @qingxinhome
 /cmd/mo-service @zhangxu19830126
 
 /pkg/backup @daviszhen @LeftHandCold @qingxinhome
@@ -55,6 +54,7 @@
 /pkg/common/stopper @zhangxu19830126
 /pkg/common/runtime @zhangxu19830126
 /pkg/common/log @zhangxu19830126
+/pkg/common/reuse @zhangxu19830126
 
 # pkg/compare
 /pkg/compare @nnsgmsone
