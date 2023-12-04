@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -80,6 +81,9 @@ func NewClient(cfg morpc.Config) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
+	if err := checkMethodVersion(ctx, request); err != nil {
+		return nil, err
+	}
 	f, err := c.AsyncSend(ctx, request)
 	if err != nil {
 		return nil, err
@@ -100,6 +104,10 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 		return nil, err
 	}
 	return resp, nil
+}
+
+func checkMethodVersion(ctx context.Context, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
