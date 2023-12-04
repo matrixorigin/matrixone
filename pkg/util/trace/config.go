@@ -100,6 +100,13 @@ type SpanContext struct {
 	Kind SpanKind `json:"span_kind"`
 }
 
+func (c *SpanContext) Clone() (sc SpanContext) {
+	copy(sc.TraceID[:], c.TraceID[:])
+	copy(sc.SpanID[:], c.SpanID[:])
+	sc.Kind = c.Kind
+	return
+}
+
 func (c *SpanContext) Size() (n int) {
 	return 24
 }

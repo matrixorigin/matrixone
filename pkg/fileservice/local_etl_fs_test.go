@@ -118,3 +118,12 @@ func TestLocalETLFS(t *testing.T) {
 	})
 
 }
+
+func TestLocalETLFSEmptyRootPath(t *testing.T) {
+	fs, err := NewLocalETLFS(
+		"test",
+		"",
+	)
+	assert.Nil(t, err)
+	assert.NotNil(t, fs)
+}
