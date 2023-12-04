@@ -15,15 +15,16 @@
 package mokafka
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
@@ -35,16 +36,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ValueType string
 
 const (
-	TypeKey             = "type"
-	TopicKey            = "topic"
-	ValueKey            = "value"
+	TypeKey  = "type"
+	TopicKey = "topic"
+
+	DatabaseKey = "database"
+
+	TimeWindowKey = "timeWindow"
+
+	BufferLimitKey = "bufferLimit"
+
+	TableKey = "table"
+
+	ValueKey = "value"
+
+	PartitionKey        = "partition"
+	RelkindKey          = "relkind"
 	BootstrapServersKey = "bootstrap.servers"
 	ProtobufSchemaKey   = "protobuf.schema"
 	ProtobufMessagekey  = "protobuf.message"
@@ -96,7 +111,7 @@ type KafkaAdapterInterface interface {
 	CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error
 	DescribeTopicDetails(ctx context.Context, topicName string) (*kafka.TopicMetadata, error)
 	ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error)
-	ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error)
+	ReadMessagesFromTopic(topic string, offset int64, limit int64, configs map[string]interface{}) ([]*kafka.Message, error)
 	GetSchemaForTopic(topic string, isKey bool) (schemaregistry.SchemaMetadata, error)
 
 	GetKafkaConsumer() (*kafka.Consumer, error)
@@ -245,7 +260,7 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 	return messages, nil
 }
 
-func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error) {
+func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64, configs map[string]interface{}) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
 		return nil, moerr.NewInternalError(context.Background(), "consumer not initialized")
 	}
@@ -262,7 +277,22 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 	}
 
 	var messages []*kafka.Message
-	for _, p := range topicMetadata.Partitions {
+	var partitions []kafka.PartitionMetadata
+	if configs[PartitionKey] != nil {
+		partition, err := strconv.Atoi(configs[PartitionKey].(string))
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range topicMetadata.Partitions {
+			if p.ID == int32(partition) {
+				partitions = append(partitions, p)
+				break
+			}
+		}
+	} else {
+		partitions = topicMetadata.Partitions
+	}
+	for _, p := range partitions {
 		// Fetch the high watermark for the partition
 		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(topic, p.ID, -1)
 		if err != nil {
@@ -458,7 +488,7 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 		}
 
 	case PROTOBUFSR:
-		schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
+		schema, err := ka.GetSchemaForTopic(configs[TopicKey].(string), false)
 		if err != nil {
 			return nil, err
 		}
@@ -489,109 +519,387 @@ func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	return b, nil
 }
 func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
+	var buf bytes.Buffer
 
 	for colIdx, typ := range typs {
-		fieldValue, ok := getter.GetFieldValue(attrKeys[colIdx])
-		if !ok {
-			return moerr.NewInternalError(ctx, "field not found: %s", attrKeys[colIdx])
-		}
-
 		id := typ.Oid
 		vec := bat.Vecs[colIdx]
+		fieldValue, ok := getter.GetFieldValue(attrKeys[colIdx])
+		if !ok || fieldValue == nil {
+			nulls.Add(vec.GetNulls(), uint64(rowIdx))
+			continue
+		}
 		switch id {
+		case types.T_bool:
+			var val bool
+			switch v := fieldValue.(type) {
+			case bool:
+				val = v
+			case int8, int16, int32, int64:
+				val = v != 0
+			case float32, float64:
+				val = v != 0.0
+			case string:
+				var err error
+				val, err = strconv.ParseBool(v)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			default:
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			cols := vector.MustFixedCol[bool](vec)
+			cols[rowIdx] = val
+		case types.T_int8:
+			var val int8
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseInt(strVal, 10, 8)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = int8(parsedValue)
+			cols := vector.MustFixedCol[int8](vec)
+			cols[rowIdx] = val
+		case types.T_int16:
+			var val int16
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseInt(strVal, 10, 16)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = int16(parsedValue)
+			cols := vector.MustFixedCol[int16](vec)
+			cols[rowIdx] = val
 		case types.T_int32:
 			var val int32
+			var strVal string
 			switch v := fieldValue.(type) {
-			case int32:
-				val = v
-			case float64:
-				val = int32(v)
-			// You can add more type cases if necessary
+			case string:
+				strVal = v
 			default:
-				return moerr.NewInternalError(ctx, "expected int32 compatible type for column %d but got %T", colIdx, fieldValue)
+				strVal = fmt.Sprintf("%v", v)
 			}
+			parsedValue, err := strconv.ParseInt(strVal, 10, 32)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = int32(parsedValue)
 			cols := vector.MustFixedCol[int32](vec)
 			cols[rowIdx] = val
 		case types.T_int64:
 			var val int64
+			var strVal string
 			switch v := fieldValue.(type) {
-			case int64:
-				val = v
-			case float64:
-				val = int64(v)
-			// Add more type cases if necessary
+			case string:
+				strVal = v
 			default:
-				return moerr.NewInternalError(ctx, "expected int64 compatible type for column %d but got %T", colIdx, fieldValue)
+				strVal = fmt.Sprintf("%v", v)
 			}
+			parsedValue, err := strconv.ParseInt(strVal, 10, 64)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = parsedValue
 			cols := vector.MustFixedCol[int64](vec)
 			cols[rowIdx] = val
-
-		case types.T_uint64:
-			val, ok := fieldValue.(uint64)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected uint64 type for column %d but got %T", colIdx, fieldValue)
+		case types.T_int128:
+			var val int64
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
 			}
+			parsedValue, err := strconv.ParseInt(strVal, 10, 64)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = parsedValue
+			cols := vector.MustFixedCol[int64](vec)
+			cols[rowIdx] = val
+		case types.T_uint8:
+			var val uint8
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseUint(strVal, 10, 8)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = uint8(parsedValue)
+			cols := vector.MustFixedCol[uint8](vec)
+			cols[rowIdx] = val
+		case types.T_uint16:
+			var val uint16
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseUint(strVal, 10, 16)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = uint16(parsedValue)
+			cols := vector.MustFixedCol[uint16](vec)
+			cols[rowIdx] = val
+		case types.T_uint32:
+			var val uint32
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseUint(strVal, 10, 32)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = uint32(parsedValue)
+			cols := vector.MustFixedCol[uint32](vec)
+			cols[rowIdx] = val
+		case types.T_uint64:
+			var val uint64
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = parsedValue
 			cols := vector.MustFixedCol[uint64](vec)
 			cols[rowIdx] = val
-
-		case types.T_float64:
-			val, ok := fieldValue.(float64)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected float64 type for column %d but got %T", colIdx, fieldValue)
+		case types.T_uint128:
+			var val uint64
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
 			}
+			parsedValue, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = parsedValue
+			cols := vector.MustFixedCol[uint64](vec)
+			cols[rowIdx] = val
+		case types.T_float32:
+			var val float32
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseFloat(strVal, 32)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = float32(parsedValue)
+			cols := vector.MustFixedCol[float32](vec)
+			cols[rowIdx] = val
+		case types.T_float64:
+			var val float64
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%v", v)
+			}
+			parsedValue, err := strconv.ParseFloat(strVal, 64)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			val = parsedValue
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = val
-
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			val, ok := fieldValue.(string)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected string type for column %d but got %T", colIdx, fieldValue)
+			var strVal string
+			switch v := fieldValue.(type) {
+			case string:
+				strVal = v
+			default:
+				strVal = fmt.Sprintf("%s", v)
 			}
-			err := vector.SetStringAt(vec, rowIdx, val, mp)
+			buf.WriteString(strVal)
+			bs := buf.Bytes()
+			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
 			if err != nil {
-				return err
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
-
-		case types.T_bool:
-			val, ok := fieldValue.(bool)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected bool type for column %d but got %T", colIdx, fieldValue)
-			}
-			cols := vector.MustFixedCol[bool](vec)
-			cols[rowIdx] = val
+			buf.Reset()
 
 		case types.T_json:
-			val, ok := fieldValue.([]byte)
-			if !ok || len(val) == 0 {
-				strVal, strOk := fieldValue.(string)
-				if !strOk {
-					return moerr.NewInternalError(ctx, "expected bytes or string type for JSON column %d but got %T", colIdx, fieldValue)
-				}
-				val = []byte(strVal)
-			}
-			err := vector.SetBytesAt(vec, rowIdx, val, mp)
+			var jsonBytes []byte
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			byteJson, err := types.ParseStringToByteJson(valueStr)
 			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			jsonBytes, err = types.EncodeJson(byteJson)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+		case types.T_date:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDateCast(valueStr)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
 				return err
 			}
-
+		case types.T_time:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseTime(valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+		case types.T_timestamp:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			t := time.Local
+			d, err := types.ParseTimestamp(t, valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
 		case types.T_datetime:
-			val, ok := fieldValue.(string)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected string type for Datetime column %d but got %T", colIdx, fieldValue)
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDatetime(valueStr, vec.GetType().Scale)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
-			cols := vector.MustFixedCol[types.Datetime](vec)
-			if len(val) == 0 {
-				cols[rowIdx] = types.Datetime(0)
-			} else {
-				d, err := types.ParseDatetime(val, vec.GetType().Scale)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, fieldValue)
-				}
-				cols[rowIdx] = d
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
 			}
 
+		case types.T_enum:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := strconv.ParseUint(valueStr, 10, 16)
+			if err == nil {
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				f, err := strconv.ParseFloat(valueStr, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+					return err
+				}
+			}
+		case types.T_decimal64:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := types.ParseDecimal64(valueStr, vec.GetType().Width, vec.GetType().Scale)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		case types.T_decimal128:
+			valueStr := fmt.Sprintf("%v", fieldValue)
+			d, err := types.ParseDecimal128(valueStr, vec.GetType().Width, vec.GetType().Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
+		case types.T_uuid:
+
+			valueStr := fmt.Sprintf("%v", fieldValue)
+
+			d, err := types.ParseUuid(valueStr)
+			if err != nil {
+				nulls.Add(vec.GetNulls(), uint64(rowIdx))
+				continue
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
+				return err
+			}
 		default:
-			return moerr.NewInternalError(ctx, "the value type %s is not supported now", *vec.GetType())
+			nulls.Add(vec.GetNulls(), uint64(rowIdx))
+			continue
 		}
 	}
 	return nil
@@ -667,6 +975,7 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
+	// each time we create a new consumer group for gather all messages
 	groupId := uuid.New().String()
 	kafkaConfigs.SetKey("group.id", groupId)
 
@@ -681,9 +990,32 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory
 		BootstrapServersKey,
 	}
 
+	var additionalAllowedKeys = []string{
+		PartitionKey,
+		RelkindKey,
+		ProtobufMessagekey,
+		ProtobufSchemaKey,
+	}
+
+	// Create a set of allowed keys
+	allowedKeys := make(map[string]struct{})
+	for _, key := range requiredKeys {
+		allowedKeys[key] = struct{}{}
+	}
+	for _, key := range additionalAllowedKeys {
+		allowedKeys[key] = struct{}{}
+	}
+
 	for _, key := range requiredKeys {
 		if _, exists := configs[key]; !exists {
 			return moerr.NewInternalError(ctx, "missing required key: %s", key)
+		}
+	}
+
+	// Validate keys in configs
+	for key := range configs {
+		if _, ok := allowedKeys[key]; !ok {
+			return moerr.NewInternalError(ctx, "invalid key: %s", key)
 		}
 	}
 
@@ -747,16 +1079,32 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	}
 	defer ka.Close()
 
-	meta, err := ka.DescribeTopicDetails(ctx, configs["topic"].(string))
+	meta, err := ka.DescribeTopicDetails(ctx, configs[TopicKey].(string))
 	if err != nil {
 		return 0, err
 	}
 
 	var totalSize int64
 	kaConsumer, _ := ka.GetKafkaConsumer()
-	for _, p := range meta.Partitions {
+
+	var partitions []kafka.PartitionMetadata
+	if configs[PartitionKey] != nil {
+		partition, err := strconv.Atoi(configs[PartitionKey].(string))
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range meta.Partitions {
+			if p.ID == int32(partition) {
+				partitions = append(partitions, p)
+				break
+			}
+		}
+	} else {
+		partitions = meta.Partitions
+	}
+	for _, p := range partitions {
 		// Fetch the high watermark for the partition
-		_, highwatermarkHigh, err := kaConsumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
+		_, highwatermarkHigh, err := kaConsumer.QueryWatermarkOffsets(configs[TopicKey].(string), p.ID, -1)
 		if err != nil {
 			return 0, err
 		}
@@ -794,7 +1142,7 @@ func RetrieveData(ctx context.Context, msgs []*kafka.Message, configs map[string
 		messages = msgs
 	} else {
 		var err error
-		messages, err = ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
+		messages, err = ka.ReadMessagesFromTopic(configs[TopicKey].(string), offset, limit, configs)
 		if err != nil {
 			return nil, err
 		}
