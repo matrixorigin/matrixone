@@ -42,17 +42,18 @@ const DefaultCheckpointBlockRows = 10000
 const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
-	CheckpointVersion1 uint32 = 1
-	CheckpointVersion2 uint32 = 2
-	CheckpointVersion3 uint32 = 3
-	CheckpointVersion4 uint32 = 4
-	CheckpointVersion5 uint32 = 5
-	CheckpointVersion6 uint32 = 6
-	CheckpointVersion7 uint32 = 7
-	CheckpointVersion8 uint32 = 8
-	CheckpointVersion9 uint32 = 9
+	CheckpointVersion1  uint32 = 1
+	CheckpointVersion2  uint32 = 2
+	CheckpointVersion3  uint32 = 3
+	CheckpointVersion4  uint32 = 4
+	CheckpointVersion5  uint32 = 5
+	CheckpointVersion6  uint32 = 6
+	CheckpointVersion7  uint32 = 7
+	CheckpointVersion8  uint32 = 8
+	CheckpointVersion9  uint32 = 9
+	CheckpointVersion10 uint32 = 10
 
-	CheckpointCurrentVersion = CheckpointVersion9
+	CheckpointCurrentVersion = CheckpointVersion10
 )
 
 const (
@@ -132,6 +133,7 @@ var checkpointDataSchemas_V6 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V7 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V8 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V9 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V10 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -355,6 +357,8 @@ func init() {
 		ObjectInfoSchema,
 		ObjectInfoSchema,
 	}
+	// version 10 add objectinfo
+	checkpointDataSchemas_V10 = checkpointDataSchemas_V9
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
@@ -367,7 +371,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V7[:])
 	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V8[:])
 	registerCheckpointDataReferVersion(CheckpointVersion9, checkpointDataSchemas_V9[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V9
+	registerCheckpointDataReferVersion(CheckpointVersion10, checkpointDataSchemas_V10[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V10
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
@@ -877,6 +882,9 @@ func (data *CNCheckpointData) PrefetchFrom(
 				break
 			}
 		}
+		if i == ObjectInfo && version < CheckpointVersion10 {
+			continue
+		}
 		idx := switchCheckpointIdx(uint16(i), tableID)
 		schema := checkpointDataReferVersions[version][uint32(idx)]
 		idxes := make([]uint16, len(schema.attrs))
@@ -1252,6 +1260,9 @@ func (data *CNCheckpointData) ReadFromData(
 				tableID == pkgcatalog.MO_COLUMNS_ID {
 				break
 			}
+		}
+		if i == ObjectInfo && version < CheckpointVersion10 {
+			continue
 		}
 		idx := switchCheckpointIdx(uint16(i), tableID)
 		it := table.locations.MakeIterator()
