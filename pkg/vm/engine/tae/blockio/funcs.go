@@ -79,7 +79,7 @@ func LoadTombstoneColumns(
 	location objectio.Location,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, 0)
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
 
 func LoadOneBlock(
