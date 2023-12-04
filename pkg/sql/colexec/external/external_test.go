@@ -129,7 +129,7 @@ func Test_Prepare(t *testing.T) {
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-			extern.Format = "test"
+			extern.Format = tcs.format
 			json_byte, err = json.Marshal(extern)
 			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
@@ -156,7 +156,7 @@ func Test_Prepare(t *testing.T) {
 				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
 				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)

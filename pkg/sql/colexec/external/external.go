@@ -91,6 +91,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		}
 		param.Extern.FileService = proc.FileService
 	}
+	if !loadFormatIsValid(param.Extern) {
+		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -836,6 +840,9 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 			res = append(res, NULL_FLAG)
 			continue
 		}
+		if idx > len(cols) {
+			return nil, moerr.NewWrongValueCountOnRow(ctx, 0)
+		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
 			res = append(res, fmt.Sprintf("%v", val))
@@ -1306,4 +1313,12 @@ func readCountStringLimitSize(r *csv.Reader, ctx context.Context, size uint64, r
 		}
 	}
 	return OneBatchMaxRow, false, nil
+}
+
+func loadFormatIsValid(param *tree.ExternParam) bool {
+	switch param.Format {
+	case tree.JSONLINE, tree.CSV:
+		return true
+	}
+	return false
 }
