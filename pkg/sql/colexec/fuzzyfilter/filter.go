@@ -31,7 +31,7 @@ import (
 const maxCheckDupCount = 2000
 
 /*
-This operator is used to implement a way to ensure primary keys/unique keys are not duplicate in `INSERT` and `LOAD` statements, 
+This operator is used to implement a way to ensure primary keys/unique keys are not duplicate in `INSERT` and `LOAD` statements,
  You can think of it as a special type of join, but it saves more memory and is generally faster.
 
 the BIG idea is to store
@@ -47,7 +47,7 @@ if the final bloom filter claim that
 
 Note:
 1. backgroud SQL may slow, so some optimizations could be applied
-	Using statistical information, when the data to be loaded is larger, the allowed false positive probability is lower, 
+	Using statistical information, when the data to be loaded is larger, the allowed false positive probability is lower,
 		avoiding too much content that needs to be checked.
     manually check whether collision keys duplicate or not,
         if duplicate, then return error timely

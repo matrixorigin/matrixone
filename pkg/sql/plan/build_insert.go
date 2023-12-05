@@ -375,6 +375,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				return nil
 			}
 			if fe, ok := expr.Expr.(*plan.Expr_F); ok {
+				if fe.F.Func.ObjName != "in" {
+					// give up this opt
+					return nil
+				}
 				fe.F.Args[1] = &plan.Expr{
 					Expr: &plan.Expr_List{
 						List: &plan.ExprList{

@@ -1083,7 +1083,6 @@ func makeInsertPlan(
 		}
 
 		if needCheck && useFuzzyFilter {
-
 			rfTag := builder.genNewTag()
 
 			// sink_scan
@@ -1123,6 +1122,11 @@ func makeInsertPlan(
 					break
 				}
 			}
+
+			if scanTableDef.Partition != nil && partitionExpr != nil {
+				scanTableDef.Partition.PartitionExpression = partitionExpr
+			}
+
 			scanNode := &plan.Node{
 				NodeType: plan.Node_TABLE_SCAN,
 				Stats:    &plan.Stats{},
@@ -1152,17 +1156,25 @@ func makeInsertPlan(
 				},
 			}
 
-			var blockFilterList []*Expr
+			var tableScanId int32
+
 			if len(pkFilterExprs) > 0 {
+				var blockFilterList []*Expr
 				scanNode.FilterList = pkFilterExprs
 				blockFilterList = make([]*Expr, len(pkFilterExprs))
 				for i, e := range pkFilterExprs {
 					blockFilterList[i] = DeepCopyExpr(e)
 				}
-			}
-			tableScanId := builder.appendNode(scanNode, bindCtx)
-			if len(blockFilterList) > 0 {
+				tableScanId = builder.appendNode(scanNode, bindCtx)
 				scanNode.BlockFilterList = blockFilterList
+				scanNode.RuntimeFilterProbeList = nil // can not use both
+			} else {
+				tableScanId = builder.appendNode(scanNode, bindCtx)
+			}
+
+			// Perform partition pruning on the full table scan of the partitioned table in the insert statement
+			if scanTableDef.Partition != nil && partitionExpr != nil {
+				builder.partitionPrune(tableScanId)
 			}
 
 			// fuzzy_filter
@@ -1171,7 +1183,10 @@ func makeInsertPlan(
 				Children: []int32{tableScanId, lastNodeId}, // right table build hash
 				TableDef: tableDef,
 				ObjRef:   objRef,
-				RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+			}
+
+			if len(pkFilterExprs) == 0 {
+				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
@@ -1184,7 +1199,7 @@ func makeInsertPlan(
 							},
 						},
 					},
-				},
+				}
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
