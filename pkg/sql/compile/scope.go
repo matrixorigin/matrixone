@@ -91,12 +91,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
-		if err != nil {
-			//TODO: @arjun remove this after debugging the panic suppression issue.
-			getLogger().Error("error in scope run suppressed to nil",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
 		err = nil
 	default:
 	}
