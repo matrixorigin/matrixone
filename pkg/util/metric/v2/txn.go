@@ -28,6 +28,7 @@ var (
 		}, []string{"type"})
 	TxnUserCounter     = txnCounter.WithLabelValues("user")
 	TxnInternalCounter = txnCounter.WithLabelValues("internal")
+	TxnLeakCounter     = txnCounter.WithLabelValues("leak")
 
 	txnStatementCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
