@@ -200,14 +200,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 }
 
 // RemoteRun send the scope to a remote node for execution.
-// if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
-	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
-		return s.ParallelRun(c, s.IsRemote)
-	}
-
-	if !cnclient.IsCNClientReady() {
+	if !s.canRemote(c) || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -222,7 +216,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		if err != nil && !strings.Contains(err.Error(), "panic") {
 			err = nil
 		}
-		// if context has done, it means other pipeline stop the query normally.
+		// if context has done, it means another pipeline stops the query.
 		// so there is no need to return the error again.
 	default:
 	}
@@ -722,23 +716,38 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				})
 			}
 		case vm.Sample:
-			flg = true
 			arg := in.Arg.(*sample.Argument)
-			s.Instructions = s.Instructions[i:]
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.Merge,
-				Idx: s.Instructions[0].Idx,
-				Arg: &merge.Argument{},
+			if !arg.IsMergeSampleByRow() {
+				flg = true
+
+				// if by percent, there is no need to do merge sample.
+				if arg.IsByPercent() {
+					s.Instructions = s.Instructions[i:]
+				} else {
+					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
+					s.Instructions[1] = vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: false,
+						Arg:     sample.NewMergeSample(arg),
+					}
+				}
+				s.Instructions[0] = vm.Instruction{
+					Op:  vm.Merge,
+					Idx: s.Instructions[0].Idx,
+					Arg: &merge.Argument{},
+				}
+
+				for j := range ss {
+					ss[j].appendInstruction(vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: in.IsFirst,
+						Arg:     arg.SimpleDup(),
+					})
+				}
 			}
 
-			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Sample,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg:     arg.SimpleDup(),
-				})
-			}
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
