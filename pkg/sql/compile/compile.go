@@ -2812,6 +2812,19 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 	return c.newMergeScope(rs)
 }
 
+func (c *Compile) newDeleteScope(arg *deletion.Argument, ss []*Scope) []*Scope {
+	deleteIns := &vm.Instruction{
+		Op:  vm.Deletion,
+		Arg: arg,
+	}
+	for i := range ss {
+		ss[i].Instructions = append(
+			ss[i].Instructions,
+			dupInstruction(deleteIns, nil, 0))
+	}
+	return ss
+}
+
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := &Scope{
 		PreScopes: ss,
