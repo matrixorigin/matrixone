@@ -216,8 +216,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		if err != nil && !strings.Contains(err.Error(), "panic") {
 			err = nil
 		}
-		// if context has done, it means another pipeline stops the query.
-		// so there is no need to return the error again.
 	default:
 	}
 	return err
