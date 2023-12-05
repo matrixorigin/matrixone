@@ -27,6 +27,7 @@ func (bf *BloomFilter) Clean() {
 	bf.keys = nil
 	bf.states = nil
 	bf.vals = nil
+	bf.addVals = nil
 }
 
 func (bf *BloomFilter) Add(v *vector.Vector) {
