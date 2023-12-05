@@ -1597,7 +1597,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
-
+	var isSource = false
+	if qry.TableDef != nil {
+		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
+	}
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
@@ -1632,7 +1635,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
+	if !isTemp && !isView && !isSource && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&

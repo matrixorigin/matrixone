@@ -741,6 +741,9 @@ var (
 		input:  "create dynamic table t as select a from t1",
 		output: "create dynamic table t as select a from t1",
 	}, {
+		input:  "create dynamic table t as select a from t1 with (\"type\"='kafka')",
+		output: "create dynamic table t as select a from t1 with (type = kafka)",
+	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {
