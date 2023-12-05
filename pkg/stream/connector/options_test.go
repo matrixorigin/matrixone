@@ -70,6 +70,7 @@ func TestMakeStmtOpts(t *testing.T) {
 		"bootstrap.servers": "localhost:9092",
 		"topic":             "t1",
 		"value":             "json",
+		"partition":         "1",
 	}
 	o, err = MakeStmtOpts(context.Background(), okOpts)
 	assert.NoError(t, err)
