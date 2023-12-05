@@ -67,9 +67,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
 			ctx := proc.Ctx
+			sessionInfo := proc.SessionInfo
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				if sessionInfo.AccountId != sysAccountID {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
@@ -164,9 +167,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
+			sessionInfo := proc.SessionInfo
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				if sessionInfo.AccountId != sysAccountID {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
@@ -279,6 +285,14 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			}
 			if columnStr == "__mo_rowid" {
 				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
+			}
+
+			sessionInfo := proc.SessionInfo
+			if isClusterTable(dbStr, tableStr) {
+				//if it is the cluster table in the general account, switch into the sys account
+				if sessionInfo.AccountId != sysAccountID {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 
 			db, err := e.Database(proc.Ctx, dbStr, txn)
