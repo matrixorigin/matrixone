@@ -203,14 +203,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
+	p := pipeline.New(nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
-		// if context has done, it means another pipeline stops the query.
-		// so there is no need to return the error again.
+		// this clean-up action shouldn't be called before context check.
+		// because the clean-up action will cancel the context, and error will be suppressed.
+		p.Cleanup(s.Proc, true, err)
 		return nil
 
 	default:
+		p.Cleanup(s.Proc, err != nil, err)
 		return err
 	}
 }
@@ -706,23 +709,38 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				})
 			}
 		case vm.Sample:
-			flg = true
 			arg := in.Arg.(*sample.Argument)
-			s.Instructions = s.Instructions[i:]
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.Merge,
-				Idx: s.Instructions[0].Idx,
-				Arg: &merge.Argument{},
+			if !arg.IsMergeSampleByRow() {
+				flg = true
+
+				// if by percent, there is no need to do merge sample.
+				if arg.IsByPercent() {
+					s.Instructions = s.Instructions[i:]
+				} else {
+					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
+					s.Instructions[1] = vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: false,
+						Arg:     sample.NewMergeSample(arg),
+					}
+				}
+				s.Instructions[0] = vm.Instruction{
+					Op:  vm.Merge,
+					Idx: s.Instructions[0].Idx,
+					Arg: &merge.Argument{},
+				}
+
+				for j := range ss {
+					ss[j].appendInstruction(vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: in.IsFirst,
+						Arg:     arg.SimpleDup(),
+					})
+				}
 			}
 
-			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Sample,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg:     arg.SimpleDup(),
-				})
-			}
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)

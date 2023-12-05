@@ -32,6 +32,10 @@ func (m *Request) GetID() uint64 {
 	return m.RequestID
 }
 
+func (m *Request) GetMethod() CmdMethod {
+	return m.GetCmdMethod()
+}
+
 // Method implements the morpc.MethodBasedMessage interface.
 func (m *Request) Method() uint32 {
 	return uint32(m.CmdMethod)
