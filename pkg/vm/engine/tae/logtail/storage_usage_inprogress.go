@@ -118,7 +118,12 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	for _, opt := range opts {
 		opt(cache)
 	}
+	cache.data.Clear()
 	return cache
+}
+
+func (c *StorageUsageCache) Iter() btree.IterG[UsageData_] {
+	return c.data.Iter()
 }
 
 func (c *StorageUsageCache) IsExpired() bool {
@@ -165,6 +170,14 @@ func (c *StorageUsageCache) GatherAccountSize(id uint32) (size int64, exist bool
 	return
 }
 
+func (c *StorageUsageCache) Get(usage UsageData_) (ret UsageData_, exist bool) {
+	return c.data.Get(usage)
+}
+
+func (c *StorageUsageCache) Delete(usage UsageData_) {
+	c.data.Delete(usage)
+}
+
 type TNUsageMemo struct {
 	sync.Mutex
 	cache   *StorageUsageCache
@@ -205,7 +218,7 @@ func (m *TNUsageMemo) GatherAccountSize(id uint32) (size int64, exist bool) {
 func (m *TNUsageMemo) Update(usage UsageData_, del bool) {
 	m.pending = true
 	size := int64(0)
-	if old, found := m.cache.data.Get(usage); found {
+	if old, found := m.cache.Get(usage); found {
 		size = old.Size
 	}
 
@@ -244,7 +257,7 @@ func (m *TNUsageMemo) applyDeletes(
 			piovt := UsageData_{
 				e.GetDB().GetTenantID(),
 				e.GetDB().GetID(), e.GetID(), 0}
-			if usage, exist := tnUsageMemo.cache.data.Get(piovt); exist {
+			if usage, exist := tnUsageMemo.cache.Get(piovt); exist {
 				appendToStorageUsageBat_(ckpData, usage, true, mp)
 				tnUsageMemo.Delete(usage)
 			}
@@ -292,7 +305,7 @@ func (m *TNUsageMemo) applySegInserts(inserts []UsageData_, ckpData *CheckpointD
 func (m *TNUsageMemo) applySegDeletes(deletes []UsageData_, ckpData *CheckpointData, mp *mpool.MPool) {
 	for _, usage := range deletes {
 		// can not delete a non-exist usage, right?
-		if _, exist := tnUsageMemo.cache.data.Get(usage); exist {
+		if _, exist := tnUsageMemo.cache.Get(usage); exist {
 			appendToStorageUsageBat_(ckpData, usage, true, mp)
 			tnUsageMemo.Update(usage, true)
 		}
