@@ -35,7 +35,11 @@ type sPool struct {
 
 	// sample type.
 	// same as the Type attribute of sample.Argument.
-	typ sPoolType
+	typ     sPoolType
+	isMerge bool
+
+	// some fields for performance.
+	canCheckFull bool
 
 	// capacity for each group.
 	capacity int
@@ -61,11 +65,13 @@ const (
 	percentSamplePool
 )
 
-func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int, columnReorder bool) *sPool {
+func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
 		proc:           proc,
-		requireReorder: columnReorder,
+		requireReorder: true,
 		typ:            rowSamplePool,
+		isMerge:        false,
+		canCheckFull:   false,
 		capacity:       capacity,
 		columns:        make(sampleColumnList, sampleColumnCount),
 	}
@@ -76,9 +82,40 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 		proc:           proc,
 		requireReorder: true,
 		typ:            percentSamplePool,
+		isMerge:        false,
+		canCheckFull:   false,
 		percents:       int(per * 100),
 		columns:        make(sampleColumnList, sampleColumnCount),
 	}
+}
+
+func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+	return &sPool{
+		proc:           proc,
+		requireReorder: false,
+		typ:            rowSamplePool,
+		isMerge:        true,
+		canCheckFull:   false,
+		capacity:       capacity,
+		columns:        make(sampleColumnList, sampleColumnCount),
+	}
+}
+
+func (s *sPool) setPerfFields(isGroupBy bool) {
+	s.canCheckFull = !isGroupBy && !s.isMerge && s.typ == rowSamplePool
+}
+
+func (s *sPool) IsFull() bool {
+	if !s.canCheckFull {
+		return false
+	}
+	if len(s.sPools) > 0 {
+		return s.sPools[0].space == 0
+	}
+	if len(s.mPools) > 0 {
+		return s.mPools[0].isFull()
+	}
+	return false
 }
 
 func (s *sPool) Free() {

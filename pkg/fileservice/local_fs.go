@@ -64,26 +64,31 @@ func NewLocalFS(
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*LocalFS, error) {
 
-	// ensure dir
-	f, err := os.Open(rootPath)
-	if os.IsNotExist(err) {
-		// not exists, create
-		err := os.MkdirAll(rootPath, 0755)
+	// get absolute path
+	if rootPath != "" {
+		var err error
+		rootPath, err = filepath.Abs(rootPath)
 		if err != nil {
 			return nil, err
 		}
 
-	} else if err != nil {
-		// stat error
-		return nil, err
+		// ensure dir
+		f, err := os.Open(rootPath)
+		if os.IsNotExist(err) {
+			// not exists, create
+			err := os.MkdirAll(rootPath, 0755)
+			if err != nil {
+				return nil, err
+			}
 
-	} else {
-		defer f.Close()
-	}
+		} else if err != nil {
+			// stat error
+			return nil, err
 
-	// create tmp dir
-	if err := os.MkdirAll(filepath.Join(rootPath, ".tmp"), 0755); err != nil {
-		return nil, err
+		} else {
+			defer f.Close()
+		}
+
 	}
 
 	fs := &LocalFS{
@@ -219,8 +224,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 
 	// write
 	f, err := os.CreateTemp(
-		filepath.Join(l.rootPath, ".tmp"),
-		"*.tmp",
+		l.rootPath,
+		".tmp.*",
 	)
 	if err != nil {
 		return 0, err
@@ -301,6 +306,19 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		wait()
 	}
 
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
+	}
+
 	if l.memCache != nil {
 		if err := l.memCache.Read(ctx, vector); err != nil {
 			return err
@@ -358,6 +376,19 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		defer unlock()
 	} else {
 		wait()
+	}
+
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
 	}
 
 	if l.memCache != nil {
