@@ -4016,15 +4016,13 @@ func (c *Compile) runTxn(execFunc func(executor.TxnExecutor) error) error {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		// NOTE: copied from runSqlWithResult
 		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.SessionInfo.TimeZone)
 	return exec.ExecTxn(c.proc.Ctx, execFunc, opts)
-	//TODO: later replace multiple runSql()'s within a function with one runTxn for alter.go and ddl.go
+	//TODO: later replace other runSql() usage, with runTxn() in alter.go and ddl.go
 }
 
 func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
