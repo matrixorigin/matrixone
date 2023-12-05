@@ -1396,13 +1396,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+			var tp = types.T_date
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
-				tp, _ := ExtractToDateReturnType(sval.Sval)
-				args = append(args, makePlan2DateConstNullExpr(tp))
-			} else {
-				return nil, moerr.NewInvalidArg(ctx, "to_date format", "not constant")
+				tp, _ = ExtractToDateReturnType(sval.Sval)
 			}
+			args = append(args, makePlan2DateConstNullExpr(tp))
+
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
 		} else {
