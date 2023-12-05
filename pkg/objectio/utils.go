@@ -37,11 +37,11 @@ func init() {
 	RowidType = types.T_Rowid.ToType()
 }
 
-type CreateSegOpt struct {
+type CreateObjOpt struct {
 	Id *types.Objectid
 }
 
-func (o *CreateSegOpt) WithId(id *types.Objectid) *CreateSegOpt {
+func (o *CreateObjOpt) WithId(id *types.Objectid) *CreateObjOpt {
 	o.Id = id
 	return o
 }

@@ -71,7 +71,7 @@ func (c *BoundTableOperator) processTableData() error {
 		return err
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
-	for _, dirtySeg := range dirty.Segs {
+	for _, dirtySeg := range dirty.Objs {
 		seg, err := tbl.GetObjectByID(dirtySeg.ID)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {

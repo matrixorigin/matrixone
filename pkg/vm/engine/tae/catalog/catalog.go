@@ -171,8 +171,8 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		needGC := be.DeleteBefore(ts)
 		be.RUnlock()
 		if needGC {
-			seg := be.object
-			seg.RemoveEntry(be)
+			obj := be.object
+			obj.RemoveEntry(be)
 		}
 		return nil
 	}
@@ -524,7 +524,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
-	seg, err := tbl.GetObjectByID(cmd.ID.ObjectID())
+	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
 	un := cmd.mvccNode
 	if un.Is1PC() {
 		if err := un.ApplyCommit(); err != nil {
@@ -532,16 +532,16 @@ func (catalog *Catalog) onReplayUpdateObject(
 		}
 	}
 	if err != nil {
-		seg = NewReplayObjectEntry()
-		seg.ID = *cmd.ID.ObjectID()
-		seg.table = tbl
-		seg.Insert(un)
-		seg.ObjectNode = cmd.node
-		tbl.AddEntryLocked(seg)
+		obj = NewReplayObjectEntry()
+		obj.ID = *cmd.ID.ObjectID()
+		obj.table = tbl
+		obj.Insert(un)
+		obj.ObjectNode = cmd.node
+		tbl.AddEntryLocked(obj)
 	} else {
-		node := seg.SearchNode(un)
+		node := obj.SearchNode(un)
 		if node == nil {
-			seg.Insert(un)
+			obj.Insert(un)
 		} else {
 			node.BaseNode.Update(un.BaseNode)
 		}
@@ -568,8 +568,8 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
 
 func (catalog *Catalog) onReplayCheckpointObject(
 	dbid, tbid uint64,
-	segid *types.Objectid,
-	segNode *ObjectMVCCNode,
+	objid *types.Objectid,
+	objNode *ObjectMVCCNode,
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
 	state EntryState,
@@ -584,26 +584,26 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	seg, _ := rel.GetObjectByID(segid)
-	if seg == nil {
-		seg = NewReplayObjectEntry()
-		seg.ID = *segid
-		seg.table = rel
-		seg.ObjectNode = &ObjectNode{
+	obj, _ := rel.GetObjectByID(objid)
+	if obj == nil {
+		obj = NewReplayObjectEntry()
+		obj.ID = *objid
+		obj.table = rel
+		obj.ObjectNode = &ObjectNode{
 			state:    state,
 			sorted:   rel.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
 			SortHint: catalog.NextObject(),
 		}
-		rel.AddEntryLocked(seg)
+		rel.AddEntryLocked(obj)
 	}
 	un := &MVCCNode[*ObjectMVCCNode]{
 		EntryMVCCNode: entryNode,
-		BaseNode:      segNode,
+		BaseNode:      objNode,
 		TxnMVCCNode:   txnNode,
 	}
-	node := seg.SearchNode(un)
+	node := obj.SearchNode(un)
 	if node == nil {
-		seg.Insert(un)
+		obj.Insert(un)
 	} else {
 		node.BaseNode.Update(un.BaseNode)
 	}
@@ -623,20 +623,20 @@ func (catalog *Catalog) replayObjectByBlock(
 	txn txnif.TxnReader,
 	dataFactory DataFactory) {
 	ObjectID := blkID.Object()
-	seg, _ := tbl.GetObjectByID(ObjectID)
+	obj, _ := tbl.GetObjectByID(ObjectID)
 	// create
 	if create {
-		if seg == nil {
-			seg = NewObjectEntryOnReplay(
+		if obj == nil {
+			obj = NewObjectEntryOnReplay(
 				tbl,
 				ObjectID,
 				start, end, state)
-			tbl.AddEntryLocked(seg)
+			tbl.AddEntryLocked(obj)
 		}
 	}
 	// delete
 	if delete {
-		node := seg.SearchNode(
+		node := obj.SearchNode(
 			&MVCCNode[*ObjectMVCCNode]{
 				TxnMVCCNode: &txnbase.TxnMVCCNode{
 					Start: start,
@@ -644,11 +644,11 @@ func (catalog *Catalog) replayObjectByBlock(
 			},
 		)
 		if node == nil {
-			node = seg.GetLatestNodeLocked().CloneData()
+			node = obj.GetLatestNodeLocked().CloneData()
 			node.Start = start
 			node.Prepare = end
 			node.End = end
-			seg.Insert(node)
+			obj.Insert(node)
 			node.DeletedAt = end
 		}
 	}
@@ -679,11 +679,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
-	seg, err := tbl.GetObjectByID(cmd.ID.ObjectID())
+	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
 	if err != nil {
 		panic(err)
 	}
-	blk, err := seg.GetBlockEntryByID(&cmd.ID.BlockID)
+	blk, err := obj.GetBlockEntryByID(&cmd.ID.BlockID)
 	un := cmd.mvccNode
 	if un.Is1PC() {
 		if err := un.ApplyCommit(); err != nil {
@@ -693,7 +693,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if !un.BaseNode.DeltaLoc.IsEmpty() {
 		name := un.BaseNode.DeltaLoc.Name()
 		objn := name.Num()
-		seg.replayNextObjectIdx(objn)
+		obj.replayNextObjectIdx(objn)
 	}
 	if err == nil {
 		blkun := blk.SearchNode(un)
@@ -712,7 +712,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.BlockNode = cmd.node
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
-	blk.object = seg
+	blk.object = obj
 	if blk.blkData == nil {
 		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 	} else {
@@ -722,7 +722,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if observer != nil {
 		observer.OnTimeStamp(prepareTS)
 	}
-	seg.ReplayAddEntryLocked(blk)
+	obj.ReplayAddEntryLocked(blk)
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
@@ -755,7 +755,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 }
 func (catalog *Catalog) onReplayCreateBlock(
 	dbid, tid uint64,
-	segid *types.Objectid,
+	objid *types.Objectid,
 	blkid *types.Blockid,
 	state EntryState,
 	metaloc, deltaloc objectio.Location,
@@ -784,7 +784,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		nil,
 		dataFactory)
-	seg, err := rel.GetObjectByID(segid)
+	obj, err := rel.GetObjectByID(objid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
@@ -792,17 +792,17 @@ func (catalog *Catalog) onReplayCreateBlock(
 	if !deltaloc.IsEmpty() {
 		name := deltaloc.Name()
 		objn := name.Num()
-		seg.replayNextObjectIdx(objn)
+		obj.replayNextObjectIdx(objn)
 	}
-	blk, _ := seg.GetBlockEntryByID(blkid)
+	blk, _ := obj.GetBlockEntryByID(blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
 		blk.BlockNode = &BlockNode{}
-		blk.object = seg
+		blk.object = obj
 		blk.ID = *blkid
 		blk.state = state
-		seg.ReplayAddEntryLocked(blk)
+		obj.ReplayAddEntryLocked(blk)
 		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: txnNode.End,
@@ -842,7 +842,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
-	segid *types.Objectid,
+	objid *types.Objectid,
 	blkid *types.Blockid,
 	metaloc,
 	deltaloc objectio.Location,
@@ -871,7 +871,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		true,
 		nil,
 		nil)
-	seg, err := rel.GetObjectByID(segid)
+	obj, err := rel.GetObjectByID(objid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
@@ -879,9 +879,9 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	if !deltaloc.IsEmpty() {
 		name := deltaloc.Name()
 		objn := name.Num()
-		seg.replayNextObjectIdx(objn)
+		obj.replayNextObjectIdx(objn)
 	}
-	blk, err := seg.GetBlockEntryByID(blkid)
+	blk, err := obj.GetBlockEntryByID(blkid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)

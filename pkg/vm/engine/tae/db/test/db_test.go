@@ -4218,7 +4218,7 @@ func TestLogtailBasic(t *testing.T) {
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
 	reader := logMgr.GetReader(minTs, maxTs)
 	require.False(t, reader.HasCatalogChanges())
-	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Segs))
+	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Objs))
 
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -4303,14 +4303,14 @@ func TestLogtailBasic(t *testing.T) {
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs.Next())
 	require.False(t, reader.HasCatalogChanges())
 	reader = logMgr.GetReader(minTs, catalogWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Segs))
+	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Objs))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Segs))
+	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
 	// 10 Objects, every Object has 1 blocks
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Segs))
-	for _, seg := range dirties.Segs {
+	require.Equal(t, 10, len(dirties.Objs))
+	for _, seg := range dirties.Objs {
 		require.Equal(t, 1, len(seg.Blks))
 	}
 	tots := func(ts types.TS) *timestamp.Timestamp {
@@ -8055,7 +8055,7 @@ func TestDeduplication(t *testing.T) {
 	seg, err := tbl.CreateObject(
 		txn,
 		catalog.ES_Appendable,
-		new(objectio.CreateSegOpt).WithId(ObjectIDs[0]))
+		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]))
 	assert.NoError(t, err)
 	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)
 	assert.NoError(t, err)

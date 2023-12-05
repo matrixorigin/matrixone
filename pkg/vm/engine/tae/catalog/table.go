@@ -166,7 +166,7 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetObjectByID(id *types.Objectid) (seg *ObjectEntry, err error) {
+func (entry *TableEntry) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.entries[*id]
@@ -175,21 +175,21 @@ func (entry *TableEntry) GetObjectByID(id *types.Objectid) (seg *ObjectEntry, er
 	}
 	return node.GetPayload(), nil
 }
-func (entry *TableEntry) GetObjectsByID(id *types.Segmentid) (seg []*ObjectEntry, err error) {
+func (entry *TableEntry) GetObjectsByID(id *types.Segmentid) (obj []*ObjectEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	for nodeID, node := range entry.entries {
 		if nodeID.Segment().Eq(*id) {
-			if seg == nil {
-				seg = make([]*ObjectEntry, 0)
+			if obj == nil {
+				obj = make([]*ObjectEntry, 0)
 			}
-			seg = append(seg, node.GetPayload())
+			obj = append(obj, node.GetPayload())
 		}
 	}
-	if seg == nil {
+	if obj == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return seg, nil
+	return obj, nil
 }
 
 func (entry *TableEntry) MakeObjectIt(reverse bool) *common.GenericSortedDListIt[*ObjectEntry] {
@@ -201,7 +201,7 @@ func (entry *TableEntry) MakeObjectIt(reverse bool) *common.GenericSortedDListIt
 func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	opts *objectio.CreateSegOpt,
+	opts *objectio.CreateObjOpt,
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
@@ -384,32 +384,18 @@ func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
 
 func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 
-func (entry *TableEntry) LastAppendableSegmemt() (seg *ObjectEntry) {
+func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
 	it := entry.MakeObjectIt(false)
 	for it.Valid() {
-		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropCommitted()
-		if itSeg.IsAppendable() && !dropped {
-			seg = itSeg
+		itObj := it.Get().GetPayload()
+		dropped := itObj.HasDropCommitted()
+		if itObj.IsAppendable() && !dropped {
+			obj = itObj
 			break
 		}
 		it.Next()
 	}
-	return seg
-}
-
-func (entry *TableEntry) LastNonAppendableSegmemt() (seg *ObjectEntry) {
-	it := entry.MakeObjectIt(false)
-	for it.Valid() {
-		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropCommitted()
-		if !itSeg.IsAppendable() && !dropped {
-			seg = itSeg
-			break
-		}
-		it.Next()
-	}
-	return seg
+	return obj
 }
 
 func (entry *TableEntry) AsCommonID() *common.ID {
@@ -425,12 +411,12 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			err = nil
 		}
 	}()
-	segIt := entry.MakeObjectIt(true)
-	for segIt.Valid() {
-		Object := segIt.Get().GetPayload()
+	objIt := entry.MakeObjectIt(true)
+	for objIt.Valid() {
+		Object := objIt.Get().GetPayload()
 		if err := processor.OnObject(Object); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				segIt.Next()
+				objIt.Next()
 				continue
 			}
 			return err
@@ -450,28 +436,28 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		if err := processor.OnPostObject(Object); err != nil {
 			return err
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	return
 }
 
 func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn) (deleted *ObjectEntry, err error) {
-	seg, err := entry.GetObjectByID(id)
+	obj, err := entry.GetObjectByID(id)
 	if err != nil {
 		return
 	}
-	seg.Lock()
-	defer seg.Unlock()
-	needWait, waitTxn := seg.NeedWaitCommitting(txn.GetStartTS())
+	obj.Lock()
+	defer obj.Unlock()
+	needWait, waitTxn := obj.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
-		seg.Unlock()
+		obj.Unlock()
 		waitTxn.GetTxnState(true)
-		seg.Lock()
+		obj.Lock()
 	}
 	var isNewNode bool
-	isNewNode, err = seg.DropEntryLocked(txn)
+	isNewNode, err = obj.DropEntryLocked(txn)
 	if err == nil && isNewNode {
-		deleted = seg
+		deleted = obj
 	}
 	return
 }
@@ -550,12 +536,12 @@ func (entry *TableEntry) isColumnChangedInSchema() bool {
 }
 
 func (entry *TableEntry) FreezeAppend() {
-	seg := entry.LastAppendableSegmemt()
-	if seg == nil {
+	obj := entry.LastAppendableObject()
+	if obj == nil {
 		// nothing to freeze
 		return
 	}
-	blk := seg.LastAppendableBlock()
+	blk := obj.LastAppendableBlock()
 	if blk == nil {
 		// nothing to freeze
 		return

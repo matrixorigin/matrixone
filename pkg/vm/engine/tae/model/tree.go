@@ -89,7 +89,7 @@ func (visitor *stringVisitor) VisitTable(dbID, id uint64) (err error) {
 }
 
 func (visitor *stringVisitor) VisitObject(dbID, tableID uint64, id *objectio.ObjectId) (err error) {
-	_, _ = visitor.buf.WriteString(fmt.Sprintf("\nTree-SEG[%s]", id.String()))
+	_, _ = visitor.buf.WriteString(fmt.Sprintf("\nTree-OBJ[%s]", id.String()))
 	return
 }
 
@@ -112,7 +112,7 @@ type Tree struct {
 type TableTree struct {
 	DbID uint64
 	ID   uint64
-	Segs map[objectio.ObjectId]*ObjectTree
+	Objs map[objectio.ObjectId]*ObjectTree
 }
 
 type ObjectTree struct {
@@ -130,7 +130,7 @@ func NewTableTree(dbID, id uint64) *TableTree {
 	return &TableTree{
 		DbID: dbID,
 		ID:   id,
-		Segs: make(map[objectio.ObjectId]*ObjectTree),
+		Objs: make(map[objectio.ObjectId]*ObjectTree),
 	}
 }
 
@@ -165,7 +165,7 @@ func (tree *Tree) visitObject(visitor TreeVisitor, table *TableTree, Object *Obj
 }
 
 func (tree *Tree) visitTable(visitor TreeVisitor, table *TableTree) (err error) {
-	for _, Object := range table.Segs {
+	for _, Object := range table.Objs {
 		if err = visitor.VisitObject(table.DbID, table.ID, Object.ID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
@@ -252,12 +252,12 @@ func (tree *Tree) Shrink(tableID uint64) (empty bool) {
 	return
 }
 
-func (tree *Tree) GetObject(tableID uint64, segID types.Objectid) *ObjectTree {
+func (tree *Tree) GetObject(tableID uint64, objID types.Objectid) *ObjectTree {
 	table := tree.GetTable(tableID)
 	if table == nil {
 		return nil
 	}
-	return table.GetObject(segID)
+	return table.GetObject(objID)
 }
 
 func (tree *Tree) Compact() (empty bool) {
@@ -325,13 +325,13 @@ func (tree *Tree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err err
 	return
 }
 func (ttree *TableTree) GetObject(id types.Objectid) *ObjectTree {
-	return ttree.Segs[id]
+	return ttree.Objs[id]
 }
 
 func (ttree *TableTree) AddObject(sid *objectio.ObjectId) {
 	id := *sid
-	if _, exist := ttree.Segs[id]; !exist {
-		ttree.Segs[id] = NewObjectTree(&id)
+	if _, exist := ttree.Objs[id]; !exist {
+		ttree.Objs[id] = NewObjectTree(&id)
 	}
 }
 
@@ -339,42 +339,42 @@ func (ttree *TableTree) AddBlock(id *objectio.Blockid) {
 	sid := id.Object()
 	ttree.AddObject(sid)
 	_, seq := id.Offsets()
-	ttree.Segs[*sid].AddBlock(seq)
+	ttree.Objs[*sid].AddBlock(seq)
 }
 
 func (ttree *TableTree) ShortBlocksString() string {
 	buf := bytes.Buffer{}
-	for _, seg := range ttree.Segs {
+	for _, obj := range ttree.Objs {
 		var shortuuid [8]byte
-		hex.Encode(shortuuid[:], seg.ID[:4])
-		for id := range seg.Blks {
-			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), seg.ID.Offset(), id))
+		hex.Encode(shortuuid[:], obj.ID[:4])
+		for id := range obj.Blks {
+			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), obj.ID.Offset(), id))
 		}
 	}
 	return buf.String()
 }
 
 func (ttree *TableTree) IsEmpty() bool {
-	return len(ttree.Segs) == 0
+	return len(ttree.Objs) == 0
 }
 
-func (ttree *TableTree) Shrink(segID types.Objectid) (empty bool) {
-	delete(ttree.Segs, segID)
-	empty = len(ttree.Segs) == 0
+func (ttree *TableTree) Shrink(objID types.Objectid) (empty bool) {
+	delete(ttree.Objs, objID)
+	empty = len(ttree.Objs) == 0
 	return
 }
 
 func (ttree *TableTree) Compact() (empty bool) {
 	toDelete := make([]types.Objectid, 0)
-	for id, seg := range ttree.Segs {
-		if len(seg.Blks) == 0 {
+	for id, obj := range ttree.Objs {
+		if len(obj.Blks) == 0 {
 			toDelete = append(toDelete, id)
 		}
 	}
 	for _, id := range toDelete {
-		delete(ttree.Segs, id)
+		delete(ttree.Objs, id)
 	}
-	empty = len(ttree.Segs) == 0
+	empty = len(ttree.Objs) == 0
 	return
 }
 
@@ -385,9 +385,9 @@ func (ttree *TableTree) Merge(ot *TableTree) {
 	if ot.ID != ttree.ID {
 		panic(fmt.Sprintf("Cannot merge 2 different table tree: %d, %d", ttree.ID, ot.ID))
 	}
-	for _, seg := range ot.Segs {
-		ttree.AddObject(seg.ID)
-		ttree.Segs[*seg.ID].Merge(seg)
+	for _, obj := range ot.Objs {
+		ttree.AddObject(obj.ID)
+		ttree.Objs[*obj.ID].Merge(obj)
 	}
 }
 
@@ -398,14 +398,14 @@ func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
 	}
-	cnt := uint32(len(ttree.Segs))
+	cnt := uint32(len(ttree.Objs))
 	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
 	n += 8 + 8 + 4
 	var tmpn int64
-	for _, seg := range ttree.Segs {
-		if tmpn, err = seg.WriteTo(w); err != nil {
+	for _, obj := range ttree.Objs {
+		if tmpn, err = obj.WriteTo(w); err != nil {
 			return
 		}
 		n += tmpn
@@ -432,21 +432,21 @@ func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	for i := 0; i < int(cnt); i++ {
 		id := objectio.NewObjectid()
 		if ver < MemoTreeVersion2 {
-			segs, tmpn, err := ReadObjectTreesV1(r)
+			objs, tmpn, err := ReadObjectTreesV1(r)
 			if err != nil {
 				return n, err
 			}
-			for _, seg := range segs {
-				ttree.Segs[*seg.ID] = seg
+			for _, obj := range objs {
+				ttree.Objs[*obj.ID] = obj
 			}
 			n += tmpn
 
 		} else {
-			seg := NewObjectTree(id)
-			if tmpn, err = seg.ReadFromV2(r); err != nil {
+			obj := NewObjectTree(id)
+			if tmpn, err = obj.ReadFromV2(r); err != nil {
 				return
 			}
-			ttree.Segs[*seg.ID] = seg
+			ttree.Objs[*obj.ID] = obj
 			n += tmpn
 		}
 	}
@@ -462,14 +462,14 @@ func (ttree *TableTree) Equal(o *TableTree) bool {
 	if ttree.ID != o.ID || ttree.DbID != o.DbID {
 		return false
 	}
-	if len(ttree.Segs) != len(o.Segs) {
+	if len(ttree.Objs) != len(o.Objs) {
 		return false
 	}
-	for id, seg := range ttree.Segs {
-		if oseg, found := o.Segs[id]; !found {
+	for id, obj := range ttree.Objs {
+		if oobj, found := o.Objs[id]; !found {
 			return false
 		} else {
-			if !seg.Equal(oseg) {
+			if !obj.Equal(oobj) {
 				return false
 			}
 		}
@@ -488,7 +488,7 @@ func (stree *ObjectTree) Merge(ot *ObjectTree) {
 		return
 	}
 	if !stree.ID.Eq(*ot.ID) {
-		panic(fmt.Sprintf("Cannot merge 2 different seg tree: %d, %d", stree.ID, ot.ID))
+		panic(fmt.Sprintf("Cannot merge 2 different obj tree: %d, %d", stree.ID, ot.ID))
 	}
 	for id := range ot.Blks {
 		stree.AddBlock(id)

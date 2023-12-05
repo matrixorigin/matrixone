@@ -273,9 +273,9 @@ func (cmd *EntryCommand[T, N]) IDString() string {
 	case IOET_WALTxnCommand_Table:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
 	case IOET_WALTxnCommand_Segment:
-		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
 	case IOET_WALTxnCommand_Object:
-		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
 	case IOET_WALTxnCommand_Block:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}

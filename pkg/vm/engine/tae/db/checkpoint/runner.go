@@ -767,13 +767,13 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 
 func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
 	metas := make([]*catalog.BlockEntry, 0, 10)
-	for _, seg := range tree.Segs {
-		Object, err := table.GetObjectByID(seg.ID)
+	for _, obj := range tree.Objs {
+		Object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range seg.Blks {
-			bid := objectio.NewBlockidWithObjectID(seg.ID, blk)
+		for blk := range obj.Blks {
+			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
 			block, err := Object.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
@@ -803,13 +803,13 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 }
 
 func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
-	for _, seg := range tree.Segs {
-		Object, err := table.GetObjectByID(seg.ID)
+	for _, obj := range tree.Objs {
+		Object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range seg.Blks {
-			bid := objectio.NewBlockidWithObjectID(seg.ID, blk)
+		for blk := range obj.Blks {
+			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
 			block, err := Object.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)

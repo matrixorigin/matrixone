@@ -261,7 +261,7 @@ func (seg *localObject) prepareApplyObjectStats(stats objectio.ObjectStats) (err
 	}
 
 	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableObject(true, new(objectio.CreateSegOpt).WithId(sid))
+		seg.nseg, err = seg.table.CreateNonAppendableObject(true, new(objectio.CreateObjOpt).WithId(sid))
 		if err != nil {
 			return
 		}

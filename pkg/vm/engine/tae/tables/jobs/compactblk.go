@@ -211,7 +211,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		// double the threshold to make more room for creating new appendable Object during appending, just a piece of defensive code
 		// check GetAppender function in tableHandle
 		if curSeg.GetNextObjectIndex() > options.DefaultObjectPerSegment*2 {
-			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
+			nextSeg := curSeg.GetTable().LastAppendableObject()
 			if nextSeg.ID == curSeg.ID {
 				// we can't create appendable seg here because compaction can be rollbacked.
 				// so just wait until the new appendable seg is available.

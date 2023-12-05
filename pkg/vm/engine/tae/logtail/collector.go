@@ -221,8 +221,8 @@ func (d *dirtyCollector) DirtyCount() (tblCnt, segCnt, blkCnt int) {
 	merged := d.GetAndRefreshMerged()
 	tblCnt = merged.tree.TableCount()
 	for _, tblTree := range merged.tree.Tables {
-		segCnt += len(tblTree.Segs)
-		for _, segTree := range tblTree.Segs {
+		segCnt += len(tblTree.Objs)
+		for _, segTree := range tblTree.Objs {
 			blkCnt += len(segTree.Blks)
 		}
 	}
@@ -421,7 +421,7 @@ func (d *dirtyCollector) tryCompactTree(
 			continue
 		}
 
-		for id, dirtySeg := range dirtyTable.Segs {
+		for id, dirtySeg := range dirtyTable.Objs {
 			// remove empty segs
 			if dirtySeg.IsEmpty() {
 				dirtyTable.Shrink(id)

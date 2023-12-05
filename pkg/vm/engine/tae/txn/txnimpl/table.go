@@ -436,14 +436,14 @@ func (tbl *txnTable) CreateObject(is1PC bool) (seg handle.Object, err error) {
 	return tbl.createObject(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Object, err error) {
+func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateObjOpt) (seg handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.CreateNonAppendable.Add(1)
 	})
 	return tbl.createObject(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Object, err error) {
+func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (seg handle.Object, err error) {
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts); err != nil {
 		return

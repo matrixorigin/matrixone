@@ -35,7 +35,7 @@ import (
 
 type ObjectEntry struct {
 	ID   types.Objectid
-	Stat SegStat
+	Stat ObjStat
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
@@ -44,7 +44,7 @@ type ObjectEntry struct {
 	*ObjectNode
 }
 
-type SegStat struct {
+type ObjStat struct {
 	// min max etc. later
 	sync.RWMutex
 	loaded         bool
@@ -55,7 +55,7 @@ type SegStat struct {
 	remainingRows  int
 }
 
-func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
+func (s *ObjStat) loadObjectInfo(blk *BlockEntry) error {
 	schema := blk.GetSchema()
 	loc := blk.GetMetaLoc()
 
@@ -96,61 +96,61 @@ func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
 	return nil
 }
 
-func (s *SegStat) GetLoaded() bool {
+func (s *ObjStat) GetLoaded() bool {
 	s.RLock()
 	defer s.RUnlock()
 	return s.loaded
 }
 
-func (s *SegStat) GetSortKeyZonemap() index.ZM {
+func (s *ObjStat) GetSortKeyZonemap() index.ZM {
 	s.RLock()
 	defer s.RUnlock()
 	return s.sortKeyZonemap.Clone()
 }
 
-func (s *SegStat) SetRows(rows int) {
+func (s *ObjStat) SetRows(rows int) {
 	s.Lock()
 	defer s.Unlock()
 	s.rows = rows
 }
 
-func (s *SegStat) SetRemainingRows(rows int) {
+func (s *ObjStat) SetRemainingRows(rows int) {
 	s.Lock()
 	defer s.Unlock()
 	s.remainingRows = rows
 }
 
-func (s *SegStat) GetRemainingRows() int {
+func (s *ObjStat) GetRemainingRows() int {
 	s.RLock()
 	defer s.RUnlock()
 	return s.remainingRows
 }
 
-func (s *SegStat) GetRows() int {
+func (s *ObjStat) GetRows() int {
 	s.RLock()
 	defer s.RUnlock()
 	return s.rows
 }
 
-func (s *SegStat) GetOriginSize() int {
+func (s *ObjStat) GetOriginSize() int {
 	s.RLock()
 	defer s.RUnlock()
 	return s.originSize
 }
 
-func (s *SegStat) SetOriginSize(size int) {
+func (s *ObjStat) SetOriginSize(size int) {
 	s.Lock()
 	defer s.Unlock()
 	s.originSize = size
 }
 
-func (s *SegStat) GetCompSize() int {
+func (s *ObjStat) GetCompSize() int {
 	s.RLock()
 	defer s.RUnlock()
 	return s.compSize
 }
 
-func (s *SegStat) String(composeSortKey bool) string {
+func (s *ObjStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
 	if s.sortKeyZonemap != nil {
 		if composeSortKey {
@@ -453,7 +453,7 @@ func (entry *ObjectEntry) StringLocked() string {
 
 func (entry *ObjectEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s%s]SEG[%s]", entry.state.Repr(), entry.ObjectNode.String(), id.String())
+	return fmt.Sprintf("[%s%s]OBJ[%s]", entry.state.Repr(), entry.ObjectNode.String(), id.String())
 }
 
 func (entry *ObjectEntry) String() string {
@@ -470,10 +470,10 @@ func (entry *ObjectEntry) StringWithLevel(level common.PPLevel) string {
 
 func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
+		return fmt.Sprintf("[%s-%s]OBJ[%s][C@%s,D@%s]",
 			entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
+	return fmt.Sprintf("[%s-%s]OBJ[%s]%s", entry.state.Repr(), entry.ObjectNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *ObjectEntry) BlockCnt() int {
@@ -485,7 +485,7 @@ func (entry *ObjectEntry) IsAppendable() bool {
 }
 
 func (entry *ObjectEntry) SetSorted() {
-	// modifing Object interface to supporte a borned sorted seg is verbose
+	// modifing Object interface to supporte a borned sorted obj is verbose
 	// use Lock instead, the contention won't be intense
 	entry.Lock()
 	defer entry.Unlock()

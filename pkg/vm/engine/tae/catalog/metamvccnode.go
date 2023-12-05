@@ -170,12 +170,12 @@ func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 
 type ObjectNode struct {
 	state    EntryState
-	IsLocal  bool   // this segment is hold by a localsegment
-	SortHint uint64 // sort segment by create time, make iteration on segment determined
-	// used in appendable segment, bump this if creating a new block, and
+	IsLocal  bool   // this object is hold by a localobject
+	SortHint uint64 // sort object by create time, make iteration on object determined
+	// used in appendable object, bump this if creating a new block, and
 	// the block will be eventually flushed to a s3 file.
-	// for non-appendable segment, this field makes no sense, because if we
-	// decide to create a new non-appendable segment, its content is all set.
+	// for non-appendable object, this field makes no sense, because if we
+	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
 }

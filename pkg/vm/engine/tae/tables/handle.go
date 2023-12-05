@@ -59,7 +59,7 @@ func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err er
 func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 	var segEntry *catalog.ObjectEntry
 	if h.appender == nil {
-		segEntry = h.table.meta.LastAppendableSegmemt()
+		segEntry = h.table.meta.LastAppendableObject()
 		if segEntry == nil {
 			err = data.ErrAppendableObjectNotFound
 			return
