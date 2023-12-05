@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -45,9 +46,13 @@ func TestUnlockAfterTimeoutOnRemote(t *testing.T) {
 
 			// table1 on l1
 			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
+			defer func() {
+				assert.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			}()
 
 			// txn2 lock row 2 on remote.
 			mustAddTestLock(t, ctx, l2, table1, txn2, [][]byte{{2}}, pb.Granularity_Row)
+
 			// l2 shutdown
 			assert.NoError(t, l2.Close())
 
@@ -65,6 +70,7 @@ func TestUnlockAfterTimeoutOnRemote(t *testing.T) {
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
 		},
 	)
+
 }
 
 func TestLockBlockedOnRemote(t *testing.T) {
@@ -215,77 +221,86 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 }
 
 func TestGetActiveTxnWithRemote(t *testing.T) {
-	hold := newMapBasedTxnHandler(
-		"s1",
-		newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+		defer hold.close()
 
-	txnID := []byte("txn1")
-	st := time.Now()
-	txn := hold.getActiveTxn(txnID, true, "s1")
-	assert.NotNil(t, txn)
-	assert.Equal(t, "s1", txn.remoteService)
-	assert.Equal(t, 1, len(hold.mu.remoteServices))
-	assert.Equal(t, 1, hold.mu.dequeue.Len())
-	e := hold.mu.dequeue.PopFront()
-	assert.Equal(t, "s1", e.Value.id)
-	assert.True(t, e.Value.time.After(st))
+		txnID := []byte("txn1")
+		st := time.Now()
+		txn := hold.getActiveTxn(txnID, true, "s1")
+		assert.NotNil(t, txn)
+		assert.Equal(t, "s1", txn.remoteService)
+		assert.Equal(t, 1, len(hold.mu.remoteServices))
+		assert.Equal(t, 1, hold.mu.dequeue.Len())
+		e := hold.mu.dequeue.PopFront()
+		assert.Equal(t, "s1", e.Value.id)
+		assert.True(t, e.Value.time.After(st))
+	})
 }
 
 func TestGetTimeoutRemoveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(
-		"s1",
-		newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+		defer hold.close()
 
-	txnID1 := []byte("txn1")
-	hold.getActiveTxn(txnID1, true, "s1")
-	txnID2 := []byte("txn2")
-	hold.getActiveTxn(txnID2, true, "s2")
+		txnID1 := []byte("txn1")
+		hold.getActiveTxn(txnID1, true, "s1")
+		txnID2 := []byte("txn2")
+		hold.getActiveTxn(txnID2, true, "s2")
 
-	// s1(now-10s), s2(now-5s)
-	now := time.Now()
-	hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
-	hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
+		// s1(now-10s), s2(now-5s)
+		now := time.Now()
+		hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
+		hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
 
-	txns, wait := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
-	assert.Equal(t, 0, len(txns))
-	assert.NotEqual(t, time.Duration(0), wait)
+		txns, wait := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
+		assert.Equal(t, 0, len(txns))
+		assert.NotEqual(t, time.Duration(0), wait)
 
-	// s1 timeout
-	txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
-	assert.Equal(t, 1, len(txns))
-	assert.NotEqual(t, time.Duration(0), wait)
-	assert.Equal(t, txnID1, txns[0])
+		// s1 timeout
+		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+		assert.Equal(t, 1, len(txns))
+		assert.NotEqual(t, time.Duration(0), wait)
+		assert.Equal(t, txnID1, txns[0])
 
-	// s2 timeout
-	txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
-	assert.Equal(t, 1, len(txns))
-	assert.Equal(t, time.Duration(0), wait)
-	assert.Equal(t, txnID2, txns[0])
+		// s2 timeout
+		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
+		assert.Equal(t, 1, len(txns))
+		assert.Equal(t, time.Duration(0), wait)
+		assert.Equal(t, txnID2, txns[0])
+	})
 }
 
 func TestKeepRemoteActiveTxn(t *testing.T) {
-	hold := newMapBasedTxnHandler(
-		"s1",
-		newFixedSlicePool(16)).(*mapBasedTxnHolder)
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+		defer hold.close()
 
-	txnID1 := []byte("txn1")
-	txnID2 := []byte("txn2")
-	hold.getActiveTxn(txnID1, true, "s1")
-	hold.getActiveTxn(txnID2, true, "s2")
-	var ids []string
-	hold.mu.dequeue.Iter(0, func(r remote) bool {
-		ids = append(ids, r.id)
-		return true
-	})
-	assert.Equal(t, []string{"s1", "s2"}, ids)
+		txnID1 := []byte("txn1")
+		txnID2 := []byte("txn2")
+		hold.getActiveTxn(txnID1, true, "s1")
+		hold.getActiveTxn(txnID2, true, "s2")
+		var ids []string
+		hold.mu.dequeue.Iter(0, func(r remote) bool {
+			ids = append(ids, r.id)
+			return true
+		})
+		assert.Equal(t, []string{"s1", "s2"}, ids)
 
-	hold.keepRemoteActiveTxn("s1")
-	ids = ids[:0]
-	hold.mu.dequeue.Iter(0, func(r remote) bool {
-		ids = append(ids, r.id)
-		return true
+		hold.keepRemoteActiveTxn("s1")
+		ids = ids[:0]
+		hold.mu.dequeue.Iter(0, func(r remote) bool {
+			ids = append(ids, r.id)
+			return true
+		})
+		assert.Equal(t, []string{"s2", "s1"}, ids)
 	})
-	assert.Equal(t, []string{"s2", "s1"}, ids)
 }
 
 func TestLockWithBindIsStale(t *testing.T) {
