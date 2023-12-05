@@ -149,7 +149,7 @@ jobs:
           cat mo.yml
           echo "======================================"
           
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic,log/column,log/query 2>&1          
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
