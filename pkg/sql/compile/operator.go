@@ -539,7 +539,22 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 			delCtx.PartitionSources[i] = pRel
 		}
 	}
-
+	if delCtx.CanTruncate {
+		tableDef := delCtx.Source.GetTableDef(proc.Ctx)
+		delCtx.IndexTableNames = make([]string, 0)
+		if tableDef.Indexes != nil {
+			for _, indexDef := range tableDef.Indexes {
+				if indexDef.TableExist {
+					delCtx.IndexTableNames = append(delCtx.IndexTableNames, indexDef.IndexTableName)
+				}
+			}
+		}
+		if tableDef.Fkeys != nil {
+			for _, fk := range tableDef.Fkeys {
+				delCtx.ForeignTbl = append(delCtx.ForeignTbl, fk.ForeignTbl)
+			}
+		}
+	}
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
 	}, nil

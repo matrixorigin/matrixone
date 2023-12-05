@@ -689,6 +689,8 @@ message Node {
 		TIME_WINDOW = 64;
 		Fill = 65;
 		PARTITION = 66;
+
+		DELETE_BY_TRUNCATE = 67;
 	}
 
 	enum JoinType {

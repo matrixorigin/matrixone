@@ -268,7 +268,16 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	if hasUniqueKey || hasSecondaryKey {
+	canTruncate := delCtx.isDeleteWithoutFilters
+
+	if len(delCtx.tableDef.RefChildTbls) > 0 ||
+		delCtx.tableDef.ViewSql != nil ||
+		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account) ||
+		delCtx.objRef.PubInfo != nil {
+		canTruncate = false
+	}
+
+	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
 		typMap := make(map[string]*plan.Type)
 		posMap := make(map[string]int)
 		for idx, col := range delCtx.tableDef.Cols {
@@ -330,7 +339,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						//sink_scan -> lock -> delete
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable, delCtx.partitionInfos)
-						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
+						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 						putDeleteNodeInfo(delNodeInfo)
 						if err != nil {
 							return err
@@ -380,7 +389,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				} else {
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable, delCtx.partitionInfos)
-					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
+					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 					putDeleteNodeInfo(delNodeInfo)
 					if err != nil {
 						return err
@@ -400,7 +409,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable, delCtx.partitionInfos)
-	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false)
+	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
@@ -1528,6 +1537,7 @@ func makeOneDeletePlan(
 	delNodeInfo *deleteNodeInfo,
 	isUK bool, // is delete unique key hidden table
 	isSK bool,
+	canTruncate bool,
 ) (int32, error) {
 	if isUK || isSK {
 		// append lock
@@ -1551,15 +1561,21 @@ func makeOneDeletePlan(
 		lastNodeId = builder.appendNode(lockNode, bindCtx)
 	}
 
+	nodeType := plan.Node_DELETE
+
+	if canTruncate {
+		nodeType = plan.Node_DELETE_BY_TRUNCATE
+	}
+
 	// append delete node
 	deleteNode := &Node{
-		NodeType: plan.Node_DELETE,
+		NodeType: nodeType,
 		Children: []int32{lastNodeId},
 		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{
 			RowIdIdx:            int32(delNodeInfo.deleteIndex),
 			Ref:                 delNodeInfo.objRef,
-			CanTruncate:         false,
+			CanTruncate:         canTruncate,
 			AddAffectedRows:     delNodeInfo.addAffectedRows,
 			IsClusterTable:      delNodeInfo.IsClusterTable,
 			PartitionTableIds:   delNodeInfo.partTableIDs,

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"math"
 	"strings"
 
@@ -1245,12 +1246,41 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	var err error
 	var isTemp bool
 	var newId uint64
-
+	var dbName string
+	var tblName string
+	var oldId uint64
+	var partitionTableNames []string
+	var indexTableNames []string
+	var foreignTbl []uint64
+	keepAutoIncrement := false
+	affectRows := int64(0)
 	tqry := s.Plan.GetDdl().GetTruncateTable()
-	dbName := tqry.GetDatabase()
-	tblName := tqry.GetTable()
-	oldId := tqry.GetTableId()
-
+	if tqry != nil {
+		dbName = tqry.GetDatabase()
+		tblName = tqry.GetTable()
+		oldId = tqry.GetTableId()
+		partitionTableNames = tqry.GetPartitionTableNames()
+		indexTableNames = tqry.GetIndexTableNames()
+		foreignTbl = tqry.GetForeignTbl()
+	} else {
+		switch arg := s.Instructions[0].Arg.(type) {
+		case *deletion.Argument:
+			delCtx := arg.DeleteCtx
+			dbName = delCtx.Ref.SchemaName
+			tblName = delCtx.Ref.ObjName
+			oldId = uint64(delCtx.Ref.Obj)
+			partitionTableNames = delCtx.PartitionTableNames
+			indexTableNames = delCtx.IndexTableNames
+			foreignTbl = delCtx.ForeignTbl
+			keepAutoIncrement = true
+			affectRows, err = delCtx.Source.Rows(c.ctx)
+			if err != nil {
+				return err
+			}
+		default:
+			return moerr.NewNYI(c.ctx, fmt.Sprintf("truncate do not support instruction op '%v'", s.Instructions[0].Op))
+		}
+	}
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1279,7 +1309,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1304,7 +1334,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// Truncate Index Tables if needed
-	for _, name := range tqry.IndexTableNames {
+	for _, name := range indexTableNames {
 		var err error
 		if isTemp {
 			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
@@ -1317,7 +1347,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	//Truncate Partition subtable if needed
-	for _, name := range tqry.PartitionTableNames {
+	for _, name := range partitionTableNames {
 		var err error
 		if isTemp {
 			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
@@ -1330,7 +1360,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// update tableDef of foreign key's table with new table id
-	for _, ftblId := range tqry.ForeignTbl {
+	for _, ftblId := range foreignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
 		if err != nil {
 			return err
@@ -1374,7 +1404,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		c.ctx,
 		oldId,
 		newId,
-		false,
+		keepAutoIncrement,
 		c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1386,6 +1416,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	c.setAffectedRows(uint64(affectRows))
 	return nil
 }
 
