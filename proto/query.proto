@@ -96,17 +96,17 @@ message GetProtocolVersionRequest {
 
 message GetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
-  string Version = 1;
+  int64 Version = 1;
 }
 
 message SetProtocolVersionRequest {
   // ProtocolVersion is the version of the protocol
-  string Version = 1;
+  int64 Version = 1;
 }
 
 message SetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
-  string Version = 1;
+  int64 Version = 1;
 }
 
 // Request is the query request.

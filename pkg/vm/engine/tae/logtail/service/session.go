@@ -183,11 +183,19 @@ func (s *morpcStream) write(
 	}
 	chunks := Split(buf[:n], s.limit)
 
-	s.logger.Debug("send response by segment",
-		zap.Int("chunk-number", len(chunks)),
-		zap.Int("chunk-limit", s.limit),
-		zap.Int("message-size", size),
-	)
+	if len(chunks) > 1 {
+		s.logger.Info("send response by segment",
+			zap.Int("chunk-number", len(chunks)),
+			zap.Int("chunk-limit", s.limit),
+			zap.Int("message-size", size),
+		)
+	} else {
+		s.logger.Debug("send response by segment",
+			zap.Int("chunk-number", len(chunks)),
+			zap.Int("chunk-limit", s.limit),
+			zap.Int("message-size", size),
+		)
+	}
 
 	for index, chunk := range chunks {
 		seg := s.segments.Acquire()
@@ -314,7 +322,7 @@ func NewSession(
 
 					ss.OnBeforeSend(now)
 					err := ss.stream.write(ctx, msg.response)
-					ss.OnAfterSend(now, cnt)
+					ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
@@ -592,7 +600,7 @@ func (ss *Session) OnBeforeSend(t time.Time) {
 	ss.sendMu.lastBeforeSend = t
 }
 
-func (ss *Session) OnAfterSend(before time.Time, count int64) {
+func (ss *Session) OnAfterSend(before time.Time, count int64, size int) {
 	ss.sendMu.Lock()
 	defer ss.sendMu.Unlock()
 	now := time.Now()
@@ -600,7 +608,8 @@ func (ss *Session) OnAfterSend(before time.Time, count int64) {
 	if cost > 10*time.Second {
 		ss.logger.Info("send logtail too much",
 			zap.Int64("sendRound", count),
-			zap.Duration("duration", cost))
+			zap.Duration("duration", cost),
+			zap.Int("msg size", size))
 	}
 	ss.sendMu.lastAfterSend = now
 }

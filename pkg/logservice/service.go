@@ -195,7 +195,7 @@ func NewService(
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
 
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion1)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	return service, nil
 }
