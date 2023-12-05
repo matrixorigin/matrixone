@@ -648,13 +648,6 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
 	}
 
-	var fs fileservice.FileService
-	if fs, err = fileservice.Get[fileservice.FileService](
-		proc.FileService, defines.SharedFileServiceName,
-	); err != nil {
-		return
-	}
-
 	var uncommittedObjects []objectio.ObjectStats
 	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
 		tbl.db.databaseId, tbl.tableId,
@@ -663,7 +656,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err := tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, ranges, fs,
+		exprs, state, uncommittedObjects, ranges, tbl.db.txn.engine.fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -759,7 +752,7 @@ func (tbl *txnTable) rangesOnePart(
 				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -784,7 +777,7 @@ func (tbl *txnTable) rangesOnePart(
 			if obj.Rows() == 0 && meta.IsEmpty() {
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
