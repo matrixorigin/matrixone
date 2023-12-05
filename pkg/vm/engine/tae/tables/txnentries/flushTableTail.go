@@ -239,20 +239,8 @@ func (entry *flushTableTailEntry) ApplyCommit() (err error) {
 		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.ablksHandles[i].GetDeltaPersistedTS())
 	}
 
-	pTs := types.TS{}
 	for i, blk := range entry.delSrcMetas {
-		pTs = entry.delSrcHandles[i].GetDeltaPersistedTS()
-		blk.GetBlockData().GCInMemeoryDeletesByTS(pTs)
-	}
-
-	// debug stopped checkpoint
-	// TODO(_): delete this if branch
-	if len(entry.delSrcMetas) == 1 {
-		blk := entry.delSrcMetas[0]
-		found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(types.TS{}, entry.txn.GetStartTS())
-		if found {
-			logutil.Infof("found not cleared del chain, pts %v", pTs.ToString())
-		}
+		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.delSrcHandles[i].GetDeltaPersistedTS())
 	}
 
 	tbl := entry.tableEntry
