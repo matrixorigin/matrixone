@@ -1481,10 +1481,20 @@ func (tbl *txnTable) NewReader(
 	ranges [][]byte) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
 	if len(ranges) == 0 {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, hasNull, nil)
+		if hasNull {
+			return []engine.Reader{
+				new(emptyReader),
+			}, nil
+		}
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, hasNull, nil)
+		if hasNull {
+			return []engine.Reader{
+				new(emptyReader),
+			}, nil
+		}
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
@@ -1502,16 +1512,23 @@ func (tbl *txnTable) NewReader(
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
 
-		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, hasNull, dirtyBlks)
-		if err != nil {
-			return nil, err
+		var rds0 []engine.Reader
+		var err error
+		if hasNull {
+			rds0 = []engine.Reader{
+				new(emptyReader),
+			}
+		} else {
+			rds0, err = tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
+			if err != nil {
+				return nil, err
+			}
 		}
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 
 		if len(cleanBlks) > 0 {
-			//FIXME::tbl.proc produce datarace
 			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load())
 			if err != nil {
 				return nil, err
@@ -1533,14 +1550,14 @@ func (tbl *txnTable) NewReader(
 	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
 }
 
-func (tbl *txnTable) getPkCnt() (cnt int) {
-	for _, col := range tbl.tableDef.Cols {
-		if col.Primary {
-			cnt++
-		}
-	}
-	return
-}
+//func (tbl *txnTable) getPkCnt() (cnt int) {
+//	for _, col := range tbl.tableDef.Cols {
+//		if col.Primary {
+//			cnt++
+//		}
+//	}
+//	return
+//}
 
 func (tbl *txnTable) makeEncodedPK(
 	expr *plan.Expr) (
@@ -1569,7 +1586,7 @@ func (tbl *txnTable) makeEncodedPK(
 				encodedPK = encodedPK[0 : len(encodedPK)-1]
 				put.Put()
 			}
-			isExactlyEqual = tbl.getPkCnt() == cnt
+			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
 			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
@@ -1595,13 +1612,7 @@ func (tbl *txnTable) newMergeReader(
 	num int,
 	expr *plan.Expr,
 	encodedPK []byte,
-	hasNull bool,
 	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
-	if hasNull {
-		return []engine.Reader{
-			new(emptyReader),
-		}, nil
-	}
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	rds0, err := tbl.newReader(
