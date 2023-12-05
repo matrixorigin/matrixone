@@ -169,6 +169,14 @@ var (
 	TxnStatementExecuteDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("execute")
 	TxnStatementExecuteLatencyDurationHistogram = txnStatementDurationHistogram.WithLabelValues("execute-latency")
 	TxnStatementCompileDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("compile")
+	TxnStatementScanDurationHistogram           = txnStatementDurationHistogram.WithLabelValues("scan")
+	TxnStatementExternalScanDurationHistogram   = txnStatementDurationHistogram.WithLabelValues("external-scan")
+	TxnStatementStatsDurationHistogram          = txnStatementDurationHistogram.WithLabelValues("stats")
+	TxnStatementResolveDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("resolve")
+	TxnStatementResolveUdfDurationHistogram     = txnStatementDurationHistogram.WithLabelValues("resolve-udf")
+	TxnStatementUpdateStatsDurationHistogram    = txnStatementDurationHistogram.WithLabelValues("update-stats")
+	TxnStatementUpdateInfoFromZonemapHistogram  = txnStatementDurationHistogram.WithLabelValues("update-info-from-zonemap")
+	TxnStatementUpdateStatsInfoMapHistogram     = txnStatementDurationHistogram.WithLabelValues("update-stats-info-map")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
