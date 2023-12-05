@@ -146,6 +146,11 @@ func (txn *activeTxn) close(
 					txn,
 					table)
 				l.unlock(txn, cs, commitTS)
+				logTxnUnlockTableCompleted(
+					serviceID,
+					txn,
+					table,
+					cs)
 				if n > parallelUnlockTables {
 					wg.Done()
 				}
@@ -157,25 +162,11 @@ func (txn *activeTxn) close(
 			ants.Submit(fn(table, cs))
 		} else {
 			fn(table, cs)()
-			logTxnUnlockTableCompleted(
-				serviceID,
-				txn,
-				table,
-				cs)
-			cs.close()
 		}
 	}
 
 	if n > parallelUnlockTables {
 		wg.Wait()
-		for table, cs := range txn.holdLocks {
-			logTxnUnlockTableCompleted(
-				serviceID,
-				txn,
-				table,
-				cs)
-			cs.close()
-		}
 	}
 
 	reuse.Free(txn, nil)
@@ -183,7 +174,8 @@ func (txn *activeTxn) close(
 }
 
 func (txn *activeTxn) reset() {
-	for table := range txn.holdLocks {
+	for table, cs := range txn.holdLocks {
+		cs.close()
 		delete(txn.holdLocks, table)
 	}
 	txn.txnID = nil

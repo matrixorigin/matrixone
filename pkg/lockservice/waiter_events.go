@@ -127,6 +127,11 @@ func (mw *waiterEvents) start() {
 func (mw *waiterEvents) close() {
 	mw.stopper.Stop()
 	close(mw.eventC)
+	mw.mu.Lock()
+	for _, w := range mw.mu.blockedWaiters {
+		w.close()
+	}
+	mw.mu.Unlock()
 }
 
 func (mw *waiterEvents) add(c *lockContext) {
