@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
@@ -91,13 +92,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
-		if err != nil {
-			//TODO: @arjun remove this after debugging the panic suppression issue.
-			getLogger().Error("error in scope run suppressed to nil",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
+		if err != nil && !strings.Contains(err.Error(), "panic") {
+			err = nil
 		}
-		err = nil
+
 	default:
 	}
 	return err
@@ -158,10 +156,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		select {
 		case <-s.Proc.Ctx.Done():
+			if err != nil && !strings.Contains(err.Error(), "panic") {
+				err = nil
+			}
 		default:
-			p.Cleanup(s.Proc, true, err)
-			return err
 		}
+		p.Cleanup(s.Proc, true, err)
+		return err
 	}
 	p.Cleanup(s.Proc, false, nil)
 
@@ -218,13 +219,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
+		if err != nil && !strings.Contains(err.Error(), "panic") {
+			err = nil
+		}
 		// if context has done, it means other pipeline stop the query normally.
 		// so there is no need to return the error again.
-		return nil
-
 	default:
-		return err
 	}
+	return err
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -261,8 +263,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			for i := 0; i < receiver.size; i++ {
 				select {
 				case <-s.Proc.Ctx.Done():
-					return nil
-
+					if err != nil && !strings.Contains(err.Error(), "panic") {
+						err = nil
+					}
+					return err
 				case filter := <-receiver.ch:
 					switch filter.Typ {
 					case pbpipeline.RuntimeFilter_PASS:
@@ -836,7 +840,10 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 				select {
 				case <-s.Proc.Ctx.Done():
-					errChan <- nil
+					if err != nil && !strings.Contains(err.Error(), "panic") {
+						err = nil
+					}
+					errChan <- err
 				default:
 					errChan <- err
 				}
