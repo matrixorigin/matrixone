@@ -1238,33 +1238,31 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) erro
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
-func doTruncateTable(
-	c *Compile,
-	dbName string,
-	tableName string,
-	tableId uint64,
-	partitionTableNames []string,
-	indexTableNames []string,
-	foreignTbl []uint64,
-	keepAutoIncrement bool,
-) error {
+// Truncation operations cannot be performed if the session holds an active table lock.
+func (s *Scope) TruncateTable(c *Compile) error {
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
 	var isTemp bool
-	var newTblId uint64
+	var newId uint64
+
+	tqry := s.Plan.GetDdl().GetTruncateTable()
+	dbName := tqry.GetDatabase()
+	tblName := tqry.GetTable()
+	oldId := tqry.GetTableId()
+
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
 
-	if rel, err = dbSource.Relation(c.ctx, tableName, nil); err != nil {
+	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
 		dbSource, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
 			return err
 		}
-		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tableName), nil)
+		rel, e = dbSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil)
 		if e != nil {
 			return err
 		}
@@ -1273,7 +1271,7 @@ func doTruncateTable(
 
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tableName, lock.LockMode_Shared); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1281,7 +1279,7 @@ func doTruncateTable(
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, false); e != nil {
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1294,11 +1292,11 @@ func doTruncateTable(
 	}
 
 	if isTemp {
-		// memory engine truncate always return 0, so for temporary table, just use origin tableId as newTblId
-		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tableName))
-		newTblId = rel.GetTableID(c.ctx)
+		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
+		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
+		newId = rel.GetTableID(c.ctx)
 	} else {
-		newTblId, err = dbSource.Truncate(c.ctx, tableName)
+		newId, err = dbSource.Truncate(c.ctx, tblName)
 	}
 
 	if err != nil {
@@ -1306,7 +1304,7 @@ func doTruncateTable(
 	}
 
 	// Truncate Index Tables if needed
-	for _, name := range indexTableNames {
+	for _, name := range tqry.IndexTableNames {
 		var err error
 		if isTemp {
 			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
@@ -1318,11 +1316,11 @@ func doTruncateTable(
 		}
 	}
 
-	//Truncate Partition subTable if needed
-	for _, name := range partitionTableNames {
+	//Truncate Partition subtable if needed
+	for _, name := range tqry.PartitionTableNames {
 		var err error
 		if isTemp {
-			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
 			_, err = dbSource.Truncate(c.ctx, name)
 		}
@@ -1332,8 +1330,8 @@ func doTruncateTable(
 	}
 
 	// update tableDef of foreign key's table with new table id
-	for _, fTblId := range foreignTbl {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fTblId)
+	for _, ftblId := range tqry.ForeignTbl {
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
 		if err != nil {
 			return err
 		}
@@ -1351,8 +1349,8 @@ func doTruncateTable(
 		for _, ct := range oldCt.Cts {
 			if def, ok := ct.(*engine.RefChildTableDef); ok {
 				for idx, refTable := range def.Tables {
-					if refTable == tableId {
-						def.Tables[idx] = newTblId
+					if refTable == oldId {
+						def.Tables[idx] = newId
 						break
 					}
 				}
@@ -1370,39 +1368,25 @@ func doTruncateTable(
 	}
 
 	if isTemp {
-		tableId = rel.GetTableID(c.ctx)
+		oldId = rel.GetTableID(c.ctx)
 	}
 	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 		c.ctx,
-		tableId,
-		newTblId,
-		keepAutoIncrement,
+		oldId,
+		newId,
+		false,
 		c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
 
 	// update index information in mo_catalog.mo_indexes
-	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newTblId, tableId)
+	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
 	err = c.runSql(updateSql)
 	if err != nil {
 		return err
 	}
 	return nil
-}
-
-// TruncateTable Truncation operations cannot be performed if the session holds an active table lock.
-func (s *Scope) TruncateTable(c *Compile) error {
-	truncateTbl := s.Plan.GetDdl().GetTruncateTable()
-	return doTruncateTable(
-		c,
-		truncateTbl.GetDatabase(),
-		truncateTbl.GetTable(),
-		truncateTbl.GetTableId(),
-		truncateTbl.PartitionTableNames,
-		truncateTbl.IndexTableNames,
-		truncateTbl.ForeignTbl,
-		false)
 }
 
 func (s *Scope) DropSequence(c *Compile) error {
