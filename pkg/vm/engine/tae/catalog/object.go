@@ -91,7 +91,7 @@ func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
 		common.HumanReadableBytes(entry.GetOriginSize()),
 		common.HumanReadableBytes(entry.GetCompSize()),
 		entry.GetRows(),
-		entry.remainingRows,
+		entry.remainingRows.V(),
 		zonemapStr,
 	)
 }
