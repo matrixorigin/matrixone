@@ -215,6 +215,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	if ctr.state == vm.Build {
 		for {
+			// Check if the current query has been canceled
+			select {
+			case <-proc.Ctx.Done():
+				result := vm.NewCallResult()
+				result.Batch = nil
+				result.Status = vm.ExecStop
+				return result, proc.Ctx.Err()
+			default:
+			}
+
 			result, err := arg.children[0].Call(proc)
 			if err != nil {
 				result.Status = vm.ExecStop
@@ -245,16 +255,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	// Check if the current query has been canceled
 	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, proc.Ctx.Err()
-	default:
-	}
-
 	if ctr.state == vm.Eval {
 		err := ctr.sortAndSend(proc, &result)
 		if err != nil {
