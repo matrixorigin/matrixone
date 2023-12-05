@@ -75,7 +75,7 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleCount(txn executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+func (s *Scope) handleCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`), count(`%s`) from `%s`.`%s`;",
@@ -83,7 +83,7 @@ func (s *Scope) handleCount(txn executor.TxnExecutor, indexDef *plan.IndexDef, q
 		originalTableDef.Pkey.PkeyColName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := txn.Exec(countTotalSql)
+	rs, err := c.runSqlWithResult(countTotalSql)
 	if err != nil {
 		return 0, err
 	}
@@ -104,7 +104,7 @@ func (s *Scope) handleCount(txn executor.TxnExecutor, indexDef *plan.IndexDef, q
 	return totalCnt, nil
 }
 
-func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string) error {
+func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string) error {
 
 	/*
 		The meta table will contain version number for now. In the future, it can contain `index progress` etc.
@@ -142,7 +142,7 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 		maxVersions,
 	)
 
-	_, err := c.Exec(insertSQL)
+	err := c.runSql(insertSQL)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 	return nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string,
 	entriesTableName string) error {
@@ -170,7 +170,7 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c executor.TxnExecutor, indexDef 
 		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 	)
-	_, err := c.Exec(deleteCentroidsSQL)
+	err := c.runSql(deleteCentroidsSQL)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c executor.TxnExecutor, indexDef 
 		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 	)
-	_, err = c.Exec(deleteEntriesSQL)
+	err = c.runSql(deleteEntriesSQL)
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,7 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c executor.TxnExecutor, indexDef 
 
 }
 
-func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *plan.IndexDef,
+func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
 
 	// 1. algo params
@@ -260,7 +260,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		kmeansInitType,
 		sampleSQL,
 	)
-	_, err = c.Exec(clusterCentersSQL)
+	err = c.runSql(clusterCentersSQL)
 	if err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 	return nil
 }
 
-func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string) error {
 
@@ -382,7 +382,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		centroidsTableForCurrentVersionSql,
 	)
 
-	_, err = c.Exec(mappingSQL)
+	err = c.runSql(mappingSQL)
 	if err != nil {
 		return err
 	}

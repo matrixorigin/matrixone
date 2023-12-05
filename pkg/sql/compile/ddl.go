@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"math"
 	"strings"
 
@@ -1157,66 +1156,63 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
 	}
 
-	return c.runTxn(func(txn executor.TxnExecutor) error {
+	// 2. create hidden tables
+	if indexInfo != nil {
 
-		// 2. create hidden tables
-		if indexInfo != nil {
+		tables := make([]string, 3)
+		tables[0] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+		tables[1] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase)
+		tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
 
-			tables := make([]string, 3)
-			tables[0] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
-			tables[1] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase)
-			tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
-
-			for _, createTableSql := range tables {
-				_, err := c.runSqlWithResult(createTableSql)
-				if err != nil {
-					return err
-				}
+		for _, createTableSql := range tables {
+			_, err := c.runSqlWithResult(createTableSql)
+			if err != nil {
+				return err
 			}
 		}
+	}
 
-		// 3. if table does not have data, we stop here.
-		totalCnt, err := s.handleCount(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-		if totalCnt == 0 {
-			return nil
-		}
-
-		// 4.a populate meta table
-		err = s.handleIvfIndexMetaTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
-		if err != nil {
-			return err
-		}
-
-		// 4.b delete old entries in "centroids" and "entries" table for the current version
-		err = s.handleIvfIndexDeleteOldEntries(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-		if err != nil {
-			return err
-		}
-
-		// 4.c populate centroids table
-		err = s.handleIvfIndexCentroidsTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
-			totalCnt,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
-		if err != nil {
-			return err
-		}
-
-		// 4.d populate entries table
-		err = s.handleIvfIndexEntriesTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-		if err != nil {
-			return err
-		}
-
+	// 3. if table does not have data, we stop here.
+	totalCnt, err := s.handleCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+	if totalCnt == 0 {
 		return nil
-	})
+	}
+
+	// 4.a populate meta table
+	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+	if err != nil {
+		return err
+	}
+
+	// 4.b delete old entries in "centroids" and "entries" table for the current version
+	err = s.handleIvfIndexDeleteOldEntries(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.c populate centroids table
+	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
+		totalCnt,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.d populate entries table
+	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	return nil
 
 }
 
