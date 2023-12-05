@@ -30,11 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func TestCloseLocalLockTable(t *testing.T) {
-	table := uint64(1)
+	table := uint64(10)
 	getRunner(false)(
 		t,
 		table,
@@ -63,6 +62,8 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 		t,
 		[]string{"s1"},
 		func(_ *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(),
 				time.Second*10)
@@ -72,7 +73,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				t,
 				ctx,
 				l,
-				1,
+				tableID,
 				[]byte{1},
 				[][]byte{{1}},
 				pb.Granularity_Row)
@@ -84,7 +85,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				defer wg.Done()
 				_, err := l.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{{1}},
 					[]byte{2},
 					newTestRowExclusiveOptions(),
@@ -97,7 +98,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				defer wg.Done()
 				_, err := l.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{{1}},
 					[]byte{3},
 					newTestRowExclusiveOptions(),
@@ -105,7 +106,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				require.Equal(t, ErrLockTableNotFound, err)
 			}()
 
-			v, err := l.getLockTable(1)
+			v, err := l.getLockTable(tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			for {
@@ -343,7 +344,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			table := uint64(1)
+			table := uint64(10)
 			for _, c := range cases {
 				stopper := stopper.NewStopper("")
 				v, err := l.getLockTableWithCreate(table, true)
@@ -434,6 +435,7 @@ func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 		t,
 		[]string{"s1"},
 		func(_ *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
 			l := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(),
 				time.Second*10)
@@ -443,7 +445,7 @@ func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 				t,
 				ctx,
 				l,
-				1,
+				tableID,
 				[]byte{2},
 				[][]byte{{1}},
 				pb.Granularity_Row)
@@ -456,29 +458,29 @@ func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 					t,
 					ctx,
 					l,
-					1,
+					tableID,
 					[]byte{1},
 					[][]byte{{1}},
 					pb.Granularity_Row)
 			}()
 			go func() {
 				defer wg.Done()
-				waitWaiters(t, l, 1, []byte{1}, 1)
+				waitWaiters(t, l, tableID, []byte{1}, 1)
 				mustAddTestLock(
 					t,
 					ctx,
 					l,
-					1,
+					tableID,
 					[]byte{1},
 					[][]byte{{1}, {2}},
 					pb.Granularity_Row)
 			}()
 
-			waitWaiters(t, l, 1, []byte{1}, 2)
+			waitWaiters(t, l, tableID, []byte{1}, 2)
 			require.NoError(t, l.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
 
 			wg.Wait()
-			v, err := l.getLockTable(1)
+			v, err := l.getLockTable(tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -492,6 +494,8 @@ func TestIssue9856(t *testing.T) {
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l := s[0]
 			ctx := context.Background()
 			option := pb.LockOptions{
@@ -545,13 +549,12 @@ func TestIssue9856(t *testing.T) {
 			{"start": "053a150a3a150100", "end": "083a15063a160bb800", "mode": "Exclusive"}
 			{"start": "093a15043a16088800", "end": "0a3a15043a16060700", "mode": "Exclusive"}
 			{"start": "053a15023a150100", "end": "073a15013a160bb800", "mode": "Exclusive"}`
-			for idx, r := range strings.Split(values, "\n") {
-				getLogger().Info(">>>>>>>>>>>>>>", zap.Int("idx", idx))
+			for _, r := range strings.Split(values, "\n") {
 				v := &target{}
 				json.MustUnmarshal([]byte(r), v)
-				_, err := l.Lock(ctx, 1, [][]byte{[]byte(v.Start), []byte(v.End)}, []byte("txn1"), option)
+				_, err := l.Lock(ctx, tableID, [][]byte{[]byte(v.Start), []byte(v.End)}, []byte("txn1"), option)
 				require.NoError(t, err)
-				vv, err := l.getLockTable(1)
+				vv, err := l.getLockTable(tableID)
 				require.NoError(t, err)
 				lt := vv.(*localLockTable)
 				lt.mu.Lock()
@@ -561,7 +564,6 @@ func TestIssue9856(t *testing.T) {
 					return true
 				})
 				lt.mu.Unlock()
-				getLogger().Info(">>>>>>>>>>>>>>, keys", zap.Int("idx", idx), zap.Strings("keys", keys))
 			}
 		},
 	)
@@ -577,7 +579,7 @@ func TestRangeLockConflict(t *testing.T) {
 				time.Second*1000)
 			defer cancel()
 
-			tableID := uint64(1)
+			tableID := uint64(10)
 			txnID1 := []byte{1}
 			txnID2 := []byte{2}
 
@@ -718,7 +720,7 @@ func TestLockedTSIsLastCommittedTS(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			tableID := uint64(1)
+			tableID := uint64(10)
 			v, err := l.getLockTableWithCreate(tableID, true)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
@@ -789,7 +791,7 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			tableID := uint64(1)
+			tableID := uint64(10)
 			v, err := l.getLockTableWithCreate(tableID, true)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
