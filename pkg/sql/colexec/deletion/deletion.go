@@ -16,8 +16,6 @@ package deletion
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -162,41 +160,6 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 }
 
 func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error) {
-	delCtx := arg.DeleteCtx
-
-	if arg.DeleteCtx.CanTruncate {
-		dbName := delCtx.Ref.SchemaName
-		tableName := delCtx.Ref.ObjName
-		tableId := uint64(delCtx.Ref.Obj)
-		result := vm.NewCallResult()
-		affectRows, err := delCtx.Source.Rows(proc.Ctx)
-		eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-		if err != nil {
-			return result, err
-		}
-
-		err = TruncateTable(
-			proc.Ctx,
-			eng,
-			proc,
-			dbName,
-			tableName,
-			tableId,
-			delCtx.PartitionTableNames,
-			delCtx.IndexTableNames,
-			delCtx.ForeignTbl,
-			true,
-		)
-
-		if err != nil {
-			return result, err
-		}
-		if delCtx.AddAffectedRows {
-			atomic.AddUint64(&arg.affectedRows, uint64(affectRows))
-		}
-		return result, nil
-	}
-
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -207,6 +170,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 	bat := result.Batch
 
 	var affectedRows uint64
+	delCtx := arg.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
