@@ -198,6 +198,11 @@ func (ins *Instruction) IsBrokenNode() bool {
 	return false
 }
 
+func (ins *Instruction) CannotRemote() bool {
+	// todo: I think we should add more operators here.
+	return ins.Op == LockOp
+}
+
 type ModificationArgument interface {
 	AffectedRows() uint64
 }

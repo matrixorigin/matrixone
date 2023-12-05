@@ -90,9 +90,6 @@ var debugMagicNames = map[magicType]string{
 	DropDatabase:   "DropDatabase",
 	DropTable:      "DropTable",
 	DropIndex:      "DropIndex",
-	Deletion:       "Deletion",
-	Insert:         "Insert",
-	InsertValues:   "InsertValues",
 	MergeDelete:    "MergeDelete",
 	MergeInsert:    "MergeInsert",
 }

@@ -69,7 +69,7 @@ func (tp Tuple) String() string {
 	return printTuple(tp)
 }
 
-func (tp Tuple) ErrString() string {
+func (tp Tuple) ErrString(scales []int32) string {
 	var res strings.Builder
 	if len(tp) > 1 {
 		res.WriteString("(")
@@ -89,9 +89,9 @@ func (tp Tuple) ErrString() string {
 		case Timestamp:
 			res.WriteString(fmt.Sprintf("%v", t.String()))
 		case Decimal64:
-			res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		case Decimal128:
-			res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		default:
 			res.WriteString(fmt.Sprintf("%v", t))
 		}

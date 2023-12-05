@@ -114,8 +114,9 @@ func ReadOneBlock(
 	typs []types.Type,
 	m *mpool.MPool,
 	fs fileservice.FileService,
+	policies ...fileservice.Policy,
 ) (ioVec *fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory)
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policies...)
 }
 
 func ReadOneBlockWithMeta(

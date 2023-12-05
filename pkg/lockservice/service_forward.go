@@ -45,5 +45,6 @@ func (s *service) forwardLock(
 	if err != nil {
 		return pb.Result{}, err
 	}
+	defer releaseResponse(resp)
 	return resp.Lock.Result, nil
 }

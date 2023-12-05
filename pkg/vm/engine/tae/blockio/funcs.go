@@ -33,6 +33,7 @@ func LoadColumnsData(
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
+	policies ...fileservice.Policy,
 ) (bat *batch.Batch, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
@@ -41,7 +42,7 @@ func LoadColumnsData(
 		return
 	}
 	dataMeta := meta.MustGetMeta(metaType)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policies...); err != nil {
 		return
 	}
 	bat = batch.NewWithSize(len(cols))
@@ -65,8 +66,9 @@ func LoadColumns(
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
+	policies ...fileservice.Policy,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m)
+	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policies...)
 }
 
 func LoadTombstoneColumns(

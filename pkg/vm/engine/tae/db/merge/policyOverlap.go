@@ -51,7 +51,7 @@ func (o *Overlap) OnObject(obj *catalog.SegmentEntry) {
 			maxv := sortKeyZonemap.GetMaxBuf()
 			mint, _, _ := types.DecodeTuple(minv)
 			maxt, _, _ := types.DecodeTuple(maxv)
-			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(), maxt.ErrString())
+			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(nil), maxt.ErrString(nil))
 		}
 	}
 }
