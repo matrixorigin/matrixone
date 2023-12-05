@@ -98,11 +98,9 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 
 type DeleteCtx struct {
 	CanTruncate           bool
-	RowIdIdx              int      // The array index position of the rowid column
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	IndexTableNames       []string
-	ForeignTbl            []uint64
+	RowIdIdx              int               // The array index position of the rowid column
+	PartitionTableIDs     []uint64          // Align array index with the partition number
+	PartitionTableNames   []string          // Align array index with the partition number
 	PartitionIndexInBatch int               // The array index position of the partition expression column
 	PartitionSources      []engine.Relation // Align array index with the partition number
 	Source                engine.Relation

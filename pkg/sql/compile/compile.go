@@ -1132,23 +1132,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
 		c.appendMetaTables(n.DeleteCtx.Ref)
-		if n.DeleteCtx.CanTruncate {
-			arg, err := constructDeletion(n, c.e, c.proc)
-			if err != nil {
-				return nil, err
-			}
-			ss := []*Scope{{
-				Magic: Deletion,
-				Plan:  c.pn,
-				Instructions: vm.Instructions{
-					{
-						Op:  vm.Deletion,
-						Arg: arg,
-					},
-				},
-			}}
-			return ss, nil
-		}
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
@@ -2810,19 +2793,6 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 			dupInstruction(delete, nil, 0))
 	}
 	return c.newMergeScope(rs)
-}
-
-func (c *Compile) newDeleteScope(arg *deletion.Argument, ss []*Scope) []*Scope {
-	deleteIns := &vm.Instruction{
-		Op:  vm.Deletion,
-		Arg: arg,
-	}
-	for i := range ss {
-		ss[i].Instructions = append(
-			ss[i].Instructions,
-			dupInstruction(deleteIns, nil, 0))
-	}
-	return ss
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
