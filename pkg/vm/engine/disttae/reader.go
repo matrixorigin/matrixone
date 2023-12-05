@@ -356,12 +356,16 @@ func (r *blockReader) Read(
 	}
 
 	// read the block
+	var policy fileservice.Policy
+	if r.scanType == LARGE {
+		policy = fileservice.SkipMemoryCacheWrites
+	}
 	bat, err := blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
-		r.fs, mp, vp,
+		r.fs, mp, vp, policy,
 	)
 	if err != nil {
 		return nil, err
