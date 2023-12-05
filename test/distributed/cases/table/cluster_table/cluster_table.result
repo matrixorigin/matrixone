@@ -672,3 +672,4 @@ CREATE CLUSTER TABLE mo_instance (id varchar(128) NOT NULL,name VARCHAR(255) NOT
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 drop account acc_idx;
 drop table mo_instance;
+drop table if exists statement_cu;

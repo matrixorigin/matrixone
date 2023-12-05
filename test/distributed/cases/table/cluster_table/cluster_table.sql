@@ -47,7 +47,9 @@ drop table t7;
 use mo_catalog;
 drop table if exists cluster_table_1;
 create cluster table cluster_table_1(a int, b int);
+
 drop table if exists statement_cu;
+
 CREATE CLUSTER TABLE `statement_cu` (
 `statement_id` VARCHAR(36) NOT NULL,
 `account` VARCHAR(300) NOT NULL,
@@ -55,6 +57,7 @@ CREATE CLUSTER TABLE `statement_cu` (
 `cu` DECIMAL(23,3) NOT NULL,
 PRIMARY KEY (`statement_id`,`account_id`)
 );
+
 
 drop account if exists test_account1;
 create account test_account1 admin_name = 'test_user' identified by '111';
@@ -389,3 +392,4 @@ CREATE CLUSTER TABLE mo_instance (id varchar(128) NOT NULL,name VARCHAR(255) NOT
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 drop account acc_idx;
 drop table mo_instance;
+drop table if exists statement_cu;
