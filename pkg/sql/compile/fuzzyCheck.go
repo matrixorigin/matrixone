@@ -166,7 +166,11 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 			if err != nil {
 				return err
 			}
-			es := t.ErrString()
+			scales := make([]int32, len(f.compoundCols))
+			for i, c := range f.compoundCols {
+				scales[i] = c.Typ.Scale
+			}
+			es := t.ErrString(scales)
 			kcnt[es]++
 		}
 	}
@@ -250,7 +254,11 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				if t, e := types.Unpack(toCheck.GetBytesAt(0)); e != nil {
 					err = e
 				} else {
-					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(), f.attr)
+					scales := make([]int32, len(f.compoundCols))
+					for i, c := range f.compoundCols {
+						scales[i] = c.Typ.Scale
+					}
+					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(scales), f.attr)
 				}
 			}
 		}

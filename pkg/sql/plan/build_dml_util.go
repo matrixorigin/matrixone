@@ -1073,7 +1073,15 @@ func makeInsertPlan(
 			if err != nil {
 				return err
 			}
-			filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+			colTypes := string("")
+			for i := range indexSourceColTypes {
+				if types.T(indexSourceColTypes[i].Id).IsDecimal() {
+					colTypes = colTypes + string(byte(indexSourceColTypes[i].Scale))
+				} else {
+					colTypes = colTypes + "0"
+				}
+			}
+			filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
 			if err != nil {
 				return err
 			}
