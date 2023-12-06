@@ -192,45 +192,62 @@ func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
 }
 
 var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
-	plan2.Node_UNKNOWN:           "UnKnown Node",
-	plan2.Node_VALUE_SCAN:        "Values Scan",
-	plan2.Node_TABLE_SCAN:        "Table Scan",
-	plan2.Node_FUNCTION_SCAN:     "Function Scan",
-	plan2.Node_EXTERNAL_SCAN:     "External Scan",
-	plan2.Node_STREAM_SCAN:       "Stream Scan",
-	plan2.Node_MATERIAL_SCAN:     "Material Scan",
-	plan2.Node_PROJECT:           "Project",
+	plan2.Node_UNKNOWN: "UnKnown Node",
+
+	plan2.Node_VALUE_SCAN:    "Values Scan",
+	plan2.Node_TABLE_SCAN:    "Table Scan",
+	plan2.Node_FUNCTION_SCAN: "Function Scan",
+	plan2.Node_EXTERNAL_SCAN: "External Scan",
+	plan2.Node_MATERIAL_SCAN: "Material Scan",
+	plan2.Node_SOURCE_SCAN:   "Source Scan",
+
+	plan2.Node_PROJECT: "Project",
+
 	plan2.Node_EXTERNAL_FUNCTION: "External Function",
-	plan2.Node_MATERIAL:          "Material",
-	plan2.Node_SINK:              "Sink",
-	plan2.Node_SINK_SCAN:         "Sink Scan",
-	plan2.Node_RECURSIVE_SCAN:    "Recursive Scan",
-	plan2.Node_RECURSIVE_CTE:     "CTE Scan",
-	plan2.Node_AGG:               "Aggregate",
-	plan2.Node_DISTINCT:          "Distinct",
-	plan2.Node_FILTER:            "Filter",
-	plan2.Node_JOIN:              "Join",
-	plan2.Node_SAMPLE:            "Sample",
-	plan2.Node_SORT:              "Sort",
-	plan2.Node_UNION:             "Union",
-	plan2.Node_UNION_ALL:         "Union All",
-	plan2.Node_UNIQUE:            "Unique",
-	plan2.Node_WINDOW:            "Window",
-	plan2.Node_BROADCAST:         "Broadcast",
-	plan2.Node_SPLIT:             "Split",
-	plan2.Node_GATHER:            "Gather",
-	plan2.Node_ASSERT:            "Assert",
-	plan2.Node_INSERT:            "Insert",
-	plan2.Node_DELETE:            "Delete",
-	plan2.Node_INTERSECT:         "Intersect",
-	plan2.Node_INTERSECT_ALL:     "Intersect All",
-	plan2.Node_MINUS:             "Minus",
-	plan2.Node_MINUS_ALL:         "Minus All",
-	plan2.Node_ON_DUPLICATE_KEY:  "On Duplicate Key",
-	plan2.Node_PRE_DELETE:        "Pre Delete",
-	plan2.Node_PRE_INSERT:        "Pre Insert",
-	plan2.Node_PRE_INSERT_UK:     "Pre Insert Unique",
-	plan2.Node_LOCK_OP:           "Lock Operator",
+
+	plan2.Node_MATERIAL:       "Material",
+	plan2.Node_SINK:           "Sink",
+	plan2.Node_SINK_SCAN:      "Sink Scan",
+	plan2.Node_RECURSIVE_SCAN: "Recursive Scan",
+	plan2.Node_RECURSIVE_CTE:  "CTE Scan",
+
+	plan2.Node_AGG:       "Aggregate",
+	plan2.Node_DISTINCT:  "Distinct",
+	plan2.Node_FILTER:    "Filter",
+	plan2.Node_JOIN:      "Join",
+	plan2.Node_SAMPLE:    "Sample",
+	plan2.Node_SORT:      "Sort",
+	plan2.Node_UNION:     "Union",
+	plan2.Node_UNION_ALL: "Union All",
+	plan2.Node_UNIQUE:    "Unique",
+	plan2.Node_WINDOW:    "Window",
+
+	plan2.Node_BROADCAST: "Broadcast",
+	plan2.Node_SPLIT:     "Split",
+	plan2.Node_GATHER:    "Gather",
+
+	plan2.Node_ASSERT: "Assert",
+
+	plan2.Node_INSERT:  "Insert",
+	plan2.Node_DELETE:  "Delete",
+	plan2.Node_REPLACE: "Replace",
+
+	plan2.Node_LOCK_OP: "Lock Operator",
+
+	plan2.Node_INTERSECT:     "Intersect",
+	plan2.Node_INTERSECT_ALL: "Intersect All",
+	plan2.Node_MINUS:         "Minus",
+	plan2.Node_MINUS_ALL:     "Minus All",
+
+	plan2.Node_ON_DUPLICATE_KEY: "On Duplicate Key",
+	plan2.Node_PRE_INSERT:       "Pre Insert",
+	plan2.Node_PRE_DELETE:       "Pre Delete",
+	plan2.Node_PRE_INSERT_UK:    "Pre Insert Unique",
+	plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
+
+	plan2.Node_TIME_WINDOW: "Time window",
+	plan2.Node_Fill:        "Fill",
+	plan2.Node_PARTITION:   "Partition",
 }
 
 const (
@@ -251,18 +268,27 @@ const (
 	Label_Union_Expressions         = "Union expressions"
 	Label_Union_All_Expressions     = "Union all expressions"
 	Label_Intersect_Expressions     = "Intersect expressions"
-	Label_Intersect_All_Expressions = "Intersect All expressions"
+	Label_Intersect_All_Expressions = "Intersect all expressions"
 	Label_Minus_Expressions         = "Minus expressions"
 	Label_Pre_Insert                = "Pre insert"
 	Label_Pre_InsertUk              = "Pre insert uk"
 	Label_Pre_Delete                = "Pre delete"
 	Label_Sink                      = "Sink"
 	Label_Sink_Scan                 = "Sink scan"
-	Label_Recursive_SCAN            = "recursive scan"
+	Label_Recursive_SCAN            = "Recursive scan"
 	Label_Recursive_CTE             = "CTE scan"
 	Label_Lock_Op                   = "Lock op"
 	Label_Row_Number                = "Number of rows"
 	Label_Offset                    = "Offset"
+
+	Label_Time_Window      = "Time window"
+	Label_Partition        = "Partition"
+	Label_Fill             = "Fill"
+	Label_Boardcast        = "Boardcast"
+	Label_Split            = "Split"
+	Label_Gather           = "Gather"
+	Label_Assert           = "Assert"
+	Label_On_Duplicate_Key = "On duplicate key"
 )
 
 const (
