@@ -360,6 +360,7 @@ func (r *blockReader) Read(
 	var policy fileservice.Policy
 	if r.scanType == LARGE {
 		policy = fileservice.SkipMemoryCacheWrites
+		logutil.Infof("large scan!!!!!!!!!!!")
 	}
 	bat, err := blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
