@@ -102,6 +102,10 @@ type RPCClient interface {
 type ClientSession interface {
 	// Close close the client session
 	Close() error
+	// SafeClose is similar to Close, but it ensures that all in-flight messages
+	// are sent to the client. If a timeout has elapsed without an acknowledgement
+	// that the client has received the message, then it will simply close the connection.
+	SafeClose(ctx context.Context) error
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
 	// CreateCache create a message cache using cache ID. Cache will removed if
