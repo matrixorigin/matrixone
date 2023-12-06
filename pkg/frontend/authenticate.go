@@ -3189,54 +3189,56 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
-			err = bh.Exec(ctx, "begin;")
+			rtnErr = bh.Exec(ctx, "begin;")
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
 
-			sql, err = getSqlForRoleIdOfRole(ctx, sr.Role.UserName)
-			if err != nil {
-				return err
+			sql, rtnErr = getSqlForRoleIdOfRole(ctx, sr.Role.UserName)
+			if rtnErr != nil {
+				return rtnErr
 			}
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
 
-			erArray, err = getResultSet(ctx, bh)
-			if err != nil {
-				return err
+			erArray, rtnErr = getResultSet(ctx, bh)
+			if rtnErr != nil {
+				return rtnErr
 			}
 			if execResultArrayHasData(erArray) {
-				roleId, err = erArray[0].GetInt64(ctx, 0, 0)
-				if err != nil {
-					return err
+				roleId, rtnErr = erArray[0].GetInt64(ctx, 0, 0)
+				if rtnErr != nil {
+					return rtnErr
 				}
 			} else {
-				return moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
+				rtnErr = moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
+				return
 			}
 
 			//step2 : check the role has been granted to the user or not
 			sql = getSqlForCheckUserGrant(roleId, int64(account.GetUserID()))
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
 
-			erArray, err = getResultSet(ctx, bh)
-			if err != nil {
-				return err
+			erArray, rtnErr = getResultSet(ctx, bh)
+			if rtnErr != nil {
+				return rtnErr
 			}
 
 			if !execResultArrayHasData(erArray) {
-				return moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
+				rtnErr = moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
+				return
 			}
-			return err
+			return rtnErr
 		}
 
 		err = switchRoleFunc()
@@ -4594,27 +4596,27 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				}
 				handleArgMatch := func() (rtnErr error) {
 					//put it into the single transaction
-					err = bh.Exec(ctx, "begin;")
+					rtnErr = bh.Exec(ctx, "begin;")
 					defer func() {
-						rtnErr = finishTxn(ctx, bh, err)
-						if err == nil {
+						rtnErr = finishTxn(ctx, bh, rtnErr)
+						if rtnErr == nil {
 							u := &function.NonSqlUdfBody{}
 							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
 								rm(u.Body)
 							}
 						}
 					}()
-					if err != nil {
-						return err
+					if rtnErr != nil {
+						return rtnErr
 					}
 
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
-					err = bh.Exec(ctx, sql)
-					if err != nil {
-						return err
+					rtnErr = bh.Exec(ctx, sql)
+					if rtnErr != nil {
+						return rtnErr
 					}
-					return err
+					return rtnErr
 				}
 				return handleArgMatch()
 			}
@@ -4664,21 +4666,21 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		}
 		handleArgMatch := func() (rtnErr error) {
 			//put it into the single transaction
-			err = bh.Exec(ctx, "begin;")
+			rtnErr = bh.Exec(ctx, "begin;")
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
 
 			sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
 
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
-			return err
+			return rtnErr
 		}
 		return handleArgMatch()
 	} else {
@@ -8800,35 +8802,36 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
-		err = bh.Exec(ctx, "begin")
+		rtnErr = bh.Exec(ctx, "begin")
 		defer func() {
-			rtnErr = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
-		if err != nil {
-			return err
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// step 1: check account exists or not
 		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-		isExist, err = checkTenantExistsOrNot(newCtx, bh, accountName)
-		if err != nil {
-			return err
+		isExist, rtnErr = checkTenantExistsOrNot(newCtx, bh, accountName)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		if !isExist {
-			return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+			rtnErr = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+			return
 		}
 
 		// step2: update the config
-		sql, err = getSqlForupdateConfigurationByAccount(ctx, update_config, accountName, "version_compatibility")
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForupdateConfigurationByAccount(ctx, update_config, accountName, "version_compatibility")
+		if rtnErr != nil {
+			return rtnErr
 		}
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		return err
+		return rtnErr
 	}
 
 	err = updateConfigForAccount()
@@ -8867,12 +8870,12 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
-			err = bh.Exec(ctx, "begin")
+			rtnErr = bh.Exec(ctx, "begin")
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
 
 			//step 1: get account_name and database_name
@@ -8880,7 +8883,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 				accountName = ses.GetTenantInfo().GetTenant()
 				accountId = ses.GetTenantInfo().GetTenantID()
 			} else {
-				return err
+				return rtnErr
 			}
 
 			//step 2: check database name
@@ -8891,11 +8894,11 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			//step 3: insert the record
 			sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, accountId, accountName, dbName, variableName, variableValue, false)
 
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
-			return err
+			return rtnErr
 		}
 		err = insertRecordFunc()
 		if err != nil {
@@ -8922,20 +8925,20 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
-			err = bh.Exec(ctx, "begin")
+			rtnErr = bh.Exec(ctx, "begin")
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
 			sql = getSqlForDeleteMysqlCompatbilityMode(datname)
 
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
-			return err
+			return rtnErr
 		}
 		err = deleteRecordFunc()
 		if err != nil {
@@ -9271,12 +9274,12 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
-			err = bh.Exec(ctx, "begin;")
+			rtnErr = bh.Exec(ctx, "begin;")
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, rtnErr)
 			}()
-			if err != nil {
-				return err
+			if rtnErr != nil {
+				return rtnErr
 			}
 
 			accountId = tenantInfo.GetTenantID()
@@ -9284,11 +9287,11 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
 				logInfo(ses, ses.GetDebugString(), "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
 			}
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
-			return err
+			return rtnErr
 		}
 		err = setGlobalFunc()
 		if err != nil {
