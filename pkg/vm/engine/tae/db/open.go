@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	fmt "fmt"
 	"path"
 	"sync/atomic"
 	"time"
@@ -257,10 +258,11 @@ func checkObjectState(db *DB) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
 		if oe.IsAppendable() == oe.IsSorted() {
-			panic("logic err")
+			panic(fmt.Sprintf("logic err %v",oe.ID.String()))
 		}
 		return nil
 	}
+	db.Catalog.RecurLoop(p)
 }
 
 func TaeMetricsTask(ctx context.Context) {

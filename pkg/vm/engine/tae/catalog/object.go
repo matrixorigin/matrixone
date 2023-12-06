@@ -335,7 +335,17 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	objectDataMeta := objMeta.MustDataMeta()
 	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
 	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
+	objectio.SetObjectStatsSize(&stats, metaLoc.Extent().End()+objectio.FooterSize)
 	schema := entry.table.schema.Load()
+	originSize := uint32(0)
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colmata := objectDataMeta.MustGetColumn(uint16(col.SeqNum))
+		originSize += colmata.Location().OriginSize()
+	}
+	objectio.SetObjectStatsOriginSize(&stats, originSize)
 	if schema.HasSortKey() {
 		col := schema.GetSingleSortKey()
 		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())

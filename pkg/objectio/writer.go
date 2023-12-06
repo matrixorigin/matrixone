@@ -558,7 +558,7 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 	return err
 }
 
-func (w *objectWriterV1) GetDataStats() ObjectStats{
+func (w *objectWriterV1) GetDataStats() ObjectStats {
 	return w.objStats[SchemaData]
 }
 
