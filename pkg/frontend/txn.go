@@ -687,8 +687,7 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		        the transaction need to be rollback at the end of the statement.
 				(every error will abort the transaction.)
 	*/
-	if !ses.InMultiStmtTransactionMode() ||
-		ses.InActiveTransaction() {
+	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)

@@ -2908,13 +2908,13 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 		}
 	}
 
-	alterAccountFunc := func() error {
+	alterAccountFunc := func() (rtnErr error) {
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		err = bh.Exec(ctx, "begin")
 		defer func() {
-			err = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
 			return err
@@ -3183,13 +3183,13 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 
 		//step1 : check the role exists or not;
 
-		switchRoleFunc := func() error {
+		switchRoleFunc := func() (rtnErr error) {
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			err = bh.Exec(ctx, "begin;")
 			defer func() {
-				err = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, err)
 			}()
 			if err != nil {
 				return err
@@ -3526,9 +3526,9 @@ func formatCredentials(credentials tree.StageCredentials) string {
 	return rstr
 }
 
-func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) error {
+func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err error) {
 	var sql string
-	var err error
+	//var err error
 	var stageExist bool
 	var credentials string
 	var StageStatus string
@@ -3588,8 +3588,8 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	return err
 }
 
-func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) error {
-	var err error
+func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
+	//var err error
 	var filePath string
 	var sql string
 	var erArray []ExecResult
@@ -3680,9 +3680,9 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 
 }
 
-func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error {
+func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
 	var sql string
-	var err error
+	//var err error
 	var stageExist bool
 	var credentials string
 	bh := ses.GetBackgroundExec(ctx)
@@ -3773,9 +3773,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 	return err
 }
 
-func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
+func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err error) {
 	var sql string
-	var err error
+	//var err error
 	var stageExist bool
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -4106,10 +4106,10 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		return moerr.NewInternalError(ctx, "can not delete the account %s", da.Name)
 	}
 
-	dropAccountFunc := func() error {
+	dropAccountFunc := func() (rtnErr error) {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
-			err = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
 			return err
@@ -4589,11 +4589,11 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				if !match {
 					continue
 				}
-				handleArgMatch := func() error {
+				handleArgMatch := func() (rtnErr error) {
 					//put it into the single transaction
 					err = bh.Exec(ctx, "begin;")
 					defer func() {
-						err = finishTxn(ctx, bh, err)
+						rtnErr = finishTxn(ctx, bh, err)
 						if err == nil {
 							u := &function.NonSqlUdfBody{}
 							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
@@ -4659,11 +4659,11 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		if err != nil {
 			return err
 		}
-		handleArgMatch := func() error {
+		handleArgMatch := func() (rtnErr error) {
 			//put it into the single transaction
 			err = bh.Exec(ctx, "begin;")
 			defer func() {
-				err = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, err)
 			}()
 			if err != nil {
 				return err
@@ -7726,10 +7726,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	createNewAccount := func() error {
+	createNewAccount := func() (rtnErr error) {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
-			err = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
 			return err
@@ -7796,11 +7796,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
-
 		return err
 	}
 
 	err = createNewAccount()
+	fmt.Printf("---------------------wuxiliang------------------------%v\n", err)
 	if err != nil {
 		return err
 	}
@@ -8705,13 +8705,13 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	accountName = tenantInfo.GetTenant()
 	currentRole = tenantInfo.GetDefaultRoleID()
 
-	updateConfigForDatabase := func() error {
+	updateConfigForDatabase := func() (rtnErr error) {
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		err = bh.Exec(ctx, "begin")
 		defer func() {
-			err = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
 			return err
@@ -8791,13 +8791,13 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	accountName := stmt.AccountName
 	update_config := stmt.UpdateConfig
 
-	updateConfigForAccount := func() error {
+	updateConfigForAccount := func() (rtnErr error) {
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		err = bh.Exec(ctx, "begin")
 		defer func() {
-			err = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
 			return err
@@ -8858,13 +8858,13 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 			return nil
 		}
 
-		insertRecordFunc := func() error {
+		insertRecordFunc := func() (rtnErr error) {
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			err = bh.Exec(ctx, "begin")
 			defer func() {
-				err = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, err)
 			}()
 			if err != nil {
 				return err
@@ -8913,13 +8913,13 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			return nil
 		}
 
-		deleteRecordFunc := func() error {
+		deleteRecordFunc := func() (rtnErr error) {
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			err = bh.Exec(ctx, "begin")
 			defer func() {
-				err = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, err)
 			}()
 			if err != nil {
 				return err
@@ -9261,13 +9261,13 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
 		}
 
-		setGlobalFunc := func() error {
+		setGlobalFunc := func() (rtnErr error) {
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			err = bh.Exec(ctx, "begin;")
 			defer func() {
-				err = finishTxn(ctx, bh, err)
+				rtnErr = finishTxn(ctx, bh, err)
 			}()
 			if err != nil {
 				return err
