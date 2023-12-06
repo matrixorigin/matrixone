@@ -25,43 +25,43 @@ import (
 	"go.uber.org/zap"
 )
 
-type delSegTask struct {
+type delObjTask struct {
 	*tasks.BaseTask
-	delSegs []*catalog.ObjectEntry
+	delObjs []*catalog.ObjectEntry
 	txn     txnif.AsyncTxn
 }
 
-func NewDelSegTask(ctx *tasks.Context, txn txnif.AsyncTxn, delSegs []*catalog.ObjectEntry) *delSegTask {
-	task := &delSegTask{
-		delSegs: delSegs,
+func NewDelObjTask(ctx *tasks.Context, txn txnif.AsyncTxn, delObjs []*catalog.ObjectEntry) *delObjTask {
+	task := &delObjTask{
+		delObjs: delObjs,
 		txn:     txn,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return task
 }
 
-func (t *delSegTask) String() string {
-	segs := "DelSeg:"
-	for _, seg := range t.delSegs {
-		segs = fmt.Sprintf("%s%s,", segs, seg.ID.String())
+func (t *delObjTask) String() string {
+	objs := "DelObj:"
+	for _, obj := range t.delObjs {
+		objs = fmt.Sprintf("%s%s,", objs, obj.ID.String())
 	}
-	return segs
+	return objs
 }
 
-func (t *delSegTask) Execute(ctx context.Context) (err error) {
+func (t *delObjTask) Execute(ctx context.Context) (err error) {
 	tdesc := t.String()
 	logutil.Info("Mergeblocks delete merged Objects [Start]", zap.String("task", tdesc))
-	dbId := t.delSegs[0].GetTable().GetDB().ID
+	dbId := t.delObjs[0].GetTable().GetDB().ID
 	database, err := t.txn.GetDatabaseByID(dbId)
 	if err != nil {
 		return
 	}
-	relId := t.delSegs[0].GetTable().ID
+	relId := t.delObjs[0].GetTable().ID
 	rel, err := database.GetRelationByID(relId)
 	if err != nil {
 		return
 	}
-	for _, entry := range t.delSegs {
+	for _, entry := range t.delObjs {
 		if err = rel.SoftDeleteObject(&entry.ID); err != nil {
 			return
 		}

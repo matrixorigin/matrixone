@@ -107,17 +107,17 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catalog.ObjectEntry) error {
+func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catalog.ObjectEntry) error {
 	mem := e.MemAvailBytes()
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	osize, esize := estimateMergeConsume(segs)
+	osize, esize := estimateMergeConsume(objs)
 	if esize > 2*mem/3 {
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
 
-	mergedBlks, msegs := expandObjectList(segs)
+	mergedBlks, mobjs := expandObjectList(objs)
 	blkCnt := len(mergedBlks)
 
 	scopes := make([]common.ID, blkCnt)
@@ -126,7 +126,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, msegs, nil, e.rt)
+		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mobjs, nil, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
 	if err == tasks.ErrScheduleScopeConflict {
@@ -134,47 +134,47 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), osize, esize)
+	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, mobjs, len(mergedBlks), osize, esize)
 	if err = task.WaitDone(); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
 	return nil
 }
 
-func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog.ObjectEntry, policy Policy) {
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delObjs []*catalog.ObjectEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
-	hasDelSeg := len(delSegs) > 0
+	hasDelObj := len(delObjs) > 0
 
-	originalDelCnt := len(delSegs)
+	originalDelCnt := len(delObjs)
 
 	hasMergeObjects := false
 
 	objectList := policy.Revise(0, int64(e.MemAvailBytes()))
-	mergedBlks, msegs := expandObjectList(objectList)
+	mergedBlks, mobjs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
 	if blkCnt > 0 {
-		delSegs = append(delSegs, msegs...)
+		delObjs = append(delObjs, mobjs...)
 		hasMergeObjects = true
 	}
 
-	if !hasDelSeg && !hasMergeObjects {
+	if !hasDelObj && !hasMergeObjects {
 		return
 	}
 
-	segScopes := make([]common.ID, len(delSegs))
-	for i, s := range delSegs {
-		segScopes[i] = *s.AsCommonID()
+	objScopes := make([]common.ID, len(delObjs))
+	for i, s := range delObjs {
+		objScopes[i] = *s.AsCommonID()
 	}
 
 	// remove stale Objects only
-	if hasDelSeg && !hasMergeObjects {
+	if hasDelObj && !hasMergeObjects {
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			return jobs.NewDelSegTask(ctx, txn, delSegs), nil
+			return jobs.NewDelObjTask(ctx, txn, delObjs), nil
 		}
-		if _, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory); err != nil {
-			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
+		if _, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, objScopes, factory); err != nil {
+			logutil.Infof("[Mergeblocks] Schedule del obj errinfo=%v", err)
 		} else {
-			logutil.Infof("[Mergeblocks] Scheduled Object Del| %d-%s del %d segs", entry.ID, e.tableName, len(delSegs))
+			logutil.Infof("[Mergeblocks] Scheduled Object Del| %d-%s del %d objs", entry.ID, e.tableName, len(delObjs))
 		}
 		return
 	}
@@ -184,10 +184,10 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
 	}
-	scopes = append(scopes, segScopes...)
+	scopes = append(scopes, objScopes...)
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, delSegs, nil, e.rt)
+		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, delObjs, nil, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
@@ -197,15 +197,15 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 		return
 	}
 
-	osize, esize := estimateMergeConsume(msegs)
+	osize, esize := estimateMergeConsume(mobjs)
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
-	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
+	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 	var delPrint []*catalog.ObjectEntry
-	if delSegs != nil {
-		delPrint = delSegs[:originalDelCnt]
+	if delObjs != nil {
+		delPrint = delObjs[:originalDelCnt]
 	}
-	logMergeTask(e.tableName, task.ID(), delPrint, msegs, blkCnt, osize, esize)
+	logMergeTask(e.tableName, task.ID(), delPrint, mobjs, blkCnt, osize, esize)
 }
 
 func (e *MergeExecutor) MemAvailBytes() int {
@@ -217,16 +217,16 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
-func expandObjectList(segs []*catalog.ObjectEntry) (
-	mblks []*catalog.BlockEntry, msegs []*catalog.ObjectEntry,
+func expandObjectList(objs []*catalog.ObjectEntry) (
+	mblks []*catalog.BlockEntry, mobjs []*catalog.ObjectEntry,
 ) {
-	if len(segs) < 2 {
+	if len(objs) < 2 {
 		return
 	}
-	msegs = segs
-	mblks = make([]*catalog.BlockEntry, 0, len(segs)*constMergeMinBlks)
-	for _, seg := range segs {
-		blkit := seg.MakeBlockIt(true)
+	mobjs = objs
+	mblks = make([]*catalog.BlockEntry, 0, len(objs)*constMergeMinBlks)
+	for _, obj := range objs {
+		blkit := obj.MakeBlockIt(true)
 		for ; blkit.Valid(); blkit.Next() {
 			entry := blkit.Get().GetPayload()
 			if !entry.IsActive() {
@@ -250,15 +250,15 @@ func logMergeTask(name string, taskId uint64, dels, merges []*catalog.ObjectEntr
 
 	rows := 0
 	infoBuf := &bytes.Buffer{}
-	for _, seg := range merges {
-		r := seg.Stat.GetRemainingRows()
+	for _, obj := range merges {
+		r := obj.Stat.GetRemainingRows()
 		rows += r
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(seg.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
 	}
 	if len(dels) > 0 {
 		infoBuf.WriteString(" | del:")
-		for _, seg := range dels {
-			infoBuf.WriteString(fmt.Sprintf(" %s", common.ShortObjId(seg.ID)))
+		for _, obj := range dels {
+			infoBuf.WriteString(fmt.Sprintf(" %s", common.ShortObjId(obj.ID)))
 		}
 	}
 	logutil.Infof(

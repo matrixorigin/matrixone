@@ -114,13 +114,13 @@ func NewBasicPolicy() *Basic {
 
 // impl Policy for Basic
 func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
-	rowsLeftOnSeg := obj.Stat.GetRemainingRows()
+	rowsLeftOnObj := obj.Stat.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
-		if rowsLeftOnSeg < o.config.ObjectMinRows {
+		if rowsLeftOnObj < o.config.ObjectMinRows {
 			return true
 		}
-		if rowsLeftOnSeg < obj.Stat.GetRows()/2 {
+		if rowsLeftOnObj < obj.Stat.GetRows()/2 {
 			return true
 		}
 		return false
@@ -128,7 +128,7 @@ func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
 
 	if iscandidate() {
 		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
-			row:   rowsLeftOnSeg,
+			row:   rowsLeftOnObj,
 			entry: obj,
 		}, o.config.MergeMaxOneRun)
 	}
@@ -170,20 +170,20 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 }
 
 func (o *Basic) Revise(cpu, mem int64) []*catalog.ObjectEntry {
-	segs := o.objHeap.finish()
-	sort.Slice(segs, func(i, j int) bool {
-		return segs[i].Stat.GetRemainingRows() < segs[j].Stat.GetRemainingRows()
+	objs := o.objHeap.finish()
+	sort.Slice(objs, func(i, j int) bool {
+		return objs[i].Stat.GetRemainingRows() < objs[j].Stat.GetRemainingRows()
 	})
-	segs = o.controlMem(segs, mem)
-	segs = o.optimize(segs)
-	return segs
+	objs = o.controlMem(objs, mem)
+	objs = o.optimize(objs)
+	return objs
 }
 
-func (o *Basic) optimize(segs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
-	// segs are sorted by remaining rows
+func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
-	for i, seg := range segs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.GetRemainingRows())
+	for i, obj := range objs {
+		o.accBuf = append(o.accBuf, o.accBuf[i]+obj.Stat.GetRemainingRows())
 	}
 	acc := o.accBuf
 
@@ -211,12 +211,12 @@ func (o *Basic) optimize(segs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 		return nil
 	}
 
-	segs = segs[:i]
+	objs = objs[:i]
 
-	return segs
+	return objs
 }
 
-func (o *Basic) controlMem(segs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
+func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
@@ -225,17 +225,17 @@ func (o *Basic) controlMem(segs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 		return esize > int(2*mem/3)
 	}
 	popCnt := 0
-	for needPopout(segs) {
-		segs = segs[:len(segs)-1]
+	for needPopout(objs) {
+		objs = objs[:len(objs)-1]
 		popCnt++
 	}
 	if popCnt > 0 {
 		logutil.Infof(
 			"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
-			o.id, o.schema.Name, popCnt, len(segs)+popCnt, common.HumanReadableBytes(int(mem)),
+			o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
 		)
 	}
-	return segs
+	return objs
 }
 
 func (o *Basic) ResetForTable(entry *catalog.TableEntry) {

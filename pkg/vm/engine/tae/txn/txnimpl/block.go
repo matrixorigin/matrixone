@@ -296,8 +296,8 @@ func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetObject().GetTable().ID, entry, readed)
 }
 
-func (blk *txnBlock) GetObject() (seg handle.Object) {
-	seg = newObject(blk.table, blk.entry.GetObject())
+func (blk *txnBlock) GetObject() (obj handle.Object) {
+	obj = newObject(blk.table, blk.entry.GetObject())
 	return
 }
 
@@ -316,19 +316,19 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 		it.err = ObjectIt.GetError()
 		return it
 	}
-	seg := ObjectIt.GetObject()
-	blockIt := seg.MakeBlockIt()
+	obj := ObjectIt.GetObject()
+	blockIt := obj.MakeBlockIt()
 	for !blockIt.Valid() {
 		ObjectIt.Next()
 		if !ObjectIt.Valid() {
 			it.err = ObjectIt.GetError()
 			return it
 		}
-		seg.Close()
-		seg = ObjectIt.GetObject()
-		blockIt = seg.MakeBlockIt()
+		obj.Close()
+		obj = ObjectIt.GetObject()
+		blockIt = obj.MakeBlockIt()
 	}
-	seg.Close()
+	obj.Close()
 	it.blockIt = blockIt
 	it.ObjectIt = ObjectIt
 	it.rel = rel
@@ -344,19 +344,19 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 		it.err = ObjectIt.GetError()
 		return it
 	}
-	seg := ObjectIt.GetObject()
-	blockIt := seg.MakeBlockIt()
+	obj := ObjectIt.GetObject()
+	blockIt := obj.MakeBlockIt()
 	for !blockIt.Valid() {
 		ObjectIt.Next()
 		if !ObjectIt.Valid() {
 			it.err = ObjectIt.GetError()
 			return it
 		}
-		seg.Close()
-		seg = ObjectIt.GetObject()
-		blockIt = seg.MakeBlockIt()
+		obj.Close()
+		obj = ObjectIt.GetObject()
+		blockIt = obj.MakeBlockIt()
 	}
-	seg.Close()
+	obj.Close()
 	it.blockIt = blockIt
 	it.ObjectIt = ObjectIt
 	it.rel = rel
@@ -390,7 +390,7 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	var seg handle.Object
+	var obj handle.Object
 	for {
 		it.ObjectIt.Next()
 		if !it.ObjectIt.Valid() {
@@ -399,11 +399,11 @@ func (it *relBlockIt) Valid() bool {
 			}
 			return false
 		}
-		if seg != nil {
-			seg.Close()
+		if obj != nil {
+			obj.Close()
 		}
-		seg = it.ObjectIt.GetObject()
-		meta := seg.GetMeta().(*catalog.ObjectEntry)
+		obj = it.ObjectIt.GetObject()
+		meta := obj.GetMeta().(*catalog.ObjectEntry)
 		meta.RLock()
 		cnt := meta.BlockCnt()
 		meta.RUnlock()
@@ -411,10 +411,10 @@ func (it *relBlockIt) Valid() bool {
 			break
 		}
 	}
-	if seg != nil {
-		seg.Close()
+	if obj != nil {
+		obj.Close()
 	}
-	it.blockIt = seg.MakeBlockIt()
+	it.blockIt = obj.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {
 		it.err = err
 	}
@@ -434,16 +434,16 @@ func (it *relBlockIt) Next() {
 	if !it.ObjectIt.Valid() {
 		return
 	}
-	seg := it.ObjectIt.GetObject()
-	it.blockIt = seg.MakeBlockIt()
+	obj := it.ObjectIt.GetObject()
+	it.blockIt = obj.MakeBlockIt()
 	for !it.blockIt.Valid() {
 		it.ObjectIt.Next()
 		if !it.ObjectIt.Valid() {
 			return
 		}
-		seg.Close()
-		seg = it.ObjectIt.GetObject()
-		it.blockIt = seg.MakeBlockIt()
+		obj.Close()
+		obj = it.ObjectIt.GetObject()
+		it.blockIt = obj.MakeBlockIt()
 	}
-	seg.Close()
+	obj.Close()
 }
