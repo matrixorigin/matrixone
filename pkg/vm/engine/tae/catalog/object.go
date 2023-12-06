@@ -337,6 +337,11 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	return stats, nil
 }
 
+func (entry *ObjectEntry) LoadObjectInfoForLastNode() (objectio.ObjectStats, error) {
+	startTS := entry.GetLatestCommittedNode().Start
+	return entry.LoadObjectInfoWithTxnTS(startTS)
+}
+
 // for test
 func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
 	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
