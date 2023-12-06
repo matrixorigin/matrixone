@@ -97,8 +97,6 @@ func StatementInfoUpdate(existing, new Item) {
 	}
 	e.AggrCount += 1
 	e.Duration += n.Duration
-	e.RowsRead += n.RowsRead
-	e.BytesScan += n.BytesScan
 	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
@@ -373,6 +371,10 @@ func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float6
 }
 
 // mergeStats n (new one) into e (existing one)
+// All data generated in ExecPlan2Stats should be handled here, including:
+// - statsArray
+// - RowRead
+// - BytesScan
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
 	val, _, err := e.AggrMemoryTime.Add(
@@ -381,6 +383,8 @@ func mergeStats(e, n *StatementInfo) error {
 		Decimal128Scale,
 	)
 	e.AggrMemoryTime = mustDecimal128(val, err)
+	e.RowsRead += n.RowsRead
+	e.BytesScan += n.BytesScan
 	return nil
 }
 

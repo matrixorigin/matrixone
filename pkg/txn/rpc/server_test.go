@@ -37,8 +37,9 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(Config{EnableCompress: true},
-			newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
+		rt := newTestRuntime(newTestClock(), s.rt.Logger().RawLogger())
+		runtime.SetupProcessLevelRuntime(rt)
+		cli, err := NewSender(Config{EnableCompress: true}, rt)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -208,6 +209,10 @@ func (cs *testClientSession) RemoteAddress() string {
 }
 
 func (cs *testClientSession) Close() error {
+	return nil
+}
+
+func (cs *testClientSession) SafeClose(ctx context.Context) error {
 	return nil
 }
 

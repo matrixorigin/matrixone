@@ -2672,7 +2672,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.LockTableStmt, *tree.UnLockTableStmt,
-			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream, *tree.AlterSequence:
+			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence:
 			resp := mce.setResponse(i, len(cws), rspLen)
 			if _, ok := stmt.(*tree.Insert); ok {
 				resp.lastInsertId = proc.GetLastInsertID()
@@ -3531,7 +3531,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
-		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreateStream,
+		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreateSource,
 		*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 		//change privilege
 		switch cw.GetAst().(type) {
@@ -3746,7 +3746,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		LastInsertID:         ses.GetLastInsertID(),
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
-		StreamInMemScanBatch: inMemStreamScan,
+		SourceInMemScanBatch: inMemStreamScan,
 	}
 	proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)

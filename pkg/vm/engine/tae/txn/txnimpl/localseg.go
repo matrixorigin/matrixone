@@ -56,6 +56,8 @@ type localSegment struct {
 	appends     []*appendCtx
 	tableHandle data.TableHandle
 	nseg        handle.Segment
+
+	stats []objectio.ObjectStats
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -82,19 +84,20 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location) {
-	sid := metaLoc.Name().SegmentId()
-	meta := catalog.NewStandaloneBlockWithLoc(
-		nil,
-		objectio.NewBlockid(&sid, 0, uint16(len(seg.nodes))),
-		seg.table.store.txn.GetStartTS(),
-		metaLoc,
-		deltaLoc)
-	n := newPNode(
-		seg.table,
-		meta,
-	)
-	seg.nodes = append(seg.nodes, n)
+func (seg *localSegment) registerStats(stats objectio.ObjectStats) {
+	if seg.stats == nil {
+		seg.stats = make([]objectio.ObjectStats, 0)
+	}
+	seg.stats = append(seg.stats, stats)
+}
+
+func (seg *localSegment) isStatsExisted(o objectio.ObjectStats) bool {
+	for _, stats := range seg.stats {
+		if stats.ObjectName().Equal(o.ObjectName()) {
+			return true
+		}
+	}
+	return false
 }
 
 // register an appendable insertNode.
@@ -151,6 +154,11 @@ func (seg *localSegment) PrepareApply() (err error) {
 	}()
 	for _, node := range seg.nodes {
 		if err = seg.prepareApplyNode(node); err != nil {
+			return
+		}
+	}
+	for _, stats := range seg.stats {
+		if err = seg.prepareApplyObjectStats(stats); err != nil {
 			return
 		}
 	}
@@ -242,13 +250,8 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 	return nil
 }
 
-func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
-	//handle persisted insertNode.
-	metaloc, deltaloc := node.GetPersistedLoc()
-	blkn := metaloc.ID()
-	sid := metaloc.Name().SegmentId()
-	filen := metaloc.Name().Num()
-
+func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (err error) {
+	sid := stats.ObjectName().SegmentId()
 	shouldCreateNewSeg := func() bool {
 		if seg.nseg == nil {
 			return true
@@ -264,14 +267,29 @@ func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
 			return
 		}
 	}
-	opts := new(objectio.CreateBlockOpt).
-		WithMetaloc(metaloc).
-		WithDetaloc(deltaloc).
-		WithFileIdx(filen).
-		WithBlkIdx(uint16(blkn))
-	_, err = seg.nseg.CreateNonAppendableBlock(opts)
-	if err != nil {
-		return
+
+	num := stats.ObjectName().Num()
+	blkCount := stats.BlkCnt()
+	totalRow := stats.Rows()
+	blkMaxRows := seg.table.schema.BlockMaxRows
+	for i := uint16(0); i < uint16(blkCount); i++ {
+		var blkRow uint32
+		if totalRow > blkMaxRows {
+			blkRow = blkMaxRows
+		} else {
+			blkRow = totalRow
+		}
+		totalRow -= blkRow
+		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
+
+		opts := new(objectio.CreateBlockOpt).
+			WithMetaloc(metaloc).
+			WithFileIdx(num).
+			WithBlkIdx(i)
+		_, err = seg.nseg.CreateNonAppendableBlock(opts)
+		if err != nil {
+			return
+		}
 	}
 	return
 }
@@ -280,7 +298,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	if !node.IsPersisted() {
 		return seg.prepareApplyANode(node.(*anode))
 	}
-	return seg.prepareApplyPNode(node.(*pnode))
+	return nil
 }
 
 // CloseAppends un-reference the appendable blocks
@@ -337,10 +355,10 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	metaLocs []objectio.Location,
+	stats objectio.ObjectStats,
 ) (err error) {
-	for i, metaLoc := range metaLocs {
-		seg.registerNode(metaLoc, nil)
+	seg.registerStats(stats)
+	for i := range pkVecs {
 		dedupType := seg.table.store.txn.GetDedupType()
 		//insert primary keys into seg.index
 		if pkVecs != nil && dedupType == txnif.FullDedup {

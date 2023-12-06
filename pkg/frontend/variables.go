@@ -274,7 +274,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	if convertVal != 1 && convertVal != 0 {
-		return nil, errorConvertFromStringToBoolFailed
+		return nil, moerr.NewInvalidArgNoCtx("Bool Type convert from string bad value :%s", value)
 	}
 	return int8(convertVal), nil
 
@@ -3481,6 +3481,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("gtid_purged"),
 		Default:           "",
+	},
+	"transaction_operator_open_log": {
+		Name:              "transaction_operator_open_log",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
+		Default:           int64(0),
 	},
 }
 

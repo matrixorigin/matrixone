@@ -48,9 +48,17 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 	options := make(map[string]string)
+	for _, option := range st.DTOptions {
+		switch opt := option.(type) {
+		case *tree.CreateSourceWithOption:
+			key := string(opt.Key)
+			val := opt.Val.(*tree.NumVal).OrigString()
+			options[key] = val
+		}
+	}
+
 	ses := mce.GetSession()
 
-	//get query optimizer and execute Optimize
 	generatedPlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
 	if err != nil {
 		return err
@@ -58,7 +66,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 	query := generatedPlan.GetQuery()
 	if query != nil { // Checking if query is not nil
 		for _, node := range query.Nodes {
-			if node.NodeType == plan.Node_STREAM_SCAN {
+			if node.NodeType == plan.Node_SOURCE_SCAN {
 				//collect the stream tableDefs
 				streamTableDef := node.TableDef.Defs
 				for _, def := range streamTableDef {

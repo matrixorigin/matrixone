@@ -117,6 +117,7 @@ jobs:
           fi
       - name: Get MO Cluster Addr
         id: get_mo_addr
+        timeout-minutes: 2
         run: |
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
           echo mo_svc_ip=$mo_svc_ip
@@ -126,6 +127,7 @@ jobs:
           echo "cn_ips is $cn_ips"
           echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT
       - name: Prepare Data in cn-0
+        timeout-minutes: 5
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- bash -c '
           set -x;
@@ -155,6 +157,7 @@ jobs:
           exit 0;
           '
       - name: Prepare Data in cn-1
+        timeout-minutes: 5
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- bash -c '
           set -x;
@@ -277,6 +280,7 @@ jobs:
           ref: main
       
       - name: Create Account for Test
+        timeout-minutes: 2
         id: account_for_ssb_and_tpch
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
@@ -293,6 +297,7 @@ jobs:
 
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
+        id: step_ssb_test
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -306,6 +311,35 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-ssb
           mkdir -p report
           ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
+
+      - name: Check MO Status and Collect Trace
+        if: ${{  always() && steps.step_ssb_test.conclusion != 'success' }}
+        run: |
+          set -x
+          unset https_proxy
+          unset http_proxy
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          rm -rf $GITHUB_WORKSPACE/upload && mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
+          dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
+          curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
+          curl "http://$dn_ip:6060/debug/pprof/goroutine?debug=2" -o dn_groutine.out
+
+          cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
+          curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
+          curl "http://$cn_0_ip:6060/debug/pprof/goroutine?debug=2" -o cn_0_groutine.out
+
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
+          curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
+          curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() && steps.step_ssb_test.conclusion != 'success' }}
+        with:
+          name: mo-cluster-trace-${{ github.event.pull_request.number }}-ssb
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+
 
       # start tpch test
       - name: Load TPCH 10G Test Data
@@ -321,8 +355,38 @@ jobs:
           mkdir -p report
           ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
+      - name: Check MO Status and Collect Trace
+        if: ${{ always() && steps.load_tpch_data.conclusion != 'success' }}
+        run: |
+          set -x
+          unset https_proxy
+          unset http_proxy
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          rm -rf $GITHUB_WORKSPACE/upload && mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
+          dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
+          curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
+          curl "http://$dn_ip:6060/debug/pprof/goroutine?debug=2" -o dn_groutine.out
+
+          cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
+          curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
+          curl "http://$cn_0_ip:6060/debug/pprof/goroutine?debug=2" -o cn_0_groutine.out
+
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
+          curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
+          curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() && steps.load_tpch_data.conclusion != 'success' }}
+        with:
+          name: mo-cluster-trace-${{ github.event.pull_request.number }}-load-tpch
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+
+
       - name: Start TPCH 10G Test
         if: ${{ always() && !cancelled() && steps.load_tpch_data.conclusion == 'success' }}
+        id: step_tpch_test
         timeout-minutes: 20
         run: |
           set -uo pipefail
@@ -332,6 +396,34 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpch
           mkdir -p report
           ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
+
+      - name: Check MO Status and Collect Trace
+        if: ${{ always() && steps.step_tpch_test.conclusion != 'success' }}
+        run: |
+          set -x
+          unset https_proxy
+          unset http_proxy
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          rm -rf $GITHUB_WORKSPACE/upload && mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
+          dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
+          curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
+          curl "http://$dn_ip:6060/debug/pprof/goroutine?debug=2" -o dn_groutine.out
+
+          cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
+          curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
+          curl "http://$cn_0_ip:6060/debug/pprof/goroutine?debug=2" -o cn_0_groutine.out
+
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
+          curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
+          curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() && steps.step_tpch_test.conclusion != 'success' }}
+        with:
+          name: mo-cluster-trace-${{ github.event.pull_request.number }}-tpch
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
 
       - name: Collect Upload files
         if: ${{ failure() || cancelled() }}
@@ -377,6 +469,7 @@ jobs:
           ref: main
           
       - name: Create Account for Test And Set PATH
+        timeout-minutes: 2
         id: account_for_sysbench
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
@@ -480,6 +573,7 @@ jobs:
           ref: main
           
       - name: Create Account for Test
+        timeout-minutes: 2
         id: account_for_tpcc
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account tpcc_test admin_name = 'admin' identified by '111' comment 'for tpcc test';"

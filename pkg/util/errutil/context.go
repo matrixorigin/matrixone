@@ -20,6 +20,7 @@ import (
 
 	"github.com/cockroachdb/errors/errbase"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // WithContext annotates err with a stack info and a context, which should contain span info.
@@ -35,6 +36,13 @@ func WithContextWithDepth(ctx context.Context, err error, depth int) error {
 	}
 	if _, ok := err.(StackTracer); !ok {
 		err = &withStack{cause: err, Stack: stack.Callers(depth + 1)}
+	}
+	// check SpanContext
+	// if exist NEED a copy for SpanContext, prevent DATA RACE between 'span.SpanContext()' and 'sc.Reset()'
+	span := trace.SpanFromContext(ctx)
+	if sc := span.SpanContext(); !sc.IsEmpty() {
+		newSC := sc.Clone()
+		ctx = trace.ContextWithSpanContext(context.Background(), newSC)
 	}
 	err = &withContext{cause: err, ctx: ctx}
 	GetReportErrorFunc()(ctx, err, depth+1)

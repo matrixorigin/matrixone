@@ -18,6 +18,9 @@ import (
 	"context"
 	liberrors "errors"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"strconv"
-	"strings"
 )
 
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
@@ -53,9 +54,9 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	}
 
 	// Build a list of table.Columns based on the query result
-	cols := []table.Column{}
+	cols := make([]table.Column, 0, cnt)
 	errors := []error{}
-	for i := uint64(0); i < result.RowCount(); i++ {
+	for i := uint64(0); i < cnt; i++ {
 		name, err := result.StringValueByName(ctx, i, "column_name")
 		if err != nil {
 			errors = append(errors, err)
@@ -188,8 +189,13 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
-	if errs := u.UpgradeMoIndexesSchema(ctx); len(errs) > 0 {
+	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
 		logutil.Errorf("upgrade mo_indexes failed")
+		errors = append(errors, errs...)
+	}
+
+	if errs := u.RunUpgradeSqls(ctx); len(errs) > 0 {
+		logutil.Errorf("modify table column failed")
 		errors = append(errors, errs...)
 	}
 
@@ -305,6 +311,36 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 	return nil
 }
 
+func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	errors := []error{}
+	// Execute upgrade SQL
+	for _, sql := range sqls {
+		currentSchema, err := u.GetCurrentSchema(ctx, exec, sql.schema, sql.table)
+		if err != nil {
+			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
+			continue
+			//return err
+		}
+		if ok := sql.modified(currentSchema); ok {
+			continue
+		}
+
+		if err := exec.Exec(ctx, sql.sql, ie.NewOptsBuilder().Finish()); err != nil {
+			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
+		}
+	}
+	if errors != nil {
+		return errors
+	}
+
+	return nil
+}
+
 // UpgradeNewTable system tables, add system tables
 func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
@@ -382,14 +418,15 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 // 1. boostrap.go builds mo_catalog.mo_indexes table
 // 2. sysview.InitSchema builds INFORMATION_SCHEMA.columns table that will have columns in mo_indexes table
 // 3. UpgradeMoIndexesSchema adds 3 new columns to mo_indexes table
-func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context) []error {
+// NOTE: mo_indexes is a multi-tenant table, so we need to upgrade (add column) for all tenants.
+func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
-	ifEmpty := func(sql string) (bool, error) {
-		result := exec.Query(ctx, sql, ie.NewOptsBuilder().Finish())
+	ifEmpty := func(sql string, opts *ie.OptsBuilder) (bool, error) {
+		result := exec.Query(ctx, sql, opts.Finish())
 
 		if err := result.Error(); err != nil {
 			return false, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err.Error())
@@ -399,7 +436,7 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context) []error {
 
 	}
 
-	execTxn := func(sqls []string) error {
+	execTxn := func(sqls []string, opts *ie.OptsBuilder) error {
 
 		stmt := []string{"begin;"}
 		stmt = append(stmt, sqls...)
@@ -407,7 +444,7 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context) []error {
 
 		upgradeSQL := strings.Join(stmt, "\n")
 
-		err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish())
+		err := exec.Exec(ctx, upgradeSQL, opts.Finish())
 		if err != nil {
 			return err
 		}
@@ -416,14 +453,19 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context) []error {
 	}
 
 	var errors []error
-	for _, conditionalUpgradeSQL := range conditionalUpgradeV1SQLs {
+	for _, tenant := range tenants {
+		ctx = attachAccount(ctx, tenant)
+		opts := makeOptions(tenant)
 
-		if columnNotPresent, err1 := ifEmpty(conditionalUpgradeSQL.ifEmpty); err1 != nil {
-			errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err1.Error()))
-		} else if columnNotPresent {
-			err2 := execTxn(conditionalUpgradeSQL.then)
-			if err2 != nil {
-				errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err2.Error()))
+		for _, conditionalUpgradeSQL := range conditionalUpgradeV1SQLs {
+
+			if columnNotPresent, err1 := ifEmpty(conditionalUpgradeSQL.ifEmpty, opts); err1 != nil {
+				errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err1.Error()))
+			} else if columnNotPresent {
+				err2 := execTxn(conditionalUpgradeSQL.then, opts)
+				if err2 != nil {
+					errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err2.Error()))
+				}
 			}
 		}
 	}

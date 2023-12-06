@@ -18,10 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -135,6 +138,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *StatsInfoMap) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementUpdateStatsInfoMapHistogram.Observe(time.Since(start).Seconds())
+	}()
 	s.ApproxObjectNumber = info.ApproxObjectNumber
 	s.AccurateObjectNumber = info.AccurateObjectNumber
 	s.BlockNumber = info.BlockNumber

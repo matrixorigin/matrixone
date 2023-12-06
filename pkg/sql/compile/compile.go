@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -370,22 +371,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Deletion:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Delete(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
-	case Insert:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Insert(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
 	case Replace:
 		return s.replace(c)
 	}
@@ -554,6 +539,10 @@ func (c *Compile) shouldReturnCtxErr() bool {
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
@@ -740,6 +729,11 @@ func (c *Compile) removeUnavailableCN() {
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
+	}()
 	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 	if err != nil {
 		return nil, err
@@ -952,6 +946,10 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 }
 
 func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
@@ -982,8 +980,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
-		ss, err := c.compileStreamScan(ctx, n)
+	case plan.Node_SOURCE_SCAN:
+		ss, err := c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1540,8 +1538,8 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
@@ -1567,7 +1565,7 @@ func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
 		}
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Stream,
+			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -3373,15 +3371,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					agg.F.Func.ObjName = "starcount"
-					continue
+					if _, ok := args.Expr.(*plan.Expr_C); ok {
+						if agg.F.Func.ObjName == "count" {
+							agg.F.Func.ObjName = "starcount"
+							continue
+						}
+					}
+					partialresults = nil
+					break
 				}
-				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
-				if len(n.TableDef.Cols) > 0 {
-					columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[columnMap[int(col.Col.ColPos)]].Seqnum)
-				}
+				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
 			}
 			for _, buf := range ranges[1:] {
+				if partialresults == nil {
+					break
+				}
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)

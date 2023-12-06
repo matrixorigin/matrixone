@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -163,4 +164,69 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 		}
 	}
 
+}
+
+func TestLocalFSWithIOVectorCache(t *testing.T) {
+	memCache1 := NewMemCache(
+		NewLRUCache(1<<20, false, nil),
+		nil,
+	)
+	memCache2 := NewMemCache(
+		NewLRUCache(1<<20, false, nil),
+		nil,
+	)
+	caches := []IOVectorCache{memCache1, memCache2}
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	fs, err := NewLocalFS(ctx, "test", dir, DisabledCacheConfig, nil)
+	assert.Nil(t, err)
+
+	err = fs.Write(ctx, IOVector{
+		Caches:   caches,
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 8,
+				Data: []byte("12345678"),
+			},
+		},
+	})
+	assert.Nil(t, err)
+
+	vec := IOVector{
+		Caches:   caches,
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 8,
+				ToCacheData: func(r io.Reader, _ []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(8)
+					_, err := io.ReadFull(r, cacheData.Bytes())
+					if err != nil {
+						return nil, err
+					}
+					return cacheData, nil
+				},
+			},
+		},
+	}
+	err = fs.Read(ctx, &vec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, int64(8), memCache1.cache.Used())
+	assert.Equal(t, int64(8), memCache2.cache.Used())
+
+}
+
+func TestLocalFSEmptyRootPath(t *testing.T) {
+	fs, err := NewLocalFS(
+		context.Background(),
+		"test",
+		"",
+		CacheConfig{},
+		nil,
+	)
+	assert.Nil(t, err)
+	assert.NotNil(t, fs)
 }

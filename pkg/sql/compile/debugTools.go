@@ -67,7 +67,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.PreInsertUnique:         "pre insert uk",
 	vm.PreInsertSecondaryIndex: "pre insert 2nd",
 	vm.External:                "external",
-	vm.Stream:                  "stream",
+	vm.Source:                  "source",
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
@@ -89,9 +89,6 @@ var debugMagicNames = map[magicType]string{
 	DropDatabase:   "DropDatabase",
 	DropTable:      "DropTable",
 	DropIndex:      "DropIndex",
-	Deletion:       "Deletion",
-	Insert:         "Insert",
-	InsertValues:   "InsertValues",
 	MergeDelete:    "MergeDelete",
 	MergeInsert:    "MergeInsert",
 }
