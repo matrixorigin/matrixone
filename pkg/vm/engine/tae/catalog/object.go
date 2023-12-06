@@ -330,9 +330,10 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	objectDataMeta := objMeta.MustDataMeta()
 	objectio.SetObjectStatsRowCnt(&stats, objectDataMeta.BlockHeader().Rows())
 	objectio.SetObjectStatsBlkCnt(&stats, objectDataMeta.BlockCount())
-	pk := entry.table.schema.Load().GetPrimaryKey()
-	if !IsFakePkName(pk.Name) {
-		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(uint16(pk.Idx)).ZoneMap())
+	schema := entry.table.schema.Load()
+	if schema.HasSortKey() {
+		col := schema.GetSingleSortKey()
+		objectio.SetObjectStatsSortKeyZoneMap(&stats, objectDataMeta.MustGetColumn(col.SeqNum).ZoneMap())
 	}
 	return stats, nil
 }
