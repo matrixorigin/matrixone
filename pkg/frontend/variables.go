@@ -274,7 +274,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	if convertVal != 1 && convertVal != 0 {
-		return nil, errorConvertFromStringToBoolFailed
+		return nil, moerr.NewInvalidArgNoCtx("Bool Type convert from string bad value :%s", value)
 	}
 	return int8(convertVal), nil
 
