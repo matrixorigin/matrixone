@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -688,6 +689,14 @@ func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
 		return c.cache, nil
 	}
 	return nil, nil
+}
+
+func (cs *clientSession) SafeClose(ctx context.Context) error {
+	return cs.WriteRPCMessage(RPCMessage{
+		Ctx:      ctx,
+		Message:  &flagOnlyMessage{flag: flagClose, id: math.MaxUint64},
+		internal: true,
+	})
 }
 
 type cacheWithContext struct {
