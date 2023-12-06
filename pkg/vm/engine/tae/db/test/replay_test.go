@@ -66,13 +66,13 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			rel, err := db.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
-			segCnt := rand.Intn(5) + 1
-			for i := 0; i < segCnt; i++ {
-				seg, err := rel.CreateNonAppendableObject(false)
+			objCnt := rand.Intn(5) + 1
+			for i := 0; i < objCnt; i++ {
+				obj, err := rel.CreateNonAppendableObject(false)
 				assert.Nil(t, err)
 				blkCnt := rand.Intn(5) + 1
 				for j := 0; j < blkCnt; j++ {
-					_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
+					_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
 					assert.Nil(t, err)
 				}
 			}
@@ -134,12 +134,12 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateNonAppendableObject(false)
+	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
+	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -162,9 +162,9 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetObject(&blk1Meta.GetObject().ID)
+	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk1Meta.ID)
+	err = obj.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -173,9 +173,9 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.CreateObject(false)
+	obj, err = rel.CreateObject(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -214,12 +214,12 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateNonAppendableObject(false)
+	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
+	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -242,18 +242,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetObject(&blk1Meta.GetObject().ID)
+	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk1Meta.ID)
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit(context.Background()))
-
-	txn, _ = tae.StartTxn(nil)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	seg, err = rel.CreateObject(false)
+	err = obj.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -262,7 +253,16 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	err = rel.SoftDeleteObject(seg.GetID())
+	obj, err = rel.CreateObject(false)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	txn, _ = tae.StartTxn(nil)
+	e, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = e.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -301,9 +301,9 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateObject(false)
+	obj, err := rel.CreateObject(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	logutil.Infof("%d,%d", txn.GetStartTS(), txn.GetCommitTS())
@@ -438,9 +438,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	blkIterator := rel.MakeBlockIt()
 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	seg, err := rel.GetObject(&blk.GetObject().ID)
+	obj, err := rel.GetObject(&blk.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk.ID)
+	err = obj.SoftDeleteBlock(blk.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -461,9 +461,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(seg.GetID())
+	objEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
-	blkh, err := segEntry.GetBlockEntryByID(&blk.ID)
+	blkh, err := objEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
 	assert.True(t, blkh.HasDropCommittedLocked())
 
@@ -502,9 +502,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(seg.GetID())
+	objEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
-	_, err = segEntry.GetBlockEntryByID(&blk.ID)
+	_, err = objEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -1326,9 +1326,9 @@ func TestReplay10(t *testing.T) {
 	assert.True(t, d2.NullAbility)
 }
 
-// create db,tbl,seg,blk
+// create db,tbl,obj,blk
 // checkpoint
-// softdelete seg
+// softdelete obj
 // checkpoint
 // Restart
 func TestReplaySnapshots(t *testing.T) {
@@ -1345,9 +1345,9 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	seg, err := rel.CreateObject(false)
+	obj, err := rel.CreateObject(false)
 	assert.NoError(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateBlock(false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -1360,7 +1360,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	err = rel.SoftDeleteObject(seg.GetID())
+	err = rel.SoftDeleteObject(obj.GetID())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 

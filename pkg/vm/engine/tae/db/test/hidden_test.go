@@ -288,14 +288,14 @@ func TestHidden2(t *testing.T) {
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
-		segs := make([]*catalog.ObjectEntry, 0)
+		objs := make([]*catalog.ObjectEntry, 0)
 		for it.Valid() {
-			seg := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			segs = append(segs, seg)
+			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+			objs = append(objs, obj)
 			it.Next()
 		}
-		for _, seg := range segs {
-			factory, taskType, scopes, err := tables.BuildObjectCompactionTaskFactory(seg, tae.Runtime)
+		for _, obj := range objs {
+			factory, taskType, scopes, err := tables.BuildObjectCompactionTaskFactory(obj, tae.Runtime)
 			assert.NoError(t, err)
 			if factory == nil {
 				continue

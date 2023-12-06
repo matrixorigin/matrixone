@@ -56,8 +56,8 @@ func TestTables1(t *testing.T) {
 	handle := table.GetHandle()
 	_, err := handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
-	seg, _ := rel.CreateObject(false)
-	blk, _ := seg.CreateBlock(false)
+	obj, _ := rel.CreateObject(false)
+	blk, _ := obj.CreateBlock(false)
 	id := blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender := handle.SetAppender(id)
 	assert.NotNil(t, appender)
@@ -76,8 +76,8 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
 
-	seg, _ = rel.CreateObject(false)
-	blk, _ = seg.CreateBlock(false)
+	obj, _ = rel.CreateObject(false)
+	blk, _ = obj.CreateBlock(false)
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
@@ -88,8 +88,8 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
 
-	seg, _ = rel.CreateObject(false)
-	blk, _ = seg.CreateBlock(false)
+	obj, _ = rel.CreateObject(false)
+	blk, _ = obj.CreateBlock(false)
 
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
@@ -155,35 +155,35 @@ func TestTxn1(t *testing.T) {
 	t.Logf("Append takes: %s", time.Since(now))
 	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
 	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
-	expectSegCnt := expectBlkCnt
+	expectObjCnt := expectBlkCnt
 	// t.Log(expectBlkCnt)
-	// t.Log(expectSegCnt)
+	// t.Log(expectObjCnt)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		seg, err := rel.CreateObject(false)
+		obj, err := rel.CreateObject(false)
 		assert.Nil(t, err)
-		_, err = seg.CreateBlock(false)
+		_, err = obj.CreateBlock(false)
 		assert.Nil(t, err)
 	}
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		segIt := rel.MakeObjectIt()
-		segCnt := uint32(0)
+		objIt := rel.MakeObjectIt()
+		objCnt := uint32(0)
 		blkCnt := uint32(0)
-		for segIt.Valid() {
-			segCnt++
-			blkIt := segIt.GetObject().MakeBlockIt()
+		for objIt.Valid() {
+			objCnt++
+			blkIt := objIt.GetObject().MakeBlockIt()
 			for blkIt.Valid() {
 				blkCnt++
 				blkIt.Next()
 			}
-			segIt.Next()
+			objIt.Next()
 		}
-		assert.Equal(t, expectSegCnt, segCnt)
+		assert.Equal(t, expectObjCnt, objCnt)
 		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))

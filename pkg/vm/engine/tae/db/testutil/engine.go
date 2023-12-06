@@ -326,9 +326,9 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 
 	for id, offsets := range idOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
+		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(e.t, err)
-		blk, err := seg.GetBlockEntryByID(&id.BlockID)
+		blk, err := obj.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(e.t, err)
 		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, blk.GetBlockData(), e.schema, txn, offsets)
 		assert.NoError(e.t, err)
@@ -598,7 +598,7 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 		if se.GetTable().ID != tid {
 			return nil
 		}
-		return collector.VisitSeg(se)
+		return collector.VisitObj(se)
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)

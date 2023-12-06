@@ -664,7 +664,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	}
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
-	collector.ObjectFn = collector.VisitSeg
+	collector.ObjectFn = collector.VisitObj
 	collector.BlockFn = collector.VisitBlk
 	return collector
 }
@@ -679,7 +679,7 @@ func NewBackupCollector(start, end types.TS) *IncrementalCollector {
 		},
 	}
 	collector.BlockFn = collector.VisitBlkForBackup
-	collector.ObjectFn = collector.VisitSegForBackup
+	collector.ObjectFn = collector.VisitObjForBackup
 	return collector
 }
 
@@ -718,7 +718,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
-	collector.ObjectFn = collector.VisitSeg
+	collector.ObjectFn = collector.VisitObj
 	collector.BlockFn = collector.VisitBlk
 	return collector
 }
@@ -2509,7 +2509,7 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 		return err
 	}
 	p := &catalog.LoopProcessor{}
-	p.ObjectFn = collector.VisitSeg
+	p.ObjectFn = collector.VisitObj
 	err = c.RecurLoop(p)
 	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
@@ -2831,7 +2831,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 	return nil
 }
 
-func (collector *BaseCollector) VisitSegForBackup(entry *catalog.ObjectEntry) (err error) {
+func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	entry.RLock()
 	if entry.GetCreatedAtLocked().Greater(collector.start) {
 		entry.RUnlock()
@@ -2841,12 +2841,12 @@ func (collector *BaseCollector) VisitSegForBackup(entry *catalog.ObjectEntry) (e
 	return collector.visitObjectEntry(entry)
 }
 
-func (collector *BaseCollector) VisitSeg(entry *catalog.ObjectEntry) (err error) {
+func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error) {
 	collector.visitObjectEntry(entry)
 	return nil
 }
 
-func (collector *GlobalCollector) VisitSeg(entry *catalog.ObjectEntry) error {
+func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
 		collector.deletes[UsageObjID][entry.ID] = struct{}{}
 		return nil
@@ -2857,7 +2857,7 @@ func (collector *GlobalCollector) VisitSeg(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().GetDB().BaseEntryImpl) {
 		return nil
 	}
-	return collector.BaseCollector.VisitSeg(entry)
+	return collector.BaseCollector.VisitObj(entry)
 }
 
 func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {

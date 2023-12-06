@@ -96,11 +96,11 @@ func TestAOT2(t *testing.T) {
 
 func createAndWriteSingleNAObject(t *testing.T, ctx context.Context,
 	rel handle.Relation, fs *objectio.ObjectFS) {
-	segHandle, err := rel.CreateNonAppendableObject(false)
+	objHandle, err := rel.CreateNonAppendableObject(false)
 	require.Nil(t, err)
 
-	segEntry := segHandle.GetMeta().(*catalog.ObjectEntry)
-	segEntry.SetSorted()
+	objEntry := objHandle.GetMeta().(*catalog.ObjectEntry)
+	objEntry.SetSorted()
 
 	schema := rel.Schema().(*catalog.Schema)
 	vecs := make([]containers.Vector, len(schema.ColDefs))
@@ -117,10 +117,10 @@ func createAndWriteSingleNAObject(t *testing.T, ctx context.Context,
 		writtenBatches[idx].AddVector(schema.ColDefs[idx].Name, vecs[idx])
 	}
 
-	blk, err := segHandle.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(0)))
+	blk, err := objHandle.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(0)))
 	require.Nil(t, err)
 
-	name := objectio.BuildObjectNameWithObjectID(&segEntry.ID)
+	name := objectio.BuildObjectNameWithObjectID(&objEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, []uint16{0})
 	require.Nil(t, err)
 
@@ -143,11 +143,11 @@ func createAndWriteSingleNAObject(t *testing.T, ctx context.Context,
 }
 
 // create Objects for tables
-func createAndWriteBatchNAObject(t *testing.T, ctx context.Context, segCnts []int,
+func createAndWriteBatchNAObject(t *testing.T, ctx context.Context, objCnts []int,
 	rels []handle.Relation, fs *objectio.ObjectFS) {
 
 	for idx, rel := range rels {
-		for i := 0; i < segCnts[idx]; i++ {
+		for i := 0; i < objCnts[idx]; i++ {
 			createAndWriteSingleNAObject(t, ctx, rel, fs)
 		}
 	}
@@ -176,14 +176,14 @@ func createTAE(t *testing.T, ctx context.Context) *db.DB {
 func createTablesAndObjects(t *testing.T, ctx context.Context, tae *db.DB, dbName string, tblCnt int) {
 	// table count
 	relCnt := tblCnt
-	naSegCnts := make([]int, relCnt)
+	naObjCnts := make([]int, relCnt)
 	for i := 0; i < relCnt; i++ {
 		// generating the count of non appendable Object for each table
-		naSegCnts[i] = rand.Int()%50 + 1
+		naObjCnts[i] = rand.Int()%50 + 1
 	}
 
 	rels := createTables(t, tae, dbName, 10, relCnt)
-	createAndWriteBatchNAObject(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
+	createAndWriteBatchNAObject(t, ctx, naObjCnts, rels, tae.Runtime.Fs)
 }
 
 // test plan:

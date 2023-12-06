@@ -459,7 +459,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		checkpoint:    ckp,
 	}
 	b.BlockFn = b.VisitBlk
-	b.ObjectFn = b.VisitSeg
+	b.ObjectFn = b.VisitObj
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
@@ -496,7 +496,7 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
-func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.ObjectEntry) error {
+func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	e.RUnlock()
