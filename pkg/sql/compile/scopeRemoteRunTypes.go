@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -85,10 +86,12 @@ type messageSenderOnClient struct {
 
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
+
+	c *Compile
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string) (*messageSenderOnClient, error) {
+	ctx context.Context, c *Compile, toAddr string) (*messageSenderOnClient, error) {
 	var sender = new(messageSenderOnClient)
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
@@ -102,6 +105,7 @@ func newMessageSenderOnClient(
 	} else {
 		sender.ctx = ctx
 	}
+	sender.c = c
 	return sender, nil
 }
 
@@ -158,6 +162,83 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
+	}
+}
+
+func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool, err error) {
+	var val morpc.Message
+	var m *pipeline.Message
+	var dataBuffer []byte
+
+	for {
+		val, err = sender.receiveMessage()
+		if err != nil {
+			return nil, false, err
+		}
+		if val == nil {
+			return nil, true, nil
+		}
+
+		m = val.(*pipeline.Message)
+		if info, get := m.TryToGetMoErr(); get {
+			return nil, false, info
+		}
+		if m.IsEndMessage() {
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				ana := new(pipeline.AnalysisList)
+				if err = ana.Unmarshal(anaData); err != nil {
+					return nil, false, err
+				}
+				mergeAnalyseInfo(sender.c.anal, ana)
+			}
+			return nil, true, nil
+		}
+
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
+
+		if m.WaitingNextToMerge() {
+			continue
+		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
+		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
+		if err != nil {
+			return nil, false, err
+		}
+		dataBuffer = nil
+
+		return bat, false, nil
+	}
+}
+
+func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+	source := ana.List
+	if len(target.analInfos) != len(source) {
+		return
+	}
+	for i := range target.analInfos {
+		n := source[i]
+		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
 	}
 }
 
