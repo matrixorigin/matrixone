@@ -454,6 +454,9 @@ type analyze struct {
 	start    time.Time
 	wait     time.Duration
 	analInfo *AnalyzeInfo
+
+
+	childrenCallDuration time.Duration
 }
 
 func (si *SessionInfo) GetUser() string {

@@ -138,6 +138,10 @@ type Operator interface {
 	AppendChild(child Operator)
 }
 
+func childrenCall(o Operator, anal process.Analyze) {
+	
+}
+
 type ExecStatus int
 
 const (
