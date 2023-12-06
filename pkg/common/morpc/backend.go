@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
 )
 
@@ -126,22 +128,23 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 }
 
 type remoteBackend struct {
-	remote       string
-	metrics      *metrics
-	logger       *zap.Logger
-	codec        Codec
-	conn         goetty.IOSession
-	writeC       chan *Future
-	stopWriteC   chan struct{}
-	resetConnC   chan struct{}
-	stopper      *stopper.Stopper
-	readStopper  *stopper.Stopper
-	closeOnce    sync.Once
-	ctx          context.Context
-	cancel       context.CancelFunc
-	cancelOnce   sync.Once
-	pingTimer    *time.Timer
-	lastPingTime time.Time
+	remote           string
+	metrics          *metrics
+	logger           *zap.Logger
+	codec            Codec
+	conn             goetty.IOSession
+	writeC           chan *Future
+	stopWriteC       chan struct{}
+	resetConnC       chan struct{}
+	stopper          *stopper.Stopper
+	readStopper      *stopper.Stopper
+	closeOnce        sync.Once
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cancelOnce       sync.Once
+	pingTimer        *time.Timer
+	lastPingTime     time.Time
+	lastPingWaitTime time.Duration
 
 	options struct {
 		hasPayloadResponse bool
@@ -448,7 +451,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			getLogger().Warn("system is busy, write loop schedule interval is too large",
 				zap.Duration("interval", interval),
 				zap.Time("last-ping-trigger-time", rb.lastPingTime),
+				zap.Duration("last-ping-trigger-wait-time", rb.lastPingWaitTime),
 				zap.Duration("ping-interval", rb.getPingTimeout()))
+			// dump all goroutines to stderr
+			profile.ProfileGoroutine(os.Stderr, 2)
 		}
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
@@ -551,29 +557,41 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		}
 	}()
 
+	receiveClosed := false
 	for {
 		select {
 		case <-ctx.Done():
 			rb.clean()
 			return
 		default:
-			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
+			v, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			if err != nil {
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
-				rb.scheduleResetConn()
+				if !receiveClosed {
+					rb.scheduleResetConn()
+				}
 				return
 			}
 			rb.metrics.receiveCounter.Inc()
-
 			rb.active()
+
+			msg := v.(RPCMessage)
+			if m, ok := msg.Message.(*flagOnlyMessage); ok {
+				switch m.flag {
+				case flagClose:
+					receiveClosed = true
+					_ = rb.conn.Disconnect()
+					continue
+				}
+			}
 
 			if rb.options.hasPayloadResponse {
 				wg.Add(1)
 			}
-			resp := msg.(RPCMessage).Message
-			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
+			resp := msg.Message
+			rb.requestDone(ctx, resp.GetID(), msg, nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()
 			}
@@ -608,13 +626,18 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		}
 	}
 
+	t := time.Now()
 	select {
 	case <-rb.pingTimer.C:
+		rb.lastPingWaitTime = time.Since(t)
 		doHeartbeat()
 	case f := <-rb.writeC:
+		rb.lastPingWaitTime = time.Since(t)
 		handleHeartbeat()
 		messages = append(messages, f)
 	case <-rb.resetConnC:
+		getLogger().Warn("reset remote connection")
+		rb.lastPingWaitTime = time.Since(t)
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
@@ -708,7 +731,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(context.TODO(), RPCMessage{}, true)
+		st.done(context.TODO(), RPCMessage{})
 	}
 }
 
@@ -763,7 +786,7 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(ctx, msg, false)
+			st.done(ctx, msg)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -1111,8 +1134,7 @@ func (s *stream) ID() uint64 {
 
 func (s *stream) done(
 	ctx context.Context,
-	message RPCMessage,
-	clean bool) {
+	message RPCMessage) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1120,9 +1142,6 @@ func (s *stream) done(
 		return
 	}
 
-	if clean {
-		s.cleanCLocked()
-	}
 	response := message.Message
 	if message.Cancel != nil {
 		defer message.Cancel()
