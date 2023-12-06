@@ -1479,11 +1479,15 @@ func (tbl *txnTable) NewReader(
 	num int,
 	expr *plan.Expr,
 	ranges [][]byte) ([]engine.Reader, error) {
+	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
+	if hasNull {
+		return []engine.Reader{new(emptyReader)}, nil
+	}
 	if len(ranges) == 0 {
-		return tbl.newMergeReader(ctx, num, expr, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		return tbl.newMergeReader(ctx, num, expr, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
@@ -1500,8 +1504,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-
-		rds0, err := tbl.newMergeReader(ctx, num, expr, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
 		if err != nil {
 			return nil, err
 		}
@@ -1510,7 +1513,6 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			//FIXME::tbl.proc produce datarace
 			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load())
 			if err != nil {
 				return nil, err
@@ -1532,27 +1534,18 @@ func (tbl *txnTable) NewReader(
 	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
 }
 
-func (tbl *txnTable) newMergeReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
-
-	var encodedPrimaryKey []byte
+func (tbl *txnTable) makeEncodedPK(
+	expr *plan.Expr) (
+	encodedPK []byte,
+	hasNull bool,
+	isExactlyEqual bool) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
-		// TODO: workaround for composite primary key
-		// right now for composite primary key, the filter expr will not be pushed down
-		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
-
-			// return empty reader if the composite primary key has null value
+			_, hasNull = getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
-				return []engine.Reader{
-					new(emptyReader),
-				}, nil
+				return
 			}
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
@@ -1563,33 +1556,44 @@ func (tbl *txnTable) newMergeReader(
 				}
 				v := packer.Bytes()
 				packer.Reset()
-				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
 				// TODO: hack: remove the last comma, need to fix this in the future
-				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
+				encodedPK = encodedPK[0 : len(encodedPK)-1]
 				put.Put()
 			}
+			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			hasNull = isNull
 			if hasNull {
-				return []engine.Reader{
-					new(emptyReader),
-				}, nil
+				return
 			}
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
-				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
 			}
+			isExactlyEqual = true
 		}
+		return
 	}
+	return nil, false, false
+}
+
+func (tbl *txnTable) newMergeReader(
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	encodedPK []byte,
+	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
-		encodedPrimaryKey,
+		encodedPK,
 		expr,
 		dirtyBlks)
 	if err != nil {
