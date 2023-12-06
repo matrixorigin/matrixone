@@ -147,6 +147,20 @@ func (c *StorageUsageCache) Update(usage UsageData_) {
 	c.data.Set(usage)
 }
 
+func (c *StorageUsageCache) ClearForUpdate() {
+	c.data.Clear()
+}
+
+func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint32]int64) {
+	usages = make(map[uint32]int64)
+	c.data.Scan(func(item UsageData_) bool {
+		usages[item.AccId] += item.Size
+		return true
+	})
+
+	return
+}
+
 func (c *StorageUsageCache) GatherAccountSize(id uint32) (size int64, exist bool) {
 	iter := c.data.Iter()
 	defer iter.Release()
@@ -212,6 +226,10 @@ func (m *TNUsageMemo) HasUpdate() bool {
 
 func (m *TNUsageMemo) GatherAccountSize(id uint32) (size int64, exist bool) {
 	return m.cache.GatherAccountSize(id)
+}
+
+func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint32]int64) {
+	return m.cache.GatherAllAccSize()
 }
 
 // Update does setting or updating

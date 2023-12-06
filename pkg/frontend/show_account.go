@@ -131,16 +131,10 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
+func requestStorageUsage(ses *Session) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-		req := db.StorageUsageReq{}
-		for x := 0; x < len(accIds); x++ {
-			for y := 0; y < len(accIds[x]); y++ {
-				req.AccIds = append(req.AccIds, accIds[x][y])
-			}
-		}
-		return req.Marshal()
+		return nil, nil
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
@@ -211,6 +205,15 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]int64, succeed b
 }
 
 func updateStorageUsageCache(accIds []int32, sizes []int64) {
+
+	if len(accIds) == 0 {
+		return
+	}
+
+	// step 1: delete stale accounts
+	cnUsageCache.ClearForUpdate()
+
+	// step 2: update
 	for x := range accIds {
 		cnUsageCache.Update(logtail.UsageData_{
 			AccId: uint32(accIds[x]),
@@ -218,10 +221,8 @@ func updateStorageUsageCache(accIds []int32, sizes []int64) {
 		})
 	}
 
-	if len(accIds) > 0 {
-		// if not update received, don't update this timestamp
-		cnUsageCache.SetUpdateTime(time.Now())
-	}
+	// update this timestamp
+	cnUsageCache.SetUpdateTime(time.Now())
 }
 
 // getAccountStorageUsage calculates the storage usage of all accounts
@@ -231,14 +232,13 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 		return nil, nil
 	}
 
-	fmt.Println("--------------- cache: \n", cnUsageCache.String())
 	// step 1: check cache
 	if usage, succeed := checkStorageUsageCache(accIds); succeed {
 		return usage, nil
 	}
 
 	// step 2: query to tn
-	response, err := requestStorageUsage(ses, accIds)
+	response, err := requestStorageUsage(ses)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,6 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 
 	updateStorageUsageCache(usage.AccIds, usage.Sizes)
-	fmt.Println("--------------- cache: \n", cnUsageCache.String())
 
 	// step 2: handling these pulled data
 	return handleStorageUsageResponse(ctx, usage)
