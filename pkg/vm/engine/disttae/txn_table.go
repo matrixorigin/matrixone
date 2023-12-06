@@ -1480,20 +1480,13 @@ func (tbl *txnTable) NewReader(
 	expr *plan.Expr,
 	ranges [][]byte) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
+	if hasNull {
+		return []engine.Reader{new(emptyReader)}, nil
+	}
 	if len(ranges) == 0 {
-		if hasNull {
-			return []engine.Reader{
-				new(emptyReader),
-			}, nil
-		}
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		if hasNull {
-			return []engine.Reader{
-				new(emptyReader),
-			}, nil
-		}
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
@@ -1511,18 +1504,9 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-
-		var rds0 []engine.Reader
-		var err error
-		if hasNull {
-			rds0 = []engine.Reader{
-				new(emptyReader),
-			}
-		} else {
-			rds0, err = tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
-			if err != nil {
-				return nil, err
-			}
+		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
+		if err != nil {
+			return nil, err
 		}
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
@@ -1549,15 +1533,6 @@ func (tbl *txnTable) NewReader(
 	}
 	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
 }
-
-//func (tbl *txnTable) getPkCnt() (cnt int) {
-//	for _, col := range tbl.tableDef.Cols {
-//		if col.Primary {
-//			cnt++
-//		}
-//	}
-//	return
-//}
 
 func (tbl *txnTable) makeEncodedPK(
 	expr *plan.Expr) (
