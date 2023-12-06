@@ -43,7 +43,7 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	err = server.Start()
 	require.Nil(t, err)
 
-	sender, err := newMessageSenderOnClient(context.TODO(), "127.0.0.1:9999")
+	sender, err := newMessageSenderOnClient(context.TODO(), nil, "127.0.0.1:9999")
 	require.Nil(t, err)
 	defer sender.close()
 

@@ -50,7 +50,6 @@ type ReceiveInfo struct {
 type Server struct {
 	sync.Mutex
 	id uint64
-	mp map[uint64]*process.WaitRegister
 
 	hakeeper      logservice.CNHAKeeperClient
 	CNSegmentId   types.Uuid
