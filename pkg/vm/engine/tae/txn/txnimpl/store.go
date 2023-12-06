@@ -407,8 +407,8 @@ func (store *txnStore) ObserveTxn(
 					visitTable(txnEntry)
 				}
 			}
-			if tbl.localObject != nil {
-				for _, node := range tbl.localObject.nodes {
+			if tbl.tableSpace != nil {
+				for _, node := range tbl.tableSpace.nodes {
 					anode, ok := node.(*anode)
 					if ok {
 						schema := anode.table.GetLocalSchema()

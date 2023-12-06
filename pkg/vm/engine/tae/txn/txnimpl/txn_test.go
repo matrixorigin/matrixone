@@ -215,7 +215,7 @@ func TestAppend(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
 	assert.Equal(t, int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, int(brows), int(tbl.localObject.index.Count()))
+	assert.Equal(t, int(brows), int(tbl.tableSpace.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[0])
 	assert.NotNil(t, err)
@@ -225,14 +225,14 @@ func TestAppend(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	assert.Equal(t, 2*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 2*int(brows), int(tbl.localObject.index.Count()))
+	assert.Equal(t, 2*int(brows), int(tbl.tableSpace.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[2])
 	assert.Nil(t, err)
 	err = tbl.Append(context.Background(), bats[2])
 	assert.Nil(t, err)
 	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
-	assert.Equal(t, 3*int(brows), int(tbl.localObject.index.Count()))
+	assert.Equal(t, 3*int(brows), int(tbl.tableSpace.index.Count()))
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -364,7 +364,7 @@ func TestNodeCommand(t *testing.T) {
 	err = tbl.RangeDeleteLocalRows(100, 200)
 	assert.NoError(t, err)
 
-	for i, inode := range tbl.localObject.nodes {
+	for i, inode := range tbl.tableSpace.nodes {
 		cmd, err := inode.MakeCommand(uint32(i))
 		assert.NoError(t, err)
 		assert.NotNil(t, cmd.(*AppendCmd).Data)

@@ -228,7 +228,7 @@ func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int {
 	if blk.isUncommitted {
-		return blk.table.localObject.GetBlockRows(blk.entry)
+		return blk.table.tableSpace.GetBlockRows(blk.entry)
 	}
 	return blk.entry.GetBlockData().Rows()
 }
@@ -239,7 +239,7 @@ func (blk *txnBlock) GetColumnDataByName(
 	schema := blk.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localObject.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx, mp)
 }
@@ -253,7 +253,7 @@ func (blk *txnBlock) GetColumnDataByNames(
 		attrIds[i] = schema.GetColIdx(attr)
 	}
 	if blk.isUncommitted {
-		return blk.table.localObject.GetColumnDataByIds(blk.entry, attrIds, mp)
+		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, attrIds, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds, mp)
 }
@@ -266,7 +266,7 @@ func (blk *txnBlock) GetColumnDataById(
 	ctx context.Context, colIdx int, mp *mpool.MPool,
 ) (*containers.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localObject.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx, mp)
 }
@@ -275,7 +275,7 @@ func (blk *txnBlock) GetColumnDataByIds(
 	ctx context.Context, colIdxes []int, mp *mpool.MPool,
 ) (*containers.BlockView, error) {
 	if blk.isUncommitted {
-		return blk.table.localObject.GetColumnDataByIds(blk.entry, colIdxes, mp)
+		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, colIdxes, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes, mp)
 }
@@ -287,7 +287,7 @@ func (blk *txnBlock) Prefetch(idxes []int) error {
 		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
 	}
 	if blk.isUncommitted {
-		return blk.table.localObject.Prefetch(blk.entry, seqnums)
+		return blk.table.tableSpace.Prefetch(blk.entry, seqnums)
 	}
 	return blk.entry.GetBlockData().Prefetch(seqnums)
 }

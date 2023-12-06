@@ -100,7 +100,7 @@ type txnTable struct {
 	store       *txnStore
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
-	localObject *localObject
+	tableSpace  *tableSpace
 	deleteNodes map[common.ID]*deleteNode
 	entry       *catalog.TableEntry
 	schema      *catalog.Schema
@@ -388,8 +388,8 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 		}
 		cmdMgr.AddCmd(cmd)
 	}
-	if tbl.localObject != nil {
-		if err = tbl.localObject.CollectCmd(cmdMgr); err != nil {
+	if tbl.tableSpace != nil {
+		if err = tbl.tableSpace.CollectCmd(cmdMgr); err != nil {
 			return
 		}
 	}
@@ -587,11 +587,11 @@ func (tbl *txnTable) GetID() uint64 {
 
 func (tbl *txnTable) Close() error {
 	var err error
-	if tbl.localObject != nil {
-		if err = tbl.localObject.Close(); err != nil {
+	if tbl.tableSpace != nil {
+		if err = tbl.tableSpace.Close(); err != nil {
 			return err
 		}
-		tbl.localObject = nil
+		tbl.tableSpace = nil
 	}
 	tbl.deleteNodes = nil
 	tbl.logs = nil
@@ -650,10 +650,10 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 			}
 		}
 	}
-	if tbl.localObject == nil {
-		tbl.localObject = newLocalObject(tbl)
+	if tbl.tableSpace == nil {
+		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.localObject.Append(data)
+	return tbl.tableSpace.Append(data)
 }
 func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
 	return stats.Foreach(func(v any, isNull bool, row int) error {
@@ -668,7 +668,7 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 			v.Close()
 		}
 	}()
-	if tbl.localObject != nil && tbl.localObject.isStatsExisted(stats) {
+	if tbl.tableSpace != nil && tbl.tableSpace.isStatsExisted(stats) {
 		return nil
 	}
 	metaLocs := make([]objectio.Location, 0)
@@ -728,32 +728,32 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 			}
 		}
 	}
-	if tbl.localObject == nil {
-		tbl.localObject = newLocalObject(tbl)
+	if tbl.tableSpace == nil {
+		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.localObject.AddBlksWithMetaLoc(pkVecs, stats)
+	return tbl.tableSpace.AddBlksWithMetaLoc(pkVecs, stats)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
-	if tbl.localObject != nil {
-		err = tbl.localObject.RangeDelete(start, end)
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.RangeDelete(start, end)
 	}
 	return
 }
 
 func (tbl *txnTable) LocalDeletesToString() string {
 	s := fmt.Sprintf("<txnTable-%d>[LocalDeletes]:\n", tbl.GetID())
-	if tbl.localObject != nil {
-		s = fmt.Sprintf("%s%s", s, tbl.localObject.DeletesToString())
+	if tbl.tableSpace != nil {
+		s = fmt.Sprintf("%s%s", s, tbl.tableSpace.DeletesToString())
 	}
 	return s
 }
 
 func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
-	if tbl.localObject == nil {
+	if tbl.tableSpace == nil {
 		return false
 	}
-	return tbl.localObject.IsDeleted(row)
+	return tbl.tableSpace.IsDeleted(row)
 }
 
 // RangeDelete delete block rows in range [start, end]
@@ -785,7 +785,7 @@ func (tbl *txnTable) RangeDelete(
 				err)
 		}
 	}()
-	if tbl.localObject != nil && id.ObjectID().Eq(tbl.localObject.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -853,8 +853,8 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 }
 
 func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if tbl.localObject != nil {
-		id, offset, err = tbl.localObject.GetByFilter(filter)
+	if tbl.tableSpace != nil {
+		id, offset, err = tbl.tableSpace.GetByFilter(filter)
 		if err == nil {
 			return
 		}
@@ -883,15 +883,15 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 }
 
 func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localObject == nil {
+	if tbl.tableSpace == nil {
 		return
 	}
-	return tbl.localObject.GetValue(row, col)
+	return tbl.tableSpace.GetValue(row, col)
 }
 
 func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localObject != nil && id.ObjectID().Eq(tbl.localObject.entry.ID) {
-		return tbl.localObject.GetValue(row, col)
+	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+		return tbl.tableSpace.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
@@ -993,10 +993,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 }
 
 func (tbl *txnTable) UncommittedRows() uint32 {
-	if tbl.localObject == nil {
+	if tbl.tableSpace == nil {
 		return 0
 	}
-	return tbl.localObject.Rows()
+	return tbl.tableSpace.Rows()
 }
 func (tbl *txnTable) NeedRollback() bool {
 	return tbl.createEntry != nil && tbl.dropEntry != nil
@@ -1004,12 +1004,12 @@ func (tbl *txnTable) NeedRollback() bool {
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
-	if tbl.localObject == nil || !tbl.schema.HasPK() {
+	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return
 	}
 	var zm index.ZM
 	pkColPos := tbl.schema.GetSingleSortKeyIdx()
-	for _, node := range tbl.localObject.nodes {
+	for _, node := range tbl.tableSpace.nodes {
 		if node.IsPersisted() {
 			err = tbl.DoPrecommitDedupByNode(ctx, node)
 			if err != nil {
@@ -1441,9 +1441,9 @@ func (tbl *txnTable) DedupWorkSpace(key containers.Vector) (err error) {
 		return
 	}
 
-	if tbl.localObject != nil {
+	if tbl.tableSpace != nil {
 		//Check whether primary key is duplicated in txn's workspace.
-		if err = tbl.localObject.BatchDedup(key); err != nil {
+		if err = tbl.tableSpace.BatchDedup(key); err != nil {
 			return
 		}
 	}
@@ -1463,9 +1463,9 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		return
 	}
 
-	if tbl.localObject != nil {
+	if tbl.tableSpace != nil {
 		//Check whether primary key is duplicated in txn's workspace.
-		if err = tbl.localObject.BatchDedup(key); err != nil {
+		if err = tbl.tableSpace.BatchDedup(key); err != nil {
 			return
 		}
 	}
@@ -1475,10 +1475,10 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
-	if tbl.localObject == nil || !tbl.schema.HasPK() {
+	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return
 	}
-	err = tbl.localObject.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+	err = tbl.tableSpace.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
 }
 
@@ -1495,15 +1495,15 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 }
 
 func (tbl *txnTable) ApplyAppend() (err error) {
-	if tbl.localObject != nil {
-		err = tbl.localObject.ApplyAppend()
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.ApplyAppend()
 	}
 	return
 }
 
 func (tbl *txnTable) PrePrepare() (err error) {
-	if tbl.localObject != nil {
-		err = tbl.localObject.PrepareApply()
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.PrepareApply()
 	}
 	return
 }
@@ -1574,7 +1574,7 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 }
 
 func (tbl *txnTable) CleanUp() {
-	if tbl.localObject != nil {
-		tbl.localObject.CloseAppends()
+	if tbl.tableSpace != nil {
+		tbl.tableSpace.CloseAppends()
 	}
 }
