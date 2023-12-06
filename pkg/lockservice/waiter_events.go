@@ -127,6 +127,11 @@ func (mw *waiterEvents) start() {
 func (mw *waiterEvents) close() {
 	mw.stopper.Stop()
 	close(mw.eventC)
+	mw.mu.Lock()
+	for _, w := range mw.mu.blockedWaiters {
+		w.close()
+	}
+	mw.mu.Unlock()
 }
 
 func (mw *waiterEvents) add(c *lockContext) {
@@ -177,7 +182,7 @@ func (mw *waiterEvents) check() {
 	stopAt := -1
 	now := time.Now()
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt) < defaultLazyCheckDuration {
+		if now.Sub(w.waitAt.Load().(time.Time)) < defaultLazyCheckDuration {
 			stopAt = i
 			break
 		}
