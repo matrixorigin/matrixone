@@ -191,7 +191,7 @@ func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		ObjectNode: &ObjectNode{
 			state:    state,
-			sorted:   table.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
+			sorted:   state == ES_NotAppendable,
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}

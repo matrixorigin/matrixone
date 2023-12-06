@@ -591,7 +591,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		obj.table = rel
 		obj.ObjectNode = &ObjectNode{
 			state:    state,
-			sorted:   rel.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
+			sorted:   state == ES_NotAppendable,
 			SortHint: catalog.NextObject(),
 		}
 		rel.AddEntryLocked(obj)
