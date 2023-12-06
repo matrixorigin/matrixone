@@ -163,16 +163,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		}
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
-		columnsData := w.objMetaBuilder.GetPKData()
-		bf, err := index.NewBinaryFuseFilterByVectors(columnsData)
-		if err != nil {
-			return nil, nil, err
-		}
-		buf, err := bf.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		w.writer.WriteObjectMetaBF(buf)
 	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
