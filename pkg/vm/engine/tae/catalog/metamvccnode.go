@@ -92,35 +92,35 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 }
 
 type ObjectMVCCNode struct {
-	*objectio.ObjectStats
+	objectio.ObjectStats
 }
 
 func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		ObjectStats: objectio.NewObjectStats(),
+		ObjectStats: *objectio.NewObjectStats(),
 	}
 }
 
 func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
 	obj := NewEmptyObjectMVCCNode()
-	objectio.SetObjectStatsObjectName(obj.ObjectStats, metalocation.Name())
+	objectio.SetObjectStatsObjectName(&obj.ObjectStats, metalocation.Name())
 	return obj
 }
 
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		ObjectStats: stats.Clone(),
+		ObjectStats: *stats.Clone(),
 	}
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		ObjectStats: e.ObjectStats.Clone(),
+		ObjectStats: *e.ObjectStats.Clone(),
 	}
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		ObjectStats: e.ObjectStats.Clone(),
+		ObjectStats: *e.ObjectStats.Clone(),
 	}
 }
 func (e *ObjectMVCCNode) String() string {
@@ -130,7 +130,7 @@ func (e *ObjectMVCCNode) String() string {
 	return e.ObjectStats.String()
 }
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
-	e.ObjectStats = vun.ObjectStats.Clone()
+	e.ObjectStats = *vun.ObjectStats.Clone()
 }
 func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int
@@ -155,7 +155,7 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
 	if e == nil || e.IsEmpty() {
-		objectio.SetObjectStatsObjectName(e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
 	}
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
@@ -163,7 +163,7 @@ func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batc
 func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
 	e = &ObjectMVCCNode{
-		ObjectStats: (*objectio.ObjectStats)(buf),
+		ObjectStats: (objectio.ObjectStats)(buf),
 	}
 	return
 }
