@@ -216,15 +216,15 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	}
 }
 
-func generateCPUNumber(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 0 {
+func DeterminRuntimeDOP(cpunum, blocks int) int {
+	if cpunum <= 0 || blocks <= 16 {
 		return 1
 	}
-
-	if cpunum <= blocks {
-		return cpunum
+	ret := blocks/16 + 1
+	if ret < cpunum {
+		return ret
 	}
-	return blocks
+	return cpunum
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -342,7 +342,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 	}
 
-	mcpu := generateCPUNumber(goruntime.NumCPU(), len(s.NodeInfo.Data))
+	mcpu := DeterminRuntimeDOP(goruntime.NumCPU(), len(s.NodeInfo.Data))
 
 	switch {
 	case remote:
