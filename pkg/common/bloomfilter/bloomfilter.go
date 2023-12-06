@@ -55,7 +55,7 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 
 		idx = 0
 		for k = 0; k < lastSeed; k++ {
-			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[k])
 			for j = 0; j < n; j++ {
 				bf.addVals[idx] = getIdxVal(bf.states[j][0])
 				idx++
