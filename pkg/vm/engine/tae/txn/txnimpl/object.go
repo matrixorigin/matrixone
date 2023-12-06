@@ -118,10 +118,10 @@ func newObjectIt(table *txnTable) handle.ObjectIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	if table.localObject != nil {
+	if table.tableSpace != nil {
 		cit := &composedObjectIt{
 			ObjectIt:    it,
-			uncommitted: table.localObject.entry,
+			uncommitted: table.tableSpace.entry,
 		}
 		return cit
 	}
