@@ -307,6 +307,10 @@ func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
+func (m *blockStream) SafeClose(ctx context.Context) error {
+	return nil
+}
+
 func (m *blockStream) Close() error {
 	m.once.Do(func() {
 		close(m.ch)

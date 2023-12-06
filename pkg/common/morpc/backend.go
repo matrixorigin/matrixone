@@ -455,7 +455,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
 		interval := time.Since(lastScheduleTime)
-		if rb.options.readTimeout > 0 && interval > time.Second*30 {
+		if rb.options.readTimeout > 0 && interval > time.Second*5 {
 			getLogger().Warn("system is busy, write loop schedule interval is too large",
 				zap.Duration("interval", interval),
 				zap.Time("last-ping-trigger-time", rb.lastPingTime),
