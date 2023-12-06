@@ -554,6 +554,10 @@ func (c *Compile) shouldReturnCtxErr() bool {
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
@@ -740,6 +744,11 @@ func (c *Compile) removeUnavailableCN() {
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
+	}()
 	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 	if err != nil {
 		return nil, err
@@ -952,6 +961,10 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 }
 
 func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:

@@ -185,9 +185,6 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 }
 
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
-	task.rt.Throttle.AcquireCompactionQuota()
-	defer task.rt.Throttle.ReleaseCompactionQuota()
-
 	logutil.Info("[Start]", common.OperationField(task.Name()), common.OperandField(task),
 		common.OperandField(len(task.ablksHandles)+len(task.delSrcHandles)))
 

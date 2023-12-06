@@ -648,6 +648,21 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
 	}
 
+	var uncommittedObjects []objectio.ObjectStats
+	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
+		tbl.db.databaseId, tbl.tableId,
+	); err != nil {
+		return err
+	}
+
+	if done, err := tbl.tryFastRanges(
+		exprs, state, uncommittedObjects, ranges, tbl.db.txn.engine.fs,
+	); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -664,13 +679,6 @@ func (tbl *txnTable) rangesOnePart(
 	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
 	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
 		dirtyBlks[bid] = struct{}{}
-	}
-
-	var uncommittedObjects []objectio.ObjectStats
-	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
-		tbl.db.databaseId, tbl.tableId,
-	); err != nil {
-		return err
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
@@ -717,21 +725,6 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	var fs fileservice.FileService
-	if fs, err = fileservice.Get[fileservice.FileService](
-		proc.FileService, defines.SharedFileServiceName,
-	); err != nil {
-		return
-	}
-
-	if done, err := tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, dirtyBlks, ranges, fs,
-	); err != nil {
-		return err
-	} else if done {
-		return nil
-	}
-
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	for _, expr := range exprs {
 		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
@@ -759,7 +752,7 @@ func (tbl *txnTable) rangesOnePart(
 				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -784,7 +777,7 @@ func (tbl *txnTable) rangesOnePart(
 			if obj.Rows() == 0 && meta.IsEmpty() {
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -858,11 +851,12 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
+// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
+// it filters out only a small number of blocks which should not be distributed to remote CNs.
 func (tbl *txnTable) tryFastRanges(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,
 ) (done bool, err error) {
@@ -882,8 +876,6 @@ func (tbl *txnTable) tryFastRanges(
 		done = false
 		return
 	}
-
-	hasDeletes := len(dirtyBlks) > 0
 
 	var (
 		meta     objectio.ObjectDataMeta
@@ -966,17 +958,6 @@ func (tbl *txnTable) tryFastRanges(
 						blk.CommitTs = commitTs
 					}
 				}
-
-				if hasDeletes {
-					if _, ok := dirtyBlks[blk.BlockID]; !ok {
-						blk.CanRemote = true
-					}
-					blk.PartitionNum = -1
-					*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
-					return true
-				}
-
-				blk.CanRemote = true
 				blk.PartitionNum = -1
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 				return true
@@ -1479,11 +1460,15 @@ func (tbl *txnTable) NewReader(
 	num int,
 	expr *plan.Expr,
 	ranges [][]byte) ([]engine.Reader, error) {
+	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
+	if hasNull {
+		return []engine.Reader{new(emptyReader)}, nil
+	}
 	if len(ranges) == 0 {
-		return tbl.newMergeReader(ctx, num, expr, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		return tbl.newMergeReader(ctx, num, expr, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
@@ -1500,8 +1485,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-
-		rds0, err := tbl.newMergeReader(ctx, num, expr, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
 		if err != nil {
 			return nil, err
 		}
@@ -1510,7 +1494,6 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			//FIXME::tbl.proc produce datarace
 			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load())
 			if err != nil {
 				return nil, err
@@ -1532,27 +1515,18 @@ func (tbl *txnTable) NewReader(
 	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
 }
 
-func (tbl *txnTable) newMergeReader(
-	ctx context.Context,
-	num int,
-	expr *plan.Expr,
-	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
-
-	var encodedPrimaryKey []byte
+func (tbl *txnTable) makeEncodedPK(
+	expr *plan.Expr) (
+	encodedPK []byte,
+	hasNull bool,
+	isExactlyEqual bool) {
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
-		// TODO: workaround for composite primary key
-		// right now for composite primary key, the filter expr will not be pushed down
-		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
-
-			// return empty reader if the composite primary key has null value
+			_, hasNull = getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
-				return []engine.Reader{
-					new(emptyReader),
-				}, nil
+				return
 			}
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
@@ -1563,33 +1537,44 @@ func (tbl *txnTable) newMergeReader(
 				}
 				v := packer.Bytes()
 				packer.Reset()
-				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
 				// TODO: hack: remove the last comma, need to fix this in the future
-				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
+				encodedPK = encodedPK[0 : len(encodedPK)-1]
 				put.Put()
 			}
+			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			hasNull = isNull
 			if hasNull {
-				return []engine.Reader{
-					new(emptyReader),
-				}, nil
+				return
 			}
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
-				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
 			}
+			isExactlyEqual = true
 		}
+		return
 	}
+	return nil, false, false
+}
+
+func (tbl *txnTable) newMergeReader(
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	encodedPK []byte,
+	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
-		encodedPrimaryKey,
+		encodedPK,
 		expr,
 		dirtyBlks)
 	if err != nil {
