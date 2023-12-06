@@ -91,12 +91,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
-		if err != nil {
-			//TODO: @arjun remove this after debugging the panic suppression issue.
-			getLogger().Error("error in scope run suppressed to nil",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
 		err = nil
 	default:
 	}
@@ -209,14 +203,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
+	p := pipeline.New(nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
-		// if context has done, it means another pipeline stops the query.
-		// so there is no need to return the error again.
+		// this clean-up action shouldn't be called before context check.
+		// because the clean-up action will cancel the context, and error will be suppressed.
+		p.Cleanup(s.Proc, true, err)
 		return nil
 
 	default:
+		p.Cleanup(s.Proc, err != nil, err)
 		return err
 	}
 }
