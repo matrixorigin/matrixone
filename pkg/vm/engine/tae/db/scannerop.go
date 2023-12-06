@@ -174,8 +174,8 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return
 	}
-	delObjs := s.ObjectHelper.finish()
-	s.executor.ExecuteFor(s.tbl, delObjs, s.objPolicy)
+	// delObjs := s.ObjectHelper.finish()
+	s.executor.ExecuteFor(s.tbl, s.objPolicy)
 }
 
 func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {

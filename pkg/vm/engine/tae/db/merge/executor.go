@@ -134,60 +134,31 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, mobjs, len(mergedBlks), osize, esize)
+	logMergeTask(entry.GetLastestSchema().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
 	if err = task.WaitDone(); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
 	return nil
 }
 
-func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delObjs []*catalog.ObjectEntry, policy Policy) {
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
-	hasDelObj := len(delObjs) > 0
-
-	originalDelCnt := len(delObjs)
-
-	hasMergeObjects := false
 
 	objectList := policy.Revise(0, int64(e.MemAvailBytes()))
 	mergedBlks, mobjs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
-	if blkCnt > 0 {
-		delObjs = append(delObjs, mobjs...)
-		hasMergeObjects = true
-	}
 
-	if !hasDelObj && !hasMergeObjects {
+	if blkCnt == 0 {
 		return
 	}
 
-	objScopes := make([]common.ID, len(delObjs))
-	for i, s := range delObjs {
-		objScopes[i] = *s.AsCommonID()
-	}
-
-	// remove stale Objects only
-	if hasDelObj && !hasMergeObjects {
-		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-			return jobs.NewDelObjTask(ctx, txn, delObjs), nil
-		}
-		if _, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, objScopes, factory); err != nil {
-			logutil.Infof("[Mergeblocks] Schedule del obj errinfo=%v", err)
-		} else {
-			logutil.Infof("[Mergeblocks] Scheduled Object Del| %d-%s del %d objs", entry.ID, e.tableName, len(delObjs))
-		}
-		return
-	}
-
-	// remove stale Objects and mrege objects
 	scopes := make([]common.ID, blkCnt)
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
 	}
-	scopes = append(scopes, objScopes...)
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, delObjs, nil, e.rt)
+		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mobjs, nil, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
@@ -201,11 +172,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delObjs []*catalog
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
-	var delPrint []*catalog.ObjectEntry
-	if delObjs != nil {
-		delPrint = delObjs[:originalDelCnt]
-	}
-	logMergeTask(e.tableName, task.ID(), delPrint, mobjs, blkCnt, osize, esize)
+	logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 }
 
 func (e *MergeExecutor) MemAvailBytes() int {
@@ -243,7 +210,7 @@ func expandObjectList(objs []*catalog.ObjectEntry) (
 	return
 }
 
-func logMergeTask(name string, taskId uint64, dels, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
+func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
 	v2.TaskMergeScheduledByCounter.Inc()
 	v2.TaskMergedBlocksCounter.Add(float64(blkn))
 	v2.TasKMergedSizeCounter.Add(float64(osize))
@@ -254,12 +221,6 @@ func logMergeTask(name string, taskId uint64, dels, merges []*catalog.ObjectEntr
 		r := obj.Stat.GetRemainingRows()
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
-	}
-	if len(dels) > 0 {
-		infoBuf.WriteString(" | del:")
-		for _, obj := range dels {
-			infoBuf.WriteString(fmt.Sprintf(" %s", common.ShortObjId(obj.ID)))
-		}
 	}
 	logutil.Infof(
 		"[Mergeblocks] Scheduled %v [t%d|on%d,bn%d|%s,%s], merged(%v): %s", name,
