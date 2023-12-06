@@ -114,6 +114,7 @@ func CnServerMessageHandler(
 				zap.String("error", err.Error()))
 			cs.Close()
 		}
+		cs.SafeClose(ctx)
 	}()
 
 	msg, ok := message.(*pipeline.Message)

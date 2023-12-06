@@ -559,7 +559,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	s.init(1, false)
 	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
 	assert.NoError(t, s.Close(false))
-	s.done(context.TODO(), RPCMessage{}, false)
+	s.done(context.TODO(), RPCMessage{})
 }
 
 func TestGCStream(t *testing.T) {

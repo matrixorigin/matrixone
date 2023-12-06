@@ -32,6 +32,10 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+var (
+	maxRetryTimes = 2
+)
+
 type columnCache struct {
 	sync.RWMutex
 	logger      *log.MOLogger
@@ -390,19 +394,28 @@ func (col *columnCache) allocateLocked(
 	if n == 0 {
 		n = 1
 	}
-	for {
-		from, to, err := col.allocator.allocate(
+
+	var from, to uint64
+	var err error
+	for i := 0; i < maxRetryTimes; i++ {
+		from, to, err = col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,
 			count*n,
 			txnOp)
+		col.allocateCount.Add(1)
 		if err == nil {
-			col.allocateCount.Add(1)
-			col.applyAllocateLocked(from, to)
-			return nil
+			break
 		}
+
+		col.logger.Error("allocator increment value failed",
+			zap.Error(err),
+			zap.Uint64("table", col.col.TableID),
+			zap.String("col", col.col.ColName))
 	}
+	col.applyAllocateLocked(from, to)
+	return err
 }
 
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) {

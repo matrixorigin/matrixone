@@ -36,6 +36,7 @@ const (
 	flagStreamingMessage
 	flagPing
 	flagPong
+	flagClose
 )
 
 var (
@@ -585,6 +586,9 @@ func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, in
 		msg.internal = true
 	} else if flag&flagPong != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPong}
+		msg.internal = true
+	} else if flag&flagClose != 0 {
+		msg.Message = &flagOnlyMessage{flag: flagClose}
 		msg.internal = true
 	} else {
 		msg.Message = c.messageFactory()
