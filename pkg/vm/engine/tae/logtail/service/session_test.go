@@ -392,6 +392,10 @@ func (m *normalStream) Close() error {
 	return nil
 }
 
+func (m *normalStream) SafeClose(ctx context.Context) error {
+	return nil
+}
+
 func (m *normalStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
