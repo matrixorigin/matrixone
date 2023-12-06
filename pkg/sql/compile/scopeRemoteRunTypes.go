@@ -212,7 +212,6 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		if err != nil {
 			return nil, false, err
 		}
-		dataBuffer = nil
 
 		return bat, false, nil
 	}
