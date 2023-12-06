@@ -138,6 +138,7 @@ func ReadOneBlockWithMeta(
 	if len(policies) > 0 {
 		ioVec.Policy = policies[0]
 	}
+	logutil.Infof("!!!!!! policy %v", ioVec.Policy)
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
