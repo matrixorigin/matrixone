@@ -648,6 +648,21 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
 	}
 
+	var uncommittedObjects []objectio.ObjectStats
+	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
+		tbl.db.databaseId, tbl.tableId,
+	); err != nil {
+		return err
+	}
+
+	if done, err := tbl.tryFastRanges(
+		exprs, state, uncommittedObjects, ranges, tbl.db.txn.engine.fs,
+	); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -664,13 +679,6 @@ func (tbl *txnTable) rangesOnePart(
 	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
 	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
 		dirtyBlks[bid] = struct{}{}
-	}
-
-	var uncommittedObjects []objectio.ObjectStats
-	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
-		tbl.db.databaseId, tbl.tableId,
-	); err != nil {
-		return err
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
@@ -717,21 +725,6 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	var fs fileservice.FileService
-	if fs, err = fileservice.Get[fileservice.FileService](
-		proc.FileService, defines.SharedFileServiceName,
-	); err != nil {
-		return
-	}
-
-	if done, err := tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, dirtyBlks, ranges, fs,
-	); err != nil {
-		return err
-	} else if done {
-		return nil
-	}
-
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	for _, expr := range exprs {
 		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
@@ -759,7 +752,7 @@ func (tbl *txnTable) rangesOnePart(
 				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -784,7 +777,7 @@ func (tbl *txnTable) rangesOnePart(
 			if obj.Rows() == 0 && meta.IsEmpty() {
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, fs,
+					errCtx, &location, false, tbl.db.txn.engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -858,11 +851,12 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
+// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
+// it filters out only a small number of blocks which should not be distributed to remote CNs.
 func (tbl *txnTable) tryFastRanges(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,
 ) (done bool, err error) {
@@ -882,8 +876,6 @@ func (tbl *txnTable) tryFastRanges(
 		done = false
 		return
 	}
-
-	hasDeletes := len(dirtyBlks) > 0
 
 	var (
 		meta     objectio.ObjectDataMeta
@@ -966,17 +958,6 @@ func (tbl *txnTable) tryFastRanges(
 						blk.CommitTs = commitTs
 					}
 				}
-
-				if hasDeletes {
-					if _, ok := dirtyBlks[blk.BlockID]; !ok {
-						blk.CanRemote = true
-					}
-					blk.PartitionNum = -1
-					*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
-					return true
-				}
-
-				blk.CanRemote = true
 				blk.PartitionNum = -1
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 				return true
