@@ -251,6 +251,10 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 		return nil, moerr.NewNotSupportedNoCtx("cn version newer than tn, retry later")
 	}
 
+	if len(usage.AccIds) != len(usage.Sizes) {
+		return nil, moerr.NewNotSupportedNoCtx("cn version newer than tn, retry later")
+	}
+
 	updateStorageUsageCache(usage.AccIds, usage.Sizes)
 
 	// step 2: handling these pulled data
