@@ -301,14 +301,18 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	if blk == nil {
 		return *objectio.NewObjectStats(), nil
 	}
+	blk.RLock()
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: startTS},
 	})
 	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+		blk.RUnlock()
 		objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
 		return stats, nil
 	}
+	blk.RUnlock()
 
+	entry.RLock()
 	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
 		if !n.BaseNode.ObjectStats.IsZero() {
 			stats = *n.BaseNode.ObjectStats.Clone()
@@ -316,6 +320,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 		}
 		return true
 	})
+	entry.RUnlock()
 	if stats.Rows() != 0 {
 		return stats, nil
 	}
@@ -339,7 +344,9 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 }
 
 func (entry *ObjectEntry) LoadObjectInfoForLastNode() (objectio.ObjectStats, error) {
+	entry.RLock()
 	startTS := entry.GetLatestCommittedNode().Start
+	entry.RUnlock()
 	return entry.LoadObjectInfoWithTxnTS(startTS)
 }
 
