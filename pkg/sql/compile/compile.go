@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -216,6 +217,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in compile",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
 		}
 	}()
 
@@ -370,7 +374,12 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
+
+	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
+	stats.ExecutionStart()
+
 	defer func() {
+		stats.ExecutionEnd()
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -479,6 +488,7 @@ func (c *Compile) runOnce() error {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
 					getLogger().Error("panic in run",
+						zap.String("sql", c.sql),
 						zap.String("error", err.Error()))
 					errC <- err
 				}
@@ -3008,6 +3018,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
+	if len(qry.Nodes) == 0 {
+		panic("empty plan")
+	}
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
 		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)

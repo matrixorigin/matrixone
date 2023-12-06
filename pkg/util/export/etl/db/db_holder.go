@@ -110,6 +110,8 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if err != nil {
 			return err
 		}
+		//45s suggest by xzxiong
+		newDBConn.SetConnMaxLifetime(45 * time.Second)
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)

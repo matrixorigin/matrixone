@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -83,6 +85,7 @@ func NewDiskCache(
 		perfCounterSets: perfCounterSets,
 	}
 	ret.triggerEvict(ctx, 0)
+	ret.triggerEvict(ctx, capacity) // trigger an immediately eviction
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 	return ret, nil
@@ -97,7 +100,7 @@ func (d *DiskCache) Read(
 	err error,
 ) {
 
-	if vector.CachePolicy.Any(SkipDiskReads) {
+	if vector.Policy.Any(SkipDiskCacheReads) {
 		return nil
 	}
 
@@ -168,6 +171,7 @@ func (d *DiskCache) Read(
 		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
+			logutil.Warn("read disk cache error", zap.Any("error", err))
 			continue
 		}
 
@@ -193,7 +197,7 @@ func (d *DiskCache) Update(
 	err error,
 ) {
 
-	if vector.CachePolicy.Any(SkipDiskWrites) {
+	if vector.Policy.Any(SkipDiskCacheWrites) {
 		return nil
 	}
 
@@ -223,7 +227,9 @@ func (d *DiskCache) Update(
 		}
 
 		diskPath := d.pathForIOEntry(path.File, entry)
-		written, err := d.writeFile(ctx, diskPath, entry.Data)
+		written, err := d.writeFile(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(entry.Data)), nil
+		})
 		if err != nil {
 			return err
 		}
@@ -238,7 +244,11 @@ func (d *DiskCache) Update(
 	return nil
 }
 
-func (d *DiskCache) writeFile(ctx context.Context, diskPath string, data []byte) (bool, error) {
+func (d *DiskCache) writeFile(
+	ctx context.Context,
+	diskPath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+) (bool, error) {
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -269,27 +279,42 @@ func (d *DiskCache) writeFile(ctx context.Context, diskPath string, data []byte)
 	err = os.MkdirAll(dir, 0755)
 	if err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	numCreate++
-	n, err := f.Write(data)
+	from, err := openReader(ctx)
+	if err != nil {
+		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
+		return false, nil // ignore error
+	}
+	defer from.Close()
+	var buf []byte
+	put := ioBufferPool.Get(&buf)
+	defer put.Put()
+	n, err := io.CopyBuffer(f, from, buf)
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := f.Close(); err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 
@@ -321,7 +346,7 @@ func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
 		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
 			if d.evictState.timer.Stop() {
 				// evict immediately
-				logutil.Debug("disk cache: newly written bytes may excceeds eviction target, start immediately",
+				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
 					zap.Any("newly-written", d.evictState.newlyWritten),
 					zap.Any("newly-written-threshold", newlyWrittenThreshold),
 				)
@@ -381,13 +406,27 @@ func (d *DiskCache) evict(ctx context.Context) {
 		if err != nil {
 			return nil // ignore
 		}
-		size := info.Size()
+
+		var size int64
+		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+			size = int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
+		} else {
+			size = info.Size()
+		}
+
 		if _, ok := paths[path]; !ok {
 			paths[path] = size
 			sumSize += size
 		}
 		return nil
 	})
+
+	target := int64(float64(d.capacity) * d.evictTarget)
+
+	logutil.Info("disk cache eviction check",
+		zap.Any("used bytes", sumSize),
+		zap.Any("target", target),
+	)
 
 	var numDeleted int64
 	var bytesDeleted int64
@@ -396,13 +435,12 @@ func (d *DiskCache) evict(ctx context.Context) {
 			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 				set.FileService.Cache.Disk.Evict.Add(numDeleted)
 			}, d.perfCounterSets...)
-			logutil.Debug("disk cache: eviction finished",
-				zap.Any("files", numDeleted),
-				zap.Any("bytes", bytesDeleted),
+			logutil.Info("disk cache eviction finished",
+				zap.Any("deleted files", numDeleted),
+				zap.Any("deleted bytes", bytesDeleted),
 			)
 		}
 	}()
-	target := int64(float64(d.capacity) * d.evictTarget)
 
 	var onEvict []OnDiskCacheEvictFunc
 	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
@@ -449,6 +487,20 @@ func (d *DiskCache) pathForFile(path string) string {
 	)
 }
 
+var ErrNotCacheFile = errorStr("not a cache file")
+
+func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
+	path, err := filepath.Rel(d.path, diskPath)
+	if err != nil {
+		return "", err
+	}
+	dir, file := filepath.Split(path)
+	if file != fmt.Sprintf("full%s", cacheFileSuffix) {
+		return "", ErrNotCacheFile
+	}
+	return fromOSPath(dir), nil
+}
+
 func (d *DiskCache) waitUpdateComplete(path string) {
 	d.updatingPaths.L.Lock()
 	for d.updatingPaths.m[path] {
@@ -475,9 +527,13 @@ func (d *DiskCache) startUpdate(path string) (done func()) {
 
 var _ FileCache = new(DiskCache)
 
-func (d *DiskCache) SetFile(ctx context.Context, path string, content []byte) error {
+func (d *DiskCache) SetFile(
+	ctx context.Context,
+	path string,
+	openReader func(context.Context) (io.ReadCloser, error),
+) error {
 	diskPath := d.pathForFile(path)
-	_, err := d.writeFile(ctx, diskPath, content)
+	_, err := d.writeFile(ctx, diskPath, openReader)
 	if err != nil {
 		return err
 	}

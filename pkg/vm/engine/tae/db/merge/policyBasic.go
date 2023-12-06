@@ -15,13 +15,16 @@
 package merge
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var (
@@ -30,17 +33,19 @@ var (
 )
 
 type BasicPolicyConfig struct {
-	ObjectMinRows  int
-	MergeMaxOneRun int
+	ObjectMinRows    int
+	MergeMaxOneRun   int
+	MaxRowsMergedObj int
+	MergeHints       []api.MergeHint
 }
 
 func (c *BasicPolicyConfig) String() string {
-	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d", c.ObjectMinRows, c.MergeMaxOneRun)
+	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d, hints: %v", c.ObjectMinRows, c.MergeMaxOneRun, c.MergeHints)
 }
 
 type customConfigProvider struct {
 	sync.Mutex
-	configs map[uint64]*BasicPolicyConfig
+	configs map[uint64]*BasicPolicyConfig // works like a cache
 }
 
 func NewCustomConfigProvider() *customConfigProvider {
@@ -49,17 +54,35 @@ func NewCustomConfigProvider() *customConfigProvider {
 	}
 }
 
-func (o *customConfigProvider) GetConfig(id uint64) *BasicPolicyConfig {
+func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
 	o.Lock()
 	defer o.Unlock()
-	return o.configs[id]
+	p, ok := o.configs[tbl.ID]
+	if !ok {
+		extra := tbl.GetLastestSchema().Extra
+		if extra.MaxObjOnerun != 0 || extra.MinRowsQuailifed != 0 {
+			p = &BasicPolicyConfig{
+				ObjectMinRows:    int(extra.MinRowsQuailifed),
+				MergeMaxOneRun:   int(extra.MaxObjOnerun),
+				MaxRowsMergedObj: int(extra.MaxRowsMergedObj),
+				MergeHints:       extra.Hints,
+			}
+			o.configs[tbl.ID] = p
+		}
+	}
+	return p
 }
 
-func (o *customConfigProvider) SetConfig(id uint64, c *BasicPolicyConfig) {
+func (o *customConfigProvider) InvalidCache(tbl *catalog.TableEntry) {
 	o.Lock()
 	defer o.Unlock()
-	o.configs[id] = c
-	logutil.Infof("mergeblocks config map: %v", o.configs)
+	delete(o.configs, tbl.ID)
+}
+
+func (o *customConfigProvider) SetCache(tbl *catalog.TableEntry, cfg *BasicPolicyConfig) {
+	o.Lock()
+	defer o.Unlock()
+	o.configs[tbl.ID] = cfg
 }
 
 func (o *customConfigProvider) ResetConfig() {
@@ -91,13 +114,13 @@ func NewBasicPolicy() *Basic {
 
 // impl Policy for Basic
 func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
-	rowsLeftOnSeg := obj.Stat.RemainingRows
+	rowsLeftOnSeg := obj.Stat.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
 		if rowsLeftOnSeg < o.config.ObjectMinRows {
 			return true
 		}
-		if rowsLeftOnSeg < obj.Stat.Rows/2 {
+		if rowsLeftOnSeg < obj.Stat.GetRows()/2 {
 			return true
 		}
 		return false
@@ -111,17 +134,32 @@ func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
 	}
 }
 
-func (o *Basic) Config(id uint64, c any) {
-	if id == 0 {
-		o.configProvider.ResetConfig()
+func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c any) {
+	txn := f()
+	if tbl == nil || txn == nil {
+		return
+	}
+	db, err := txn.GetDatabaseByID(tbl.GetDB().ID)
+	if err != nil {
+		return
+	}
+	tblHandle, err := db.GetRelationByID(tbl.ID)
+	if err != nil {
 		return
 	}
 	cfg := c.(*BasicPolicyConfig)
-	o.configProvider.SetConfig(id, cfg)
+	ctx := context.Background()
+	tblHandle.AlterTable(
+		ctx,
+		api.NewUpdatePolicyReq(cfg.ObjectMinRows, cfg.MergeMaxOneRun, cfg.MaxRowsMergedObj, cfg.MergeHints...),
+	)
+	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchema().Name, cfg)
+	txn.Commit(ctx)
+	o.configProvider.InvalidCache(tbl)
 }
 
-func (o *Basic) GetConfig(id uint64) any {
-	r := o.configProvider.GetConfig(id)
+func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
+	r := o.configProvider.GetConfig(tbl)
 	if r == nil {
 		r = &BasicPolicyConfig{
 			ObjectMinRows:  int(common.RuntimeMinRowsQualified.Load()),
@@ -134,7 +172,7 @@ func (o *Basic) GetConfig(id uint64) any {
 func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	segs := o.objHeap.finish()
 	sort.Slice(segs, func(i, j int) bool {
-		return segs[i].Stat.RemainingRows < segs[j].Stat.RemainingRows
+		return segs[i].Stat.GetRemainingRows() < segs[j].Stat.GetRemainingRows()
 	})
 	segs = o.controlMem(segs, mem)
 	segs = o.optimize(segs)
@@ -145,7 +183,7 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 	// segs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, seg := range segs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.RemainingRows)
+		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.GetRemainingRows())
 	}
 	acc := o.accBuf
 
@@ -200,18 +238,18 @@ func (o *Basic) controlMem(segs []*catalog.SegmentEntry, mem int64) []*catalog.S
 	return segs
 }
 
-func (o *Basic) ResetForTable(id uint64, entry *catalog.TableEntry) {
-	o.id = id
+func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
+	o.id = entry.ID
 	o.schema = entry.GetLastestSchema()
 	o.hist = entry.Stats.GetLastMerge()
 	o.objHeap.reset()
-	o.config = o.configProvider.GetConfig(id)
+	o.config = o.configProvider.GetConfig(entry)
 	if o.config == nil && o.schema.Name == "rawlog" {
 		o.config = &BasicPolicyConfig{
 			ObjectMinRows:  500000,
 			MergeMaxOneRun: 512,
 		}
-		o.configProvider.SetConfig(id, o.config)
+		o.configProvider.SetCache(entry, o.config)
 	}
 	if o.config == nil {
 		o.config = defaultBasicConfig

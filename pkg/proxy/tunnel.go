@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -162,11 +163,13 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx); err != nil {
+			v2.ProxyClientDisconnectCounter.Inc()
 			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx); err != nil {
+			v2.ProxyServerDisconnectCounter.Inc()
 			t.setError(withCode(err, codeServerDisconnect))
 		}
 	}()
@@ -235,10 +238,20 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	start := time.Now()
 	defer func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.mu.inTransfer = false
+
+		duration := time.Since(start)
+		if duration > time.Second {
+			t.logger.Info("slow transfer for tunnel",
+				zap.Any("tunnel", t),
+				zap.Duration("transfer duration", duration),
+			)
+		}
+		v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)

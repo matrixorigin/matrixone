@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type ScannerOp interface {
@@ -134,6 +134,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 		executor:      merge.NewMergeExecutor(db.Runtime),
 	}
 
+	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
 	op.BlockFn = op.onBlock
 	op.SegmentFn = op.onSegment
@@ -158,12 +159,17 @@ func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, segs []*cata
 	return s.executor.ManuallyExecute(entry, segs)
 }
 
-func (s *MergeTaskBuilder) ConfigPolicy(id uint64, c any) {
-	s.objPolicy.Config(id, c)
+func (s *MergeTaskBuilder) ConfigPolicy(tbl *catalog.TableEntry, c any) {
+	f := func() txnif.AsyncTxn {
+		txn, _ := s.db.StartTxn(nil)
+		return txn
+	}
+
+	s.objPolicy.SetConfig(tbl, f, c)
 }
 
-func (s *MergeTaskBuilder) GetPolicy(id uint64) any {
-	return s.objPolicy.GetConfig(id)
+func (s *MergeTaskBuilder) GetPolicy(tbl *catalog.TableEntry) any {
+	return s.objPolicy.GetConfig(tbl)
 }
 
 func (s *MergeTaskBuilder) trySchedMergeTask() {
@@ -183,7 +189,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.name = entry.GetLastestSchema().Name
 	}
 	s.segmentHelper.reset()
-	s.objPolicy.ResetForTable(entry.ID, entry)
+	s.objPolicy.ResetForTable(entry)
 }
 
 func (s *MergeTaskBuilder) PreExecute() error {
@@ -196,6 +202,15 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	logutil.Infof("mergeblocks ------------------------------------")
 	return nil
 }
+func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
+	if merge.StopMerge.Load() {
+		return moerr.GetOkStopCurrRecur()
+	}
+	if s.executor.MemAvailBytes() < 100*1024*1024 {
+		return moerr.GetOkStopCurrRecur()
+	}
+	return
+}
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if s.suspend.Load() {
@@ -204,7 +219,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 	s.suspendCnt.Store(0)
 	if !tableEntry.IsActive() {
-		err = moerr.GetOkStopCurrRecur()
+		return moerr.GetOkStopCurrRecur()
 	}
 	s.resetForTable(tableEntry)
 	return
@@ -245,22 +260,15 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 		return nil
 	}
 	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
-	seg.Stat.Rows = s.segmentHelper.segRowCnt
-	seg.Stat.RemainingRows = s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel
-	if !seg.Stat.Loaded {
+	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
+	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
+
+	if !seg.Stat.GetLoaded() {
 		s.loaded += 1
 	}
+
 	seg.LoadObjectInfo()
-	if seg.Stat.OriginSize == 0 {
-		// after loading object info, original size is still 0, we have to estimate it by experience
-		if s.name == motrace.RawLogTbl {
-			factor := 1 + seg.Stat.Rows/1600
-			seg.Stat.OriginSize = (1 << 20) * factor
-		} else if s.name == "mixed_daily" {
-			factor := 1 + seg.Stat.Rows/10000
-			seg.Stat.OriginSize = (1 << 20) * factor
-		}
-	}
+
 	s.objPolicy.OnObject(seg)
 	return nil
 }

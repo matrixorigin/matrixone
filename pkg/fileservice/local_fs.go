@@ -228,15 +228,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
-	var r io.Reader
-	r = newIOEntriesReader(ctx, vector.Entries)
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		r = io.TeeReader(r, h)
-		defer func() {
-			*vector.Hash.Sum = h.Sum(nil)
-		}()
-	}
+	r := newIOEntriesReader(ctx, vector.Entries)
 
 	var buf []byte
 	putBuf := ioBufferPool.Get(&buf)
@@ -675,6 +667,10 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 		IsDir: false,
 		Size:  contentSize,
 	}, nil
+}
+
+func (l *LocalFS) PrefetchFile(ctx context.Context, filePath string) error {
+	return nil
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {

@@ -22,12 +22,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
 	txnPool = sync.Pool{New: func() any {
 		return &activeTxn{holdLocks: make(map[uint64]*cowSlice)}
 	}}
+
+	parallelUnlockTables = 2
 )
 
 // activeTxn one goroutine write, multi goroutine read
@@ -117,7 +121,9 @@ func (txn *activeTxn) close(
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
-	// TODO(fagongzi): parallel unlock
+	n := len(txn.holdLocks)
+	var wg sync.WaitGroup
+	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
 		if err != nil {
@@ -132,17 +138,46 @@ func (txn *activeTxn) close(
 			continue
 		}
 
-		logTxnUnlockTable(
-			serviceID,
-			txn,
-			table)
-		l.unlock(txn, cs, commitTS)
-		logTxnUnlockTableCompleted(
-			serviceID,
-			txn,
-			table,
-			cs)
-		cs.close()
+		fn := func(table uint64, cs *cowSlice) func() {
+			return func() {
+				logTxnUnlockTable(
+					serviceID,
+					txn,
+					table)
+				l.unlock(txn, cs, commitTS)
+				if n > parallelUnlockTables {
+					wg.Done()
+				}
+			}
+		}
+
+		if n > parallelUnlockTables {
+			wg.Add(1)
+			ants.Submit(fn(table, cs))
+		} else {
+			fn(table, cs)()
+			logTxnUnlockTableCompleted(
+				serviceID,
+				txn,
+				table,
+				cs)
+			cs.close()
+		}
+	}
+
+	if n > parallelUnlockTables {
+		wg.Wait()
+		for table, cs := range txn.holdLocks {
+			logTxnUnlockTableCompleted(
+				serviceID,
+				txn,
+				table,
+				cs)
+			cs.close()
+		}
+	}
+
+	for table := range txn.holdLocks {
 		delete(txn.holdLocks, table)
 	}
 	txn.txnID = nil

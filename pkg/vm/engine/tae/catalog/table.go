@@ -308,10 +308,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			continue
 		}
 		cnt++
-		if segment.Stat.Loaded {
+		if segment.Stat.GetLoaded() {
 			loadedCnt++
-			rows += int(segment.Stat.Rows)
-			osize += int(segment.Stat.OriginSize)
+			rows += int(segment.Stat.GetRows())
+			osize += int(segment.Stat.GetOriginSize())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
@@ -319,6 +319,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+		}
+		if w.Len() > 8*1024*1024 {
+			w.WriteString("\n...(truncated for too long, more than 8 MB)")
+			break
 		}
 	}
 	if level > common.PPL0 && cnt > 0 {
@@ -581,11 +585,18 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
+		var hints []apipb.MergeHint
+		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+			NextColSeqnum:    newSchema.Extra.NextColSeqnum,
+			MinRowsQuailifed: newSchema.Extra.MinRowsQuailifed,
+			MaxObjOnerun:     newSchema.Extra.MaxObjOnerun,
+			MaxRowsMergedObj: newSchema.Extra.MaxRowsMergedObj,
+			Hints:            hints,
 		}
+
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
