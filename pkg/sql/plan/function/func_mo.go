@@ -66,11 +66,11 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
-			ctx := proc.Ctx
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 			}
+			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
 				return err
@@ -160,14 +160,14 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 		} else {
 			var rel engine.Relation
-			ctx := proc.Ctx
 			dbStr := functionUtil.QuickBytesToStr(db)
 			tblStr := functionUtil.QuickBytesToStr(tbl)
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 			}
+			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
 				return err
@@ -281,20 +281,26 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
 			}
 
-			db, err := e.Database(proc.Ctx, dbStr, txn)
+			if isClusterTable(dbStr, tableStr) {
+				//if it is the cluster table in the general account, switch into the sys account
+				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			}
+			ctx := proc.Ctx
+
+			db, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
 				return err
 			}
-			rel, err := db.Relation(proc.Ctx, tableStr, nil)
+			rel, err := db.Relation(ctx, tableStr, nil)
 			if err != nil {
 				return err
 			}
-			tableColumns, err := rel.TableColumns(proc.Ctx)
+			tableColumns, err := rel.TableColumns(ctx)
 			if err != nil {
 				return err
 			}
 
-			ranges, err := rel.Ranges(proc.Ctx, nil)
+			ranges, err := rel.Ranges(ctx, nil)
 			if err != nil {
 				return err
 			}
@@ -305,7 +311,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				getValueFailed = true
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
-				tValues, _, er := rel.MaxAndMinValues(proc.Ctx)
+				tValues, _, er := rel.MaxAndMinValues(ctx)
 				if er != nil {
 					return er
 				}
