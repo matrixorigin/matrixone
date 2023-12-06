@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	goruntime "runtime"
 	"runtime/debug"
 	"sync"
 
@@ -215,6 +216,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	}
 }
 
+func generateCPUNumber(cpunum, blocks int) int {
+	if cpunum <= 0 || blocks <= 0 {
+		return 1
+	}
+
+	if cpunum <= blocks {
+		return cpunum
+	}
+	return blocks
+}
+
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
@@ -230,7 +242,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 
-	mcpu := s.NodeInfo.Mcpu
 	var err error
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
@@ -330,6 +341,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 		}
 	}
+
+	mcpu := generateCPUNumber(goruntime.NumCPU(), len(s.NodeInfo.Data))
 
 	switch {
 	case remote:
