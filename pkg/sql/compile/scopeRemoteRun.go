@@ -102,7 +102,7 @@ import (
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
-// The message is always *pipeline.Message here. It's a byte array encoded by method encodeScope.
+// the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 func CnServerMessageHandler(
 	ctx context.Context,
 	cnAddr string,
@@ -136,7 +136,7 @@ func CnServerMessageHandler(
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
 		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
 
-	// rebuild pipeline to run and send the query result back.
+	// rebuild pipeline to run and send query result back.
 	err = cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
@@ -313,32 +313,47 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 		valueScanOperator.Free(s.Proc, false, err)
 	}
-
+	// for {
+	// 	ok, err := lastArg.Call(s.Proc)
+	// 	if err != nil {
+	// 		valueScanOperator.Free(s.Proc, false, err)
+	// 		return err
+	// 	}
+	// 	if ok.Status == vm.ExecStop {
+	// 		break
+	// 	}
+	// }
+	// valueScanOperator.Free(s.Proc, false, err)
 	return nil
 }
 
-// remoteRun sends a scope for remote running and receives the results.
-// The back result message is always *pipeline.Message contains three cases.
+// remoteRun sends a scope for remote running and receive the results.
+// the back result message is always *pipeline.Message contains three cases.
 // 1. Message with error information
-// 2. Message with an end flag and analysis result
+// 2. Message with end flag and analysis result
 // 3. Batch Message with batch data
-func (s *Scope) remoteRun(c *Compile) (err error) {
-	// encode the scope but without the last operator.
-	// the last operator will be executed on the current node for receiving the result and send them to the next pipeline.
+func (s *Scope) remoteRun(c *Compile) error {
+	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
 	lastIdx := len(s.Instructions) - 1
 	lastInstruction := s.Instructions[lastIdx]
+	s.Instructions = s.Instructions[:lastIdx]
 
-	if lastInstruction.Op == vm.Connector || lastInstruction.Op == vm.Dispatch {
-		if err = lastInstruction.Arg.Prepare(s.Proc); err != nil {
-			return err
-		}
-	} else {
+	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
+	// i.e. we need to call the corresponding Perpare, Call and Free manually.
+	// Prepare and Free are called in this func, and Call in receiveMessageFromCnServer
+	lastArg := lastInstruction.Arg
+	switch arg := lastArg.(type) {
+	case *connector.Argument:
+		arg.Prepare(s.Proc)
+	case *dispatch.Argument:
+		arg.Prepare(s.Proc)
+	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
-	s.Instructions = s.Instructions[:lastIdx]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
+		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -346,21 +361,26 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
+		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.Method_PipelineMessage)
 	if err != nil {
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
-	return receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	lastArg.Free(s.Proc, err != nil, err)
+	return err
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -696,7 +716,6 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 }
 
 // convert vm.Instruction to pipeline.Instruction
-// todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
 	var err error
 
