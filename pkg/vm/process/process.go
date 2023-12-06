@@ -122,12 +122,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 }
 
 func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
-	for len(wreg.Ch) > 0 {
-		bat := <-wreg.Ch
-		if bat != nil {
-			bat.Clean(m)
-		}
-	}
 }
 
 func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {

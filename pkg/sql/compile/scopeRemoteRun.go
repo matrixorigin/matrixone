@@ -125,6 +125,7 @@ func CnServerMessageHandler(
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
+		cs.SafeClose(ctx)
 	}()
 
 	msg, ok := message.(*pipeline.Message)
