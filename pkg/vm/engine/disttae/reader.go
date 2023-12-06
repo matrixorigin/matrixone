@@ -373,7 +373,7 @@ func (r *blockReader) Read(
 			r.filterState.seqnums,
 			r.filterState.colTypes,
 			filter,
-			r.fs, mp, vp, fileservice.Policy(0),
+			r.fs, mp, vp,
 		)
 	}
 
