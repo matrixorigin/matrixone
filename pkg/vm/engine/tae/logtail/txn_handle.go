@@ -109,24 +109,24 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 	return logtails, b.Close
 }
 
-func (b *TxnLogtailRespBuilder) visitObject(iseg any) {
-	seg := iseg.(*catalog.ObjectEntry)
-	node := seg.GetLatestNodeLocked()
-	if seg.IsAppendable() && node.BaseNode.IsEmpty() {
+func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
+	obj := iobj.(*catalog.ObjectEntry)
+	node := obj.GetLatestNodeLocked()
+	if obj.IsAppendable() && node.BaseNode.IsEmpty() {
 		return
 	}
 	if !node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[objectInfoBatch] == nil {
 			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 		}
-		visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+		visitObject(b.batches[objectInfoBatch], obj, node, true, b.txn.GetPrepareTS())
 		return
 	}
 
 	if b.batches[objectInfoBatch] == nil {
 		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
-	visitObject(b.batches[objectInfoBatch], seg, node, true, b.txn.GetPrepareTS())
+	visitObject(b.batches[objectInfoBatch], obj, node, true, b.txn.GetPrepareTS())
 }
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {

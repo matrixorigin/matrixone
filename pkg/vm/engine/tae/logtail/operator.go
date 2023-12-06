@@ -71,20 +71,20 @@ func (c *BoundTableOperator) processTableData() error {
 		return err
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
-	for _, dirtySeg := range dirty.Objs {
-		seg, err := tbl.GetObjectByID(dirtySeg.ID)
+	for _, dirtyObj := range dirty.Objs {
+		obj, err := tbl.GetObjectByID(dirtyObj.ID)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
 			}
 			return err
 		}
-		if err = c.visitor.OnObject(seg); err != nil {
+		if err = c.visitor.OnObject(obj); err != nil {
 			return err
 		}
-		for id := range dirtySeg.Blks {
-			bid := objectio.NewBlockidWithObjectID(dirtySeg.ID, id)
-			blk, err := seg.GetBlockEntryByID(bid)
+		for id := range dirtyObj.Blks {
+			bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
+			blk, err := obj.GetBlockEntryByID(bid)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					continue

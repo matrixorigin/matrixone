@@ -52,11 +52,11 @@ type ObjectWriter interface {
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
 
-	// create a appendable block, its id will be <segid>-<nextObjectid>-0
+	// create a appendable block, its id will be <objid>-<nextObjectid>-0
 	CreateBlock(bool) (Block, error)
 	// create a non-appendable block, instructed by CreateBlockOpt.
 	// CreateBlockOpt can be nil, and the created block's id
-	// will be <segid>-<nextObjectid>-0
+	// will be <objid>-<nextObjectid>-0
 	CreateNonAppendableBlock(*objectio.CreateBlockOpt) (Block, error)
 
 	SoftDeleteBlock(id types.Blockid) (err error)

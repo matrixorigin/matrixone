@@ -94,10 +94,10 @@ func fillUsageBat(collector *BaseCollector, entry *catalog.ObjectEntry, mp *mpoo
 	accId := uint64(entry.GetTable().GetDB().GetTenantID())
 	dbId := entry.GetTable().GetDB().GetID()
 	tblId := entry.GetTable().GetID()
-	segId := entry.ID.Segment()
+	objId := entry.ID.Segment()
 	appendTo := func(size uint64) {
 		appendToStorageUsageVectors(
-			UsageData{accId, dbId, tblId, *segId, size},
+			UsageData{accId, dbId, tblId, *objId, size},
 			vecs,
 			mp,
 		)
@@ -205,13 +205,13 @@ func traverseCatalog(
 	mp *mpool.MPool,
 ) (loaded int) {
 	processor := new(catalog.LoopProcessor)
-	var segs []*catalog.ObjectEntry
+	var objs []*catalog.ObjectEntry
 
 	// need to accelerate the load process through prefetch,
 	// so we collect valid Objects first
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
 		if checkObject(entry, collector) {
-			segs = append(segs, entry)
+			objs = append(objs, entry)
 		}
 		return nil
 	}
@@ -222,9 +222,9 @@ func traverseCatalog(
 	// of the prefetch cache
 	batchCnt := 100
 	i := 0
-	for idx := 1; idx <= len(segs); idx++ {
+	for idx := 1; idx <= len(objs); idx++ {
 		// prefetch obj meta
-		blk := segs[idx-1].GetFirstBlkEntry()
+		blk := objs[idx-1].GetFirstBlkEntry()
 		if blk != nil && len(blk.GetMetaLoc()) != 0 {
 			loaded++
 			blockio.PrefetchMeta(fs, blk.GetMetaLoc())
@@ -232,14 +232,14 @@ func traverseCatalog(
 
 		// deal with the previously prefetched batch
 		for idx%batchCnt == 0 && i < idx {
-			fillUsageBat(collector, segs[i], mp)
+			fillUsageBat(collector, objs[i], mp)
 			i++
 		}
 	}
 
 	// deal with the left Objects
-	for ; i < len(segs); i++ {
-		fillUsageBat(collector, segs[i], mp)
+	for ; i < len(objs); i++ {
+		fillUsageBat(collector, objs[i], mp)
 	}
 
 	return loaded

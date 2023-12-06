@@ -226,13 +226,13 @@ func ForEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func ForEachObject(rel handle.Relation, fn func(seg handle.Object) error) {
+func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
 	it := rel.MakeObjectIt()
 	var err error
 	for it.Valid() {
-		seg := it.GetObject()
-		defer seg.Close()
-		if err = fn(seg); err != nil {
+		obj := it.GetObject()
+		defer obj.Close()
+		if err = fn(obj); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
 				return
 			} else {
@@ -316,22 +316,22 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
-	var segs []*catalog.ObjectEntry
-	segIt := rel.MakeObjectIt()
-	for segIt.Valid() {
-		seg := segIt.GetObject().GetMeta().(*catalog.ObjectEntry)
-		if !seg.IsAppendable() {
-			segs = append(segs, seg)
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt()
+	for objIt.Valid() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	_ = txn.Commit(context.Background())
-	for _, seg := range segs {
+	for _, obj := range objs {
 		txn, _ = e.StartTxn(nil)
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetObject(&seg.ID)
+		objHandle, err := rel.GetObject(&obj.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback(context.Background())
@@ -340,14 +340,14 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
 		}
 		var metas []*catalog.BlockEntry
-		it := segHandle.MakeBlockIt()
+		it := objHandle.MakeBlockIt()
 		for it.Valid() {
 			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 			metas = append(metas, meta)
 			it.Next()
 		}
-		segsToMerge := []*catalog.ObjectEntry{segHandle.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
+		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, objsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue

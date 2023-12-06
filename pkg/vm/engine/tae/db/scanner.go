@@ -49,7 +49,7 @@ type dbScanner struct {
 	errHandler ErrHandler
 	dbmask     *roaring.Bitmap
 	tablemask  *roaring.Bitmap
-	segmask    *roaring.Bitmap
+	objmask    *roaring.Bitmap
 }
 
 func (scanner *dbScanner) OnStopped() {
@@ -59,7 +59,7 @@ func (scanner *dbScanner) OnStopped() {
 func (scanner *dbScanner) OnExec() {
 	scanner.dbmask.Clear()
 	scanner.tablemask.Clear()
-	scanner.segmask.Clear()
+	scanner.objmask.Clear()
 	dbutils.PrintMemStats()
 
 	// compact logtail table
@@ -93,7 +93,7 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 		errHandler:    errHandler,
 		dbmask:        roaring.New(),
 		tablemask:     roaring.New(),
-		segmask:       roaring.New(),
+		objmask:       roaring.New(),
 	}
 	scanner.BlockFn = scanner.onBlock
 	scanner.ObjectFn = scanner.onObject
@@ -150,21 +150,21 @@ func (scanner *dbScanner) onPostDatabase(entry *catalog.DBEntry) (err error) {
 }
 
 func (scanner *dbScanner) onObject(entry *catalog.ObjectEntry) (err error) {
-	scanner.segmask.Clear()
+	scanner.objmask.Clear()
 	for i, op := range scanner.ops {
 		if scanner.tablemask.Contains(uint32(i)) {
-			scanner.segmask.Add(uint32(i))
+			scanner.objmask.Add(uint32(i))
 			continue
 		}
 		err = op.OnObject(entry)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.segmask.Add(uint32(i))
+			scanner.objmask.Add(uint32(i))
 		}
 		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
 			break
 		}
 	}
-	if scanner.segmask.GetCardinality() == uint64(len(scanner.ops)) {
+	if scanner.objmask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
 	}
 	return
