@@ -16,7 +16,6 @@ package db
 
 import (
 	"context"
-	fmt "fmt"
 	"path"
 	"sync/atomic"
 	"time"
