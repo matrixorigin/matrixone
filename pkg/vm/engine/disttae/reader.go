@@ -357,18 +357,26 @@ func (r *blockReader) Read(
 	}
 
 	// read the block
-	var policy fileservice.Policy
+	var bat *batch.Batch
+	var err error
 	if r.scanType == LARGE {
-		policy = fileservice.SkipMemoryCacheWrites
-		logutil.Infof("large scan!!!!!!!!!!!")
+		bat, err = blockio.BlockRead(
+			statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+			r.filterState.seqnums,
+			r.filterState.colTypes,
+			filter,
+			r.fs, mp, vp, fileservice.SkipMemoryCacheWrites,
+		)
+	} else {
+		bat, err = blockio.BlockRead(
+			statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+			r.filterState.seqnums,
+			r.filterState.colTypes,
+			filter,
+			r.fs, mp, vp,
+		)
 	}
-	bat, err := blockio.BlockRead(
-		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
-		r.filterState.seqnums,
-		r.filterState.colTypes,
-		filter,
-		r.fs, mp, vp, policy,
-	)
+
 	if err != nil {
 		return nil, err
 	}
