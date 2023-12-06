@@ -9236,6 +9236,7 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 			if sv, ok := gSysVarsDefs[variableName]; ok {
 				val, err = sv.GetType().ConvertFromString(variableValue)
 				if err != nil {
+					logError(ses, ses.GetDebugString(), err.Error(), zap.String("variable name:", variableName), zap.String("convert from variable value:", variableValue))
 					return nil, err
 				}
 				sysVars[variableName] = val
@@ -9275,6 +9276,9 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 
 			accountId = tenantInfo.GetTenantID()
 			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
+			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
+				logInfo(ses, ses.GetDebugString(), "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
+			}
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err

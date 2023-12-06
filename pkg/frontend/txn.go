@@ -17,8 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -157,6 +158,22 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		opts = append(opts,
 			client.WithUserTxn())
 	}
+
+	if th.ses != nil {
+		varVal, err := th.ses.GetSessionVar("transaction_operator_open_log")
+		if err != nil {
+			return nil, nil, err
+		}
+		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("transaction_operator_open_log"); ok {
+			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
+				if svbt.IsTrue(varVal) {
+					opts = append(opts, client.WithTxnOpenLog())
+				}
+			}
+		}
+
+	}
+
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),
