@@ -362,6 +362,14 @@ func (o *testOperator) IsRetry() bool {
 	panic("unimplemented")
 }
 
+func (o *testOperator) SetOpenLog(retry bool) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) IsOpenLog() bool {
+	panic("unimplemented")
+}
+
 func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
 	panic("unimplemented")
 }
