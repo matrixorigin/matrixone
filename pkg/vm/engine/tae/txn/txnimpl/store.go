@@ -376,7 +376,7 @@ func (store *txnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
-	visitObject func(seg any),
+	visitObject func(obj any),
 	visitAppend func(bat any),
 	visitDelete func(ctx context.Context, vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
@@ -505,7 +505,7 @@ func (store *txnStore) GetRelationByID(dbId uint64, id uint64) (relation handle.
 	return db.GetRelationByID(id)
 }
 
-func (store *txnStore) GetObject(id *common.ID) (seg handle.Object, err error) {
+func (store *txnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
@@ -513,7 +513,7 @@ func (store *txnStore) GetObject(id *common.ID) (seg handle.Object, err error) {
 	return db.GetObject(id)
 }
 
-func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (seg handle.Object, err error) {
+func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -521,7 +521,7 @@ func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (seg handle.Ob
 	return db.CreateObject(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool) (seg handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return

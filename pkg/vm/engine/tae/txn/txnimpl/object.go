@@ -30,7 +30,7 @@ import (
 // var putObjectCnt atomic.Int64
 // func GetStatsString() string {
 // 	return fmt.Sprintf(
-// 		"NewSeg: %d, GetSeg: %d, PutSeg: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
+// 		"NewObj: %d, GetObj: %d, PutObj: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
 // 		newObjectCnt.Load(),
 // 		getObjectCnt.Load(),
 // 		putObjectCnt.Load(),
@@ -40,7 +40,7 @@ import (
 // }
 
 var (
-	_segPool = sync.Pool{
+	_objPool = sync.Pool{
 		New: func() any {
 			// newObjectCnt.Add(1)
 			return &txnObject{}
@@ -193,66 +193,66 @@ func (cit *composedObjectIt) Next() {
 }
 
 func newObject(table *txnTable, meta *catalog.ObjectEntry) *txnObject {
-	seg := _segPool.Get().(*txnObject)
+	obj := _objPool.Get().(*txnObject)
 	// getObjectCnt.Add(1)
-	seg.Txn = table.store.txn
-	seg.table = table
-	seg.entry = meta
-	return seg
+	obj.Txn = table.store.txn
+	obj.table = table
+	obj.entry = meta
+	return obj
 }
 
-func (seg *txnObject) reset() {
-	seg.entry = nil
-	seg.table = nil
-	seg.TxnObject.Reset()
+func (obj *txnObject) reset() {
+	obj.entry = nil
+	obj.table = nil
+	obj.TxnObject.Reset()
 }
 
-func (seg *txnObject) Close() (err error) {
-	seg.reset()
-	_segPool.Put(seg)
+func (obj *txnObject) Close() (err error) {
+	obj.reset()
+	_objPool.Put(obj)
 	// putObjectCnt.Add(1)
 	return
 }
 
-func (seg *txnObject) GetMeta() any           { return seg.entry }
-func (seg *txnObject) String() string         { return seg.entry.String() }
-func (seg *txnObject) GetID() *types.Objectid { return &seg.entry.ID }
-func (seg *txnObject) MakeBlockIt() (it handle.BlockIt) {
-	return newBlockIt(seg.table, seg.entry)
+func (obj *txnObject) GetMeta() any           { return obj.entry }
+func (obj *txnObject) String() string         { return obj.entry.String() }
+func (obj *txnObject) GetID() *types.Objectid { return &obj.entry.ID }
+func (obj *txnObject) MakeBlockIt() (it handle.BlockIt) {
+	return newBlockIt(obj.table, obj.entry)
 }
 
-func (seg *txnObject) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.entry.AsCommonID(), opts)
+func (obj *txnObject) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+	return obj.Txn.GetStore().CreateNonAppendableBlock(obj.entry.AsCommonID(), opts)
 }
 
-func (seg *txnObject) IsUncommitted() bool {
-	return seg.entry.IsLocal
+func (obj *txnObject) IsUncommitted() bool {
+	return obj.entry.IsLocal
 }
 
-func (seg *txnObject) IsAppendable() bool { return seg.entry.IsAppendable() }
+func (obj *txnObject) IsAppendable() bool { return obj.entry.IsAppendable() }
 
-func (seg *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
-	fp := seg.entry.AsCommonID()
+func (obj *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
+	fp := obj.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().SoftDeleteBlock(fp)
+	return obj.Txn.GetStore().SoftDeleteBlock(fp)
 }
 
-func (seg *txnObject) GetRelation() (rel handle.Relation) {
-	return newRelation(seg.table)
+func (obj *txnObject) GetRelation() (rel handle.Relation) {
+	return newRelation(obj.table)
 }
 
-func (seg *txnObject) GetBlock(id types.Blockid) (blk handle.Block, err error) {
-	fp := seg.entry.AsCommonID()
+func (obj *txnObject) GetBlock(id types.Blockid) (blk handle.Block, err error) {
+	fp := obj.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().GetBlock(fp)
+	return obj.Txn.GetStore().GetBlock(fp)
 }
 
-func (seg *txnObject) CreateBlock(is1PC bool) (blk handle.Block, err error) {
-	id := seg.entry.AsCommonID()
-	return seg.Txn.GetStore().CreateBlock(id, is1PC)
+func (obj *txnObject) CreateBlock(is1PC bool) (blk handle.Block, err error) {
+	id := obj.entry.AsCommonID()
+	return obj.Txn.GetStore().CreateBlock(id, is1PC)
 }
 
-func (seg *txnObject) UpdateStats(stats objectio.ObjectStats) error {
-	id := seg.entry.AsCommonID()
-	return seg.Txn.GetStore().UpdateObjectStats(id, &stats)
+func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
+	id := obj.entry.AsCommonID()
+	return obj.Txn.GetStore().UpdateObjectStats(id, &stats)
 }

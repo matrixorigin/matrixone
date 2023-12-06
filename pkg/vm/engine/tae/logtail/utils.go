@@ -1086,10 +1086,10 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 			}
 		}
 
-		segStart := vector.GetFixedAt[int32](segDelStart, i)
-		segEnd := vector.GetFixedAt[int32](segDelEnd, i)
-		if segStart < segEnd {
-			segLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), SEGDeleteIDX, uint64(segStart), uint64(segEnd))
+		objStart := vector.GetFixedAt[int32](segDelStart, i)
+		objEnd := vector.GetFixedAt[int32](segDelEnd, i)
+		if objStart < objEnd {
+			segLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), SEGDeleteIDX, uint64(objStart), uint64(objEnd))
 			err = vector.AppendAny(segVec, []byte(segLoc), false, m)
 			if err != nil {
 				return
@@ -2753,37 +2753,37 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	i := 0
 	for idx := 1; idx <= len(collector.Objects); idx++ {
 
-		seg := collector.Objects[idx-1]
-		blk := seg.GetFirstBlkEntry()
+		obj := collector.Objects[idx-1]
+		blk := obj.GetFirstBlkEntry()
 		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 
 		for idx%batchCnt == 0 && i < idx {
-			seg := collector.Objects[i]
-			seg.RLock()
-			mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
-			seg.RUnlock()
+			obj := collector.Objects[i]
+			obj.RLock()
+			mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
+			obj.RUnlock()
 			for _, node := range mvccNodes {
-				stats, err := seg.LoadObjectInfoWithTxnTS(node.Start)
+				stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
 				if err != nil {
 					return err
 				}
-				seg.SearchNode(node).BaseNode.ObjectStats = stats
+				obj.SearchNode(node).BaseNode.ObjectStats = stats
 
 			}
 			i++
 		}
 	}
 	for ; i < len(collector.Objects); i++ {
-		seg := collector.Objects[i]
-		seg.RLock()
-		mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
-		seg.RUnlock()
+		obj := collector.Objects[i]
+		obj.RLock()
+		mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
+		obj.RUnlock()
 		for _, node := range mvccNodes {
-			stats, err := seg.LoadObjectInfoWithTxnTS(node.Start)
+			stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
 			if err != nil {
 				return err
 			}
-			seg.SearchNode(node).BaseNode.ObjectStats = stats
+			obj.SearchNode(node).BaseNode.ObjectStats = stats
 
 		}
 	}
@@ -2810,8 +2810,8 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		} else {
 			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
 		}
-		segNode := node
-		if segNode.HasDropCommitted() {
+		objNode := node
+		if objNode.HasDropCommitted() {
 			vector.AppendFixed(
 				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
 				objectio.HackObjid2Rowid(&entry.ID),
@@ -2820,7 +2820,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 			)
 			vector.AppendFixed(
 				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-				segNode.GetEnd(),
+				objNode.GetEnd(),
 				false,
 				common.DefaultAllocator,
 			)

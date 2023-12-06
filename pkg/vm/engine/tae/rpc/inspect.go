@@ -281,7 +281,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 	if len(dedup) < 2 {
 		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
 	}
-	segs := make([]*catalog.ObjectEntry, 0, len(objects))
+	objs := make([]*catalog.ObjectEntry, 0, len(objects))
 	for o := range dedup {
 		parts := strings.Split(o, "_")
 		uid, err := types.ParseUuid(parts[0])
@@ -292,15 +292,15 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 		if err != nil {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
-		for _, seg := range objects {
-			if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
+		for _, obj := range objects {
+			if !obj.IsActive() || !obj.IsSorted() || obj.GetNextObjectIndex() != 1 {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
-			segs = append(segs, seg)
+			objs = append(objs, obj)
 		}
 	}
 
-	c.objects = segs
+	c.objects = objs
 	return nil
 }
 

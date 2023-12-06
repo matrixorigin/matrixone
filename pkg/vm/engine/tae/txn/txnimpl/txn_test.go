@@ -620,52 +620,52 @@ func TestObject1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	segIt := rel.MakeObjectIt()
+	objIt := rel.MakeObjectIt()
 	cnt := 0
-	for segIt.Valid() {
-		iseg := segIt.GetObject()
-		t.Log(iseg.String())
+	for objIt.Valid() {
+		iobj := objIt.GetObject()
+		t.Log(iobj.String())
 		cnt++
-		segIt.Next()
+		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
 	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 
-	segIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for segIt.Valid() {
-		iseg := segIt.GetObject()
-		t.Log(iseg.String())
+	for objIt.Valid() {
+		iobj := objIt.GetObject()
+		t.Log(iobj.String())
 		cnt++
-		segIt.Next()
+		objIt.Next()
 	}
 	assert.Equal(t, 2, cnt)
 
 	txn3, _ := mgr.StartTxn(nil)
 	db, _ = txn3.GetDatabase(name)
 	rel, _ = db.GetRelationByName(schema.Name)
-	segIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for segIt.Valid() {
-		iseg := segIt.GetObject()
-		t.Log(iseg.String())
+	for objIt.Valid() {
+		iobj := objIt.GetObject()
+		t.Log(iobj.String())
 		cnt++
-		segIt.Next()
+		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 
 	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
 
-	segIt = rel.MakeObjectIt()
+	objIt = rel.MakeObjectIt()
 	cnt = 0
-	for segIt.Valid() {
-		iseg := segIt.GetObject()
-		t.Log(iseg.String())
+	for objIt.Valid() {
+		iobj := objIt.GetObject()
+		t.Log(iobj.String())
 		cnt++
-		segIt.Next()
+		objIt.Next()
 	}
 	assert.Equal(t, 1, cnt)
 }
@@ -684,8 +684,8 @@ func TestObject2(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	segCnt := 10
-	for i := 0; i < segCnt; i++ {
+	objCnt := 10
+	for i := 0; i < objCnt; i++ {
 		_, err := rel.CreateObject(false)
 		assert.Nil(t, err)
 	}
@@ -694,10 +694,10 @@ func TestObject2(t *testing.T) {
 	cnt := 0
 	for it.Valid() {
 		cnt++
-		// iseg := it.GetObject()
+		// iobj := it.GetObject()
 		it.Next()
 	}
-	assert.Equal(t, segCnt, cnt)
+	assert.Equal(t, objCnt, cnt)
 	// err := txn1.Commit()
 	// assert.Nil(t, err)
 	t.Log(c.SimplePPString(common.PPL1))
@@ -717,15 +717,15 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateNonAppendableObject(false)
+	obj, _ := rel.CreateNonAppendableObject(false)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
+		_, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
 		assert.Nil(t, err)
 	}
 
-	it := seg.MakeBlockIt()
+	it := obj.MakeBlockIt()
 	cnt := 0
 	for it.Valid() {
 		cnt++
@@ -738,16 +738,16 @@ func TestBlock1(t *testing.T) {
 	txn2, _ := mgr.StartTxn(nil)
 	db, _ = txn2.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
-	segIt := rel.MakeObjectIt()
+	objIt := rel.MakeObjectIt()
 	cnt = 0
-	for segIt.Valid() {
-		seg = segIt.GetObject()
-		it = seg.MakeBlockIt()
+	for objIt.Valid() {
+		obj = objIt.GetObject()
+		it = obj.MakeBlockIt()
 		for it.Valid() {
 			cnt++
 			it.Next()
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	assert.Equal(t, blkCnt, cnt)
 }

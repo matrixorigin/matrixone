@@ -396,7 +396,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (tbl *txnTable) GetObject(id *types.Objectid) (seg handle.Object, err error) {
+func (tbl *txnTable) GetObject(id *types.Objectid) (obj handle.Object, err error) {
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.GetObjectByID(id); err != nil {
 		return
@@ -412,7 +412,7 @@ func (tbl *txnTable) GetObject(id *types.Objectid) (seg handle.Object, err error
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	seg = newObject(tbl, meta)
+	obj = newObject(tbl, meta)
 	return
 }
 
@@ -429,26 +429,26 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid) (err error) {
 	return
 }
 
-func (tbl *txnTable) CreateObject(is1PC bool) (seg handle.Object, err error) {
+func (tbl *txnTable) CreateObject(is1PC bool) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.Create.Add(1)
 	})
 	return tbl.createObject(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateObjOpt) (seg handle.Object, err error) {
+func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Object.CreateNonAppendable.Add(1)
 	})
 	return tbl.createObject(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (seg handle.Object, err error) {
+func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts); err != nil {
 		return
 	}
-	seg = newObject(tbl, meta)
+	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
 	if is1PC {
@@ -459,11 +459,11 @@ func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *ob
 }
 
 func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
-	var seg *catalog.ObjectEntry
-	if seg, err = tbl.entry.GetObjectByID(id.ObjectID()); err != nil {
+	var obj *catalog.ObjectEntry
+	if obj, err = tbl.entry.GetObjectByID(id.ObjectID()); err != nil {
 		return
 	}
-	meta, err := seg.DropBlockEntry(&id.BlockID, tbl.store.txn)
+	meta, err := obj.DropBlockEntry(&id.BlockID, tbl.store.txn)
 	if err != nil {
 		return
 	}
@@ -520,11 +520,11 @@ func (tbl *txnTable) createBlock(
 	state catalog.EntryState,
 	is1PC bool,
 	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var seg *catalog.ObjectEntry
-	if seg, err = tbl.entry.GetObjectByID(sid); err != nil {
+	var obj *catalog.ObjectEntry
+	if obj, err = tbl.entry.GetObjectByID(sid); err != nil {
 		return
 	}
-	if !seg.IsAppendable() && state == catalog.ES_Appendable {
+	if !obj.IsAppendable() && state == catalog.ES_Appendable {
 		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
 	}
@@ -532,7 +532,7 @@ func (tbl *txnTable) createBlock(
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
-	meta, err := seg.CreateBlock(tbl.store.txn, state, factory, opts)
+	meta, err := obj.CreateBlock(tbl.store.txn, state, factory, opts)
 	if err != nil {
 		return
 	}
@@ -988,7 +988,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	}
 
 	tbl.schema = newSchema // update new schema to txn local schema
-	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
+	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
 	return err
 }
 
@@ -1269,34 +1269,34 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
-		segIt := tbl.entry.MakeObjectIt(false)
-		for segIt.Valid() {
-			seg := segIt.Get().GetPayload()
-			if seg.SortHint < tbl.dedupedObjectHint {
+		objIt := tbl.entry.MakeObjectIt(false)
+		for objIt.Valid() {
+			obj := objIt.Get().GetPayload()
+			if obj.SortHint < tbl.dedupedObjectHint {
 				break
 			}
 			{
-				seg.RLock()
+				obj.RLock()
 				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-				//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+				//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 				//if needwait {
-				//	seg.RUnlock()
+				//	obj.RUnlock()
 				//	txnToWait.GetTxnState(true)
-				//	seg.RLock()
+				//	obj.RLock()
 				//}
-				shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-				seg.RUnlock()
+				shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
+				obj.RUnlock()
 				if shouldSkip {
-					segIt.Next()
+					objIt.Next()
 					continue
 				}
 			}
 			var shouldSkip bool
 			err = nil
-			blkIt := seg.MakeBlockIt(false)
+			blkIt := obj.MakeBlockIt(false)
 			for blkIt.Valid() {
 				blk := blkIt.Get().GetPayload()
-				if seg.SortHint == tbl.dedupedObjectHint {
+				if obj.SortHint == tbl.dedupedObjectHint {
 					if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
 						break
 					}
@@ -1336,34 +1336,34 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				}
 				blkIt.Next()
 			}
-			segIt.Next()
+			objIt.Next()
 		}
 	})
 	return
 }
 
 func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
-	segIt := tbl.entry.MakeObjectIt(false)
+	objIt := tbl.entry.MakeObjectIt(false)
 	var pks containers.Vector
 	//loaded := false
-	for segIt.Valid() {
-		seg := segIt.Get().GetPayload()
-		if seg.SortHint < tbl.dedupedObjectHint {
+	for objIt.Valid() {
+		obj := objIt.Get().GetPayload()
+		if obj.SortHint < tbl.dedupedObjectHint {
 			break
 		}
 		{
-			seg.RLock()
+			obj.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			//if needwait {
-			//	seg.RUnlock()
+			//	obj.RUnlock()
 			//	txnToWait.GetTxnState(true)
-			//	seg.RLock()
+			//	obj.RLock()
 			//}
-			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-			seg.RUnlock()
+			shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
+			obj.RUnlock()
 			if shouldSkip {
-				segIt.Next()
+				objIt.Next()
 				continue
 			}
 		}
@@ -1380,10 +1380,10 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		}
 		var shouldSkip bool
 		err = nil
-		blkIt := seg.MakeBlockIt(false)
+		blkIt := obj.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
-			if seg.SortHint == tbl.dedupedObjectHint {
+			if obj.SortHint == tbl.dedupedObjectHint {
 				if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
 					break
 				}
@@ -1423,7 +1423,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			}
 			blkIt.Next()
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	return
 }

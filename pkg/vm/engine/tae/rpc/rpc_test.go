@@ -60,7 +60,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
-	//100 segs, one seg contains 50 blocks, one block contains 10 rows.
+	//100 objs, one obj contains 50 blocks, one block contains 10 rows.
 	taeBat := catalog.MockBatch(schema, 100*50*10)
 	defer taeBat.Close()
 	taeBats := taeBat.Split(100 * 50)
@@ -1778,7 +1778,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 5
 	schema.ObjectMaxBlocks = 2
-	//5 segs, one seg contains 2 blocks, one block contains 10 rows.
+	//5 objs, one obj contains 2 blocks, one block contains 10 rows.
 	rowCount := 100 * 2 * 5
 	taeBat := catalog.MockBatch(schema, rowCount)
 	defer taeBat.Close()
@@ -1898,9 +1898,9 @@ func TestApplyDeltaloc(t *testing.T) {
 	vecOpts.Capacity = 0
 	delLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	for id, offsets := range blkIDOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
+		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(t, err)
-		blk, err := seg.GetBlockEntryByID(&id.BlockID)
+		blk, err := obj.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
 		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
 		assert.NoError(t, err)

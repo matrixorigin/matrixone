@@ -169,17 +169,17 @@ func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, stats containers.V
 	)
 }
 
-func (h *txnRelation) GetObject(id *types.Objectid) (seg handle.Object, err error) {
+func (h *txnRelation) GetObject(id *types.Objectid) (obj handle.Object, err error) {
 	fp := h.table.entry.AsCommonID()
 	fp.SetObjectID(id)
 	return h.Txn.GetStore().GetObject(fp)
 }
 
-func (h *txnRelation) CreateObject(is1PC bool) (seg handle.Object, err error) {
+func (h *txnRelation) CreateObject(is1PC bool) (obj handle.Object, err error) {
 	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) CreateNonAppendableObject(is1PC bool) (seg handle.Object, err error) {
+func (h *txnRelation) CreateNonAppendableObject(is1PC bool) (obj handle.Object, err error) {
 	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 

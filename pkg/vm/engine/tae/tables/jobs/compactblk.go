@@ -87,12 +87,12 @@ func NewCompactBlockTask(
 		return
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
-	seg, err := rel.GetObject(&meta.GetObject().ID)
+	obj, err := rel.GetObject(&meta.GetObject().ID)
 	if err != nil {
 		return
 	}
-	defer seg.Close()
-	task.compacted, err = seg.GetBlock(meta.ID)
+	defer obj.Close()
+	task.compacted, err = obj.GetBlock(meta.ID)
 	if err != nil {
 		return
 	}
@@ -181,8 +181,8 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	}()
 	now := time.Now()
-	seg := task.compacted.GetObject()
-	defer seg.Close()
+	obj := task.compacted.GetObject()
+	defer obj.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	phaseNumber = 1
@@ -195,10 +195,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	}
 	defer preparer.Close()
 	phaseNumber = 2
-	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
+	if err = obj.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
-	err = seg.GetRelation().SoftDeleteObject(seg.GetID())
+	err = obj.GetRelation().SoftDeleteObject(obj.GetID())
 	if err != nil {
 		return
 	}
@@ -206,28 +206,28 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	phaseNumber = 3
 
 	if !empty {
-		createOnSeg := seg
-		curSeg := seg.GetMeta().(*catalog.ObjectEntry)
+		createOnObj := obj
+		curObj := obj.GetMeta().(*catalog.ObjectEntry)
 		// double the threshold to make more room for creating new appendable Object during appending, just a piece of defensive code
 		// check GetAppender function in tableHandle
-		if curSeg.GetNextObjectIndex() > options.DefaultObjectPerSegment*2 {
-			nextSeg := curSeg.GetTable().LastAppendableObject()
-			if nextSeg.ID == curSeg.ID {
-				// we can't create appendable seg here because compaction can be rollbacked.
-				// so just wait until the new appendable seg is available.
+		if curObj.GetNextObjectIndex() > options.DefaultObjectPerSegment*2 {
+			nextObj := curObj.GetTable().LastAppendableObject()
+			if nextObj.ID == curObj.ID {
+				// we can't create appendable obj here because compaction can be rollbacked.
+				// so just wait until the new appendable obj is available.
 				// actually this log can barely be printed.
-				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.String(), curSeg.GetNextObjectIndex())
+				logutil.Infof("do not compact on obj %s %d, wait", curObj.ID.String(), curObj.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			if createOnSeg, err = task.compacted.GetObject().GetRelation().GetObject(&nextSeg.ID); err != nil {
+			if createOnObj, err = task.compacted.GetObject().GetRelation().GetObject(&nextObj.ID); err != nil {
 				return err
 			} else {
-				defer createOnSeg.Close()
+				defer createOnObj.Close()
 			}
 		}
 
 		if _, err = task.createAndFlushNewBlock(
-			createOnSeg, preparer,
+			createOnObj, preparer,
 		); err != nil {
 			return
 		}
@@ -367,14 +367,14 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 }
 
 func (task *compactBlockTask) createAndFlushNewBlock(
-	seg handle.Object,
+	obj handle.Object,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
-	seg, err = seg.GetRelation().CreateNonAppendableObject(false)
+	obj, err = obj.GetRelation().CreateNonAppendableObject(false)
 	if err != nil {
 		return
 	}
-	newBlk, err = seg.CreateNonAppendableBlock(nil)
+	newBlk, err = obj.CreateNonAppendableBlock(nil)
 	if err != nil {
 		return
 	}

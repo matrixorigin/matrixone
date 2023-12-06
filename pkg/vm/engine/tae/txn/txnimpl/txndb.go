@@ -298,7 +298,7 @@ func (db *txnDB) GetRelationByID(id uint64) (relation handle.Relation, err error
 	return
 }
 
-func (db *txnDB) GetObject(id *common.ID) (seg handle.Object, err error) {
+func (db *txnDB) GetObject(id *common.ID) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
@@ -306,14 +306,14 @@ func (db *txnDB) GetObject(id *common.ID) (seg handle.Object, err error) {
 	return table.GetObject(id.ObjectID())
 }
 
-func (db *txnDB) CreateObject(tid uint64, is1PC bool) (seg handle.Object, err error) {
+func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
 	return table.CreateObject(is1PC)
 }
-func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (seg handle.Object, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return

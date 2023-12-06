@@ -94,14 +94,14 @@ func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relati
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)   { return }
 func (store *NoopTxnStore) GetDatabaseByID(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) DatabaseNames() (names []string)                           { return }
-func (store *NoopTxnStore) GetObject(id *common.ID) (seg handle.Object, err error) {
+func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return
 }
 
-func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (seg handle.Object, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool) (seg handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }

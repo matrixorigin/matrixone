@@ -109,13 +109,13 @@ func NewFlushTableTailTask(
 
 	for _, blk := range blks {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Object
-		seg, err = rel.GetObject(&meta.GetObject().ID)
+		var obj handle.Object
+		obj, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
 		var hdl handle.Block
-		if hdl, err = seg.GetBlock(blk.ID); err != nil {
+		if hdl, err = obj.GetBlock(blk.ID); err != nil {
 			return
 		}
 		if blk.IsAppendable() {
@@ -136,13 +136,13 @@ func NewFlushTableTailTask(
 	task.dirtyLen = len(tblEntry.DeletedDirties)
 	for _, blk := range tblEntry.DeletedDirties {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Object
-		seg, err = rel.GetObject(&meta.GetObject().ID)
+		var obj handle.Object
+		obj, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
 		var hdl handle.Block
-		if hdl, err = seg.GetBlock(blk.ID); err != nil {
+		if hdl, err = obj.GetBlock(blk.ID); err != nil {
 			return
 		}
 		task.delSrcMetas = append(task.delSrcMetas, blk)
@@ -420,16 +420,16 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		//just  soft delete all ablks and return
 		ObjectsToDelete := make(map[types.Objectid]handle.Object)
 		for _, blk := range task.ablksHandles {
-			seg := blk.GetObject()
-			if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+			obj := blk.GetObject()
+			if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
 				return err
 			}
-			ObjectsToDelete[*seg.GetID()] = seg
+			ObjectsToDelete[*obj.GetID()] = obj
 		}
 		// delete all Objects
-		for _, seg := range ObjectsToDelete {
-			tbl := seg.GetRelation()
-			if err = tbl.SoftDeleteObject(seg.GetID()); err != nil {
+		for _, obj := range ObjectsToDelete {
+			tbl := obj.GetRelation()
+			if err = tbl.SoftDeleteObject(obj.GetID()); err != nil {
 				return err
 			}
 		}
@@ -572,16 +572,16 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	ObjectsToDelete := make(map[types.Objectid]handle.Object)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
-		seg := blk.GetObject()
-		if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+		obj := blk.GetObject()
+		if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
 			return err
 		}
-		ObjectsToDelete[*seg.GetID()] = seg
+		ObjectsToDelete[*obj.GetID()] = obj
 	}
 	// delete all Objects
-	for _, seg := range ObjectsToDelete {
-		tbl := seg.GetRelation()
-		if err = tbl.SoftDeleteObject(seg.GetID()); err != nil {
+	for _, obj := range ObjectsToDelete {
+		tbl := obj.GetRelation()
+		if err = tbl.SoftDeleteObject(obj.GetID()); err != nil {
 			return err
 		}
 	}

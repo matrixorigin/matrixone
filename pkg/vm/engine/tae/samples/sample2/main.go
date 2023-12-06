@@ -116,11 +116,11 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		segIt := rel.MakeObjectIt()
-		for segIt.Valid() {
-			seg := segIt.GetObject()
-			logutil.Info(seg.String())
-			blkIt := seg.MakeBlockIt()
+		objIt := rel.MakeObjectIt()
+		for objIt.Valid() {
+			obj := objIt.GetObject()
+			logutil.Info(obj.String())
+			blkIt := obj.MakeBlockIt()
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
@@ -132,7 +132,7 @@ func main() {
 				defer view.Close()
 				blkIt.Next()
 			}
-			segIt.Next()
+			objIt.Next()
 		}
 		if err = txn.Commit(context.Background()); err != nil {
 			panic(err)
