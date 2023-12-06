@@ -1228,12 +1228,9 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		return nil, nil
 	}
 
-	for _, id := range req.AccIds {
-		// if not exist, means that all db and table has of this account has deleted,
-		// or this account never existed.
-		// so we append 0 to the result, can't skip it.
-		size, _ := memo.GatherAccountSize(uint32(id))
-		resp.AccIds = append(resp.AccIds, id)
+	usages := memo.GatherAllAccSize()
+	for accId, size := range usages {
+		resp.AccIds = append(resp.AccIds, int32(accId))
 		resp.Sizes = append(resp.Sizes, size)
 	}
 

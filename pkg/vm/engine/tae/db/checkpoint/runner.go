@@ -522,17 +522,6 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func checkpointMetaInfoFactory(entries []*CheckpointEntry) []*logtail.CkpLocVers {
-	ret := make([]*logtail.CkpLocVers, 0)
-	for idx := range entries {
-		ret = append(ret, &logtail.CkpLocVers{
-			Location: entries[idx].GetLocation(),
-			Version:  entries[idx].GetVersion(),
-		})
-	}
-	return ret
-}
-
 func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
 	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
 	data, err := factory(r.catalog)
