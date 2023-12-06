@@ -20,11 +20,12 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -46,73 +47,21 @@ type ObjectEntry struct {
 
 type ObjStat struct {
 	// min max etc. later
+	entry *ObjectEntry
 	sync.RWMutex
-	loaded         bool
-	originSize     int
-	compSize       int
-	sortKeyZonemap index.ZM
-	rows           int
-	remainingRows  int
-}
-
-func (s *ObjStat) loadObjectInfo(blk *BlockEntry) error {
-	schema := blk.GetSchema()
-	loc := blk.GetMetaLoc()
-
-	if len(loc) == 0 {
-		return nil
-	}
-
-	s.Lock()
-	defer s.Unlock()
-
-	if s.loaded {
-		return nil
-	}
-
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
-	if err != nil {
-		return err
-	}
-
-	meta := objMeta.MustDataMeta()
-
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := meta.MustGetColumn(uint16(col.SeqNum))
-		s.originSize += int(colmata.Location().OriginSize())
-		s.compSize += int(colmata.Location().Length())
-	}
-
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
-	}
-
-	s.loaded = true
-
-	return nil
+	remainingRows int
 }
 
 func (s *ObjStat) GetLoaded() bool {
-	s.RLock()
-	defer s.RUnlock()
-	return s.loaded
+	return s.GetRows() != 0
 }
 
 func (s *ObjStat) GetSortKeyZonemap() index.ZM {
-	s.RLock()
-	defer s.RUnlock()
-	return s.sortKeyZonemap.Clone()
+	res := s.entry.GetObjectStats()
+	return res.SortKeyZoneMap()
 }
 
-func (s *ObjStat) SetRows(rows int) {
-	s.Lock()
-	defer s.Unlock()
-	s.rows = rows
-}
+func (s *ObjStat) SetRows(rows int) {}
 
 func (s *ObjStat) SetRemainingRows(rows int) {
 	s.Lock()
@@ -127,40 +76,37 @@ func (s *ObjStat) GetRemainingRows() int {
 }
 
 func (s *ObjStat) GetRows() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.rows
+	res := s.entry.GetObjectStats()
+	return int(res.Rows())
 }
 
 func (s *ObjStat) GetOriginSize() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.originSize
-}
-
-func (s *ObjStat) SetOriginSize(size int) {
-	s.Lock()
-	defer s.Unlock()
-	s.originSize = size
+	res := s.entry.GetObjectStats()
+	return int(res.OriginSize())
 }
 
 func (s *ObjStat) GetCompSize() int {
-	s.RLock()
-	defer s.RUnlock()
-	return s.compSize
+	res := s.entry.GetObjectStats()
+	return int(res.Size())
 }
 
 func (s *ObjStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
-	if s.sortKeyZonemap != nil {
+	if z := s.GetSortKeyZonemap(); z != nil {
 		if composeSortKey {
-			zonemapStr = s.sortKeyZonemap.StringForCompose()
+			zonemapStr = z.StringForCompose()
 		} else {
-			zonemapStr = s.sortKeyZonemap.String()
+			zonemapStr = z.String()
 		}
 	}
-	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
+	return fmt.Sprintf(
+		"loaded:%t, oSize:%s, cSzie:%s rows:%d, remainingRows:%d, zm: %s",
+		s.GetLoaded(),
+		common.HumanReadableBytes(s.GetOriginSize()),
+		common.HumanReadableBytes(s.GetCompSize()),
+		s.GetRows(),
+		s.remainingRows,
+		zonemapStr,
 	)
 }
 
@@ -178,6 +124,7 @@ func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn
 		},
 	}
 	e.CreateWithTxn(txn, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.Stat.entry = e
 	return e
 }
 
@@ -196,6 +143,7 @@ func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end
 		},
 	}
 	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.Stat.entry = e
 	return e
 }
 
@@ -206,6 +154,7 @@ func NewReplayObjectEntry() *ObjectEntry {
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
+	e.Stat.entry = e
 	return e
 }
 
@@ -223,6 +172,7 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		},
 	}
 	e.CreateWithTS(ts, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.Stat.entry = e
 	return e
 }
 
@@ -252,10 +202,15 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	e.ID = *bid.Object()
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
+	e.Stat.entry = e
 	return e
 }
 
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
+	s := time.Now()
+	defer func() {
+		v2.GetObjectStatsDurationHistogram.Observe(time.Since(s).Seconds())
+	}()
 	entry.RLock()
 	defer entry.RUnlock()
 	entry.LoopChain(func(node *MVCCNode[*ObjectMVCCNode]) bool {
@@ -266,6 +221,16 @@ func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 		return true
 	})
 	return
+}
+
+func (entry *ObjectEntry) CheckAndLoad() error {
+	s := entry.GetObjectStats()
+	if s.Rows() == 0 {
+		_, err := entry.LoadObjectInfoForLastNode()
+		// logutil.Infof("yyyyyy loaded %v %v", common.ShortObjId(entry.ID), err)
+		return err
+	}
+	return nil
 }
 
 func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool, blk *BlockEntry) {
@@ -353,11 +318,18 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	return stats, nil
 }
 
-func (entry *ObjectEntry) LoadObjectInfoForLastNode() (objectio.ObjectStats, error) {
+func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStats, err error) {
 	entry.RLock()
 	startTS := entry.GetLatestCommittedNode().Start
 	entry.RUnlock()
-	return entry.LoadObjectInfoWithTxnTS(startTS)
+
+	stats, err = entry.LoadObjectInfoWithTxnTS(startTS)
+	if err == nil {
+		entry.Lock()
+		entry.GetLatestNodeLocked().BaseNode.ObjectStats = stats
+		entry.Unlock()
+	}
+	return stats, nil
 }
 
 // for test
@@ -384,36 +356,6 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) int {
 		return 1
 	}
 	return 0
-}
-
-// LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
-func (entry *ObjectEntry) LoadObjectInfo() error {
-	name := entry.GetTable().GetLastestSchema().Name
-	defer func() {
-		// after loading object info, original size is still 0, we have to estimate it by experience
-		rows := entry.Stat.GetRows()
-		if name == motrace.RawLogTbl && entry.Stat.GetOriginSize() == 0 && rows != 0 {
-			factor := 1 + rows/1600
-			entry.Stat.SetOriginSize((1 << 20) * factor)
-		}
-	}()
-
-	if entry.Stat.GetLoaded() {
-		return nil
-	}
-
-	// special case for raw log table.
-	if name == motrace.RawLogTbl &&
-		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
-		return nil
-	}
-
-	blk := entry.GetFirstBlkEntry()
-	if blk == nil {
-		return nil
-	}
-
-	return entry.Stat.loadObjectInfo(blk)
 }
 
 func (entry *ObjectEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {

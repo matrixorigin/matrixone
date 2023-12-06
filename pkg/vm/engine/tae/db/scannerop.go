@@ -152,7 +152,10 @@ func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, objs []*cata
 
 	// all status are safe in the TaskBuilder
 	for _, obj := range objs {
-		obj.LoadObjectInfo()
+		// TODO(_), delete this if every object has objectStat in memory
+		if err := obj.CheckAndLoad(); err != nil {
+			return err
+		}
 	}
 	return s.executor.ManuallyExecute(entry, objs)
 }
@@ -242,6 +245,9 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 
 	s.ObjectHelper.resetForNewObj()
 	s.ObjectHelper.objIsSorted = objectEntry.IsSortedLocked()
+	// if s.name == "x" {
+	// 	logutil.Infof("yyyy mergeblocks %d-%s obj(%v): %v", s.tid, s.name, common.ShortObjId(objectEntry.ID), s.ObjectHelper.objIsSorted)
+	// }
 	return
 }
 
@@ -255,7 +261,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 	obj.Stat.SetRows(s.ObjectHelper.objRowCnt)
 	obj.Stat.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
 
-	obj.LoadObjectInfo()
+	obj.CheckAndLoad()
 
 	s.objPolicy.OnObject(obj)
 	return nil
