@@ -1221,7 +1221,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	memo := logtail.GetTNUsageMemo()
 
 	memo.EnterProcessing()
-	defer memo.LeaveProcessing()
+	defer func() {
+		resp.Magic = logtail.StorageUsageMagic
+		memo.LeaveProcessing()
+	}()
 
 	if !memo.HasUpdate() {
 		resp.Succeed = true

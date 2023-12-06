@@ -97,4 +97,5 @@ message StorageUsageResp {
     bool Succeed                    = 1;
     repeated int32 AccIds           = 2;
     repeated int64 Sizes            = 3;
+    uint64 Magic                    = 4;
 }

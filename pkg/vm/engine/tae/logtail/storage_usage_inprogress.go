@@ -70,6 +70,8 @@ const (
 	UsageMAX
 )
 
+const StorageUsageMagic uint64 = 0x1A2B3C4D5E6F
+
 type UsageData_ struct {
 	AccId uint32
 	DbId  uint64
