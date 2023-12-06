@@ -17,6 +17,11 @@ package backup
 import (
 	"context"
 	"fmt"
+	"path"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -32,10 +37,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
-	"path"
-	"sync"
-	"testing"
-	"time"
 )
 
 const (
@@ -53,7 +54,7 @@ func TestBackupData(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 	db.BindSchema(schema)
 	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
