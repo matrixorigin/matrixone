@@ -1497,7 +1497,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.applyIndices(rootID)
+		//rootID = builder.applyIndices(rootID)
 		ReCalcNodeStats(rootID, builder, true, true, true)
 
 		determineHashOnPK(rootID, builder)
