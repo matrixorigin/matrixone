@@ -384,7 +384,7 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 
-		if objEntry.ObjectStats.IsZero() {
+		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
 
@@ -410,7 +410,7 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
-		if objEntry.ObjectStats.IsZero() {
+		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
 
