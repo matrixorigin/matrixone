@@ -632,6 +632,9 @@ func (catalog *Catalog) replayObjectByBlock(
 				ObjectID,
 				start, end, state)
 			tbl.AddEntryLocked(obj)
+			if tbl.GetLastestSchema().HasSortKey() && obj.IsAppendable() {
+				obj.SetSorted()
+			}
 		}
 	}
 	// delete
