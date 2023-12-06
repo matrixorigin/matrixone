@@ -1506,7 +1506,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 
-		builder.pushdownRuntimeFilters(rootID)
+		//builder.pushdownRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.rewriteStarApproxCount(rootID)
