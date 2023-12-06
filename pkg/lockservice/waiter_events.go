@@ -188,7 +188,7 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 	stopAt := -1
 	now := time.Now()
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt) < timeout {
+		if now.Sub(w.waitAt.Load().(time.Time)) < timeout {
 			stopAt = i
 			break
 		}
