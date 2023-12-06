@@ -29,10 +29,11 @@ type ObjectStorageArguments struct {
 	SharedConfigProfile string `toml:"shared-config-profile"`
 
 	// s3
-	Bucket   string `toml:"bucket"`
-	Endpoint string `toml:"endpoint"`
-	IsMinio  bool   `toml:"is-minio"`
-	Region   string `toml:"region"`
+	Bucket    string   `toml:"bucket"`
+	Endpoint  string   `toml:"endpoint"`
+	IsMinio   bool     `toml:"is-minio"`
+	Region    string   `toml:"region"`
+	CertFiles []string `toml:"cert-files"`
 
 	// credentials
 	AssumeRoleARN     string `toml:"role-arn"`
