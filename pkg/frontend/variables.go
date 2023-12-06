@@ -3482,6 +3482,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("gtid_purged"),
 		Default:           "",
 	},
+	"transaction_operator_open_log": {
+		Name:              "transaction_operator_open_log",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
