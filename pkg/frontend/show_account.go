@@ -243,15 +243,8 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 		return nil, err
 	}
 
-	var usage *db.StorageUsageResp
-	switch response.(type) {
-	case *db.StorageUsageResp:
-		usage = response.(*db.StorageUsageResp)
-	default:
-		return nil, moerr.NewNotSupportedNoCtx("cn version newer than tn, retry later")
-	}
-
-	if len(usage.AccIds) != len(usage.Sizes) {
+	usage, ok := response.(*db.StorageUsageResp)
+	if !ok || usage.Magic != logtail.StorageUsageMagic {
 		return nil, moerr.NewNotSupportedNoCtx("cn version newer than tn, retry later")
 	}
 

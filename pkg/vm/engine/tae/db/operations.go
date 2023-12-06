@@ -318,6 +318,7 @@ type StorageUsageResp struct {
 	Succeed bool
 	AccIds  []int32
 	Sizes   []int64
+	Magic   uint64
 }
 
 func (s *StorageUsageResp) MarshalBinary() ([]byte, error) {
