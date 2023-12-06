@@ -2912,46 +2912,46 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
-		err = bh.Exec(ctx, "begin")
+		rtnErr = bh.Exec(ctx, "begin")
 		defer func() {
-			rtnErr = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
-		if err != nil {
-			return err
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		//step 1: check account exists or not
 		//get accountID
-		sql, err = getSqlForCheckTenant(ctx, aa.Name)
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForCheckTenant(ctx, aa.Name)
+		if rtnErr != nil {
+			return rtnErr
 		}
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		if execResultArrayHasData(erArray) {
 			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
-				if err != nil {
-					return err
+				targetAccountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
+				if rtnErr != nil {
+					return rtnErr
 				}
 
-				accountStatus, err = erArray[0].GetString(ctx, 0, 2)
-				if err != nil {
-					return err
+				accountStatus, rtnErr = erArray[0].GetString(ctx, 0, 2)
+				if rtnErr != nil {
+					return rtnErr
 				}
 
-				version, err = erArray[0].GetUint64(ctx, i, 3)
-				if err != nil {
-					return err
+				version, rtnErr = erArray[0].GetUint64(ctx, i, 3)
+				if rtnErr != nil {
+					return rtnErr
 				}
 			}
 			accountExist = true
@@ -2960,7 +2960,8 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			// false : return an error
 			// true : skip and do nothing
 			if !aa.IfExists {
-				return moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
+				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
+				return
 			}
 		}
 
@@ -2971,88 +2972,89 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				accountCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(targetAccountId))
 
 				//1, check the admin exists or not
-				sql, err = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
-				if err != nil {
-					return err
+				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
+				if rtnErr != nil {
+					return rtnErr
 				}
 				bh.ClearExecResultSet()
-				err = bh.Exec(accountCtx, sql)
-				if err != nil {
-					return err
+				rtnErr = bh.Exec(accountCtx, sql)
+				if rtnErr != nil {
+					return rtnErr
 				}
 
-				erArray, err = getResultSet(accountCtx, bh)
-				if err != nil {
-					return err
+				erArray, rtnErr = getResultSet(accountCtx, bh)
+				if rtnErr != nil {
+					return rtnErr
 				}
 
 				if !execResultArrayHasData(erArray) {
-					return moerr.NewInternalError(accountCtx, "there is no user %s", aa.AuthOption.AdminName)
+					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AuthOption.AdminName)
+					return
 				}
 
 				//2, update the password
 				//encryption the password
 				encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
-				sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
-				if err != nil {
-					return err
+				sql, rtnErr = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
+				if rtnErr != nil {
+					return rtnErr
 				}
 				bh.ClearExecResultSet()
-				err = bh.Exec(accountCtx, sql)
-				if err != nil {
-					return err
+				rtnErr = bh.Exec(accountCtx, sql)
+				if rtnErr != nil {
+					return rtnErr
 				}
 			}
 
 			//Option 2: alter the comment of the account
 			if aa.Comment.Exist {
-				sql, err = getSqlForUpdateCommentsOfAccount(ctx, aa.Comment.Comment, aa.Name)
-				if err != nil {
-					return err
+				sql, rtnErr = getSqlForUpdateCommentsOfAccount(ctx, aa.Comment.Comment, aa.Name)
+				if rtnErr != nil {
+					return rtnErr
 				}
 				bh.ClearExecResultSet()
-				err = bh.Exec(ctx, sql)
-				if err != nil {
-					return err
+				rtnErr = bh.Exec(ctx, sql)
+				if rtnErr != nil {
+					return rtnErr
 				}
 			}
 
 			//Option 3: suspend or resume the account
 			if aa.StatusOption.Exist {
 				if aa.StatusOption.Option == tree.AccountStatusSuspend {
-					sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
-					if err != nil {
-						return err
+					sql, rtnErr = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+					if rtnErr != nil {
+						return rtnErr
 					}
 					bh.ClearExecResultSet()
-					err = bh.Exec(ctx, sql)
-					if err != nil {
-						return err
+					rtnErr = bh.Exec(ctx, sql)
+					if rtnErr != nil {
+						return rtnErr
 					}
 				} else if aa.StatusOption.Option == tree.AccountStatusOpen {
-					sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), aa.Name, (version+1)%math.MaxUint64)
-					if err != nil {
-						return err
+					sql, rtnErr = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), aa.Name, (version+1)%math.MaxUint64)
+					if rtnErr != nil {
+						return rtnErr
 					}
 					bh.ClearExecResultSet()
-					err = bh.Exec(ctx, sql)
-					if err != nil {
-						return err
+					rtnErr = bh.Exec(ctx, sql)
+					if rtnErr != nil {
+						return rtnErr
 					}
 				} else if aa.StatusOption.Option == tree.AccountStatusRestricted {
-					sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
-					if err != nil {
-						return err
+					sql, rtnErr = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+					if rtnErr != nil {
+						return rtnErr
 					}
 					bh.ClearExecResultSet()
-					err = bh.Exec(ctx, sql)
-					if err != nil {
-						return err
+					rtnErr = bh.Exec(ctx, sql)
+					if rtnErr != nil {
+						return rtnErr
 					}
 				}
 			}
 		}
-		return err
+		return rtnErr
 	}
 
 	err = alterAccountFunc()
@@ -4107,49 +4109,50 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		err = bh.Exec(ctx, "begin;")
+		rtnErr = bh.Exec(ctx, "begin;")
 		defer func() {
-			rtnErr = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
-		if err != nil {
-			return err
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		//check the account exists or not
-		sql, err = getSqlForCheckTenant(ctx, da.Name)
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForCheckTenant(ctx, da.Name)
+		if rtnErr != nil {
+			return rtnErr
 		}
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		if execResultArrayHasData(erArray) {
-			accountId, err = erArray[0].GetInt64(ctx, 0, 0)
-			if err != nil {
-				return err
+			accountId, rtnErr = erArray[0].GetInt64(ctx, 0, 0)
+			if rtnErr != nil {
+				return rtnErr
 			}
-			version, err = erArray[0].GetUint64(ctx, 0, 3)
-			if err != nil {
-				return err
+			version, rtnErr = erArray[0].GetUint64(ctx, 0, 3)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		} else {
 			//no such account
 			if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
-				return moerr.NewInternalError(ctx, "there is no account %s", da.Name)
+				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", da.Name)
+				return
 			}
 			hasAccount = false
 		}
 
 		if !hasAccount {
-			return err
+			return rtnErr
 		}
 
 		//drop tables of the tenant
@@ -4166,9 +4169,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		//step 8 : drop table mo_mysql_compatibility_mode
 		//step 9 : drop table %!%mo_increment_columns
 		for _, sql = range getSqlForDropAccount() {
-			err = bh.Exec(deleteCtx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		}
 
@@ -4176,20 +4179,20 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		databases = make(map[string]int8)
 		dbSql = "show databases;"
 		bh.ClearExecResultSet()
-		err = bh.Exec(deleteCtx, dbSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dbSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			db, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return err
+			db, rtnErr = erArray[0].GetString(ctx, i, 0)
+			if rtnErr != nil {
+				return rtnErr
 			}
 			databases[db] = 0
 		}
@@ -4215,69 +4218,69 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		}
 
 		for _, sql = range sqlsForDropDatabases {
-			err = bh.Exec(deleteCtx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		}
 
 		// drop table mo_mysql_compatibility_mode
-		err = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop table mo_pubs
-		err = bh.Exec(deleteCtx, dropMoPubsSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dropMoPubsSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop autoIcr table
-		err = bh.Exec(deleteCtx, dropAutoIcrColSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop mo_catalog.mo_indexes under general tenant
-		err = bh.Exec(deleteCtx, dropMoIndexes)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dropMoIndexes)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// drop mo_catalog.mo_table_partitions under general tenant
-		err = bh.Exec(deleteCtx, dropMoTablePartitions)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// delete the account in the mo_account of the sys account
-		sql, err = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// get all cluster table in the mo_catalog
 		sql = "show tables from mo_catalog;"
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			table, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return err
+			table, rtnErr = erArray[0].GetString(ctx, i, 0)
+			if rtnErr != nil {
+				return rtnErr
 			}
 			if isClusterTable("mo_catalog", table) {
 				clusterTables[table] = 0
@@ -4288,12 +4291,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		for clusterTable := range clusterTables {
 			sql = fmt.Sprintf("delete from mo_catalog.`%s` where account_id = %d;", clusterTable, accountId)
 			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		}
-		return err
+		return rtnErr
 	}
 
 	err = dropAccountFunc()
@@ -7727,46 +7730,47 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 
 	createNewAccount := func() (rtnErr error) {
-		err = bh.Exec(ctx, "begin;")
+		rtnErr = bh.Exec(ctx, "begin;")
 		defer func() {
-			rtnErr = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
-		if err != nil {
-			return err
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// check account exists or not
-		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
-		if err != nil {
-			return err
+		exists, rtnErr = checkTenantExistsOrNot(ctx, bh, ca.Name)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				rtnErr = moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return
 			}
-			return err
+			return rtnErr
 		} else {
-			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
-			if err != nil {
-				return err
+			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		}
 
 		// create some tables and databases for new account
-		err = bh.Exec(newTenantCtx, createMoIndexesSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(newTenantCtx, createMoIndexesSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		err = bh.Exec(newTenantCtx, createMoTablePartitionsSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(newTenantCtx, createMoTablePartitionsSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		err = bh.Exec(newTenantCtx, createAutoTableSql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(newTenantCtx, createAutoTableSql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		//create createDbSqls
@@ -7777,30 +7781,29 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			"create database mysql;",
 		}
 		for _, db := range createDbSqls {
-			err = bh.Exec(newTenantCtx, db)
-			if err != nil {
-				return err
+			rtnErr = bh.Exec(newTenantCtx, db)
+			if rtnErr != nil {
+				return rtnErr
 			}
 		}
 
 		// create tables for new account
-		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
-		if err != nil {
-			return err
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		err = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
-		if err != nil {
-			return err
+		rtnErr = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
-		if err != nil {
-			return err
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		return err
+		return rtnErr
 	}
 
 	err = createNewAccount()
-	fmt.Printf("---------------------wuxiliang------------------------%v\n", err)
 	if err != nil {
 		return err
 	}
@@ -8709,56 +8712,58 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
-		err = bh.Exec(ctx, "begin")
+		rtnErr = bh.Exec(ctx, "begin")
 		defer func() {
-			rtnErr = finishTxn(ctx, bh, err)
+			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
-		if err != nil {
-			return err
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		// step1:check database exists or not and get database owner
-		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName, int64(ses.GetTenantInfo().GetTenantID()))
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForCheckDatabaseWithOwner(ctx, dbName, int64(ses.GetTenantInfo().GetTenantID()))
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			return err
+		erArray, rtnErr = getResultSet(ctx, bh)
+		if rtnErr != nil {
+			return rtnErr
 		}
 
 		if !execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+			rtnErr = moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+			return
 		} else {
-			databaseOwner, err = erArray[0].GetInt64(ctx, 0, 1)
-			if err != nil {
-				return err
+			databaseOwner, rtnErr = erArray[0].GetInt64(ctx, 0, 1)
+			if rtnErr != nil {
+				return rtnErr
 			}
 
 			// alter database config privileges check
 			if databaseOwner != int64(currentRole) {
-				return moerr.NewInternalError(ctx, "do not have privileges to alter database config")
+				rtnErr = moerr.NewInternalError(ctx, "do not have privileges to alter database config")
+				return
 			}
 		}
 
 		// step2: update the mo_mysql_compatibility_mode of that database
-		sql, err = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
-		if err != nil {
-			return err
+		sql, rtnErr = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
+		if rtnErr != nil {
+			return rtnErr
 		}
 
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
 		}
-		return err
+		return rtnErr
 	}
 
 	err = updateConfigForDatabase()
