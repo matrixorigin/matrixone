@@ -350,6 +350,10 @@ func (m *brokenStream) Close() error {
 	return nil
 }
 
+func (m *brokenStream) SafeClose(ctx context.Context) error {
+	return nil
+}
+
 func (m *brokenStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
