@@ -580,10 +580,16 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 		}
 	}
 
+	lowerLimit := float64(100000)
+	cost := right.Stats.Cost
+	if cost < lowerLimit {
+		cost = lowerLimit
+	}
+
 	arg := &fuzzyfilter.Argument{
 		PkName:             pkName,
 		PkTyp:              pkTyp,
-		N:                  right.Stats.Cost,
+		N:                  cost,
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 

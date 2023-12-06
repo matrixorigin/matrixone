@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -140,22 +141,17 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 				continue
 			}
 
-			var TooManyCollision bool
 			pkCol := bat.GetVector(0)
 			arg.appendPassToRuntimeFilter(pkCol, proc)
 			arg.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
 				if exist {
 					if arg.collisionCnt < maxCheckDupCount {
 						arg.appendCollisionKey(proc, i, bat)
-					} else {
-						TooManyCollision = true
+						return
 					}
+					logutil.Warnf("too many collision for fuzzy filter")
 				}
 			})
-
-			if TooManyCollision {
-				return result, moerr.NewInternalError(proc.Ctx, "too many collision for fuzzy filter")
-			}
 
 			proc.PutBatch(bat)
 			continue
