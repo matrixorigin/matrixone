@@ -569,6 +569,11 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		goto DiscardAndFreeL
 	}
 
+	// Filter out the statement is empty
+	if s.Statement == "" {
+		goto DiscardAndFreeL
+	}
+
 	// Filter out exported or reported statement
 	if s.exported || s.reported {
 		goto DiscardAndFreeL
@@ -583,7 +588,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	// logging the statement that should not be here anymore
-	if s.exported || s.reported || s.User == db_holder.MOLoggerUser {
+	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
 		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement))
 	}
 
