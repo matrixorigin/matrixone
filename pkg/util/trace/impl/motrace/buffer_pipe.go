@@ -166,9 +166,6 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 					panic("not MalCsv, dont support output CSV")
 				}
 				writeValues(item)
-			} else {
-				// Aggregateed statementinfo should be freed
-				statementInfo.Free()
 			}
 		} else {
 			// If not, process as before

@@ -58,7 +58,7 @@ func (a *Aggregator) Close() {
 	// Free the StatementInfo in the Grouped
 	for _, item := range a.Grouped {
 		if stmt, ok := item.(*StatementInfo); ok {
-			stmt.Free()
+			stmt.freeNoLocked()
 		}
 	}
 	// clean up the Grouped map
