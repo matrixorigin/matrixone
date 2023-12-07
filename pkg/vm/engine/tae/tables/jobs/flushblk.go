@@ -87,6 +87,8 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	}
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+	} else if task.meta.GetSchema().HasSortKey() {
+		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
 	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
