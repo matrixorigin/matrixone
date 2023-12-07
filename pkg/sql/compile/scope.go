@@ -210,7 +210,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	case <-s.Proc.Ctx.Done():
 		// this clean-up action shouldn't be called before context check.
 		// because the clean-up action will cancel the context, and error will be suppressed.
-		p.Cleanup(s.Proc, true, err)
+		p.Cleanup(s.Proc, err != nil, err)
 		return nil
 
 	default:
