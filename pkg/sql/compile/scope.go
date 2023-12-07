@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	goruntime "runtime"
 	"runtime/debug"
 	"sync"
 
@@ -91,12 +92,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
-		if err != nil {
-			//TODO: @arjun remove this after debugging the panic suppression issue.
-			getLogger().Error("error in scope run suppressed to nil",
-				zap.String("sql", c.sql),
-				zap.String("error", err.Error()))
-		}
 		err = nil
 	default:
 	}
@@ -209,16 +204,30 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
+	p := pipeline.New(nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
-		// if context has done, it means another pipeline stops the query.
-		// so there is no need to return the error again.
+		// this clean-up action shouldn't be called before context check.
+		// because the clean-up action will cancel the context, and error will be suppressed.
+		p.Cleanup(s.Proc, err != nil, err)
 		return nil
 
 	default:
+		p.Cleanup(s.Proc, err != nil, err)
 		return err
 	}
+}
+
+func DeterminRuntimeDOP(cpunum, blocks int) int {
+	if cpunum <= 0 || blocks <= 16 {
+		return 1
+	}
+	ret := blocks/16 + 1
+	if ret < cpunum {
+		return ret
+	}
+	return cpunum
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -236,7 +245,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 
-	mcpu := s.NodeInfo.Mcpu
 	var err error
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
@@ -336,6 +344,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 		}
 	}
+
+	mcpu := DeterminRuntimeDOP(goruntime.NumCPU(), len(s.NodeInfo.Data))
 
 	switch {
 	case remote:

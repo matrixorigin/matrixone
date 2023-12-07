@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -124,6 +125,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
 	anal := proc.GetAnalyze(arg.info.Idx)
@@ -132,6 +134,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 		anal.AddScanTime(t1)
 		span.End()
+		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 
