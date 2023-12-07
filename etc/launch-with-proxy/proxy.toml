@@ -31,5 +31,3 @@ backend = "DISK-ETL"
 
 [proxy]
 uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
-listen-address = "0.0.0.0:6009"
-internal-cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
