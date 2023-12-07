@@ -170,7 +170,7 @@ func TestValid(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			assert.Empty(t, a.Valid([]pb.LockTable{b}))
 		})
 }
@@ -180,7 +180,7 @@ func TestValidWithServiceInvalid(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			b.ServiceID = "s2"
 			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
 		})
@@ -191,7 +191,7 @@ func TestValidWithVersionChanged(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			b.Version++
 			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
 		})
