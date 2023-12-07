@@ -477,10 +477,6 @@ func (entry *ObjectEntry) IsSorted() bool {
 	return entry.sorted
 }
 
-func (entry *ObjectEntry) IsSortedLocked() bool {
-	return entry.sorted
-}
-
 func (entry *ObjectEntry) GetTable() *TableEntry {
 	return entry.table
 }

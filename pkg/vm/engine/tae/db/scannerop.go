@@ -39,7 +39,7 @@ type objHelper struct {
 	// Statistics
 	objHasNonDropBlk     bool
 	objRowCnt, objRowDel int
-	objIsSorted          bool
+	objNonAppend         bool
 	isCreating           bool
 
 	// Found deletable Objects
@@ -64,7 +64,7 @@ func (d *objHelper) reset() {
 
 func (d *objHelper) resetForNewObj() {
 	d.objHasNonDropBlk = false
-	d.objIsSorted = false
+	d.objNonAppend = false
 	d.isCreating = false
 	d.objRowCnt = 0
 	d.objRowDel = 0
@@ -244,17 +244,14 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	}
 
 	s.ObjectHelper.resetForNewObj()
-	s.ObjectHelper.objIsSorted = objectEntry.IsSortedLocked()
-	// if s.name == "x" {
-	// 	logutil.Infof("yyyy mergeblocks %d-%s obj(%v): %v", s.tid, s.name, common.ShortObjId(objectEntry.ID), s.ObjectHelper.objIsSorted)
-	// }
+	s.ObjectHelper.objNonAppend = !objectEntry.IsAppendable()
 	return
 }
 
 func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 	s.ObjectHelper.push(obj)
 
-	if !obj.IsSorted() || s.ObjectHelper.isCreating {
+	if !s.ObjectHelper.objNonAppend || s.ObjectHelper.isCreating {
 		return nil
 	}
 	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
@@ -277,7 +274,7 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	s.ObjectHelper.hintNonDropBlock()
 
 	// this blk is not in a s3 object
-	if !s.ObjectHelper.objIsSorted {
+	if !s.ObjectHelper.objNonAppend {
 		return
 	}
 
