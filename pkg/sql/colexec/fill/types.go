@@ -32,8 +32,7 @@ const (
 	findNull      = 2
 	findValue     = 3
 	fillValue     = 4
-
-	findNullPre = 5
+	findNullPre   = 5
 )
 
 type container struct {
@@ -55,11 +54,13 @@ type container struct {
 	subStatus int
 	colIdx    int
 	buf       *batch.Batch
+	idx       int
 
 	// linear
 	nullIdx int
 	nullRow int
 	exes    []colexec.ExpressionExecutor
+	done    bool
 
 	process func(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error)
 }

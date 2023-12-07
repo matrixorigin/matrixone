@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCreateCloudDashboard creates a dashboard for cloud env.
 func TestCreateCloudDashboard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
@@ -27,5 +28,27 @@ func TestCreateCloudDashboard(t *testing.T) {
 	}
 
 	c := NewCloudDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}
+
+// TestCreateLocalDashboard creates a dashboard for local env.
+func TestCreateLocalDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}
+
+// TestCreateK8SDashboard creates a dashboard for k8s env(EKS, TKE).
+func TestCreateK8SDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	c := NewK8SDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
 	require.NoError(t, c.Create())
 }

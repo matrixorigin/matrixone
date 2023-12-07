@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -63,8 +64,9 @@ func NewLockService(cfg Config) LockService {
 	s := &service{
 		// If a cn with the same uuid is restarted within a short period of time, it will lead to
 		// the possibility that the remote locks will not be released, because the heartbeat timeout
-		// of a remote lockservice cannot be detected. To solve this problem we use uuid+create-time as
-		// service id, then a cn reboot with the same uuid will also be considered as not a lockservice.
+		// of a remote lockservice cannot be detected. To solve this problem we use uuid+create-time
+		// as service id, then a cn reboot with the same uuid will also be considered as not a same
+		// lockservice.
 		serviceID: getServiceIdentifier(cfg.ServiceID, time.Now().UnixNano()),
 		cfg:       cfg,
 		fsp:       newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
@@ -202,6 +204,7 @@ func (s *service) Close() error {
 			return
 		}
 		s.events.close()
+		s.activeTxnHolder.close()
 		close(s.fetchWhoWaitingListC)
 	})
 	return err
@@ -349,6 +352,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 }
 
 type activeTxnHolder interface {
+	close()
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	deleteActiveTxn(txnID []byte) *activeTxn
 	keepRemoteActiveTxn(remoteService string)
@@ -494,6 +498,16 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		}
 	}
 	return timeoutTxns, wait
+}
+
+func (h *mapBasedTxnHolder) close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for k, txn := range h.mu.activeTxns {
+		reuse.Free(txn, nil)
+		delete(h.mu.activeTxns, k)
+	}
 }
 
 type remote struct {
