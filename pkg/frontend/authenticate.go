@@ -2770,13 +2770,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	}
 
 	if user.AuthOption == nil {
-		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
-		return
+		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
 	if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
-		err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
-		return
+		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
 	//check the user exists or not
@@ -2794,8 +2792,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		// false : return an error
 		// true : return and  do nothing
 		if !au.IfExists {
-			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
-			return
+			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
 		} else {
 			return err
 		}
@@ -2838,8 +2835,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		}
 	} else {
 		if currentUser != userName {
-			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
-			return
+			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 		}
 		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 		if err != nil {
@@ -2964,8 +2960,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			// false : return an error
 			// true : skip and do nothing
 			if !aa.IfExists {
-				rtnErr = moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
-				return
+				return moerr.NewInternalError(ctx, "there is no account %s", aa.Name)
 			}
 		}
 
@@ -3221,8 +3216,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 					return rtnErr
 				}
 			} else {
-				rtnErr = moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
-				return
+				return moerr.NewInternalError(ctx, "there is no role %s", sr.Role.UserName)
 			}
 
 			//step2 : check the role has been granted to the user or not
@@ -3239,8 +3233,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 			}
 
 			if !execResultArrayHasData(erArray) {
-				rtnErr = moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
-				return
+				return moerr.NewInternalError(ctx, "the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
 			}
 			return rtnErr
 		}
@@ -3329,8 +3322,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
-		return nil, err
+		return nil, moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
 	if err != nil {
@@ -3343,8 +3335,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if accStatus == tree.AccountStatusSuspend.String() {
-		err = moerr.NewInternalError(newCtx, "the account %s is suspended", accName)
-		return nil, err
+		return nil, moerr.NewInternalError(newCtx, "the account %s is suspended", accName)
 	}
 
 	//check the publication is already exist or not
@@ -3363,8 +3354,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		return nil, err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
-		return nil, err
+		return nil, moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
 	}
 
 	databaseName, err = erArray[0].GetString(newCtx, 0, 0)
@@ -3393,8 +3383,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 					return nil, err
 				}
 				if !execResultArrayHasData(erArray) {
-					err = moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
-					return nil, err
+					return nil, moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
 				}
 
 				tenantName, err = erArray[0].GetString(newCtx, 0, 0)
@@ -3402,13 +3391,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 					return nil, err
 				}
 				if !isSubscriptionValid(accountList, tenantName) {
-					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-					return nil, err
+					return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 				}
 			}
 		} else {
-			err = moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
-			return nil, err
+			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
 		}
 	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
 		logError(ses, ses.GetDebugString(),
@@ -3419,8 +3406,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			zap.String("databaseName", databaseName),
 			zap.String("accountList", accountList),
 			zap.String("tenant", tenantInfo.GetTenant()))
-		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
-		return nil, err
+		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
 	subs = &plan.SubscriptionMeta{
@@ -3493,8 +3479,7 @@ func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, 
 		return false, err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
-		return false, err
+		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
 	}
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	if err != nil {
@@ -3574,8 +3559,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 	if stageExist {
 		if !cs.IfNotExists {
-			err = moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
-			return
+			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3646,8 +3630,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 		// if have stage enabled
 		if execResultArrayHasData(erArray) {
-			err = moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
-			return err
+			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
 		} else {
 			// use the filepath
 			return err
@@ -3821,8 +3804,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			err = moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
-			return err
+			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
@@ -3900,8 +3882,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
-		return err
+		return moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
 	}
 	datId, err = erArray[0].GetUint64(ctx, 0, 0)
 	if err != nil {
@@ -3912,8 +3893,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		return err
 	}
 	if datType != "" { //TODO: check the dat_type
-		err = moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
-		return err
+		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
 	}
 	bh.ClearExecResultSet()
 	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
@@ -3943,8 +3923,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	tenantInfo = ses.GetTenantInfo()
 
 	if !tenantInfo.IsAdminRole() {
-		err = moerr.NewInternalError(ctx, "only admin can alter publication")
-		return err
+		return moerr.NewInternalError(ctx, "only admin can alter publication")
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3968,8 +3947,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
-		return err
+		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
 	}
 
 	accountList, err = erArray[0].GetString(ctx, 0, 0)
@@ -3993,8 +3971,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			for _, acct := range ap.AccountsSet.SetAccounts {
 				s := string(acct)
 				if accountNameIsInvalid(s) {
-					err = moerr.NewInternalError(ctx, "invalid account name '%s'", s)
-					return err
+					return moerr.NewInternalError(ctx, "invalid account name '%s'", s)
 				}
 				accts = append(accts, s)
 			}
@@ -4002,8 +3979,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountList = strings.Join(accts, ",")
 		case len(ap.AccountsSet.DropAccounts) > 0:
 			if allAccount {
-				err = moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
-				return err
+				return moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
 			}
 			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.DropAccounts {
@@ -4019,14 +3995,12 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountList = strings.Join(accountListSep, ",")
 		case len(ap.AccountsSet.AddAccounts) > 0:
 			if allAccount {
-				err = moerr.NewInternalError(ctx, "cannot add account from all account option")
-				return err
+				return moerr.NewInternalError(ctx, "cannot add account from all account option")
 			}
 			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.AddAccounts {
 				if accountNameIsInvalid(string(acct)) {
-					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
-					return err
+					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
 				}
 				idx := sort.SearchStrings(accountListSep, string(acct))
 				if idx == len(accountListSep) || accountListSep[idx] != string(acct) {
@@ -4088,8 +4062,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
-		return err
+		return moerr.NewInternalError(ctx, "publication '%s' does not exist", dp.Name)
 	}
 
 	sql, err = getSqlForDropPubInfo(ctx, string(dp.Name), false)
@@ -4430,8 +4403,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 
 		if vr == nil {
 			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
-				err = moerr.NewInternalError(ctx, "there is no user %s", user.Username)
-				return err
+				return moerr.NewInternalError(ctx, "there is no user %s", user.Username)
 			}
 		}
 
@@ -4462,8 +4434,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		}
 
 		if execResultArrayHasData(erArray) {
-			err = moerr.NewInternalError(ctx, "can not delete the user %s", user.Username)
-			return err
+			return moerr.NewInternalError(ctx, "can not delete the user %s", user.Username)
 		}
 
 		//step2 : delete mo_user
@@ -4516,8 +4487,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 
 		if vr == nil {
 			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
-				err = moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
-				return err
+				return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
 			}
 		}
 
@@ -4532,8 +4502,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		//NOTE: if the role is the admin role (moadmin,accountadmin) or public,
 		//the role can not be deleted.
 		if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
-			err = moerr.NewInternalError(ctx, "can not delete the role %s", vr.name)
-			return err
+			return moerr.NewInternalError(ctx, "can not delete the role %s", vr.name)
 		}
 
 		sqls := getSqlForDeleteRole(vr.id)
@@ -4756,8 +4725,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	for i, user := range rp.Roles {
 		//check Revoke privilege on xxx yyy from moadmin(accountadmin)
 		if account.IsNameOfAdminRoles(user.UserName) {
-			err = moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "the privilege can not be revoked from the role %s", user.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, user.UserName)
 		if err != nil {
@@ -4770,8 +4738,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		verifiedRoles[i] = vr
 		if vr == nil {
 			if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
-				err = moerr.NewInternalError(ctx, "there is no role %s", user.UserName)
-				return err
+				return moerr.NewInternalError(ctx, "there is no role %s", user.UserName)
 			}
 		}
 	}
@@ -4809,8 +4776,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 				continue
 			}
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
-				err = moerr.NewInternalError(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
-				return err
+				return moerr.NewInternalError(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
 			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 			bh.ClearExecResultSet()
@@ -5036,8 +5002,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
 		if account != nil && account.IsNameOfAdminRoles(role.UserName) {
-			err = moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
 		}
 		sql, err = getSqlForRoleIdOfRole(ctx, role.UserName)
 		if err != nil {
@@ -5062,8 +5027,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				}
 			}
 		} else {
-			err = moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedRoles[i] = &verifiedRole{
 			typ:  roleType,
@@ -5085,8 +5049,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			return err
 		}
 		if isBannedPrivilege(privType) {
-			err = moerr.NewInternalError(ctx, "the privilege %s can not be granted", privType)
-			return err
+			return moerr.NewInternalError(ctx, "the privilege %s can not be granted", privType)
 		}
 		//check the match between the privilegeScope and the objectType
 		err = matchPrivilegeTypeWithObjectType(ctx, privType, objType)
@@ -5215,8 +5178,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			verifiedToRoles[i] = vr
 			if vr == nil {
 				if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
-					err = moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
-					return err
+					return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
 				}
 			}
 		}
@@ -5234,8 +5196,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 			return err
 		}
 		if vr == nil {
-			err = moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5251,22 +5212,18 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 				//check Revoke moadmin from root,dump,userX
 				//check Revoke accountadmin from root,dump,userX
 				//check Revoke moadmin(accountadmin) from roleX
-				err = moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
-				return err
+				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
 			} else if isPublicRole(from.name) {
-				err = moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
-				return err
+				return moerr.NewInternalError(ctx, "the role %s can not be revoked", from.name)
 			}
 
 			if to.typ == roleType {
 				//check Revoke roleX from moadmin(accountadmin)
 				if account.IsNameOfAdminRoles(to.name) {
-					err = moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
-					return err
+					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				} else if isPublicRole(to.name) {
 					//check Revoke roleX from public
-					err = moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
-					return err
+					return moerr.NewInternalError(ctx, "the role %s can not be revoked from the role %s", from.name, to.name)
 				}
 			}
 
@@ -5371,8 +5328,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			return err
 		}
 		if vr == nil {
-			err = moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "there is no role %s", role.UserName)
 		}
 		verifiedFromRoles[i] = vr
 	}
@@ -5400,8 +5356,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 				return err
 			}
 			if vr == nil {
-				err = moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
-				return err
+				return moerr.NewInternalError(ctx, "there is no role or user %s", user.Username)
 			}
 			verifiedToRoles[i] = vr
 
@@ -5468,15 +5423,13 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 
 			if to.typ == roleType {
 				if from.id == to.id { //direct loop
-					err = moerr.NewRoleGrantedToSelf(ctx, from.name, to.name)
-					return err
+					return moerr.NewRoleGrantedToSelf(ctx, from.name, to.name)
 				} else {
 					//check the indirect loop
 					edgeId := checkLoopGraph.addEdge(from.id, to.id)
 					has := checkLoopGraph.hasLoop(from.id)
 					if has {
-						err = moerr.NewRoleGrantedToSelf(ctx, from.name, to.name)
-						return err
+						return moerr.NewRoleGrantedToSelf(ctx, from.name, to.name)
 					}
 					//restore the graph
 					checkLoopGraph.removeEdge(edgeId)
@@ -6506,8 +6459,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
 			if err != nil {
-				err = moerr.NewInternalError(ctx, "get inherited role id of the role id. error:%v", err)
-				return false, err
+				return false, moerr.NewInternalError(ctx, "get inherited role id of the role id. error:%v", err)
 			}
 
 			erArray, err = getResultSet(ctx, bh)
@@ -7794,8 +7746,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				rtnErr = moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
-				return
+				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
@@ -8610,14 +8561,12 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 			if cf.Language == string(tree.PYTHON) {
 				if !strings.HasSuffix(cf.Body, ".py") &&
 					!strings.HasSuffix(cf.Body, ".whl") {
-					err = moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
-					return err
+					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
 				}
 				if strings.HasSuffix(cf.Body, ".whl") {
 					dotIdx := strings.LastIndex(cf.Handler, ".")
 					if dotIdx < 1 {
-						err = moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
-						return err
+						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
 					}
 				}
 			}
@@ -8872,8 +8821,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		}
 
 		if !isExist {
-			rtnErr = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
-			return
+			return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
 		}
 
 		// step2: update the config
