@@ -1574,6 +1574,7 @@ func makeOneDeletePlan(
 		truncateTable.ClusterTable = &plan.ClusterTable{
 			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
 		}
+		truncateTable.IsDelete = true
 	}
 	// append delete node
 	deleteNode := &Node{

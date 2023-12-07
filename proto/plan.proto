@@ -1254,6 +1254,7 @@ message TruncateTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	bool	is_delete = 8;
 }
 
 message ClusterTable{

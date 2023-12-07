@@ -9674,6 +9674,7 @@ type TruncateTable struct {
 	ClusterTable         *ClusterTable `protobuf:"bytes,5,opt,name=cluster_table,json=clusterTable,proto3" json:"cluster_table,omitempty"`
 	TableId              uint64        `protobuf:"varint,6,opt,name=table_id,json=tableId,proto3" json:"table_id,omitempty"`
 	ForeignTbl           []uint64      `protobuf:"varint,7,rep,packed,name=foreign_tbl,json=foreignTbl,proto3" json:"foreign_tbl,omitempty"`
+	IsDelete             bool          `protobuf:"varint,6,opt,name=is_delete,json=isDelete,proto3" json:"is_delete,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
 	XXX_unrecognized     []byte        `json:"-"`
 	XXX_sizecache        int32         `json:"-"`
