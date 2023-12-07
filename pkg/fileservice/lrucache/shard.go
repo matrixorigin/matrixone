@@ -26,7 +26,6 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	size := int64(len(value.Bytes()))
 	atomic.AddInt64(&s.size, size)
 	if _, ok := s.kv.Get(h, key); ok { // why need replace? nothing to do
-		// old algorithm is replace and not update the freshness
 		/*
 			// replace
 			atomic.AddInt64(&s.size, elem.Size*-1)
