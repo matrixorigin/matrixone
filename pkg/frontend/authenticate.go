@@ -3730,8 +3730,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 	if !stageExist {
 		if !as.IfNotExists {
-			err = moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
-			return err
+			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3982,8 +3981,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountListSep = strings.Split(accountList, ",")
 			for _, acct := range ap.AccountsSet.DropAccounts {
 				if accountNameIsInvalid(string(acct)) {
-					err = moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
-					return err
+					return moerr.NewInternalError(ctx, "invalid account name '%s'", acct)
 				}
 				idx := sort.SearchStrings(accountListSep, string(acct))
 				if idx < len(accountListSep) && accountListSep[idx] == string(acct) {
@@ -8162,8 +8160,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			return err
 		}
 		if !execResultArrayHasData(erArray) {
-			err = moerr.NewInternalError(ctx, "there is no role %s", cu.Role.UserName)
-			return err
+			return moerr.NewInternalError(ctx, "there is no role %s", cu.Role.UserName)
 		}
 		newRoleId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8301,8 +8298,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 		}
 
 		if !execResultArrayHasData(erArray) {
-			err = moerr.NewInternalError(ctx, "get the id of user %s failed", user.Username)
-			return err
+			return moerr.NewInternalError(ctx, "get the id of user %s failed", user.Username)
 		}
 		newUserId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
@@ -8673,8 +8669,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	}
 
 	if execResultArrayHasData(erArray) {
-		err = moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
-		return err
+		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
 	}
 
 	err = bh.Exec(ctx, "begin;")
