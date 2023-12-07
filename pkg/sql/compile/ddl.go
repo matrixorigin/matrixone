@@ -981,6 +981,16 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableId := r.GetTableID(c.ctx)
 
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	tblName := qry.GetTableDef().GetName()
+
+	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 
