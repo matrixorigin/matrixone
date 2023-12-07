@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"encoding/hex"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -310,6 +311,10 @@ func (r *blockReader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if r.closed {
+		return nil, nil
+	}
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -372,6 +377,15 @@ func (r *blockReader) Read(
 		return nil, err
 	}
 
+	if r.isExactlyEqual {
+		r.cnt++
+		if bat.RowCount() > 0 {
+			r.closed = true
+			logutil.Infof("block reader finds pk after reading %d blocks, txn[%s]",
+				r.cnt, r.txnID)
+		}
+	}
+
 	if filter != nil {
 		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
@@ -419,6 +433,7 @@ func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
 	encodedPrimaryKey []byte,
+	isExactlyEqual bool,
 	ts timestamp.Timestamp,
 	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
@@ -438,6 +453,8 @@ func newBlockMergeReader(
 		),
 		encodedPrimaryKey: encodedPrimaryKey,
 	}
+	r.isExactlyEqual = isExactlyEqual
+	r.txnID = hex.EncodeToString(txnTable.db.txn.op.Txn().ID)
 	return r
 }
 

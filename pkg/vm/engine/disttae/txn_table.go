@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"encoding/hex"
 	"strconv"
 	"time"
 	"unsafe"
@@ -1460,15 +1461,29 @@ func (tbl *txnTable) NewReader(
 	num int,
 	expr *plan.Expr,
 	ranges [][]byte) ([]engine.Reader, error) {
-	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
+	encodedPK, hasNull, isExactlyEqual := tbl.makeEncodedPK(expr)
 	if hasNull {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
+	if isExactlyEqual {
+		var dirtyBlks []*catalog.BlockInfo
+		if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
+			ranges = ranges[1:]
+			for _, blk := range ranges {
+				dirtyBlks = append(dirtyBlks, catalog.DecodeBlockInfo(blk))
+			}
+		}
+		logutil.Infof("txn[%s] need to read %d dirty blocks in pk-exactly-equal case\n",
+			hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+			len(dirtyBlks))
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, true, dirtyBlks)
+	}
+
 	if len(ranges) == 0 {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, false, nil)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
+		return tbl.newMergeReader(ctx, num, expr, encodedPK, false, nil)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
@@ -1485,7 +1500,7 @@ func (tbl *txnTable) NewReader(
 			}
 			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
-		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, dirtyBlks)
+		rds0, err := tbl.newMergeReader(ctx, num, expr, encodedPK, false, dirtyBlks)
 		if err != nil {
 			return nil, err
 		}
@@ -1568,9 +1583,28 @@ func (tbl *txnTable) newMergeReader(
 	num int,
 	expr *plan.Expr,
 	encodedPK []byte,
+	isExactlyEqual bool,
 	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
+	if isExactlyEqual {
+		rds0, err := tbl.newReaderForPKExactlyEqual(
+			ctx,
+			encodedPK,
+			expr,
+			dirtyBlks)
+		if err != nil {
+			return nil, err
+		}
+
+		mrds[0].rds = append(mrds[0].rds, rds0...)
+
+		for i := range rds {
+			rds[i] = &mrds[i]
+		}
+		return rds, nil
+	}
+
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
@@ -1580,6 +1614,7 @@ func (tbl *txnTable) newMergeReader(
 	if err != nil {
 		return nil, err
 	}
+
 	mrds[0].rds = append(mrds[0].rds, rds0...)
 
 	for i := range rds {
@@ -1638,6 +1673,74 @@ func (tbl *txnTable) newBlockReader(
 		rds[i] = blockReaders[i]
 	}
 	return rds, nil
+}
+
+func (tbl *txnTable) newReaderForPKExactlyEqual(
+	ctx context.Context,
+	encodedPrimaryKey []byte,
+	//isExactlyEqual bool,
+	expr *plan.Expr,
+	dirtyBlks []*catalog.BlockInfo,
+) ([]engine.Reader, error) {
+	txn := tbl.db.txn
+	ts := txn.op.SnapshotTS()
+	fs := txn.engine.fs
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	seqnumMp := make(map[string]int)
+	for _, coldef := range tbl.tableDef.Cols {
+		seqnumMp[coldef.Name] = int(coldef.Seqnum)
+	}
+
+	mp := make(map[string]types.Type)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
+	//FIXME::why did get type from the engine.AttributeDef,instead of plan.TableDef.Cols
+	for _, def := range tbl.defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		mp[attr.Attr.Name] = attr.Attr.Type
+	}
+
+	iter := state.NewPrimaryKeyIter(
+		types.TimestampToTS(ts),
+		logtailreplay.Prefix(encodedPrimaryKey),
+	)
+
+	partReader := &PartitionReader{
+		table:          tbl,
+		iter:           iter,
+		seqnumMp:       seqnumMp,
+		typsMap:        mp,
+		isExactlyEqual: true,
+		txnID:          hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+	}
+
+	proc := tbl.proc.Load()
+
+	var readers []engine.Reader
+	readers = append(readers, partReader)
+
+	if len(dirtyBlks) > 0 {
+		readers = append(
+			readers,
+			newBlockMergeReader(
+				ctx,
+				tbl,
+				encodedPrimaryKey,
+				true,
+				ts,
+				dirtyBlks,
+				expr,
+				fs,
+				proc,
+			))
+	}
+	return readers, nil
 }
 
 func (tbl *txnTable) newReader(
@@ -1707,6 +1810,7 @@ func (tbl *txnTable) newReader(
 					ctx,
 					tbl,
 					encodedPrimaryKey,
+					false,
 					ts,
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -1724,6 +1828,7 @@ func (tbl *txnTable) newReader(
 				ctx,
 				tbl,
 				encodedPrimaryKey,
+				false,
 				ts,
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,

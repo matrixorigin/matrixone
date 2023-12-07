@@ -32,27 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
-//func (txn *Transaction) getObjInfos(
-//	ctx context.Context,
-//	tbl *txnTable,
-//) (objs []logtailreplay.ObjectEntry, err error) {
-//	ts := types.TimestampToTS(txn.op.SnapshotTS())
-//	state, err := tbl.getPartitionState(ctx)
-//	if err != nil {
-//		return nil, err
-//	}
-//	iter, err := state.NewObjectsIter(ts)
-//	if err != nil {
-//		return nil, err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		objs = append(objs, entry)
-//	}
-//	iter.Close()
-//	return
-//}
-
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()
@@ -92,10 +71,6 @@ func (txn *Transaction) WriteBatch(
 			}
 			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-		}
-		// for TestPrimaryKeyCheck
-		if txn.blockId_raw_batch != nil {
-			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
 		}
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
@@ -464,11 +439,6 @@ func (txn *Transaction) genBlock() {
 	txn.rowId[5] = INIT_ROWID_OFFSET
 }
 
-func (txn *Transaction) getCurrentBlockId() *types.Blockid {
-	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	return rowId.BorrowBlockID()
-}
-
 func (txn *Transaction) genRowId() types.Rowid {
 	if txn.rowId[5] != INIT_ROWID_OFFSET {
 		txn.rowId[5]++
@@ -705,7 +675,6 @@ func (txn *Transaction) delTransaction() {
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch = nil
-	txn.blockId_raw_batch = nil
 	txn.deletedBlocks = nil
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)

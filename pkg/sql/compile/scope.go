@@ -457,6 +457,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if len(rds) != mcpu {
 		newRds := make([]engine.Reader, 0, mcpu)
 		step := len(rds) / mcpu
+		//FIXME:: if len(rds) < mcpu, then for loop will never stop?
 		for i := 0; i < len(rds); i += step {
 			m := disttae.NewMergeReader(rds[i : i+step])
 			newRds = append(newRds, m)

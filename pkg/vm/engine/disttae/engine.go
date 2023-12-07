@@ -380,7 +380,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			offsets: map[types.Blockid][]int64{},
 		},
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
-		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 		toFreeBatches:                   make(map[[2]string][]*batch.Batch),

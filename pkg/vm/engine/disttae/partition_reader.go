@@ -37,10 +37,14 @@ type PartitionReader struct {
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes  map[types.Rowid]uint8
-	iter     logtailreplay.RowsIter
-	seqnumMp map[string]int
-	typsMap  map[string]types.Type
+	deletes        map[types.Rowid]uint8
+	iter           logtailreplay.RowsIter
+	seqnumMp       map[string]int
+	typsMap        map[string]types.Type
+	isExactlyEqual bool
+	closed         bool
+	//just for test
+	txnID string
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -109,6 +113,9 @@ func (p *PartitionReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool) (*batch.Batch, error) {
 	if p == nil {
+		return nil, nil
+	}
+	if p.closed {
 		return nil, nil
 	}
 	//prepare data for read.
@@ -224,6 +231,11 @@ func (p *PartitionReader) Read(
 				vp.PutBatch(b)
 			}
 			return nil, nil
+		}
+		if p.isExactlyEqual {
+			p.closed = true
+			logutil.Infof("partition reader finds pk in partitionState.rows, txn[%s]",
+				p.txnID)
 		}
 		b.SetRowCount(rows)
 
