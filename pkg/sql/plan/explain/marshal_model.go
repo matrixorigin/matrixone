@@ -199,7 +199,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_FUNCTION_SCAN: "Function Scan",
 	plan2.Node_EXTERNAL_SCAN: "External Scan",
 	plan2.Node_MATERIAL_SCAN: "Material Scan",
-	plan2.Node_SOURCE_SCAN:   "Source Scan",
+	// plan2.Node_SOURCE_SCAN:   "Source Scan",
 
 	plan2.Node_PROJECT: "Project",
 
@@ -243,11 +243,11 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_PRE_INSERT:       "Pre Insert",
 	plan2.Node_PRE_DELETE:       "Pre Delete",
 	plan2.Node_PRE_INSERT_UK:    "Pre Insert Unique",
-	plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
+	// plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
 
-	plan2.Node_TIME_WINDOW: "Time window",
-	plan2.Node_Fill:        "Fill",
-	plan2.Node_PARTITION:   "Partition",
+	// plan2.Node_TIME_WINDOW: "Time window",
+	// plan2.Node_Fill:        "Fill",
+	// plan2.Node_PARTITION:   "Partition",
 }
 
 const (

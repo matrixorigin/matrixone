@@ -199,12 +199,12 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "gather", nil
 	case plan.Node_REPLACE:
 		return "replace", nil
-	case plan.Node_TIME_WINDOW:
-		return "time_window", nil
-	case plan.Node_Fill:
-		return "fill", nil
-	case plan.Node_PARTITION:
-		return "partition", nil
+	// case plan.Node_TIME_WINDOW:
+	// 	return "time_window", nil
+	// case plan.Node_Fill:
+	// 	return "fill", nil
+	// case plan.Node_PARTITION:
+	// 	return "partition", nil
 	case plan.Node_FUNCTION_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.TableDef != nil && m.node.TableDef.TblFunc != nil {
@@ -482,16 +482,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Lock_Op, //"lock op",
 			Value: []string{},
 		})
-	case plan.Node_TIME_WINDOW:
-		labels = append(labels, Label{
-			Name:  Label_Time_Window,
-			Value: []string{},
-		})
-	case plan.Node_PARTITION:
-		labels = append(labels, Label{
-			Name:  Label_Partition,
-			Value: []string{},
-		})
+	// case plan.Node_TIME_WINDOW:
+	// 	labels = append(labels, Label{
+	// 		Name:  Label_Time_Window,
+	// 		Value: []string{},
+	// 	})
+	// case plan.Node_PARTITION:
+	// 	labels = append(labels, Label{
+	// 		Name:  Label_Partition,
+	// 		Value: []string{},
+	// 	})
 	case plan.Node_BROADCAST:
 		labels = append(labels, Label{
 			Name:  Label_Boardcast,
