@@ -93,12 +93,8 @@ func (s *StatsArray) InitIfEmpty() *StatsArray {
 }
 
 func (s *StatsArray) Reset() *StatsArray {
-	return s.WithVersion(StatsArrayVersion).
-		// StatsArrayVersion1
-		WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0).
-		// StatsArrayVersion2
-		WithOutTrafficBytes(0)
-	// Next Version
+	*s = *initStatsArray
+	return s
 }
 
 func (s *StatsArray) GetVersion() float64         { return (*s)[StatsArrayIndexVersion] }
@@ -207,9 +203,9 @@ func StatsArrayToJsonString(arr []float64) []byte {
 
 var initStatsArray = NewStatsArray()
 
-var DefaultStatsArray = *initStatsArray.Init()
+var DefaultStatsArray = *initStatsArray
 
-var DefaultStatsArrayJsonString = initStatsArray.Init().ToJsonString()
+var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 
 type statsInfoKey struct{}
 
