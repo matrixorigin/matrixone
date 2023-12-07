@@ -250,7 +250,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 
 	updateStorageUsageCache(usage.AccIds, usage.Sizes)
 
-	// step 2: handling these pulled data
+	// step 3: handling these pulled data
 	return handleStorageUsageResponse(ctx, usage)
 }
 
