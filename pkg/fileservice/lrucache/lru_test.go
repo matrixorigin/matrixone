@@ -53,7 +53,7 @@ func TestLRUCallbacks(t *testing.T) {
 			evictEntryMap[key] = value
 			postEvictInvokedMap[key] = true
 		})
-	s := l.shards[0]
+	s := &l.shards[0]
 	s.capacity = 1
 
 	// PostSet
@@ -63,11 +63,15 @@ func TestLRUCallbacks(t *testing.T) {
 	postSetInvokedMap[1] = false // resetting
 	assert.False(t, postEvictInvokedMap[1])
 
+	s.Set(ctx, h, 1, []byte{43})
+	assert.True(t, postSetInvokedMap[1])
+	assert.True(t, postEvictInvokedMap[1]) // set on the same key, so evicted
+
 	// PostSet and PostEvict
 	h = l.hasher.Hash(2)
 	s.Set(ctx, h, 2, []byte{44})
 	assert.True(t, postEvictInvokedMap[1])        //postEvictInvokedMap is updated by PostEvict
-	assert.Equal(t, []byte{42}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
+	assert.Equal(t, []byte{43}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
 }
 
 func BenchmarkLRUSet(b *testing.B) {
@@ -80,7 +84,7 @@ func BenchmarkLRUSet(b *testing.B) {
 	v := make([]byte, 1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		k.Offset = int64(i) % (capacity * 10)
+		k.Offset = int64(i) % (capacity)
 		v[0] = byte(i)
 		l.Set(ctx, k, v)
 	}
@@ -97,7 +101,7 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 		k.Path = "tmp"
 		v := make([]byte, 1)
 		for i := 0; pb.Next(); i++ {
-			k.Offset = int64(i) % (capacity * 10)
+			k.Offset = int64(i) % (capacity)
 			v[0] = byte(i)
 			l.Set(ctx, k, v)
 		}
@@ -115,7 +119,7 @@ func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 		k.Path = "tmp"
 		v := make([]byte, 1)
 		for i := 0; pb.Next(); i++ {
-			k.Offset = int64(i) % (capacity * 10)
+			k.Offset = int64(i) % (capacity)
 			v[0] = byte(i)
 			l.Set(ctx, k, v)
 			if i%2 == 0 {

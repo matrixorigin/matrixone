@@ -121,7 +121,3 @@ func (l *LRU[K, V]) Available() int64 {
 func (l *LRU[K, V]) hash(k K) uint64 {
 	return l.hasher.Hash(k)
 }
-
-func (l *LRU[K, V]) getShard(key K) *shard[K, V] {
-	return &l.shards[l.hasher.Hash(key)%uint64(len(l.shards))]
-}
