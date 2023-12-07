@@ -969,6 +969,20 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	{
+		// Lock Original Table first before creating
+		// reference to rel by using d.Relation(c.ctx, qry.Table, nil)
+		dbName := c.db
+		if qry.GetDatabase() != "" {
+			dbName = qry.GetDatabase()
+		}
+		tblName := qry.GetTableDef().GetName()
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -980,16 +994,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	tableId := r.GetTableID(c.ctx)
-
-	dbName := c.db
-	if qry.GetDatabase() != "" {
-		dbName = qry.GetDatabase()
-	}
-	tblName := qry.GetTableDef().GetName()
-
-	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
 
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
