@@ -684,12 +684,14 @@ type BaseCollector struct {
 
 	// true for prefech object meta
 	isPrefetch bool
+
+	Objects []*catalog.ObjectEntry
 	// for storage usage
 	Usage struct {
 		// db, tbl deletes
 		Deletes    []interface{}
-		SegInserts []UsageData_
-		SegDeletes []UsageData_
+		SegInserts []*catalog.ObjectEntry
+		SegDeletes []*catalog.ObjectEntry
 	}
 }
 
@@ -2857,24 +2859,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if objNode.HasDropCommitted() {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes,
-					UsageData_{
-						Size:  int64(objNode.BaseNode.Size()),
-						TblId: entry.GetTable().GetID(),
-						DbId:  entry.GetTable().GetDB().GetID(),
-						AccId: entry.GetTable().GetDB().GetTenantID(),
-					})
+				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
 			}
 		} else {
 			// create and non-append, record into the usage ins bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegInserts = append(collector.Usage.SegInserts,
-					UsageData_{
-						Size:  int64(objNode.BaseNode.Size()),
-						TblId: entry.GetTable().GetID(),
-						DbId:  entry.GetTable().GetDB().GetID(),
-						AccId: entry.GetTable().GetDB().GetTenantID(),
-					})
+				collector.Usage.SegInserts = append(collector.Usage.SegInserts, entry)
 			}
 		}
 
