@@ -97,6 +97,8 @@ type deleteNodeInfo struct {
 	partTableIDs    []uint64 // Align array index with the partition number
 	partTableNames  []string // Align array index with the partition number
 	partitionIdx    int      // The array index position of the partition expression column
+	indexTableNames []string
+	foreignTbl      []uint64
 	addAffectedRows bool
 	pkPos           int
 	pkTyp           *plan.Type
@@ -1560,7 +1562,19 @@ func makeOneDeletePlan(
 		}
 		lastNodeId = builder.appendNode(lockNode, bindCtx)
 	}
-
+	truncateTable := &plan.TruncateTable{}
+	if canTruncate {
+		tableDef := delNodeInfo.tableDef
+		truncateTable.Table = tableDef.Name
+		truncateTable.TableId = tableDef.TblId
+		truncateTable.Database = delNodeInfo.objRef.SchemaName
+		truncateTable.IndexTableNames = delNodeInfo.indexTableNames
+		truncateTable.PartitionTableNames = delNodeInfo.partTableNames
+		truncateTable.ForeignTbl = delNodeInfo.foreignTbl
+		truncateTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+	}
 	// append delete node
 	deleteNode := &Node{
 		NodeType: plan.Node_DELETE,
@@ -1576,6 +1590,7 @@ func makeOneDeletePlan(
 			PartitionTableNames: delNodeInfo.partTableNames,
 			PartitionIdx:        int32(delNodeInfo.partitionIdx),
 			PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
+			TruncateTable:       truncateTable,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
@@ -1687,6 +1702,18 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 			}
 		}
 
+	}
+	if tableDef.Fkeys != nil {
+		for _, fk := range tableDef.Fkeys {
+			delNodeInfo.foreignTbl = append(delNodeInfo.foreignTbl, fk.ForeignTbl)
+		}
+	}
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			if indexdef.TableExist {
+				delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+			}
+		}
 	}
 	return delNodeInfo
 }

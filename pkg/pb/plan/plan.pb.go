@@ -6742,10 +6742,12 @@ type DeleteCtx struct {
 	AddAffectedRows bool       `protobuf:"varint,4,opt,name=add_affected_rows,json=addAffectedRows,proto3" json:"add_affected_rows,omitempty"`
 	IsClusterTable  bool       `protobuf:"varint,5,opt,name=is_cluster_table,json=isClusterTable,proto3" json:"is_cluster_table,omitempty"`
 	// Align array index with the partition number
-	PartitionTableIds    []uint64 `protobuf:"varint,6,rep,packed,name=partition_table_ids,json=partitionTableIds,proto3" json:"partition_table_ids,omitempty"`
-	PartitionTableNames  []string `protobuf:"bytes,7,rep,name=partition_table_names,json=partitionTableNames,proto3" json:"partition_table_names,omitempty"`
-	PartitionIdx         int32    `protobuf:"varint,8,opt,name=partition_idx,json=partitionIdx,proto3" json:"partition_idx,omitempty"`
-	PrimaryKeyIdx        int32    `protobuf:"varint,9,opt,name=primary_key_idx,json=primaryKeyIdx,proto3" json:"primary_key_idx,omitempty"`
+	PartitionTableIds   []uint64       `protobuf:"varint,6,rep,packed,name=partition_table_ids,json=partitionTableIds,proto3" json:"partition_table_ids,omitempty"`
+	PartitionTableNames []string       `protobuf:"bytes,7,rep,name=partition_table_names,json=partitionTableNames,proto3" json:"partition_table_names,omitempty"`
+	PartitionIdx        int32          `protobuf:"varint,8,opt,name=partition_idx,json=partitionIdx,proto3" json:"partition_idx,omitempty"`
+	PrimaryKeyIdx       int32          `protobuf:"varint,9,opt,name=primary_key_idx,json=primaryKeyIdx,proto3" json:"primary_key_idx,omitempty"`
+	TruncateTable       *TruncateTable `protobuf:"bytes,12,opt,name=truncate_table,json=truncateTable,proto3,oneof" json:"truncate_table,omitempty"`
+
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
