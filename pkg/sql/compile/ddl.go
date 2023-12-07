@@ -971,8 +971,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
 
 	{
-		// Lock Original Table first before creating
-		// reference to rel by using d.Relation(c.ctx, qry.Table, nil)
+		// lockMoTable will lock Table  mo_catalog.mo_tables
+		// for the row with db_name=dbName & table_name = tblName。
 		dbName := c.db
 		if qry.GetDatabase() != "" {
 			dbName = qry.GetDatabase()
