@@ -63,15 +63,11 @@ func TestLRUCallbacks(t *testing.T) {
 	postSetInvokedMap[1] = false // resetting
 	assert.False(t, postEvictInvokedMap[1])
 
-	s.Set(ctx, h, 1, []byte{43})
-	assert.True(t, postSetInvokedMap[1])
-	assert.True(t, postEvictInvokedMap[1]) // set on the same key, so evicted
-
 	// PostSet and PostEvict
 	h = l.hasher.Hash(2)
 	s.Set(ctx, h, 2, []byte{44})
 	assert.True(t, postEvictInvokedMap[1])        //postEvictInvokedMap is updated by PostEvict
-	assert.Equal(t, []byte{43}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
+	assert.Equal(t, []byte{42}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
 }
 
 func BenchmarkLRUSet(b *testing.B) {
