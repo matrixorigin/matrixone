@@ -69,7 +69,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		// remove the plan, s will be free
 		s.jsonByte = nil
 		s.FreeExecPlan()
-s.exported = true
+		s.exported = true
 
 		// copy value
 		stmt.StatementID = s.StatementID
@@ -569,8 +569,8 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		goto DiscardAndFreeL
 	}
 
-	// Filter out exported statement
-	if s.exported {
+	// Filter out exported or reported statement
+	if s.exported || s.reported {
 		goto DiscardAndFreeL
 	}
 
@@ -580,6 +580,11 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}
+	}
+
+	// logging the statement that should not be here anymore
+	if s.exported || s.reported || s.User == db_holder.MOLoggerUser {
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement))
 	}
 
 	s.reported = true
