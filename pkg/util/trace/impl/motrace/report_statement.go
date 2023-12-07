@@ -69,6 +69,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		// remove the plan, s will be free
 		s.jsonByte = nil
 		s.FreeExecPlan()
+s.exported = true
 
 		// copy value
 		stmt.StatementID = s.StatementID
