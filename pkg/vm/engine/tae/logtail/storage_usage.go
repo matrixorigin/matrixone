@@ -16,9 +16,13 @@ package logtail
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
+	"math"
 	"sync"
 	"time"
+	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -124,6 +128,16 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	return cache
 }
 
+// MemUsed returns the memory used in megabytes
+func (c *StorageUsageCache) MemUsed() float64 {
+	itemCnt := uint64(c.data.Len())
+
+	treeCost := uint64(unsafe.Sizeof(btree.BTreeG[UsageData_]{})) + itemCnt/2*12
+	itemCost := itemCnt * uint64(unsafe.Sizeof(UsageData_{}))
+
+	return math.Round(float64(treeCost+itemCost)/1048576.0*1e6) / 10e6
+}
+
 func (c *StorageUsageCache) Iter() btree.IterG[UsageData_] {
 	return c.data.Iter()
 }
@@ -212,6 +226,10 @@ var tnUsageMemo = NewTNUsageMemo()
 
 func GetTNUsageMemo() *TNUsageMemo {
 	return tnUsageMemo
+}
+
+func (m *TNUsageMemo) MemoryUsed() float64 {
+	return m.cache.MemUsed()
 }
 
 func (m *TNUsageMemo) EnterProcessing() {
@@ -415,6 +433,45 @@ func appendToStorageUsageBat_(data *CheckpointData, usage UsageData_, del bool, 
 
 }
 
+func segments2Usages(segs []*catalog.SegmentEntry) (usages []UsageData_, loaded int) {
+	toUsage := func(seg *catalog.SegmentEntry) UsageData_ {
+		return UsageData_{
+			DbId:  seg.GetTable().GetDB().GetID(),
+			Size:  int64(seg.Stat.GetCompSize()),
+			TblId: seg.GetTable().GetID(),
+			AccId: seg.GetTable().GetDB().GetTenantID(),
+		}
+	}
+
+	// prefetch with batch, need to consider the capacity
+	// of the prefetch cache
+	batchCnt := 100
+	i := 0
+	for idx := 1; idx <= len(segs); idx++ {
+		// prefetch obj meta
+		blk := segs[idx-1].GetFirstBlkEntry()
+		if blk != nil && len(blk.GetMetaLoc()) != 0 {
+			loaded++
+			blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
+		}
+
+		// deal with the previously prefetched batch
+		for idx%batchCnt == 0 && i < idx {
+			segs[i].LoadObjectInfo()
+			usages = append(usages, toUsage(segs[i]))
+			i++
+		}
+	}
+
+	// deal with the left segments
+	for ; i < len(segs); i++ {
+		segs[i].LoadObjectInfo()
+		usages = append(usages, toUsage(segs[i]))
+	}
+
+	return
+}
+
 func FillUsageBatOfGlobal_(
 	collector *GlobalCollector) {
 	start := time.Now()
@@ -431,19 +488,29 @@ func FillUsageBatOfGlobal_(
 func FillUsageBatOfIncremental_(collector *IncrementalCollector) {
 	start := time.Now()
 
+	var loaded int
+	var usage []UsageData_
+
 	tnUsageMemo.EnterProcessing()
 	defer func() {
 		tnUsageMemo.LeaveProcessing()
+		v2.TaskICkpLoadObjectCounter.Add(float64(loaded))
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	// must apply seg insert first
 	// step 1: apply seg insert (non-appendable, committed)
-	tnUsageMemo.applySegInserts(collector.Usage.SegInserts, collector.data, collector.Allocator())
+	usage, loaded = segments2Usages(collector.Usage.SegInserts)
+	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
 	tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
-	tnUsageMemo.applySegDeletes(collector.Usage.SegDeletes, collector.data, collector.Allocator())
+	usage, loaded = segments2Usages(collector.Usage.SegDeletes)
+	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
+
+	logutil.Info(fmt.Sprintf("[storage usage]: load object: %d, current usage cache size: %f",
+		loaded, tnUsageMemo.MemoryUsed()))
+
 }
