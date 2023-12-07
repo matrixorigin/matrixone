@@ -1561,15 +1561,9 @@ func makeOneDeletePlan(
 		lastNodeId = builder.appendNode(lockNode, bindCtx)
 	}
 
-	nodeType := plan.Node_DELETE
-
-	if canTruncate {
-		nodeType = plan.Node_DELETE_BY_TRUNCATE
-	}
-
 	// append delete node
 	deleteNode := &Node{
-		NodeType: nodeType,
+		NodeType: plan.Node_DELETE,
 		Children: []int32{lastNodeId},
 		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{

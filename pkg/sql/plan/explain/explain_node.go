@@ -114,8 +114,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Insert"
 	case plan.Node_DELETE:
 		pname = "Delete"
-	case plan.Node_DELETE_BY_TRUNCATE:
-		pname = "Delete by truncate"
 	case plan.Node_INTERSECT:
 		pname = "Intersect"
 	case plan.Node_INTERSECT_ALL:

@@ -1131,6 +1131,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		if n.DeleteCtx.CanTruncate {
+			arg, err := constructDeletion(n, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			return []*Scope{{
+				Magic: TruncateTable,
+				Instructions: vm.Instructions{
+					vm.Instruction{
+						Op:  vm.Deletion,
+						Arg: arg,
+					},
+				},
+			}}, nil
+		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1176,20 +1191,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ss = []*Scope{rs}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
-	case plan.Node_DELETE_BY_TRUNCATE:
-		arg, err := constructDeletion(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
-		return []*Scope{{
-			Magic: TruncateTable,
-			Instructions: vm.Instructions{
-				vm.Instruction{
-					Op:  vm.Deletion,
-					Arg: arg,
-				},
-			},
-		}}, nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
