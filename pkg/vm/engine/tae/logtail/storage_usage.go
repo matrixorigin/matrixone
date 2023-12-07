@@ -359,7 +359,7 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
-// EstablishFromCKPs replays usage info stored in ckps into tn cache
+// EstablishFromCKPs replays usage info which stored in ckps into the tn cache
 func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
@@ -371,13 +371,11 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		}
 
 		insVecs := getStorageUsageBatVectors_(entries[x].bats[StorageUsageInsIDX])
+		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
 		for y := 0; y < insVecs[UsageAccID].Length(); y++ {
 			m.Update(UsageData_{
-				vector.GetFixedAt[uint32](insVecs[UsageAccID], y),
-				vector.GetFixedAt[uint64](insVecs[UsageDBID], y),
-				vector.GetFixedAt[uint64](insVecs[UsageTblID], y),
-				vector.GetFixedAt[int64](insVecs[UsageSize], y),
+				accCol[y], dbCol[y], tblCol[y], sizeCol[y],
 			}, false)
 		}
 
@@ -387,13 +385,11 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		}
 
 		delVecs := getStorageUsageBatVectors_(entries[x].bats[StorageUsageDelIDX])
+		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < delVecs[UsageAccID].Length(); y++ {
 			m.Update(UsageData_{
-				vector.GetFixedAt[uint32](delVecs[UsageAccID], y),
-				vector.GetFixedAt[uint64](delVecs[UsageDBID], y),
-				vector.GetFixedAt[uint64](delVecs[UsageTblID], y),
-				vector.GetFixedAt[int64](delVecs[UsageSize], y),
+				accCol[y], dbCol[y], tblCol[y], sizeCol[y],
 			}, true)
 		}
 	}
@@ -411,6 +407,17 @@ func getStorageUsageBatVectors_(bat *containers.Batch) []*vector.Vector {
 	return []*vector.Vector{
 		accIDVec, dbIDVec, tblIDVec, nil, sizeVec,
 	}
+}
+
+func getStorageUsageVectorCols(vecs []*vector.Vector) (
+	accCol []uint32, dbCol []uint64, tblCol []uint64, sizeCol []int64) {
+
+	dbCol = vector.MustFixedCol[uint64](vecs[UsageDBID])
+	accCol = vector.MustFixedCol[uint32](vecs[UsageAccID])
+	tblCol = vector.MustFixedCol[uint64](vecs[UsageTblID])
+	sizeCol = vector.MustFixedCol[int64](vecs[UsageSize])
+
+	return
 }
 
 func appendToStorageUsageBat_(data *CheckpointData, usage UsageData_, del bool, mp *mpool.MPool) {
