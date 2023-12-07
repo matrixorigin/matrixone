@@ -162,6 +162,10 @@ func (c *checkpointCleaner) updateMinMerged(e *checkpoint.CheckpointEntry) {
 	c.minMerged.Store(e)
 }
 
+func (c *checkpointCleaner) updateMaxCompared(e *checkpoint.CheckpointEntry) {
+	c.maxCompared.Store(e)
+}
+
 func (c *checkpointCleaner) updateInputs(input *GCTable) {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
@@ -180,6 +184,10 @@ func (c *checkpointCleaner) GetMaxConsumed() *checkpoint.CheckpointEntry {
 
 func (c *checkpointCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 	return c.minMerged.Load()
+}
+
+func (c *checkpointCleaner) GetMaxCompared() *checkpoint.CheckpointEntry {
+	return c.maxCompared.Load()
 }
 
 func (c *checkpointCleaner) GetInputs() *GCTable {
@@ -285,6 +293,7 @@ func (c *checkpointCleaner) TryGC() error {
 		if err != nil {
 			return err
 		}
+		c.updateMaxCompared(maxGlobalCKP)
 	}
 	return nil
 }
@@ -344,17 +353,21 @@ func (c *checkpointCleaner) CheckGC() error {
 	debugCandidates := c.ckpClient.GetAllIncrementalCheckpoints()
 	c.inputs.RLock()
 	defer c.inputs.RUnlock()
-	gCkp := c.ckpClient.MaxGlobalCheckpoint()
+	maxConsumed := c.GetMaxConsumed()
+	if maxConsumed == nil {
+		return moerr.NewInternalErrorNoCtx("GC has not yet run")
+	}
+	gCkp := c.GetMaxCompared()
+	if gCkp == nil {
+		gCkp = c.ckpClient.MaxGlobalCheckpoint()
+		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
+	}
 	data, err := c.collectGlobalCkpData(gCkp)
 	if err != nil {
 		return err
 	}
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
-	maxConsumed := c.GetMaxConsumed()
-	if maxConsumed == nil {
-		return moerr.NewInternalErrorNoCtx("GC has not yet run")
-	}
 	for i, ckp := range debugCandidates {
 		if ckp.GetEnd().Equal(maxConsumed.GetEnd()) {
 			debugCandidates = debugCandidates[:i+1]
@@ -363,6 +376,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	}
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
 	start2 := maxConsumed.GetEnd()
+	logutil.Infof("gckp is %v, maxConsumed is %v, start1 is %v", gCkp.String(), maxConsumed.String(), debugCandidates[len(debugCandidates)-1].String())
 	if !start1.Equal(start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
@@ -436,6 +450,7 @@ func (c *checkpointCleaner) Process() {
 	}
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
 	if maxGlobalCKP != nil && compareTS.Less(maxGlobalCKP.GetEnd()) {
+		logutil.Infof("maxGlobalCKP is %v, compareTS is %v", maxGlobalCKP.String(), compareTS.ToString())
 		data, err := c.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
 			return
@@ -444,6 +459,7 @@ func (c *checkpointCleaner) Process() {
 		if err != nil {
 			return
 		}
+		c.updateMaxCompared(maxGlobalCKP)
 	}
 	err = c.mergeGCFile()
 	if err != nil {
