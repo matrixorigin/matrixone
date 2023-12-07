@@ -3660,8 +3660,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 			// is the stage staus is disabled
 			if stageStatus == tree.StageStatusDisabled.String() {
-				err = moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
-				return err
+				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
 			} else if stageStatus == tree.StageStatusEnabled.String() {
 				// replace the filepath using stage url
 				url, err = erArray[0].GetString(ctx, 0, 0)
@@ -3673,8 +3672,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 				ses.ep.userConfig.StageFilePath = filePath
 			}
 		} else {
-			err = moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
-			return err
+			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
 	return err
