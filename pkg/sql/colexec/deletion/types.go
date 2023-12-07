@@ -112,23 +112,28 @@ type DeleteCtx struct {
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RemoteDelete {
-		for _, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
-			for _, bat := range blockId_rowIdBatch {
-				bat.Clean(proc.GetMPool())
-			}
-		}
-
-		for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
-			for _, bat := range blockId_metaLoc {
-				bat.Clean(proc.GetMPool())
-			}
-		}
 		arg.SegmentMap = nil
-		arg.ctr.blockId_bitmap = nil
-		arg.ctr.partitionId_blockId_rowIdBatch = nil
-		arg.ctr.partitionId_blockId_deltaLoc = nil
-		arg.ctr.blockId_type = nil
-		arg.ctr.pool = nil
+		if arg.ctr != nil {
+			for _, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
+				for _, bat := range blockId_rowIdBatch {
+					if bat != nil {
+						bat.Clean(proc.GetMPool())
+					}
+				}
+			}
+			for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
+				for _, bat := range blockId_metaLoc {
+					if bat != nil {
+						bat.Clean(proc.GetMPool())
+					}
+				}
+			}
+			arg.ctr.blockId_bitmap = nil
+			arg.ctr.partitionId_blockId_rowIdBatch = nil
+			arg.ctr.partitionId_blockId_deltaLoc = nil
+			arg.ctr.blockId_type = nil
+			arg.ctr.pool = nil
+		}
 	}
 	if arg.resBat != nil {
 		arg.resBat.Clean(proc.Mp())
