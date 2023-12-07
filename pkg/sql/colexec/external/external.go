@@ -140,6 +140,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	result := vm.NewCallResult()
+
+	// Check if the current query has been canceled
+	select {
+	case <-proc.Ctx.Done():
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, proc.Ctx.Err()
+	default:
+	}
+
 	param := arg.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop

@@ -204,6 +204,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 
 	for {
+		// Check if the current query has been canceled
+		select {
+		case <-proc.Ctx.Done():
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, proc.Ctx.Err()
+		default:
+		}
+
 		switch ctr.status {
 		case receiving:
 			bat, end, err := ctr.ReceiveFromAllRegs(anal)

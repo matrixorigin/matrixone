@@ -43,6 +43,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		// Check if the current query has been canceled
+		select {
+		case <-proc.Ctx.Done():
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, proc.Ctx.Err()
+		default:
+		}
+
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
