@@ -218,7 +218,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    122
+2    186
 drop table if exists t11;
 create table t11(
 col1 int primary key,
@@ -247,7 +247,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
 mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    122
+2    170
 create external table external_table(
 col1 int,
 col2 float,
@@ -302,7 +302,7 @@ max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    
 7566    7369    WARD    ALLEN    SALESMAN    CLERK    7902    7698    1981-04-02    1980-12-17    2975.00    800.00    500.00    300.00    30    20
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
 mo_table_rows(test_db, partition_table)    mo_table_size(test_db, partition_table)
-4    320
+4    512
 create table t2(
 col1 json
 );
@@ -478,7 +478,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    122
+2    186
 drop table if exists t11;
 create table t11(
 col1 int primary key,
@@ -507,7 +507,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
 mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    122
+2    170
 create external table external_table(
 col1 int,
 col2 float,

@@ -264,7 +264,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	found := false
 
 	for i := range cols {
-		if !cols[i].Hidden && (name == AllColumns || cols[i].Name == name) {
+		if name == AllColumns || cols[i].Name == name {
 			neededCols[cols[i].Name] = cols[i]
 			found = true
 		}
@@ -1719,6 +1719,7 @@ func (tbl *txnTable) newReader(
 				newBlockMergeReader(
 					ctx,
 					tbl,
+					encodedPrimaryKey,
 					ts,
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -1737,6 +1738,7 @@ func (tbl *txnTable) newReader(
 			readers[i+1] = newBlockMergeReader(
 				ctx,
 				tbl,
+				encodedPrimaryKey,
 				ts,
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
@@ -1767,8 +1769,9 @@ func (tbl *txnTable) newReader(
 		steps)
 	for i := range blockReaders {
 		bmr := &blockMergeReader{
-			blockReader: blockReaders[i],
-			table:       tbl,
+			blockReader:       blockReaders[i],
+			table:             tbl,
+			encodedPrimaryKey: encodedPrimaryKey,
 		}
 		readers[i+1] = bmr
 	}
