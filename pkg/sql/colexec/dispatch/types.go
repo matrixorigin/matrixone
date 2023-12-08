@@ -148,6 +148,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			case <-arg.LocalRegs[i].Ctx.Done():
 			case arg.LocalRegs[i].Ch <- nil:
 			}
+		} else {
+			arg.LocalRegs[i].CleanChannel(proc.Mp())
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
