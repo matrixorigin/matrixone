@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -162,11 +163,13 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx); err != nil {
+			v2.ProxyClientDisconnectCounter.Inc()
 			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx); err != nil {
+			v2.ProxyServerDisconnectCounter.Inc()
 			t.setError(withCode(err, codeServerDisconnect))
 		}
 	}()
@@ -248,6 +251,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 				zap.Duration("transfer duration", duration),
 			)
 		}
+		v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
