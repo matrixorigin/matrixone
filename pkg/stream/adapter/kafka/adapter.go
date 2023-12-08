@@ -438,10 +438,6 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) (*batch.Batch
 	batch := batch.NewWithSize(len(typs))
 	for i, typ := range typs {
 		typ.Size = int32(typ.Oid.TypeLen())
-		switch typ.Oid {
-		case types.T_datetime:
-			typ.Scale = 6
-		}
 		vec := vector.NewVec(typ)
 		err := vec.PreExtend(batchSize, pool)
 		if err != nil {
