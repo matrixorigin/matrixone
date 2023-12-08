@@ -1636,13 +1636,13 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 
 	var ret *plan2.Plan
 	var err error
+	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId = defines.GetAccountId(requestCtx)
-	}
-	isPrepareStmt := false
-	if len(ses.sql) > 8 {
-		prefix := strings.ToLower(ses.sql[:8])
-		isPrepareStmt = prefix == "execute " || prefix == "prepare "
+		if len(ses.sql) > 8 {
+			prefix := strings.ToLower(ses.sql[:8])
+			isPrepareStmt = prefix == "execute " || prefix == "prepare "
+		}
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
