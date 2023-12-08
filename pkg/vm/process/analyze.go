@@ -52,7 +52,6 @@ func (a *analyze) Stop() {
 	}
 }
 
-
 func (a *analyze) Alloc(size int64) {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.MemorySize, size)
