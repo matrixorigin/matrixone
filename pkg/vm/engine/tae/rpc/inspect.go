@@ -19,10 +19,13 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,6 +189,116 @@ func (c *objStatArg) Run() error {
 		c.ctx.resp.Payload = b.Bytes()
 	}
 	return nil
+}
+
+type storageUsageHistoryArg struct {
+	ctx   *inspectContext
+	accId uint32
+	dbI   uint64
+	tblId uint64
+}
+
+func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	expr, _ := cmd.Flags().GetString("target")
+
+	c.accId, c.dbI, c.tblId, err = parseStorageUsageTarget(expr, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *storageUsageHistoryArg) Run() (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+
+	versions := make([]uint32, len(entries))
+	locations := make([]objectio.Location, len(entries))
+
+	for idx := range entries {
+		versions[idx] = entries[idx].GetVersion()
+		locations[idx] = entries[idx].GetLocation()
+	}
+
+	var usageInsData [][]logtail.UsageData_
+	var usageDelData [][]logtail.UsageData_
+
+	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
+		ctx, locations, versions,
+		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
+		return err
+	}
+
+	txn, _ := c.ctx.db.StartTxn(nil)
+	defer txn.Commit(context.Background())
+
+	getDbAndTblNames := func(dbId, tblId uint64) (string, string) {
+		h, _ := txn.GetDatabaseByID(dbId)
+		if h == nil {
+			return "deleted", "deleted"
+		}
+
+		r, _ := h.GetRelationByID(tblId)
+		if r == nil {
+			return h.GetName(), "deleted"
+		}
+		return h.GetName(), r.Schema().(*catalog.Schema).Name
+	}
+
+	formatOutput := func(dst *bytes.Buffer, data logtail.UsageData_, hint string) float64 {
+		if checkUsageData(data, c) {
+			size := float64(data.Size) / 1048576
+
+			dbName, tblName := getDbAndTblNames(data.DbId, data.TblId)
+			dst.WriteString(fmt.Sprintf("\t[(acc)-%d (%s)-%d (%s)-%d] %s -> %f (mb)\n",
+				data.AccId, dbName, data.DbId, tblName, data.TblId, hint, size))
+
+			return size
+		}
+
+		return 0
+	}
+
+	b := &bytes.Buffer{}
+	ckpType := []string{"G", "I"}
+
+	totalSize := 0.0
+	for x := range entries {
+		eachCkpTotal := 0.0
+
+		b.WriteString(fmt.Sprintf("CKP[%s]: %s\n", ckpType[entries[x].GetType()],
+			time.Unix(0, entries[x].GetEnd().Physical())))
+		for _, data := range usageInsData[x] {
+			eachCkpTotal += formatOutput(b, data, "insert")
+		}
+
+		for _, data := range usageDelData[x] {
+			eachCkpTotal -= formatOutput(b, data, "delete")
+		}
+
+		if eachCkpTotal != 0 {
+			b.WriteString(fmt.Sprintf("\n\taccumulation: %f (mb)\n", eachCkpTotal))
+		}
+
+		totalSize += eachCkpTotal
+
+		b.WriteByte('\n')
+	}
+
+	b.WriteString(fmt.Sprintf(
+		"total accumulation in all ckps: %f (mb), current tn cache mem used: %f\n",
+		totalSize, logtail.GetTNUsageMemo().MemoryUsed()))
+
+	c.ctx.resp.Payload = b.Bytes()
+	return nil
+}
+
+func (c *storageUsageHistoryArg) String() string {
+	return fmt.Sprintf("")
 }
 
 type manualyIgnoreArg struct {
@@ -567,6 +680,15 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
 	rootCmd.AddCommand(maiCmd)
 
+	storageUsageCmd := &cobra.Command{
+		Use:   "storage_usage",
+		Short: "storage usage details",
+		Run:   RunFactory(&storageUsageHistoryArg{}),
+	}
+
+	storageUsageCmd.Flags().StringP("target", "t", "*", "format: accId.dbName.tableName")
+	rootCmd.AddCommand(storageUsageCmd)
+
 	return rootCmd
 }
 
@@ -685,4 +807,88 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 		heap.Pop(&o.candidates)
 	}
 	return nil
+}
+
+// the history of one table
+// mo_ctl("dn", "inspect", "storage_usage -t accId.dbName.tableName");
+//
+// the history of one db
+// mo_ctl("dn", "inspect", "storage_usage -t accId.dbName");
+//
+// the history of one acc
+// mo_ctl("dn", "inspect", "storage_usage -t accId");
+//
+// the history of all
+// mo_ctl("dn", "inspect", "storage_usage -t *");
+func parseStorageUsageTarget(expr string, ac *db.AccessInfo, db *db.DB) (
+	accId uint32, dbId uint64, tblId uint64, err error) {
+	strs := strings.Split(expr, ".")
+
+	if len(strs) == 0 || len(strs) > 3 {
+		return 0, 0, 0, moerr.NewInvalidArgNoCtx(expr, "")
+	}
+
+	if len(strs) == 1 && strs[0] == "*" {
+		return math.MaxUint32, math.MaxUint64, math.MaxUint64, nil
+	}
+
+	txn, _ := db.StartTxn(nil)
+	defer txn.Commit(context.Background())
+
+	if ac != nil {
+		logutil.Infof("inspect with access info: %+v", ac)
+		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
+	}
+
+	var id int
+	if id, err = strconv.Atoi(strs[0]); err != nil {
+		return 0, 0, 0, err
+	}
+
+	accId = uint32(id)
+	dbId, tblId = math.MaxUint64, math.MaxUint64
+
+	var dbHdl handle.Database
+	if len(strs) >= 2 {
+		dbHdl, err = txn.GetDatabase(strs[1])
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		dbId = dbHdl.GetID()
+	}
+
+	if len(strs) == 3 {
+		tblHdl, err := dbHdl.GetRelationByName(strs[2])
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		tblId = tblHdl.ID()
+	}
+
+	return accId, dbId, tblId, nil
+}
+
+func checkUsageData(data logtail.UsageData_, c *storageUsageHistoryArg) bool {
+	if c.accId == math.MaxUint32 {
+		return true
+	}
+
+	if c.accId != data.AccId {
+		return false
+	}
+
+	if c.dbI == math.MaxUint64 {
+		return true
+	}
+
+	if c.dbI != data.DbId {
+		return false
+	}
+
+	if c.tblId == math.MaxUint64 {
+		return true
+	}
+
+	return c.tblId == data.TblId
 }

@@ -60,6 +60,9 @@ const (
 	CheckpointMetaAttr_BlockLocation            = "checkpoint_meta_block_location"
 	CheckpointMetaAttr_SchemaType               = "checkpoint_meta_schema_type"
 
+	CheckpointMetaAttr_StorageUsageInsLocation = "checkpoint_meta_storage_usage_ins_location"
+	CheckpointMetaAttr_StorageUsageDelLocation = "checkpoint_meta_storage_usage_del_location"
+
 	AccountIDDbNameTblName = catalog.AccountIDDbNameTblName
 	AccountIDDbName        = catalog.AccountIDDbName
 
@@ -252,9 +255,14 @@ var (
 		SnapshotMetaAttr_BlockCNInsertBatchLocation,
 		SnapshotMetaAttr_BlockDeleteBatchLocation,
 		SnapshotMetaAttr_SegDeleteBatchLocation,
+		CheckpointMetaAttr_StorageUsageInsLocation,
+		CheckpointMetaAttr_StorageUsageDelLocation,
 	}
+
 	MetaShcemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
