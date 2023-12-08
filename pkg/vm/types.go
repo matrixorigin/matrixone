@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -138,8 +139,11 @@ type Operator interface {
 	AppendChild(child Operator)
 }
 
-func childrenCall(o Operator, anal process.Analyze) {
-	
+func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+	beforeChildrenCall := time.Now()
+	result, err := o.Call(proc)
+	anal.ChildrenCallStop(beforeChildrenCall)
+	return result, err
 }
 
 type ExecStatus int

@@ -16,7 +16,6 @@ package shuffle
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,11 +56,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	var index int
 
-	var childrenCallDuration time.Duration
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer func() {
-		anal.StopWithSub(childrenCallDuration)
+		anal.Stop()
 	}()
 
 	// clean last sent batch
@@ -87,9 +85,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for index == -1 {
 		// do input
 
-		beforeChildrenCall := time.Now()
-		result, err := arg.children[0].Call(proc)
-		childrenCallDuration += time.Since(beforeChildrenCall)
+		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
 
 		if err != nil {
 			return result, err

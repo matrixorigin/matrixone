@@ -16,7 +16,6 @@ package order
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -215,19 +214,15 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 
-	var childrenCallDuration time.Duration
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer func() {
-		anal.StopWithSub(childrenCallDuration)
+		anal.Stop()
 	}()
 
 	if ctr.state == vm.Build {
 		for {
-
-			beforeChildrenCall := time.Now()
-			result, err := arg.children[0].Call(proc)
-			childrenCallDuration += time.Since(beforeChildrenCall)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
 
 			if err != nil {
 				result.Status = vm.ExecStop
