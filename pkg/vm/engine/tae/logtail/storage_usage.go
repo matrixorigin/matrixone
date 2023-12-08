@@ -103,7 +103,7 @@ func fillUsageBat(collector *BaseCollector, entry *catalog.ObjectEntry, mp *mpoo
 		)
 	}
 
-	if err := entry.LoadObjectInfo(); err != nil {
+	if err := entry.CheckAndLoad(); err != nil {
 		return
 	}
 

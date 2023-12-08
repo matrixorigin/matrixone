@@ -537,6 +537,8 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	if schema.HasPK() {
 		pkIdx := schema.GetSingleSortKeyIdx()
 		writer.SetPrimaryKey(uint16(pkIdx))
+	} else if schema.HasSortKey() {
+		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
 	}
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))

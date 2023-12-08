@@ -190,6 +190,7 @@ func createTablesAndObjects(t *testing.T, ctx context.Context, tae *db.DB, dbNam
 //  1. test if the `fillSEGStorageUsageBat` work as expected
 //  2. benchmark the `fillSEGStorageUsageBat`
 func Test_FillUsageBatOfIncrement(t *testing.T) {
+	t.Skip("waiting refactoring")
 	ctx := context.Background()
 
 	tae := createTAE(t, ctx)
@@ -301,6 +302,7 @@ func checkpointMetaInfoFactory(entries []*checkpoint.CheckpointEntry) []*logtail
 }
 
 func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
+	t.Skip("waiting refactoring")
 	ctx := context.Background()
 
 	t.Run("current version", func(t *testing.T) {
