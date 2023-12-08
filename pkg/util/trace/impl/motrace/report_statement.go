@@ -448,6 +448,11 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		return s.statsArray.ToJsonString()
 	} else {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
+		if s.statsArray.GetTimeConsumed() > 0 {
+			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
+				zap.String("statement_id", uuid.UUID(s.StatementID).String()),
+			)
+		}
 		s.statsArray.InitIfEmpty().Add(&statsArray)
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
@@ -589,7 +594,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// logging the statement that should not be here anymore
 	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
-		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement))
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()))
 	}
 
 	s.reported = true
