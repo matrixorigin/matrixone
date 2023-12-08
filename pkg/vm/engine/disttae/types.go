@@ -590,12 +590,7 @@ type blockReader struct {
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
-	buffer         []int64
-	isExactlyEqual bool
-	closed         bool
-	//just for test
-	txnID string
-	cnt   int
+	buffer []int64
 }
 
 type blockMergeReader struct {
@@ -611,8 +606,18 @@ type blockMergeReader struct {
 }
 
 type readerForPKExactlyEqual struct {
+	table    *txnTable
+	prepared bool
+	// inserted rows comes from txn.writes.
+	inserts []*batch.Batch
+	//deleted rows comes from txn.writes or partitionState.rows.
+	deletes  map[types.Rowid]uint8
+	iter     logtailreplay.RowsIter
+	seqnumMp map[string]int
+	typsMap  map[string]types.Type
+	closed   bool
 	bmReader *blockMergeReader
-	pReader  *PartitionReader
+	txnID    string
 }
 
 type mergeReader struct {

@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"encoding/hex"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -311,10 +310,6 @@ func (r *blockReader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if r.closed {
-		return nil, nil
-	}
-
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -377,15 +372,6 @@ func (r *blockReader) Read(
 		return nil, err
 	}
 
-	if r.isExactlyEqual {
-		r.cnt++
-		if bat.RowCount() > 0 {
-			r.closed = true
-			//logutil.Infof("block reader finds pk after reading %d blocks, txn[%s]",
-			//	r.cnt, r.txnID)
-		}
-	}
-
 	if filter != nil {
 		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
@@ -433,7 +419,6 @@ func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
 	encodedPrimaryKey []byte,
-	isExactlyEqual bool,
 	ts timestamp.Timestamp,
 	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
@@ -453,8 +438,6 @@ func newBlockMergeReader(
 		),
 		encodedPrimaryKey: encodedPrimaryKey,
 	}
-	r.isExactlyEqual = isExactlyEqual
-	r.txnID = hex.EncodeToString(txnTable.db.txn.op.Txn().ID)
 	return r
 }
 
@@ -606,29 +589,199 @@ func (r *blockMergeReader) Read(
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
 }
 
+func (r *readerForPKExactlyEqual) prepare() error {
+	txn := r.table.db.txn
+	var inserts []*batch.Batch
+	var deletes map[types.Rowid]uint8
+	//prepare inserts and deletes for partition reader.
+	if !txn.readOnly.Load() && !r.prepared {
+		inserts = make([]*batch.Batch, 0, len(r.table.writes))
+		deletes = make(map[types.Rowid]uint8)
+		for _, entry := range r.table.writes {
+			if entry.typ == INSERT {
+				if entry.bat == nil || entry.bat.IsEmpty() {
+					continue
+				}
+				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+					continue
+				}
+				inserts = append(inserts, entry.bat)
+				continue
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
+		// so, here only load deletes which don't belong to PartitionState.blks.
+		r.table.LoadDeletesForMemBlocksIn(r.table._partState, deletes)
+		r.inserts = inserts
+		r.deletes = deletes
+		r.prepared = true
+	}
+	return nil
+}
+
 func (r *readerForPKExactlyEqual) Read(
 	ctx context.Context,
-	cols []string,
+	colNames []string,
 	expr *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
-	bat, err := r.pReader.Read(ctx, cols, expr, mp, vp)
-	if err != nil {
-		return nil, err
-	}
-	if bat == nil {
+	if r.closed {
 		return nil, nil
 	}
-	if r.bmReader != nil {
-		return r.bmReader.Read(ctx, cols, expr, mp, vp)
+	//prepare data for read.
+	if err := r.prepare(); err != nil {
+		return nil, err
 	}
-	return bat, nil
+	if len(r.inserts) > 0 {
+		bat := r.inserts[0].GetSubBatch(colNames)
+		rowIds := vector.MustFixedCol[types.Rowid](r.inserts[0].Vecs[0])
+		r.inserts = r.inserts[1:]
+		b := batch.NewWithSize(len(colNames))
+		b.SetAttributes(colNames)
+		for i, name := range colNames {
+			if vp == nil {
+				b.Vecs[i] = vector.NewVec(r.typsMap[name])
+			} else {
+				b.Vecs[i] = vp.GetVector(r.typsMap[name])
+			}
+		}
+		for i, vec := range b.Vecs {
+			srcVec := bat.Vecs[i]
+			uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
+			for j := 0; j < bat.RowCount(); j++ {
+				if _, ok := r.deletes[rowIds[j]]; ok {
+					continue
+				}
+				if err := uf(vec, srcVec, int64(j)); err != nil {
+					return nil, err
+				}
+			}
+		}
+		logutil.Debugf("read %v with %v", colNames, r.seqnumMp)
+		//		CORNER CASE:
+		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+		//		the bat.RowCount() is not always the right value for the result batch b.
+		b.SetRowCount(b.Vecs[0].Length())
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch(
+				"partition reader[workspace:memory]",
+				b))
+		}
+		return b, nil
+	}
+	//read batch from partitionState.rows.
+	{
+		const maxRows = 8192
+		b := batch.NewWithSize(len(colNames))
+		b.SetAttributes(colNames)
+		for i, name := range colNames {
+			if vp == nil {
+				b.Vecs[i] = vector.NewVec(r.typsMap[name])
+			} else {
+				b.Vecs[i] = vp.GetVector(r.typsMap[name])
+			}
+		}
+		rows := 0
+		appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
+		for i, name := range b.Attrs {
+			if name == catalog.Row_ID {
+				appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
+			} else {
+				appendFuncs[i] = vector.GetUnionOneFunction(r.typsMap[name], mp)
+			}
+		}
+
+		//read rows from partitionState.rows.
+		for r.iter.Next() {
+			entry := r.iter.Entry()
+			if _, ok := r.deletes[entry.RowID]; ok {
+				continue
+			}
+			for i, name := range b.Attrs {
+				if name == catalog.Row_ID {
+					if err := vector.AppendFixed(
+						b.Vecs[i],
+						entry.RowID,
+						false,
+						mp); err != nil {
+						return nil, err
+					}
+				} else {
+					idx := 2 /*rowid and commits*/ + r.seqnumMp[name]
+					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
+						entry.Batch.Attrs[idx] == "" /*drop column*/ {
+						if err := vector.AppendAny(
+							b.Vecs[i],
+							nil,
+							true,
+							mp); err != nil {
+							return nil, err
+						}
+					} else {
+						appendFuncs[i](
+							b.Vecs[i],
+							entry.Batch.Vecs[2 /*rowid and commits*/ +r.seqnumMp[name]],
+							entry.Offset,
+						)
+					}
+
+				}
+			}
+			rows++
+			if rows == maxRows {
+				break
+			}
+		}
+		if rows != 0 {
+			r.closed = true
+			//logutil.Infof("readerForPKExactlyEqual finds pk in partitionState.rows, txn[%s]",
+			//	r.txnID)
+			b.SetRowCount(rows)
+			return b, nil
+		}
+		if vp == nil {
+			b.Clean(mp)
+		} else {
+			vp.PutBatch(b)
+		}
+		if r.bmReader != nil {
+			bat, err := r.bmReader.Read(ctx, colNames, expr, mp, vp)
+			if err != nil {
+				return nil, err
+			}
+			if bat != nil && bat.RowCount() > 0 {
+				r.closed = true
+				//logutil.Infof("readerForPKExactlyEqual finds pk in block, txn[%s]",
+				//	r.txnID)
+			}
+			return bat, nil
+		}
+		return nil, nil
+	}
 }
 
 func (r *readerForPKExactlyEqual) Close() error {
 	r.bmReader.Close()
-	r.pReader.Close()
 	return nil
 }
 

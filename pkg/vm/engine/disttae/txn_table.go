@@ -1711,26 +1711,32 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 		logtailreplay.Prefix(encodedPrimaryKey),
 	)
 
-	partReader := &PartitionReader{
-		table:          tbl,
-		iter:           iter,
-		seqnumMp:       seqnumMp,
-		typsMap:        mp,
-		isExactlyEqual: true,
-		txnID:          hex.EncodeToString(tbl.db.txn.op.Txn().ID),
-	}
+	//partReader := &PartitionReader{
+	//	table:          tbl,
+	//	iter:           iter,
+	//	seqnumMp:       seqnumMp,
+	//	typsMap:        mp,
+	//	isExactlyEqual: true,
+	//	txnID:          hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+	//}
 
 	proc := tbl.proc.Load()
 
-	var reader readerForPKExactlyEqual
-	reader.pReader = partReader
+	//var reader readerForPKExactlyEqual
+	//reader.pReader = partReader
+	reader := &readerForPKExactlyEqual{
+		table:    tbl,
+		iter:     iter,
+		seqnumMp: seqnumMp,
+		typsMap:  mp,
+		txnID:    hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+	}
 
 	if len(dirtyBlks) > 0 {
 		reader.bmReader = newBlockMergeReader(
 			ctx,
 			tbl,
 			encodedPrimaryKey,
-			true,
 			ts,
 			dirtyBlks,
 			expr,
@@ -1738,7 +1744,7 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 			proc,
 		)
 	}
-	return []engine.Reader{&reader}, nil
+	return []engine.Reader{reader}, nil
 }
 
 func (tbl *txnTable) newReader(
@@ -1808,7 +1814,6 @@ func (tbl *txnTable) newReader(
 					ctx,
 					tbl,
 					encodedPrimaryKey,
-					false,
 					ts,
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
@@ -1826,7 +1831,6 @@ func (tbl *txnTable) newReader(
 				ctx,
 				tbl,
 				encodedPrimaryKey,
-				false,
 				ts,
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
