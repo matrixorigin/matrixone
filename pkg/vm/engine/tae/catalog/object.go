@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,8 +46,7 @@ type ObjectEntry struct {
 
 type ObjStat struct {
 	// min max etc. later
-	entry *ObjectEntry
-	sync.RWMutex
+	entry         *ObjectEntry
 	remainingRows int
 }
 
@@ -64,14 +62,10 @@ func (s *ObjStat) GetSortKeyZonemap() index.ZM {
 func (s *ObjStat) SetRows(rows int) {}
 
 func (s *ObjStat) SetRemainingRows(rows int) {
-	s.Lock()
-	defer s.Unlock()
 	s.remainingRows = rows
 }
 
 func (s *ObjStat) GetRemainingRows() int {
-	s.RLock()
-	defer s.RUnlock()
 	return s.remainingRows
 }
 
