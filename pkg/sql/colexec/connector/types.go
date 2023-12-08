@@ -42,6 +42,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		case arg.Reg.Ch <- nil:
 		case <-arg.Reg.Ctx.Done():
 		}
+	} else {
+		arg.Reg.CleanChannel(proc.Mp())
 	}
 	close(arg.Reg.Ch)
 }
