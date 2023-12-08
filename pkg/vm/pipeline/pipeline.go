@@ -65,11 +65,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		}
 	}
 
-	for _, ins := range p.instructions {
-		ins.Idx += 1
-		ins.IsFirst = false
-	}
-
 	tableScanOperator := table_scan.Argument{
 		Reader: r,
 		Attrs:  p.attrs,
@@ -77,7 +72,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 	p.instructions = append([]vm.Instruction{
 		{
 			Op:      vm.TableScan,
-			Idx:     0,
+			Idx:     -1,
 			Arg:     &tableScanOperator,
 			IsFirst: true,
 			IsLast:  false,
