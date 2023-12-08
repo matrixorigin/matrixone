@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -29,8 +30,12 @@ var (
 		return &lockContext{}
 	}}
 
-	defaultLazyCheckDuration = time.Second * 5
+	defaultLazyCheckDuration atomic.Value
 )
+
+func init() {
+	defaultLazyCheckDuration.Store(time.Second * 5)
+}
 
 type lockContext struct {
 	ctx      context.Context
@@ -165,7 +170,8 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 }
 
 func (mw *waiterEvents) handle(ctx context.Context) {
-	timer := time.NewTimer(defaultLazyCheckDuration)
+	timeout := defaultLazyCheckDuration.Load().(time.Duration)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	for {
@@ -180,13 +186,13 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 				c.release()
 			}
 		case <-timer.C:
-			mw.check()
-			timer.Reset(defaultLazyCheckDuration)
+			mw.check(timeout)
+			timer.Reset(timeout)
 		}
 	}
 }
 
-func (mw *waiterEvents) check() {
+func (mw *waiterEvents) check(timeout time.Duration) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	if len(mw.mu.blockedWaiters) == 0 {
@@ -196,7 +202,7 @@ func (mw *waiterEvents) check() {
 	stopAt := -1
 	now := time.Now()
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt) < defaultLazyCheckDuration {
+		if now.Sub(w.waitAt) < timeout {
 			stopAt = i
 			break
 		}
