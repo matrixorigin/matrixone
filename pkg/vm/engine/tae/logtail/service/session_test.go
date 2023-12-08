@@ -307,10 +307,6 @@ func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
-func (m *blockStream) SafeClose(ctx context.Context) error {
-	return nil
-}
-
 func (m *blockStream) Close() error {
 	m.once.Do(func() {
 		close(m.ch)
@@ -350,10 +346,6 @@ func (m *brokenStream) Close() error {
 	return nil
 }
 
-func (m *brokenStream) SafeClose(ctx context.Context) error {
-	return nil
-}
-
 func (m *brokenStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
@@ -389,10 +381,6 @@ func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
 }
 
 func (m *normalStream) Close() error {
-	return nil
-}
-
-func (m *normalStream) SafeClose(ctx context.Context) error {
 	return nil
 }
 
