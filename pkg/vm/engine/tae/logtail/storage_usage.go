@@ -15,8 +15,12 @@
 package logtail
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 	"math"
@@ -212,12 +216,10 @@ type TNUsageMemo struct {
 	sync.Mutex
 	cache   *StorageUsageCache
 	pending bool
-	//pending PendingUpdateType
 }
 
 func NewTNUsageMemo() *TNUsageMemo {
 	memo := new(TNUsageMemo)
-	//memo.pending = NUpdate
 	memo.cache = NewStorageUsageCache()
 	return memo
 }
@@ -420,7 +422,14 @@ func getStorageUsageVectorCols(vecs []*vector.Vector) (
 	return
 }
 
+const UsageBatMetaTableId uint64 = StorageUsageMagic
+
 func appendToStorageUsageBat_(data *CheckpointData, usage UsageData_, del bool, mp *mpool.MPool) {
+	start, end := int32(0), int32(0)
+
+	defer func() {
+		updateStorageUsageMeta(data, UsageBatMetaTableId, start, end, del)
+	}()
 
 	appendFunc := func(vecs []*vector.Vector) {
 		vector.AppendFixed[int64](vecs[UsageSize], usage.Size, false, mp)
@@ -431,13 +440,16 @@ func appendToStorageUsageBat_(data *CheckpointData, usage UsageData_, del bool, 
 
 	if !del {
 		insVecs := getStorageUsageBatVectors_(data.bats[StorageUsageInsIDX])
+		start = int32(insVecs[0].Length())
 		appendFunc(insVecs)
+		end = int32(insVecs[0].Length())
 		return
 	}
 
 	delVecs := getStorageUsageBatVectors_(data.bats[StorageUsageDelIDX])
+	start = int32(delVecs[0].Length())
 	appendFunc(delVecs)
-
+	end = int32(delVecs[0].Length())
 }
 
 func segments2Usages(segs []*catalog.SegmentEntry) (usages []UsageData_, loaded int) {
@@ -479,9 +491,36 @@ func segments2Usages(segs []*catalog.SegmentEntry) (usages []UsageData_, loaded 
 	return
 }
 
-func FillUsageBatOfGlobal_(
-	collector *GlobalCollector) {
+// prepare for storing the storage usage bat location into ckp table meta
+func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, del bool) {
+	if del {
+		data.updateTableMeta(tid, StorageUsageDel, start, end)
+	} else {
+		data.updateTableMeta(tid, StorageUsageIns, start, end)
+	}
+}
+
+func applyChanges(collector *BaseCollector) (loaded int) {
+	// must apply seg insert first
+	// step 1: apply seg insert (non-appendable, committed)
+	usage, l := segments2Usages(collector.Usage.SegInserts)
+	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
+	loaded += l
+
+	// step 2: apply db, tbl deletes
+	tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
+
+	// step 3: apply seg deletes
+	usage, l = segments2Usages(collector.Usage.SegDeletes)
+	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
+	loaded += l
+
+	return loaded
+}
+
+func FillUsageBatOfGlobal_(collector *GlobalCollector) {
 	start := time.Now()
+	//var loaded int
 
 	tnUsageMemo.EnterProcessing()
 	defer func() {
@@ -489,14 +528,15 @@ func FillUsageBatOfGlobal_(
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	//loaded = applyChanges(collector.BaseCollector)
+	//logutil.Info(fmt.Sprintf("[storage usage] CKP[G]: load object: %d, current usage cache size: %f",
+	//	loaded, tnUsageMemo.MemoryUsed()))
 	tnUsageMemo.replayIntoGCKP(collector)
 }
 
 func FillUsageBatOfIncremental_(collector *IncrementalCollector) {
 	start := time.Now()
-
 	var loaded int
-	var usage []UsageData_
 
 	tnUsageMemo.EnterProcessing()
 	defer func() {
@@ -505,19 +545,149 @@ func FillUsageBatOfIncremental_(collector *IncrementalCollector) {
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// must apply seg insert first
-	// step 1: apply seg insert (non-appendable, committed)
-	usage, loaded = segments2Usages(collector.Usage.SegInserts)
-	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
-
-	// step 2: apply db, tbl deletes
-	tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
-
-	// step 3: apply seg deletes
-	usage, loaded = segments2Usages(collector.Usage.SegDeletes)
-	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
-
-	logutil.Info(fmt.Sprintf("[storage usage]: load object: %d, current usage cache size: %f",
+	loaded = applyChanges(collector.BaseCollector)
+	logutil.Info(fmt.Sprintf("[storage usage] CKP[I]: load object: %d, current usage cache size: %f",
 		loaded, tnUsageMemo.MemoryUsed()))
+}
 
+// GetStorageUsageHistory is for debug to show these storage usage changes.
+//
+// 1. load each ckp meta batch.
+//
+// 2. load the specified storage usage ins/del batch using locations storing in meta batch.
+func GetStorageUsageHistory(
+	ctx context.Context,
+	locations []objectio.Location, versions []uint32,
+	fs fileservice.FileService, mp *mpool.MPool) ([][]UsageData_, [][]UsageData_, error) {
+
+	var err error
+
+	// 1. load each ckp meta batch
+	datas, err := loadMetaBat(ctx, versions, locations, fs, mp)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	usageInsData := make([][]UsageData_, len(locations))
+	usageDelData := make([][]UsageData_, len(locations))
+
+	var usageInsBat []*batch.Batch
+	var usageDelBat []*batch.Batch
+
+	for idx := 0; idx < len(datas); idx++ {
+		datas[idx].GetTableMeta(UsageBatMetaTableId, versions[idx], locations[idx])
+		usageMeta := datas[idx].meta[UsageBatMetaTableId]
+
+		// 2.1. load storage usage ins bat
+		if usageInsBat, err = loadBatch(
+			ctx, usageMeta.tables[StorageUsageIns].locations,
+			versions[idx], StorageUsageInsIDX, fs, mp); err != nil {
+			return nil, nil, err
+		}
+
+		// 2.2. load storage usage del bat
+		if usageDelBat, err = loadBatch(
+			ctx, usageMeta.tables[StorageUsageDel].locations,
+			versions[idx], StorageUsageDelIDX, fs, mp); err != nil {
+			return nil, nil, err
+		}
+
+		// 3. collect usage data from these batches
+		for _, bat := range usageInsBat {
+			if ret := cnBatchToUsageDatas(bat); len(ret) != 0 {
+				usageInsData[idx] = append(usageInsData[idx], ret...)
+			}
+		}
+
+		for _, bat := range usageDelBat {
+			if ret := cnBatchToUsageDatas(bat); len(ret) != 0 {
+				usageDelData[idx] = append(usageDelData[idx], ret...)
+			}
+		}
+	}
+
+	return usageInsData, usageDelData, nil
+}
+
+func cnBatchToUsageDatas(bat *batch.Batch) []UsageData_ {
+	accCol := vector.MustFixedCol[uint32](bat.GetVector(2))
+	dbCol := vector.MustFixedCol[uint64](bat.GetVector(3))
+	tblCol := vector.MustFixedCol[uint64](bat.GetVector(4))
+	sizeCol := vector.MustFixedCol[int64](bat.GetVector(6))
+
+	var usages []UsageData_
+
+	for idx := range accCol {
+		usages = append(usages, UsageData_{
+			accCol[idx],
+			dbCol[idx],
+			tblCol[idx],
+			sizeCol[idx],
+		})
+	}
+	return usages
+}
+
+func loadMetaBat(
+	ctx context.Context,
+	versions []uint32, locations []objectio.Location,
+	fs fileservice.FileService, mp *mpool.MPool) ([]*CNCheckpointData, error) {
+
+	datas := make([]*CNCheckpointData, len(locations))
+	var idxes []uint16
+
+	for idx := 0; idx < len(locations); idx++ {
+		if versions[idx] < CheckpointVersion10 {
+			continue
+		}
+
+		data := NewCNCheckpointData()
+
+		// 1.1. prefetch meta bat
+		meteIdxSchema := checkpointDataReferVersions[versions[idx]][MetaIDX]
+		for attrIdx := range meteIdxSchema.attrs {
+			idxes = append(idxes, uint16(attrIdx))
+		}
+
+		data.PrefetchMetaIdx(ctx, versions[idx], idxes, locations[idx], fs)
+
+		// 1.2. read meta bat
+		reader, err := blockio.NewObjectReader(fs, locations[idx])
+		if err != nil {
+			return nil, err
+		}
+
+		data.InitMetaIdx(ctx, versions[idx], reader, locations[idx], mp)
+
+		idxes = idxes[:0]
+		datas[idx] = data
+	}
+
+	return datas, nil
+}
+
+func loadBatch(
+	ctx context.Context, locations BlockLocations, version uint32,
+	batIdx uint16, fs fileservice.FileService, mp *mpool.MPool) ([]*batch.Batch, error) {
+
+	var bats []*batch.Batch
+
+	it := locations.MakeIterator()
+	for it.HasNext() {
+		block := it.Next()
+		schema := checkpointDataReferVersions[version][uint32(batIdx)]
+		reader, err := blockio.NewObjectReader(fs, block.GetLocation())
+		if err != nil {
+			return nil, err
+		}
+
+		if bat, err := LoadCNSubBlkColumnsByMetaWithId(
+			ctx, schema.types, schema.attrs, batIdx,
+			block.GetID(), version, reader, mp); err != nil {
+			return nil, err
+		} else {
+			bats = append(bats, bat)
+		}
+	}
+	return bats, nil
 }

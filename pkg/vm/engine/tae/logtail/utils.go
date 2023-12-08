@@ -110,6 +110,8 @@ const (
 	Checkpoint_Meta_CN_Delete_Block_LOC_IDX = 4
 	Checkpoint_Meta_Delete_Block_LOC_IDX    = 5
 	Checkpoint_Meta_Object_LOC_IDX          = 6
+	Checkpoint_Meta_Usage_Ins_LOC_IDX       = 7
+	Checkpoint_Meta_Usage_Del_LOC_IDX       = 8
 )
 
 // for ver1-3
@@ -614,6 +616,8 @@ const (
 	BlockDelete
 	CNBlockInsert
 	ObjectInfo
+	StorageUsageIns
+	StorageUsageDel
 )
 
 func (m *TableMeta) String() string {
@@ -623,7 +627,7 @@ func (m *TableMeta) String() string {
 	return fmt.Sprintf("interval:%v, locations:%v", m.ClosedInterval, m.locations)
 }
 
-const MetaMaxIdx = ObjectInfo + 1
+const MetaMaxIdx = StorageUsageDel + 1
 
 type CheckpointMeta struct {
 	tables [MetaMaxIdx]*TableMeta
@@ -781,6 +785,7 @@ func NewCNCheckpointData() *CNCheckpointData {
 	}
 }
 
+// checkpoint table meta idx to ckp batch idx
 func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 	idx := uint16(i)
 
@@ -792,6 +797,10 @@ func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 		idx = BLKCNMetaInsertIDX
 	} else if i == ObjectInfo {
 		idx = ObjectInfoIDX
+	} else if i == StorageUsageIns {
+		idx = StorageUsageInsIDX
+	} else if i == StorageUsageDel {
+		idx = StorageUsageDelIDX
 	}
 	switch tableID {
 	case pkgcatalog.MO_DATABASE_ID:
@@ -1005,6 +1014,12 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
 	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_LOC_IDX]
 
+	var usageInsVec, usageDelVec *vector.Vector
+	if version >= CheckpointVersion10 {
+		usageInsVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Ins_LOC_IDX]
+		usageDelVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Del_LOC_IDX]
+	}
+
 	var i int
 	if version <= CheckpointVersion4 {
 		i = -1
@@ -1056,6 +1071,17 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 		segDeleteTableMeta := NewTableMeta()
 		segDeleteTableMeta.locations = segDelStr
 		tableMeta.tables[ObjectInfo] = segDeleteTableMeta
+	}
+
+	if usageInsVec != nil {
+		usageInsTableMeta := NewTableMeta()
+		usageDelTableMeta := NewTableMeta()
+
+		usageInsTableMeta.locations = usageInsVec.GetBytesAt(i)
+		usageDelTableMeta.locations = usageDelVec.GetBytesAt(i)
+
+		tableMeta.tables[StorageUsageIns] = usageInsTableMeta
+		tableMeta.tables[StorageUsageDel] = usageDelTableMeta
 	}
 
 	data.meta[tid] = tableMeta
@@ -1507,13 +1533,13 @@ func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Locati
 func (data *CheckpointData) prepareMeta() {
 	bat := data.bats[MetaIDX]
 	blkInsLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
-
 	blkDelLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
 	blkCNInsLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector()
-
 	segDelLoc := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
-
 	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	usageInsLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
+	usageDelLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
+
 	sortMeta := make([]int, 0)
 	for tid := range data.meta {
 		sortMeta = append(sortMeta, int(tid))
@@ -1540,6 +1566,18 @@ func (data *CheckpointData) prepareMeta() {
 			vector.AppendBytes(segDelLoc, nil, true, data.allocator)
 		} else {
 			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[ObjectInfo].locations), false, data.allocator)
+		}
+
+		if data.meta[uint64(tid)].tables[StorageUsageIns] == nil {
+			vector.AppendBytes(usageInsLoc, nil, true, data.allocator)
+		} else {
+			vector.AppendBytes(usageInsLoc, data.meta[uint64(tid)].tables[StorageUsageIns].locations, false, data.allocator)
+		}
+
+		if data.meta[uint64(tid)].tables[StorageUsageDel] == nil {
+			vector.AppendBytes(usageDelLoc, nil, true, data.allocator)
+		} else {
+			vector.AppendBytes(usageDelLoc, data.meta[uint64(tid)].tables[StorageUsageDel].locations, false, data.allocator)
 		}
 	}
 }
@@ -1882,6 +1920,16 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
+func validateBeforeLoadBlkCol(version uint32, idxs []uint16, colNames []string) []uint16 {
+	// in version 10, the storage usage ins/del was added into the ckp meta batch
+	if version <= CheckpointVersion9 {
+		if colNames[len(colNames)-1] == CheckpointMetaAttr_StorageUsageDelLocation {
+			return idxs[0 : len(idxs)-2]
+		}
+	}
+	return idxs
+}
+
 func LoadBlkColumnsByMeta(
 	version uint32,
 	cxt context.Context,
@@ -1901,6 +1949,7 @@ func LoadBlkColumnsByMeta(
 		ioResults = make([]*batch.Batch, 1)
 		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
+		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
 		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	}
 	if err != nil {
@@ -1945,6 +1994,7 @@ func LoadCNSubBlkColumnsByMeta(
 		ioResults = make([]*batch.Batch, 1)
 		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
+		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
 		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	}
 	if err != nil {
@@ -1974,6 +2024,7 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	if version <= CheckpointVersion3 {
 		ioResult, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
+		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
 		ioResult, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
 	}
 	if err != nil {
@@ -2169,7 +2220,7 @@ func LoadSpecifiedCkpBatch(
 		return
 	}
 
-	data.replayMetaBatch()
+	data.replayMetaBatch(version)
 	for _, val := range data.locations {
 		if reader, err = blockio.NewObjectReader(fs, val); err != nil {
 			return
@@ -2211,19 +2262,25 @@ func (data *CheckpointData) readMetaBatch(
 	return
 }
 
-func (data *CheckpointData) replayMetaBatch() {
+func (data *CheckpointData) replayMetaBatch(version uint32) {
 	bat := data.bats[MetaIDX]
 	data.locations = make(map[string]objectio.Location)
 	tidVec := vector.MustFixedCol[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	insVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector())
-	delVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector())
-	delCNVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector())
-	segVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector())
+	insVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
+	delVec := bat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector()
+	delCNVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
+	segVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
 
-	for i := 0; i < data.bats[MetaIDX].GetVectorByName(SnapshotAttr_TID).Length(); i++ {
+	var usageInsVec, usageDelVec *vector.Vector
+	if version >= CheckpointVersion10 {
+		usageInsVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
+		usageDelVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
+	}
+
+	for i := 0; i < len(tidVec); i++ {
 		tid := tidVec[i]
 		if tid == 0 {
-			bl := BlockLocations(insVec[i])
+			bl := BlockLocations(insVec.GetBytesAt(i))
 			it := bl.MakeIterator()
 			for it.HasNext() {
 				block := it.Next()
@@ -2233,18 +2290,28 @@ func (data *CheckpointData) replayMetaBatch() {
 			}
 			continue
 		}
-		insLocation := insVec[i]
-		delLocation := delVec[i]
-		delCNLocation := delCNVec[i]
-		segLocation := segVec[i]
+		insLocation := insVec.GetBytesAt(i)
+		delLocation := delVec.GetBytesAt(i)
+		delCNLocation := delCNVec.GetBytesAt(i)
+		segLocation := segVec.GetBytesAt(i)
+
+		tmp := [][]byte{insLocation, delLocation, delCNLocation, segLocation}
+		if usageInsVec != nil {
+			tmp = append(tmp, usageInsVec.GetBytesAt(i))
+			tmp = append(tmp, usageDelVec.GetBytesAt(i))
+		}
 
 		tableMeta := NewCheckpointMeta()
-		tableMeta.DecodeFromString([][]byte{insLocation, delLocation, delCNLocation, segLocation})
+		tableMeta.DecodeFromString(tmp)
 		data.meta[tid] = tableMeta
 	}
 
 	for _, meta := range data.meta {
 		for _, table := range meta.tables {
+			if table == nil {
+				continue
+			}
+
 			it := table.locations.MakeIterator()
 			for it.HasNext() {
 				block := it.Next()
@@ -2261,7 +2328,7 @@ func (data *CheckpointData) readAll(
 	version uint32,
 	service fileservice.FileService,
 ) (err error) {
-	data.replayMetaBatch()
+	data.replayMetaBatch(version)
 	checkpointDataSize := uint64(0)
 	readDuration := time.Now()
 	for _, val := range data.locations {
