@@ -101,7 +101,7 @@ var (
 			Subsystem: "rpc",
 			Name:      "backend_connect_duration_seconds",
 			Help:      "Bucketed histogram of write data into socket duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"name"})
 
 	rpcWriteDurationHistogram = prometheus.NewHistogramVec(
@@ -110,7 +110,7 @@ var (
 			Subsystem: "rpc",
 			Name:      "write_duration_seconds",
 			Help:      "Bucketed histogram of write data into socket duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"name", "side"})
 
 	rpcWriteLatencyDurationHistogram = prometheus.NewHistogramVec(
@@ -119,7 +119,7 @@ var (
 			Subsystem: "rpc",
 			Name:      "write_latency_duration_seconds",
 			Help:      "Bucketed histogram of write latency duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"name", "side"})
 
 	rpcBackendDoneDurationHistogram = prometheus.NewHistogramVec(
@@ -128,7 +128,7 @@ var (
 			Subsystem: "rpc",
 			Name:      "backend_done_duration_seconds",
 			Help:      "Bucketed histogram of request done duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"name"})
 )
 
