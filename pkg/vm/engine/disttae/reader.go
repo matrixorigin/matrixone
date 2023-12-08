@@ -620,7 +620,10 @@ func (r *readerForPKExactlyEqual) Read(
 	if bat == nil {
 		return nil, nil
 	}
-	return r.bmReader.Read(ctx, cols, expr, mp, vp)
+	if r.bmReader != nil {
+		return r.bmReader.Read(ctx, cols, expr, mp, vp)
+	}
+	return bat, nil
 }
 
 func (r *readerForPKExactlyEqual) Close() error {
