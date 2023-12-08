@@ -116,15 +116,10 @@ func newDiskETLFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService
 func newMinioFileService(
 	ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet,
 ) (FileService, error) {
+	cfg.S3.Name = cfg.Name
 	fs, err := NewS3FSOnMinio(
 		ctx,
-		ObjectStorageArguments{
-			SharedConfigProfile: cfg.S3.SharedConfigProfile,
-			Name:                cfg.Name,
-			Endpoint:            cfg.S3.Endpoint,
-			Bucket:              cfg.S3.Bucket,
-			KeyPrefix:           cfg.S3.KeyPrefix,
-		},
+		cfg.S3,
 		cfg.Cache,
 		perfCounters,
 		false,
@@ -139,15 +134,10 @@ func newS3FileService(
 	ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet,
 ) (FileService, error) {
 
+	cfg.S3.Name = cfg.Name
 	fs, err := NewS3FS(
 		ctx,
-		ObjectStorageArguments{
-			SharedConfigProfile: cfg.S3.SharedConfigProfile,
-			Name:                cfg.Name,
-			Endpoint:            cfg.S3.Endpoint,
-			Bucket:              cfg.S3.Bucket,
-			KeyPrefix:           cfg.S3.KeyPrefix,
-		},
+		cfg.S3,
 		cfg.Cache,
 		perfCounters,
 		false,
