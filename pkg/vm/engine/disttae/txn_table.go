@@ -1465,7 +1465,7 @@ func (tbl *txnTable) NewReader(
 	if hasNull {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
-	if isExactlyEqual {
+	if len(encodedPK) > 0 && isExactlyEqual {
 		var dirtyBlks []*catalog.BlockInfo
 		if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 			ranges = ranges[1:]
@@ -1473,8 +1473,9 @@ func (tbl *txnTable) NewReader(
 				dirtyBlks = append(dirtyBlks, catalog.DecodeBlockInfo(blk))
 			}
 		}
-		logutil.Infof("txn[%s] need to read %d dirty blocks in pk-exactly-equal case\n",
+		logutil.Infof("txn[%s] table[%s] need to read %d dirty blocks in pk-exactly-equal case\n",
 			hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+			tbl.tableName,
 			len(dirtyBlks))
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, true, dirtyBlks)
 	}
