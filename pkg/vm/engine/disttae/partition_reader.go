@@ -234,8 +234,8 @@ func (p *PartitionReader) Read(
 		}
 		if p.isExactlyEqual {
 			p.closed = true
-			logutil.Infof("partition reader finds pk in partitionState.rows, txn[%s]",
-				p.txnID)
+			//logutil.Infof("partition reader finds pk in partitionState.rows, txn[%s]",
+			//	p.txnID)
 		}
 		b.SetRowCount(rows)
 

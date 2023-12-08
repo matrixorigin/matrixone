@@ -381,8 +381,8 @@ func (r *blockReader) Read(
 		r.cnt++
 		if bat.RowCount() > 0 {
 			r.closed = true
-			logutil.Infof("block reader finds pk after reading %d blocks, txn[%s]",
-				r.cnt, r.txnID)
+			//logutil.Infof("block reader finds pk after reading %d blocks, txn[%s]",
+			//	r.cnt, r.txnID)
 		}
 	}
 
@@ -604,6 +604,29 @@ func (r *blockMergeReader) Read(
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
+}
+
+func (r *readerForPKExactlyEqual) Read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (*batch.Batch, error) {
+	bat, err := r.pReader.Read(ctx, cols, expr, mp, vp)
+	if err != nil {
+		return nil, err
+	}
+	if bat == nil {
+		return nil, nil
+	}
+	return r.bmReader.Read(ctx, cols, expr, mp, vp)
+}
+
+func (r *readerForPKExactlyEqual) Close() error {
+	r.bmReader.Close()
+	r.pReader.Close()
+	return nil
 }
 
 // -----------------------------------------------------------------

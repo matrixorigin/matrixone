@@ -610,6 +610,11 @@ type blockMergeReader struct {
 	deletaLocs map[string][]objectio.Location
 }
 
+type readerForPKExactlyEqual struct {
+	bmReader *blockMergeReader
+	pReader  *PartitionReader
+}
+
 type mergeReader struct {
 	rds []engine.Reader
 }

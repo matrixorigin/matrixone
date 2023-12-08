@@ -1473,10 +1473,10 @@ func (tbl *txnTable) NewReader(
 				dirtyBlks = append(dirtyBlks, catalog.DecodeBlockInfo(blk))
 			}
 		}
-		logutil.Infof("txn[%s] table[%s] need to read %d dirty blocks in pk-exactly-equal case\n",
-			hex.EncodeToString(tbl.db.txn.op.Txn().ID),
-			tbl.tableName,
-			len(dirtyBlks))
+		//logutil.Infof("txn[%s] table[%s] need to read %d dirty blocks in pk-exactly-equal case\n",
+		//	hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+		//	tbl.tableName,
+		//	len(dirtyBlks))
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, true, dirtyBlks)
 	}
 
@@ -1679,7 +1679,6 @@ func (tbl *txnTable) newBlockReader(
 func (tbl *txnTable) newReaderForPKExactlyEqual(
 	ctx context.Context,
 	encodedPrimaryKey []byte,
-	//isExactlyEqual bool,
 	expr *plan.Expr,
 	dirtyBlks []*catalog.BlockInfo,
 ) ([]engine.Reader, error) {
@@ -1723,25 +1722,23 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 
 	proc := tbl.proc.Load()
 
-	var readers []engine.Reader
-	readers = append(readers, partReader)
+	var reader readerForPKExactlyEqual
+	reader.pReader = partReader
 
 	if len(dirtyBlks) > 0 {
-		readers = append(
-			readers,
-			newBlockMergeReader(
-				ctx,
-				tbl,
-				encodedPrimaryKey,
-				true,
-				ts,
-				dirtyBlks,
-				expr,
-				fs,
-				proc,
-			))
+		reader.bmReader = newBlockMergeReader(
+			ctx,
+			tbl,
+			encodedPrimaryKey,
+			true,
+			ts,
+			dirtyBlks,
+			expr,
+			fs,
+			proc,
+		)
 	}
-	return readers, nil
+	return []engine.Reader{&reader}, nil
 }
 
 func (tbl *txnTable) newReader(
