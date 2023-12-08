@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"math"
 	"net"
 	"runtime"
@@ -93,14 +94,8 @@ var (
 	ctxCancelError = context.Canceled.Error()
 )
 
-var pool = sync.Pool{
-	New: func() any {
-		return new(Compile)
-	},
-}
-
-// New is used to new an object of compile
-func New(
+// NewCompile is used to new an object of compile
+func NewCompile(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
 	e engine.Engine,
@@ -109,7 +104,7 @@ func New(
 	isInternal bool,
 	cnLabel map[string]string,
 	startAt time.Time) *Compile {
-	c := pool.Get().(*Compile)
+	c := reuse.Alloc[Compile](nil)
 	c.e = e
 	c.db = db
 	c.ctx = ctx
@@ -129,27 +124,26 @@ func New(
 	return c
 }
 
-func putCompile(c *Compile) {
+func (c *Compile) release() {
 	if c == nil {
 		return
 	}
+	reuse.Free[Compile](c, nil)
+}
+
+func (c Compile) Name() string {
+	return "compile.Compile"
+}
+
+func (c *Compile) reset() {
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
 			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
 		c.anal.analInfos = nil
 	}
-	if c.scope != nil {
-		c.scope = nil
-	}
-
+	c.scope = nil
 	c.proc.CleanValueScanBatchs()
-	c.clear()
-	pool.Put(c)
-}
-
-func (c *Compile) clear() {
-	c.scope = c.scope[:0]
 	c.pn = nil
 	c.u = nil
 	c.fill = nil
@@ -399,8 +393,8 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		putCompile(c)
-		putCompile(cc)
+		c.release()
+		cc.release()
 
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
@@ -435,7 +429,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+		cc = NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			pn, e := c.buildPlanFunc()
 			if e != nil {

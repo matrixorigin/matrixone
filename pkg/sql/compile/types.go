@@ -199,7 +199,7 @@ type Compile struct {
 	//fill will be called when result data is ready.
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
-	affectRows atomic.Uint64
+	affectRows *atomic.Uint64
 	// cn address
 	addr string
 	// db current database name.

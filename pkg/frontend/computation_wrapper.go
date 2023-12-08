@@ -354,7 +354,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if tInfo != nil {
 		tenant = tInfo.GetTenant()
 	}
-	cwft.compile = compile.New(
+	cwft.compile = compile.NewCompile(
 		addr,
 		cwft.ses.GetDatabaseName(),
 		cwft.ses.GetSql(),
