@@ -3696,8 +3696,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
 
+	if len(input.sqlSourceType) > 0 && input.sqlSourceType[0] == constant.ExternSql {
+		fmt.Printf("---------------------------------wuxiliang----------------------->%s\n", input.getSql())
+	}
 	if judgeIsClientBIQuery(input) {
 		dialectEquivalentRewrite(input)
+		fmt.Printf("---------------------------------wuxiliangconv--------------------->%s\n", input.getSql())
 	}
 
 	pu := ses.GetParameterUnit()
