@@ -646,6 +646,7 @@ func (r *readerForPKExactlyEqual) Read(
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 	if r.closed {
+		//record r.readerCnt
 		return nil, nil
 	}
 	//prepare data for read.
@@ -774,6 +775,7 @@ func (r *readerForPKExactlyEqual) Read(
 				//logutil.Infof("readerForPKExactlyEqual finds pk in block, txn[%s]",
 				//	r.txnID)
 			}
+			r.readCnt++
 			return bat, nil
 		}
 		return nil, nil

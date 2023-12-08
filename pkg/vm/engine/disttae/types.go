@@ -617,6 +617,7 @@ type readerForPKExactlyEqual struct {
 	typsMap  map[string]types.Type
 	closed   bool
 	bmReader *blockMergeReader
+	readCnt  int
 	txnID    string
 }
 
