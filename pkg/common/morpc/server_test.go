@@ -43,7 +43,7 @@ func TestHandleServer(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
@@ -455,7 +455,7 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 }
 
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
-	bf := NewGoettyBasedBackendFactory(newTestCodec())
+	bf := NewGoettyBasedBackendFactory(newTestCodec(), WithBackendReadTimeout(time.Second))
 	c, err := NewClient(
 		"",
 		bf,
@@ -475,5 +475,49 @@ func TestPing(t *testing.T) {
 		defer cancel()
 
 		assert.NoError(t, c.Ping(ctx, testAddr))
+	})
+}
+
+func TestServerSafeClose(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		n := 10
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			go func() {
+				defer wg.Done()
+				for i := 0; i < n; i++ {
+					assert.NoError(t, cs.Write(ctx, request.Message))
+				}
+				assert.NoError(t, cs.SafeClose(ctx))
+			}()
+			return nil
+		})
+
+		st, err := c.NewStream(testAddr, false)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, st.Close(false))
+		}()
+
+		req := newTestMessage(st.ID())
+		assert.NoError(t, st.Send(ctx, req))
+
+		rc, err := st.Receive()
+		assert.NoError(t, err)
+		for i := 0; i < n; i++ {
+			assert.Equal(t, req, <-rc)
+		}
+		wg.Wait()
+		v := <-rc
+		assert.Nil(t, v)
 	})
 }
