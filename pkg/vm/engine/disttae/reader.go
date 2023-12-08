@@ -647,6 +647,7 @@ func (r *readerForPKExactlyEqual) Read(
 ) (*batch.Batch, error) {
 	if r.closed {
 		//record r.readerCnt
+		v2.TxnPKExactlyEqReaderCountHistogram.Observe(float64(r.readCnt))
 		return nil, nil
 	}
 	//prepare data for read.

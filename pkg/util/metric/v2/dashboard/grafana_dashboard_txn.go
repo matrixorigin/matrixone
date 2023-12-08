@@ -40,6 +40,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
 			c.initTxnReaderDurationRow(),
+			c.initPKExactlyEqualReaderRow(),
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
@@ -56,6 +57,28 @@ func (c *DashboardCreator) initTxnDashboard() error {
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initPKExactlyEqualReaderRow() dashboard.Option {
+	// pk_exactly_eq_reader_count
+	return dashboard.Row(
+		"PK Exactly Equal Reader",
+		c.getHistogram(
+			"dirty blk count when new reader",
+			c.getMetricWithFilter("mo_txn_pk_exactly_eq_reader_count_bucket", `type="dirty-blk"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6,
+			axis.Unit(""),
+			axis.Min(0)),
+
+		c.getHistogram(
+			"read count",
+			c.getMetricWithFilter("mo_txn_pk_exactly_eq_reader_count_bucket", `type="count"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6,
+			axis.Unit(""),
+			axis.Min(0)),
+	)
 }
 
 func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
