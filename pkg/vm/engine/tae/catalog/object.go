@@ -207,10 +207,6 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 }
 
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
-	s := time.Now()
-	defer func() {
-		v2.GetObjectStatsDurationHistogram.Observe(time.Since(s).Seconds())
-	}()
 	entry.RLock()
 	defer entry.RUnlock()
 	entry.LoopChain(func(node *MVCCNode[*ObjectMVCCNode]) bool {
@@ -226,6 +222,10 @@ func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 func (entry *ObjectEntry) CheckAndLoad() error {
 	s := entry.GetObjectStats()
 	if s.Rows() == 0 {
+		ins := time.Now()
+		defer func() {
+			v2.GetObjectStatsDurationHistogram.Observe(time.Since(ins).Seconds())
+		}()
 		_, err := entry.LoadObjectInfoForLastNode()
 		// logutil.Infof("yyyyyy loaded %v %v", common.ShortObjId(entry.ID), err)
 		return err
