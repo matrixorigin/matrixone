@@ -33,9 +33,9 @@ const (
 )
 
 var aliasMap = map[string][2]string{
-	aliasClause1: [2]string{"TABLE_CATALOG", "TABLE_CAT"},
-	aliasClause2: [2]string{"TABLE_SCHEMA", "TABLE_SCHEM"},
-	aliasClause3: [2]string{"TABLE_SCHEMA", "TABLE_SCHEM"},
+	aliasClause1: {"TABLE_CATALOG", "TABLE_CAT"},
+	aliasClause2: {"TABLE_SCHEMA", "TABLE_SCHEM"},
+	aliasClause3: {"TABLE_SCHEMA", "TABLE_SCHEM"},
 }
 
 // Determine if it is a BI query SQL
