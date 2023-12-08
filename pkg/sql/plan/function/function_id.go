@@ -562,6 +562,7 @@ var functionIdRegister = map[string]int32{
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
+	"locate":                         REGEXP_INSTR,
 	"regexp_like":                    REGEXP_LIKE,
 	"regexp_replace":                 REGEXP_REPLACE,
 	"regexp_substr":                  REGEXP_SUBSTR,
