@@ -758,12 +758,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols[rowIdx] = val
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			var strVal string
-			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
-			default:
-				strVal = fmt.Sprintf("%s", v)
-			}
+			strVal = fmt.Sprintf("%v", fieldValue)
 			buf.WriteString(strVal)
 			bs := buf.Bytes()
 			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
