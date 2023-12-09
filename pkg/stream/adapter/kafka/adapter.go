@@ -774,38 +774,70 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols[rowIdx] = val
 		case types.T_uint128:
 			var val uint64
-			strVal := fmt.Sprintf("%v", fieldValue)
-
-			parsedValue, err := strconv.ParseUint(strVal, 10, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
+			switch v := fieldValue.(type) {
+			case float64:
+				if v < 0 || v > math.MaxUint64*2 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(v)
+			case float32:
+				if v < 0 || v > math.MaxUint64*2 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 64)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(parsedValue)
 			}
-			val = parsedValue
 			cols := vector.MustFixedCol[uint64](vec)
 			cols[rowIdx] = val
 		case types.T_float32:
 			var val float32
-			strVal := fmt.Sprintf("%v", fieldValue)
 
-			parsedValue, err := strconv.ParseFloat(strVal, 32)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
+			switch v := fieldValue.(type) {
+			case float64:
+				if v < math.MaxFloat32 || v > math.MaxFloat32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float32(v)
+			case float32:
+				val = float32(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseFloat(strVal, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float32(parsedValue)
 			}
-			val = float32(parsedValue)
 			cols := vector.MustFixedCol[float32](vec)
 			cols[rowIdx] = val
 		case types.T_float64:
 			var val float64
-			strVal := fmt.Sprintf("%v", fieldValue)
 
-			parsedValue, err := strconv.ParseFloat(strVal, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
+			switch v := fieldValue.(type) {
+			case float64:
+				val = float64(v)
+			case float32:
+				val = float64(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseFloat(strVal, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float64(parsedValue)
 			}
-			val = parsedValue
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = val
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
