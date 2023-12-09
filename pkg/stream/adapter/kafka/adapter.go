@@ -550,16 +550,32 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols[rowIdx] = val
 		case types.T_int8:
 			var val int8
-			strVal := fmt.Sprintf("%v", fieldValue)
-
-			parsedValue, err := strconv.ParseInt(strVal, 10, 8)
-			if err != nil {
+			switch v := fieldValue.(type) {
+			case float64:
+				if v < math.MinInt8 || v > math.MaxInt8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(v)
+			case float32:
+				if v < math.MinInt8 || v > math.MaxInt8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseInt(strVal, 10, 8)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(parsedValue)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			val = int8(parsedValue)
-			cols := vector.MustFixedCol[int8](vec)
-			cols[rowIdx] = val
 		case types.T_int16:
 			var val int16
 			switch v := fieldValue.(type) {
