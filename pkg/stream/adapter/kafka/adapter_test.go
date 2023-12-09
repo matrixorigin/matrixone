@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/gogo/protobuf/proto"
@@ -253,6 +254,131 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 	// Assertions
 	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
 	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
+}
+func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
+
+	// Define types and attributes as per your schema
+	typs := []types.Type{
+		types.New(types.T_char, 30, 0),
+		types.New(types.T_int32, 32, 0),
+		types.New(types.T_int16, 16, 0),
+	}
+	attrs := []string{
+		"a", "b", "c",
+	}
+	configs := map[string]interface{}{
+		"value": "json",
+	}
+	// Create test msgs data
+	msgs := []*kafka.Message{
+		{
+			Value: []byte(`{
+            "a": "test_name1", 
+            "b": "99",
+            "c": "123"
+        }`),
+		},
+		{
+			Value: []byte(`{
+            "a": "test_name2",
+            "b": 150,
+            "c": 99999999999
+        }`),
+		},
+	}
+
+	expected := [][]interface{}{
+		{"test_name1", int32(99), int16(123)},
+		{"test_name2", int32(150), nil},
+	}
+
+	// Call PopulateBatchFromMSG
+	batch, err := PopulateBatchFromMSG(context.Background(), nil, typs, attrs, msgs, configs, mpool.MustNewZero())
+	if err != nil {
+		t.Fatalf("PopulateBatchFromMSG failed: %s", err)
+	}
+
+	// Assertions
+	if batch == nil {
+		t.Errorf("Expected non-nil batch")
+	} else {
+		// Check the number of vectors
+		assert.Equal(t, 3, batch.VectorCount(), "Expected 2 vectors in the batch")
+
+		// Check the data in the batch
+		for colIdx, attr := range attrs {
+			vec := batch.Vecs[colIdx]
+			if vec.Length() != len(msgs) {
+				t.Errorf("Expected %d rows in column '%s', got %d", len(msgs), attr, vec.Length())
+			} else {
+				for rowIdx := 0; rowIdx < vec.Length(); rowIdx++ {
+					expectedValue := expected[rowIdx][colIdx]
+					actualValue := getNonNullValue(vec, uint32(rowIdx))
+					if vec.GetNulls().Contains(uint64(rowIdx)) {
+						actualValue = nil
+					}
+					assert.Equal(t, expectedValue, actualValue, fmt.Sprintf("Mismatch in row %d, column '%s'", rowIdx, attr))
+				}
+			}
+		}
+	}
+
+}
+
+func getNonNullValue(col *vector.Vector, row uint32) any {
+
+	switch col.GetType().Oid {
+	case types.T_bool:
+		return vector.GetFixedAt[bool](col, int(row))
+	case types.T_int8:
+		return vector.GetFixedAt[int8](col, int(row))
+	case types.T_int16:
+		return vector.GetFixedAt[int16](col, int(row))
+	case types.T_int32:
+		return vector.GetFixedAt[int32](col, int(row))
+	case types.T_int64:
+		return vector.GetFixedAt[int64](col, int(row))
+	case types.T_uint8:
+		return vector.GetFixedAt[uint8](col, int(row))
+	case types.T_uint16:
+		return vector.GetFixedAt[uint16](col, int(row))
+	case types.T_uint32:
+		return vector.GetFixedAt[uint32](col, int(row))
+	case types.T_uint64:
+		return vector.GetFixedAt[uint64](col, int(row))
+	case types.T_decimal64:
+		return vector.GetFixedAt[types.Decimal64](col, int(row))
+	case types.T_decimal128:
+		return vector.GetFixedAt[types.Decimal128](col, int(row))
+	case types.T_uuid:
+		return vector.GetFixedAt[types.Uuid](col, int(row))
+	case types.T_float32:
+		return vector.GetFixedAt[float32](col, int(row))
+	case types.T_float64:
+		return vector.GetFixedAt[float64](col, int(row))
+	case types.T_date:
+		return vector.GetFixedAt[types.Date](col, int(row))
+	case types.T_time:
+		return vector.GetFixedAt[types.Time](col, int(row))
+	case types.T_datetime:
+		return vector.GetFixedAt[types.Datetime](col, int(row))
+	case types.T_timestamp:
+		return vector.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return vector.GetFixedAt[types.Enum](col, int(row))
+	case types.T_TS:
+		return vector.GetFixedAt[types.TS](col, int(row))
+	case types.T_Rowid:
+		return vector.GetFixedAt[types.Rowid](col, int(row))
+	case types.T_Blockid:
+		return vector.GetFixedAt[types.Blockid](col, int(row))
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
+		return col.GetStringAt(int(row))
+	default:
+		//return vector.ErrVecTypeNotSupport
+		panic(any("No Support"))
+	}
 }
 
 func TestRetrieveDataWIthProtobuf(t *testing.T) {
