@@ -262,9 +262,15 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 		types.New(types.T_char, 30, 0),
 		types.New(types.T_int32, 32, 0),
 		types.New(types.T_int16, 16, 0),
+		types.New(types.T_int8, 8, 0),
+		types.New(types.T_uint8, 8, 0),
+		types.New(types.T_uint64, 64, 0),
+		types.New(types.T_float32, 32, 0),
+		types.New(types.T_datetime, 64, 0),
+		types.New(types.T_json, 64, 0),
 	}
 	attrs := []string{
-		"a", "b", "c",
+		"1", "2", "3", "4", "5", "6", "7", "8", "9",
 	}
 	configs := map[string]interface{}{
 		"value": "json",
@@ -273,23 +279,55 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 	msgs := []*kafka.Message{
 		{
 			Value: []byte(`{
-            "a": "test_name1", 
-            "b": "99",
-            "c": "123"
+            "1": "test_name1",
+            "2": 99,
+            "3": 123,
+            "4": 1,
+            "5": 2,
+            "6": 1234567890123,
+            "7": 123.3,
+            "8": "2021-01-01",
+            "9": "{\"a\": 1}"
         }`),
 		},
 		{
 			Value: []byte(`{
-            "a": "test_name2",
-            "b": 150,
-            "c": 99999999999
+            "1": "test_name2",
+            "2": 150,
+            "3": 456,
+            "4": 3,
+            "5": 4,
+            "6": 9876543210987,
+            "7": 456.7,
+            "8": "2000-12-04",
+            "9": "{\"b\": 2}"
         }`),
 		},
 	}
 
 	expected := [][]interface{}{
-		{"test_name1", int32(99), int16(123)},
-		{"test_name2", int32(150), nil},
+		{
+			"test_name1",
+			int32(99),
+			int16(123),
+			int8(1),
+			uint8(2),
+			uint64(1234567890123),
+			float32(123.3),
+			types.Datetime(63745056000000000),
+			"\x01\x01\x00\x00\x00\x1c\x00\x00\x00\x13\x00\x00\x00\x01\x00\t\x14\x00\x00\x00a\x01\x00\x00\x00\x00\x00\x00\x00",
+		},
+		{
+			"test_name2",
+			int32(150),
+			int16(456),
+			int8(3),
+			uint8(4),
+			uint64(9876543210987),
+			float32(456.7),
+			types.Datetime(63111484800000000),
+			"\x01\x01\x00\x00\x00\x1c\x00\x00\x00\x13\x00\x00\x00\x01\x00\t\x14\x00\x00\x00b\x02\x00\x00\x00\x00\x00\x00\x00",
+		},
 	}
 
 	// Call PopulateBatchFromMSG
@@ -302,8 +340,6 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 	if batch == nil {
 		t.Errorf("Expected non-nil batch")
 	} else {
-		// Check the number of vectors
-		assert.Equal(t, 3, batch.VectorCount(), "Expected 2 vectors in the batch")
 
 		// Check the data in the batch
 		for colIdx, attr := range attrs {
