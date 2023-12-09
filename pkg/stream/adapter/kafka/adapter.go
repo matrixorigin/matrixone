@@ -670,26 +670,54 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols[rowIdx] = val
 		case types.T_uint8:
 			var val uint8
-			strVal := fmt.Sprintf("%v", fieldValue)
-
-			parsedValue, err := strconv.ParseUint(strVal, 10, 8)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
+			switch v := fieldValue.(type) {
+			case float64:
+				if v < 0 || v > math.MaxUint8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(v)
+			case float32:
+				if v < 0 || v > math.MaxUint8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 8)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(parsedValue)
 			}
-			val = uint8(parsedValue)
 			cols := vector.MustFixedCol[uint8](vec)
 			cols[rowIdx] = val
 		case types.T_uint16:
 			var val uint16
-			strVal := fmt.Sprintf("%v", fieldValue)
-
-			parsedValue, err := strconv.ParseUint(strVal, 10, 16)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
+			switch v := fieldValue.(type) {
+			case float64:
+				if v < 0 || v > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(v)
+			case float32:
+				if v < 0 || v > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(v)
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 16)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(parsedValue)
 			}
-			val = uint16(parsedValue)
 			cols := vector.MustFixedCol[uint16](vec)
 			cols[rowIdx] = val
 		case types.T_uint32:
