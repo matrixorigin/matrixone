@@ -594,7 +594,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// logging the statement that should not be here anymore
 	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
-		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()))
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 
 	s.reported = true
