@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -419,7 +418,6 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
-	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
@@ -437,7 +435,6 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
-		encodedPrimaryKey: encodedPrimaryKey,
 	}
 	return r
 }
@@ -496,44 +493,23 @@ func (r *blockMergeReader) prefetchDeletes() error {
 	return nil
 }
 
-func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error {
+func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 	if len(r.blks) == 0 {
 		return nil
 	}
 	info := r.blks[0]
-
-	r.tryUpdateColumns(cols)
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
 		return err
 	}
-
 	// load deletes from partition state for the specified block
-	filter := r.getReadFilter(r.proc, len(r.blks))
-
-	state, err := r.table.getPartitionState(ctx)
-	if err != nil {
-		return err
-	}
-	ts := types.TimestampToTS(r.ts)
-
-	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
-		iter := state.NewPrimaryKeyDelIter(
-			ts,
-			logtailreplay.Prefix(r.encodedPrimaryKey),
-			info.BlockID,
-		)
-		for iter.Next() {
-			entry := iter.Entry()
-			if !entry.Deleted {
-				continue
-			}
-			_, offset := entry.RowID.Decode()
-			r.buffer = append(r.buffer, int64(offset))
+	{
+		state, err := r.table.getPartitionState(ctx)
+		if err != nil {
+			return err
 		}
-		iter.Close()
-	} else {
+		ts := types.TimestampToTS(r.ts)
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -582,7 +558,7 @@ func (r *blockMergeReader) Read(
 		return nil, err
 	}
 	//load deletes for the specified block
-	if err := r.loadDeletes(ctx, cols); err != nil {
+	if err := r.loadDeletes(ctx); err != nil {
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
