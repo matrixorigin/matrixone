@@ -292,15 +292,29 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 		},
 		{
 			Value: []byte(`{
-            "1": "test_name2",
-            "2": 150,
-            "3": 456,
-            "4": 3,
-            "5": 4,
-            "6": 9876543210987,
-            "7": 456.7,
-            "8": "2000-12-04",
-            "9": "{\"b\": 2}"
+				"1": "test_name2",
+				"2": 150,
+				"3": 456,
+				"4": 3,
+				"5": 4,
+				"6": 9876543210987,
+				"7": 456.7,
+				"8": "2000-12-04",
+				"9": "{\"c1\": \"\\\"\",\"c2\":\"\\\\:\",\"c3\": \"\\\\,\",\"c4\":\"\\\\\\\"\\\\:\\\\,\",\"c5\":\"\\\\{\",\"c6\":\"\\\\}\"}"
+		}
+		`),
+		},
+		{
+			Value: []byte(`{
+            "1": "test_name3",
+            "2": 2147483648,
+            "3": 32768,
+            "4": 128,
+            "5": 256,
+            "6": 1844674407370955161644444,
+            "7": "123.33.3",
+            "8": "2021-01-01T00:00:00",
+            "9": "invalid_json"
         }`),
 		},
 	}
@@ -326,7 +340,18 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 			uint64(9876543210987),
 			float32(456.7),
 			types.Datetime(63111484800000000),
-			"\x01\x01\x00\x00\x00\x1c\x00\x00\x00\x13\x00\x00\x00\x01\x00\t\x14\x00\x00\x00b\x02\x00\x00\x00\x00\x00\x00\x00",
+			"\x01\x06\x00\x00\x00k\x00\x00\x00J\x00\x00\x00\x02\x00L\x00\x00\x00\x02\x00N\x00\x00\x00\x02\x00P\x00\x00\x00\x02\x00R\x00\x00\x00\x02\x00T\x00\x00\x00\x02\x00\fV\x00\x00\x00\fX\x00\x00\x00\f[\x00\x00\x00\f^\x00\x00\x00\fe\x00\x00\x00\fh\x00\x00\x00c1c2c3c4c5c6\x01\"\x02\\:\x02\\,\x06\\\"\\:\\,\x02\\{\x02\\}",
+		},
+		{
+			"test_name3",
+			nil, // int32 overflow
+			nil, // int16 overflow
+			nil, // int8 overflow
+			nil, // uint8 overflow
+			nil, // uint64 overflow
+			nil, // valid float32
+			nil, // invalid datetime
+			nil, // invalid JSON
 		},
 	}
 
@@ -408,7 +433,9 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAt[types.Rowid](col, int(row))
 	case types.T_Blockid:
 		return vector.GetFixedAt[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+	case types.T_json:
+		return col.GetStringAt(int(row))
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
 		return col.GetStringAt(int(row))
 	default:
