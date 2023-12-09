@@ -77,6 +77,7 @@ func KafkaSinkConnectorExecutor(
 		ss := strings.Split(fullTableName, ".")
 		options[mokafka.DatabaseKey] = ss[0]
 		options[mokafka.TableKey] = ss[1]
+		options[mokafka.CREATED_AT] = tasks[0].CreateAt.String()
 		bufferLimit := getBufferLimit(options[mokafka.BufferLimitKey])
 
 		c, err := NewKafkaMoConnector(logger, options, ieFactory(), bufferLimit)
@@ -125,7 +126,7 @@ func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
-	groupId := configs[mokafka.TopicKey] + "-" + configs[mokafka.DatabaseKey] + "-" + configs[mokafka.TableKey] + "-" + configs[mokafka.PartitionKey]
+	groupId := configs[mokafka.TopicKey] + "-" + configs[mokafka.DatabaseKey] + "-" + configs[mokafka.TableKey] + "-" + configs[mokafka.PartitionKey] + "-" + configs[mokafka.CREATED_AT]
 	kafkaConfigs.SetKey("group.id", groupId)
 	return kafkaConfigs
 }

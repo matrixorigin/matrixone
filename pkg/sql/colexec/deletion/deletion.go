@@ -73,9 +73,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				return result, err
 			}
@@ -167,6 +175,11 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	bat := result.Batch
 
 	var affectedRows uint64

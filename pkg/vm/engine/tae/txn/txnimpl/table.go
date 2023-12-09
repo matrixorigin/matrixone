@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"runtime/trace"
 	"time"
 
@@ -699,6 +700,7 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
+					fileservice.Policy(0),
 				)
 				if err != nil {
 					return err
@@ -1231,6 +1233,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
+					fileservice.Policy(0),
 				)
 				if err != nil {
 					return err

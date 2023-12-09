@@ -60,28 +60,55 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
-	// fixme: if recording status=Running entity, here has data-trace issue.
-	// Should clone the StatementInfo as new one.
+	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
-		// process the execplan
+
+		// execute the stat plan
 		s.ExecPlan2Stats(ctx)
-		// remove the plan
+
+		// remove the plan, s will be free
 		s.jsonByte = nil
 		s.FreeExecPlan()
+		s.exported = true
 
-		// remove the TransacionID
-		s.TransactionID = NilTxnID
-		s.StatementTag = ""
-		s.StatementFingerprint = ""
-		s.Error = nil
-		s.AggrCount = 1
-		s.Database = ""
-		s.StmtBuilder.WriteString(s.Statement)
+		// copy value
+		stmt.StatementID = s.StatementID
+		stmt.SessionID = s.SessionID
+		stmt.Account = s.Account
+		stmt.User = s.User
+		stmt.Host = s.Host
+		stmt.RoleId = s.RoleId
+		stmt.StatementType = s.StatementType
+		stmt.QueryType = s.QueryType
+		stmt.SqlSourceType = s.SqlSourceType
+		stmt.Statement = s.Statement
+		stmt.StmtBuilder.WriteString(s.Statement)
+		stmt.Status = s.Status
+		stmt.Duration = s.Duration
+		stmt.ResultCount = s.ResultCount
+		stmt.RowsRead = s.RowsRead
+		stmt.BytesScan = s.BytesScan
+		stmt.ConnType = s.ConnType
+		stmt.statsArray = s.statsArray
+		stmt.RequestAt = s.RequestAt
+		stmt.ResponseAt = s.ResponseAt
+		stmt.end = s.end
+
+		// remove the TransactionID
+		stmt.TransactionID = NilTxnID
+		// modified value
+		stmt.StatementTag = ""
+		stmt.StatementFingerprint = ""
+		stmt.Error = nil
+		stmt.AggrCount = 1
+		stmt.Database = ""
 		duration := s.Duration
-		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
-		s.RequestAt = s.ResponseAt.Truncate(windowSize)
-		s.ResponseAt = s.RequestAt.Add(windowSize)
-		return s
+		stmt.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(stmt.statsArray.GetMemorySize() * float64(duration)))
+		stmt.RequestAt = stmt.ResponseAt.Truncate(windowSize)
+		stmt.ResponseAt = stmt.RequestAt.Add(windowSize)
+
+		// mark both statement export as true
+		return stmt
 	}
 	return nil
 }
@@ -120,6 +147,7 @@ func StatementInfoFilter(i Item) bool {
 		return false
 	}
 
+	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
 		return false
 	}
@@ -420,6 +448,11 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		return s.statsArray.ToJsonString()
 	} else {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
+		if s.statsArray.GetTimeConsumed() > 0 {
+			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
+				zap.String("statement_id", uuid.UUID(s.StatementID).String()),
+			)
+		}
 		s.statsArray.InitIfEmpty().Add(&statsArray)
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
@@ -540,12 +573,28 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if s.User == db_holder.MOLoggerUser {
 		goto DiscardAndFreeL
 	}
+
+	// Filter out the statement is empty
+	if s.Statement == "" {
+		goto DiscardAndFreeL
+	}
+
+	// Filter out exported or reported statement
+	if s.exported || s.reported {
+		goto DiscardAndFreeL
+	}
+
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}
+	}
+
+	// logging the statement that should not be here anymore
+	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 
 	s.reported = true
