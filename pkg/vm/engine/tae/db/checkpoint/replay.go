@@ -57,6 +57,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = true
 		}
 	}()
+	t0 := time.Now()
 	ctx := r.ctx
 	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
 	if err != nil {
@@ -92,7 +93,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
-	t0 := time.Now()
 	var CheckpointVersion int
 	// in version 1, checkpoint metadata doesn't contain 'version'.
 	vecLen := len(bats[0].Vecs)
