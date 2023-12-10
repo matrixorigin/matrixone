@@ -42,6 +42,9 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
 	dbName := string(st.Table.Schema())
+	if dbName == "" {
+		dbName = mce.ses.GetDatabaseName()
+	}
 	tableName := string(st.Table.Name())
 	_, tableDef := mce.ses.GetTxnCompileCtx().Resolve(dbName, tableName)
 	if tableDef == nil {
@@ -80,7 +83,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		}
 	}
 
-	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
+	options[moconnector.OptConnectorSql] = "use " + mce.ses.GetDatabaseName() + "; " + tree.String(st.AsSource, dialect.MYSQL)
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,
