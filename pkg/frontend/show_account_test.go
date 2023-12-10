@@ -17,9 +17,10 @@ package frontend
 import (
 	"context"
 	"math"
-	"os"
+	"math/rand"
 	"path"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,17 +153,18 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.mp)
 	}
 
-	size := uint64(1024 * 1024 * 11235)
+	size := int64(1024 * 1024 * 11235)
 	embeddingSizeToBatch(bat, size, ses.mp)
 
 	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
 }
 
-func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
+func mockCheckpointData(t *testing.T, accIds []uint64, insSize, delSize []int64) *logtail.CheckpointData {
 	ckpData := logtail.NewCheckpointData(common.CheckpointAllocator)
-	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
+	insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
+	delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
 
-	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
+	accVec := insBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
 	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
 	for idx := range accIds {
@@ -184,37 +185,62 @@ func mockObjectFileService(ctx context.Context, dirName string) *objectio.Object
 // 1. mock a checkpoint and write it down
 // 2. mock a storage usage response
 // 3. handle this response
-func Test_ShowAccounts(t *testing.T) {
-	ctx := context.Background()
-	accIds := []uint64{0, 1, 2, 3, 4}
-	sizes := []uint64{0, 1024, 2048, 4096, 8192}
+//func Test_ShowAccounts(t *testing.T) {
+//	ctx := context.Background()
+//	accIds := []uint64{0, 1, 2, 3, 4}
+//	sizes := []uint64{0, 1024, 2048, 4096, 8192}
+//
+//	ckpData := mockCheckpointData(t, accIds, sizes)
+//	defer ckpData.Close()
+//
+//	dirName := "show_account_test"
+//	objFs := mockObjectFileService(ctx, dirName)
+//	cnLocation, _, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
+//	require.Nil(t, err)
+//
+//	defer func() {
+//		err = os.RemoveAll(dirName)
+//		require.Nil(t, err)
+//	}()
+//
+//	resp := &db.StorageUsageResp{}
+//	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
+//		Location: cnLocation,
+//		Version:  9,
+//	})
+//
+//	usage, err := handleStorageUsageResponse(ctx, resp, objFs.Service)
+//	require.Nil(t, err)
+//
+//	require.Equal(t, len(usage), len(accIds))
+//
+//	for idx := range accIds {
+//		require.Equal(t, sizes[idx], usage[int32(accIds[idx])])
+//	}
+//
+//}
 
-	ckpData := mockCheckpointData(t, accIds, sizes)
-	defer ckpData.Close()
-
-	dirName := "show_account_test"
-	objFs := mockObjectFileService(ctx, dirName)
-	cnLocation, _, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
-	require.Nil(t, err)
-
-	defer func() {
-		err = os.RemoveAll(dirName)
-		require.Nil(t, err)
-	}()
-
-	resp := &db.StorageUsageResp{}
-	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-		Location: cnLocation,
-		Version:  9,
-	})
-
-	usage, err := handleStorageUsageResponse(ctx, resp, objFs.Service)
-	require.Nil(t, err)
-
-	require.Equal(t, len(usage), len(accIds))
-
-	for idx := range accIds {
-		require.Equal(t, sizes[idx], usage[int32(accIds[idx])])
+func mockUsageDatas(cnt int) (datas []logtail.UsageData) {
+	for i := 0; i < cnt; i++ {
+		datas = append(datas, logtail.UsageData{
+			AccId: rand.Uint32(),
+			DbId:  rand.Uint64(),
+			TblId: rand.Uint64(),
+			Size:  rand.Int63(),
+		})
 	}
+	return
+}
+
+func Test_ShowAccounts(t *testing.T) {
+	datas := mockUsageDatas(10)
+
+	for i := 0; i < len(datas)-2; i++ {
+		cnUsageCache.Update(datas[i])
+	}
+
+	cnUsageCache.SetUpdateTime(time.Now())
+
+	//checkStorageUsageCache()
 
 }

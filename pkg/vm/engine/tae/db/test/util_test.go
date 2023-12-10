@@ -153,8 +153,10 @@ func createAndWriteBatchNAObject(t *testing.T, ctx context.Context, objCnts []in
 	}
 }
 
-func createTables(t *testing.T, tae *db.DB, dbName string, colCnt int, tblCnt int) []handle.Relation {
+func createTables(t *testing.T, tae *db.DB, dbName string, colCnt int, tblCnt int) ([]handle.Relation, handle.Database) {
 	txn, _ := tae.StartTxn(nil)
+	defer txn.Commit(context.Background())
+
 	db, err := txn.CreateDatabase(dbName, "", "")
 	assert.Nil(t, err)
 
@@ -166,7 +168,7 @@ func createTables(t *testing.T, tae *db.DB, dbName string, colCnt int, tblCnt in
 		rels[i] = rel
 	}
 
-	return rels
+	return rels, db
 }
 
 func createTAE(t *testing.T, ctx context.Context) *db.DB {
@@ -182,8 +184,8 @@ func createTablesAndObjects(t *testing.T, ctx context.Context, tae *db.DB, dbNam
 		naObjCnts[i] = rand.Int()%50 + 1
 	}
 
-	rels := createTables(t, tae, dbName, 10, relCnt)
-	createAndWriteBatchNAObject(t, ctx, naObjCnts, rels, tae.Runtime.Fs)
+	rels, _ := createTables(t, tae, dbName, 10, relCnt)
+	createAndWriteBatchNASegment(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
 }
 
 // test plan:
@@ -214,12 +216,12 @@ func Test_FillUsageBatOfIncrement(t *testing.T) {
 		return nil
 	}
 
-	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
+	logtail.FillUsageBatOfIncremental(collector)
 
 	// after `FillUsageBatOfIncremental`, all non-appendable Object should be loaded
 	tae.Catalog.RecurLoop(collector)
 
-	storageUsageBat := collector.OrphanData().GetBatches()[logtail.SEGStorageUsageIDX]
+	storageUsageBat := collector.OrphanData().GetBatches()[logtail.StorageUsageInsIDX]
 	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
 	logutil.Info(storageUsageBat.String())
@@ -235,20 +237,20 @@ func Benchmark_FillSEGStorageUsageBatOfIncrement(b *testing.B) {
 	t := &testing.T{}
 	tae := createTAE(t, ctx)
 	defer tae.Close()
-	rels := createTables(t, tae, "testdb", 10, 1)
+	rels, _ := createTables(t, tae, "testdb", 10, 1)
 
 	collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 
 	for i := 0; i < b.N; i++ {
-		createAndWriteBatchNAObject(t, ctx, []int{100}, rels, tae.Runtime.Fs)
-		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
+		createAndWriteBatchNASegment(t, ctx, []int{100}, rels, tae.Runtime.Fs)
+		logtail.FillUsageBatOfIncremental(collector)
 	}
 }
 
 func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt int, oldVersion bool) (
 	[]*checkpoint.CheckpointEntry, []handle.Relation) {
 	// create 3 tables, and each table has 10 columns
-	rels := createTables(t, tae, "testdb", 10, 3)
+	rels, _ := createTables(t, tae, "testdb", 10, 3)
 	var entries []*checkpoint.CheckpointEntry
 	for i := 0; i < cnt; i++ {
 		// 3 tables, each table has 10 non-appendable Object
@@ -262,7 +264,7 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		//	return nil
 		//}
 
-		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
+		logtail.FillUsageBatOfIncremental(collector)
 
 		tae.Catalog.RecurLoop(collector)
 		err := collector.PostLoop(tae.Catalog)
@@ -290,16 +292,16 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 	return entries, rels
 }
 
-func checkpointMetaInfoFactory(entries []*checkpoint.CheckpointEntry) []*logtail.CkpLocVers {
-	ret := make([]*logtail.CkpLocVers, 0)
-	for idx := range entries {
-		ret = append(ret, &logtail.CkpLocVers{
-			Location: entries[idx].GetLocation(),
-			Version:  entries[idx].GetVersion(),
-		})
-	}
-	return ret
-}
+//func checkpointMetaInfoFactory(entries []*checkpoint.CheckpointEntry) []*logtail.CkpLocVers {
+//	ret := make([]*logtail.CkpLocVers, 0)
+//	for idx := range entries {
+//		ret = append(ret, &logtail.CkpLocVers{
+//			Location: entries[idx].GetLocation(),
+//			Version:  entries[idx].GetVersion(),
+//		})
+//	}
+//	return ret
+//}
 
 func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 	t.Skip("waiting refactoring")
@@ -309,24 +311,19 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		tae := createTAE(t, ctx)
 		defer tae.Close()
 
-		entries, rels := createCkpAndWriteDown(t, ctx, tae, 10, false)
+		_, rels := createCkpAndWriteDown(t, ctx, tae, 10, false)
 		collector := logtail.NewGlobalCollector(types.TS{}, 0)
 
 		// mark the first table as deleted
-		deletes := collector.GetDeletes()
-		deletes[logtail.UsageTblID][rels[0].ID()] = struct{}{}
+		//deletes := collector.GetDeletes()
+		//deletes[logtail.UsageTblID][rels[0].ID()] = struct{}{}
 
-		logtail.FillUsageBatOfGlobal(
-			tae.Catalog,
-			collector,
-			tae.Runtime.Fs.Service,
-			checkpointMetaInfoFactory(entries),
-		)
+		logtail.FillUsageBatOfGlobal(collector)
 
 		data := collector.OrphanData()
 		defer data.Close()
 
-		bat := data.GetBatches()[logtail.SEGStorageUsageIDX]
+		bat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
 		require.Equal(t, len(rels)-1, sizeVec.Length())
@@ -336,26 +333,21 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		tae := createTAE(t, ctx)
 		defer tae.Close()
 
-		entries, rels := createCkpAndWriteDown(t, ctx, tae, 10, true)
+		_, rels := createCkpAndWriteDown(t, ctx, tae, 10, true)
 		collector := logtail.NewGlobalCollector(types.TS{}, 0)
 
 		// mark all tables as deleted
-		deletes := collector.GetDeletes()
-		for i := 0; i < len(rels); i++ {
-			deletes[logtail.UsageTblID][rels[i].ID()] = struct{}{}
-		}
+		//deletes := collector.GetDeletes()
+		//for i := 0; i < len(rels); i++ {
+		//	deletes[logtail.UsageTblID][rels[i].ID()] = struct{}{}
+		//}
 
-		logtail.FillUsageBatOfGlobal(
-			tae.Catalog,
-			collector,
-			tae.Runtime.Fs.Service,
-			checkpointMetaInfoFactory(entries),
-		)
+		logtail.FillUsageBatOfGlobal(collector)
 
 		data := collector.OrphanData()
 		defer data.Close()
 
-		bat := data.GetBatches()[logtail.SEGStorageUsageIDX]
+		bat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
 		// when existing old checkpoints, it will traverse the catalog

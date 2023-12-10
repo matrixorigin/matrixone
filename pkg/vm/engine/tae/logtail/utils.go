@@ -449,7 +449,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) fu
 
 		if collectUsage {
 			// collecting usage happens only when do ckp
-			FillUsageBatOfIncremental_(collector)
+			FillUsageBatOfIncremental(collector)
 		}
 
 		data = collector.OrphanData()
@@ -486,7 +486,7 @@ func GlobalCheckpointDataFactory(
 		}
 		err = collector.PostLoop(c)
 
-		FillUsageBatOfGlobal_(collector)
+		FillUsageBatOfGlobal(collector)
 
 		data = collector.OrphanData()
 
