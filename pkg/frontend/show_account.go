@@ -215,7 +215,7 @@ func updateStorageUsageCache(accIds []int32, sizes []int64) {
 
 	// step 2: update
 	for x := range accIds {
-		cnUsageCache.Update(logtail.UsageData_{
+		cnUsageCache.Update(logtail.UsageData{
 			AccId: uint32(accIds[x]),
 			Size:  sizes[x],
 		})

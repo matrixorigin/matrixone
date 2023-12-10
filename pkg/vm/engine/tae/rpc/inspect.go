@@ -216,16 +216,22 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 
-	versions := make([]uint32, len(entries))
-	locations := make([]objectio.Location, len(entries))
+	var versions []uint32
+	var locations []objectio.Location
 
 	for idx := range entries {
-		versions[idx] = entries[idx].GetVersion()
-		locations[idx] = entries[idx].GetLocation()
+		if entries[idx].GetVersion() < logtail.CheckpointVersion10 {
+			continue
+		}
+		versions = append(versions, entries[idx].GetVersion())
+		locations = append(locations, entries[idx].GetLocation())
 	}
 
-	var usageInsData [][]logtail.UsageData_
-	var usageDelData [][]logtail.UsageData_
+	// remove the old version
+	entries = entries[len(entries)-len(versions):]
+
+	var usageInsData [][]logtail.UsageData
+	var usageDelData [][]logtail.UsageData
 
 	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
 		ctx, locations, versions,
@@ -249,7 +255,7 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 		return h.GetName(), r.Schema().(*catalog.Schema).Name
 	}
 
-	formatOutput := func(dst *bytes.Buffer, data logtail.UsageData_, hint string) float64 {
+	formatOutput := func(dst *bytes.Buffer, data logtail.UsageData, hint string) float64 {
 		if checkUsageData(data, c) {
 			size := float64(data.Size) / 1048576
 
@@ -869,7 +875,7 @@ func parseStorageUsageTarget(expr string, ac *db.AccessInfo, db *db.DB) (
 	return accId, dbId, tblId, nil
 }
 
-func checkUsageData(data logtail.UsageData_, c *storageUsageHistoryArg) bool {
+func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
 	if c.accId == math.MaxUint32 {
 		return true
 	}
