@@ -667,7 +667,15 @@ func (c *Compile) lockMetaTables() error {
 
 		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
 		if err != nil {
-			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
+			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+				moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+
+			// other errors, just throw  out
+			return err
 		}
 	}
 	return nil
