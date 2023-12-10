@@ -2689,9 +2689,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			if st, ok := cw.GetAst().(*tree.DropTable); ok {
-				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 				// handle dynamic table drop, cancel all the running daemon task
 				_ = mce.handleDropDynamicTable(requestCtx, st)
+
+				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 			}
 
 			if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
