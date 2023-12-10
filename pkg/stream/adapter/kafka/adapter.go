@@ -70,6 +70,8 @@ const (
 	AVRO       ValueType = "avro"
 	PROTOBUF   ValueType = "protobuf"
 	PROTOBUFSR ValueType = "protobuf_sr"
+
+	CREATED_AT = "created_at"
 )
 
 type DataGetter interface {

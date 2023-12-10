@@ -225,6 +225,37 @@ func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.D
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleDropDynamicTable(ctx context.Context, st *tree.DropTable) error {
+	ts := mce.routineMgr.getParameterUnit().TaskService
+
+	// Query all relevant tasks belonging to the current tenant
+	tasks, err := ts.QueryDaemonTask(mce.ses.requestCtx,
+		taskservice.WithTaskType(taskservice.EQ, pb.TaskType_TypeKafkaSinkConnector.String()),
+		taskservice.WithAccountID(taskservice.EQ, mce.ses.accountId),
+		taskservice.WithTaskStatusCond(pb.TaskStatus_Running, pb.TaskStatus_Created, pb.TaskStatus_Paused, pb.TaskStatus_PauseRequested),
+	)
+	if err != nil || len(tasks) == 0 {
+		return err
+	}
+
+	// Filter the tasks within the loop
+	for _, tn := range st.Names {
+		dbName := string(tn.Schema())
+		if dbName == "" {
+			dbName = mce.ses.GetDatabaseName()
+		}
+		fullTableName := dbName + "." + string(tn.Name())
+
+		for _, task := range tasks {
+			if task.Details.Details.(*pb.Details_Connector).Connector.TableName == fullTableName {
+				if err := mce.handleCancelDaemonTask(ctx, task.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
 func (mce *MysqlCmdExecutor) handleShowConnectors(ctx context.Context, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
