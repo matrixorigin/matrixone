@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -79,6 +80,7 @@ func (s *scaling) doScaling() {
 		}
 		return true
 	})
+	v2.ProxyDrainCounter.Add(float64(len(drainingCNs)))
 	for _, cn := range drainingCNs {
 		tuns := s.connManager.getTunnelsByCNID(cn)
 		tunNum := len(tuns)

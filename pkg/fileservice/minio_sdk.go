@@ -16,11 +16,14 @@ package fileservice
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -121,7 +124,7 @@ func NewMinioSDK(
 	dialer := &net.Dialer{
 		KeepAlive: 5 * time.Second,
 	}
-	options.Transport = &http.Transport{
+	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           dialer.DialContext,
 		MaxIdleConns:          100,
@@ -132,6 +135,30 @@ func NewMinioSDK(
 		ExpectContinueTimeout: 1 * time.Second,
 		ForceAttemptHTTP2:     true,
 	}
+	if len(args.CertFiles) > 0 {
+		// custom certs
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			panic(err)
+		}
+		for _, path := range args.CertFiles {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				// ignore
+				continue
+			}
+			logutil.Info("file service: load cert file",
+				zap.Any("path", path),
+			)
+			pool.AppendCertsFromPEM(content)
+		}
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			RootCAs:            pool,
+		}
+		transport.TLSClientConfig = tlsConfig
+	}
+	options.Transport = transport
 
 	// endpoint
 	isSecure, err := minioValidateEndpoint(&args)

@@ -18,6 +18,7 @@ name = "SHARED"
 bucket = "mo-test"
 endpoint = "http://minio:9000"
 key-prefix = "server/data"
+cert-files = ["/etc/ssl/cert.pem"]
 
 [fileservice.cache]
 memory-capacity = "512MB"
