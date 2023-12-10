@@ -18,16 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"hash/crc32"
-	"sync/atomic"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -38,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -79,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -86,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -99,10 +92,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"time"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
-// the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
+// The message is always *pipeline.Message here. It's a byte array encoded by method encodeScope.
 func CnServerMessageHandler(
 	ctx context.Context,
 	cnAddr string,
@@ -124,7 +119,6 @@ func CnServerMessageHandler(
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
-		cs.SafeClose(ctx)
 	}()
 
 	msg, ok := message.(*pipeline.Message)
@@ -136,7 +130,7 @@ func CnServerMessageHandler(
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
 		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
 
-	// rebuild pipeline to run and send query result back.
+	// rebuild pipeline to run and send the query result back.
 	err = cnMessageHandle(&receiver)
 	if err != nil {
 		return receiver.sendError(err)
@@ -211,10 +205,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 // receiveMessageFromCnServer deal the back message from cn-server.
 func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
-	var val morpc.Message
+	var bat *batch.Batch
+	var end bool
 	var err error
-	var dataBuffer []byte
-	var sequence uint64
 
 	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
 	if sender.receiveCh == nil {
@@ -253,107 +246,47 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	lastArg.SetInfo(info)
 	lastArg.AppendChild(valueScanOperator)
 	for {
-		val, err = sender.receiveMessage()
+		bat, end, err = sender.receiveBatch()
 		if err != nil {
 			return err
 		}
-		if val == nil {
-			break
+		if end {
+			return nil
 		}
 
-		m := val.(*pipeline.Message)
-
-		if errInfo, get := m.TryToGetMoErr(); get {
-			return errInfo
-		}
-		if m.IsEndMessage() {
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				ana := new(pipeline.AnalysisList)
-				if err = ana.Unmarshal(anaData); err != nil {
-					return err
-				}
-				mergeAnalyseInfo(c.anal, ana)
-			}
-			break
-		}
-		// XXX some order check just for safety ?
-		if sequence != m.Sequence {
-			return moerr.NewInternalErrorNoCtx("Batch packages passed by morpc are out of order")
-		}
-		sequence++
-
-		if dataBuffer == nil {
-			dataBuffer = m.Data
-		} else {
-			dataBuffer = append(dataBuffer, m.Data...)
-		}
-
-		if m.WaitingNextToMerge() {
-			continue
-		}
-		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
-			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
-		}
-
-		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
-		if bat != batch.EmptyBatch {
-			bat.AddCnt(1)
-		}
-		dataBuffer = nil
-		if err != nil {
-			return err
-		}
 		lastAnalyze.Network(bat)
 		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
-		result, err := lastArg.Call(s.Proc)
-		if err != nil || result.Status == vm.ExecStop {
-			valueScanOperator.Free(s.Proc, false, err)
-			return err
+		result, errCall := lastArg.Call(s.Proc)
+		if errCall != nil || result.Status == vm.ExecStop {
+			valueScanOperator.Free(s.Proc, false, errCall)
+			return errCall
 		}
-		valueScanOperator.Free(s.Proc, false, err)
+		valueScanOperator.Free(s.Proc, false, errCall)
 	}
-	// for {
-	// 	ok, err := lastArg.Call(s.Proc)
-	// 	if err != nil {
-	// 		valueScanOperator.Free(s.Proc, false, err)
-	// 		return err
-	// 	}
-	// 	if ok.Status == vm.ExecStop {
-	// 		break
-	// 	}
-	// }
-	// valueScanOperator.Free(s.Proc, false, err)
-	return nil
 }
 
-// remoteRun sends a scope for remote running and receive the results.
-// the back result message is always *pipeline.Message contains three cases.
+// remoteRun sends a scope for remote running and receives the results.
+// The back result message is always *pipeline.Message contains three cases.
 // 1. Message with error information
-// 2. Message with end flag and analysis result
+// 2. Message with an end flag and analysis result
 // 3. Batch Message with batch data
-func (s *Scope) remoteRun(c *Compile) error {
-	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
+func (s *Scope) remoteRun(c *Compile) (err error) {
+	// encode the scope but without the last operator.
+	// the last operator will be executed on the current node for receiving the result and send them to the next pipeline.
 	lastIdx := len(s.Instructions) - 1
 	lastInstruction := s.Instructions[lastIdx]
-	s.Instructions = s.Instructions[:lastIdx]
 
-	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
-	// i.e. we need to call the corresponding Perpare, Call and Free manually.
-	// Prepare and Free are called in this func, and Call in receiveMessageFromCnServer
-	lastArg := lastInstruction.Arg
-	switch arg := lastArg.(type) {
-	case *connector.Argument:
-		arg.Prepare(s.Proc)
-	case *dispatch.Argument:
-		arg.Prepare(s.Proc)
-	default:
+	if lastInstruction.Op == vm.Connector || lastInstruction.Op == vm.Dispatch {
+		if err = lastInstruction.Arg.Prepare(s.Proc); err != nil {
+			return err
+		}
+	} else {
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
+	s.Instructions = s.Instructions[:lastIdx]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -361,26 +294,21 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
-		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
-		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.Method_PipelineMessage)
 	if err != nil {
-		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	lastArg.Free(s.Proc, err != nil, err)
-	return err
+	return receiveMessageFromCnServer(c, s, sender, lastInstruction)
 }
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
@@ -716,9 +644,8 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 }
 
 // convert vm.Instruction to pipeline.Instruction
+// todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
-	var err error
-
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
@@ -809,12 +736,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
-			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-				id := colexec.Srv.RegistConnector(t.LocalRegs[i])
-				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
-					return ctxId, nil, err
-				}
-			}
 			in.Dispatch.LocalConnector[i] = &pipeline.Connector{
 				ConnectorIndex: idx,
 				PipelineId:     ctx0.id,
@@ -1044,12 +965,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.OrderBy = t.OrderBySpecs
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
-		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-			id := colexec.Srv.RegistConnector(t.Reg)
-			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId, nodeInfo); err != nil {
-				return ctxId, nil, err
-			}
-		}
 		in.Connect = &pipeline.Connector{
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx,
@@ -1544,30 +1459,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	return v, nil
 }
 
-func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
-	source := ana.List
-	if len(target.analInfos) != len(source) {
-		return
-	}
-	for i := range target.analInfos {
-		n := source[i]
-		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
-		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
-		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
-		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
-		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
-		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
-		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
-		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
-		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
-		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
-		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
-		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
-		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
-	}
-}
-
 // convert []types.Type to []*plan.Type
 func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
@@ -1795,70 +1686,4 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 		}
 	}
 	return -1, nil
-}
-
-func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeInfo engine.Node) (int32, error) {
-	ds := &Scope{Magic: Pushdown}
-	ds.Proc = process.NewWithAnalyze(ctx.scope.Proc, ctx.scope.Proc.Ctx, 0, nil)
-	ds.DataSource = &Source{
-		PushdownId:   id,
-		PushdownAddr: nodeInfo.Addr,
-	}
-	ds.appendInstruction(vm.Instruction{
-		Op: vm.Connector,
-		Arg: &connector.Argument{
-			Reg: ctx.scope.Proc.Reg.MergeReceivers[idx],
-		},
-	})
-	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
-	p := &pipeline.Pipeline{}
-	p.PipelineId = ctxId
-	p.PipelineType = pipeline.Pipeline_PipelineType(Pushdown)
-	ctxId++
-	p.DataSource = &pipeline.Source{
-		PushdownId:   id,
-		PushdownAddr: nodeInfo.Addr,
-	}
-	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
-		Op: int32(vm.Connector),
-		Connect: &pipeline.Connector{
-			ConnectorIndex: idx,
-			PipelineId:     ctx.id,
-		},
-	})
-	ctx.pipe.Children = append(ctx.pipe.Children, p)
-	return ctxId, nil
-}
-
-func (ctx *scopeContext) isDescendant(dsc *scopeContext) bool {
-	if ctx.id == dsc.id {
-		return true
-	}
-	for i := range ctx.children {
-		if ctx.children[i].isDescendant(dsc) {
-			return true
-		}
-	}
-	return false
-}
-
-func (ctx *scopeContext) isRemote(targetContext *scopeContext, depth int) bool {
-	if targetContext.scope.Magic != Remote {
-		return false
-	}
-	if ctx.id == targetContext.id && depth == 0 {
-		return true
-	}
-	for i := range ctx.children {
-		if ctx.children[i].scope.Magic == Remote {
-			if ctx.children[i].isRemote(targetContext, depth+1) {
-				return true
-			}
-		} else {
-			if ctx.children[i].isRemote(targetContext, depth) {
-				return true
-			}
-		}
-	}
-	return false
 }
