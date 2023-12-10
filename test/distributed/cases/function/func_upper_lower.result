@@ -1,0 +1,46 @@
+select to_upper('abc'), upper('abc');
+to_upper(abc)    upper(abc)
+ABC    ABC
+select to_upper('abc 123'), upper('abc 123');
+to_upper(abc 123)    upper(abc 123)
+ABC 123    ABC 123
+select to_upper(null);
+to_upper(null)
+null
+create table up_t(a varchar(10), b char(10));
+insert into up_t values('abc', 'abc');
+insert into up_t values(null, null);
+insert into up_t values('abc 123', 'abc 123');
+select to_upper(a), upper(a) from up_t;
+to_upper(a)    upper(a)
+ABC    ABC
+null    null
+ABC 123    ABC 123
+select to_upper(b), upper(b) from up_t;
+to_upper(b)    upper(b)
+ABC    ABC
+null    null
+ABC 123    ABC 123
+select to_lower('ABC'), lower('ABC');
+to_lower(ABC)    lower(ABC)
+abc    abc
+select to_lower('AbC 123'), lower('AbC 123');
+to_lower(AbC 123)    lower(AbC 123)
+abc 123    abc 123
+select to_lower(null);
+to_lower(null)
+null
+create table low_t(a varchar(10), b char(10));
+insert into low_t values('ABC', 'ABC');
+insert into low_t values(null, null);
+insert into low_t values('AbC 123', 'AbC 123');
+select to_lower(a), lower(a) from low_t;
+to_lower(a)    lower(a)
+abc    abc
+null    null
+abc 123    abc 123
+select to_lower(b), lower(b) from low_t;
+to_lower(b)    lower(b)
+abc    abc
+null    null
+abc 123    abc 123
