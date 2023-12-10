@@ -682,7 +682,7 @@ triggers    0    0    accountadmin
 engines    0    0    accountadmin
 routines    0    0    accountadmin
 parameters    0    0    accountadmin
-keywords    747    21267    accountadmin
+keywords    747    45171    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
