@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -135,8 +134,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.RemoteRun(c)
 			case Parallel:
 				errChan <- scope.ParallelRun(c, scope.IsRemote)
-			case Pushdown:
-				errChan <- scope.PushdownRun()
 			}
 		})
 	}
@@ -194,7 +191,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
-	if !s.canRemote(c) || !cnclient.IsCNClientReady() {
+	if !s.canRemote(c, true) || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -478,29 +475,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
-}
-
-func (s *Scope) PushdownRun() error {
-	var end bool // exist flag
-	var err error
-
-	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
-	for {
-		bat := <-reg.Ch
-		if bat == nil {
-			s.Proc.SetInputBatch(bat)
-			_, err = vm.Run(s.Instructions, s.Proc)
-			s.Proc.Cancel()
-			return err
-		}
-		if bat.RowCount() == 0 {
-			continue
-		}
-		s.Proc.SetInputBatch(bat)
-		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
-			return err
-		}
-	}
 }
 
 func (s *Scope) JoinRun(c *Compile) error {
