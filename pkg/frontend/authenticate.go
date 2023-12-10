@@ -3493,7 +3493,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3512,7 +3512,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
+			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3643,7 +3643,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	optionBits := uint8(0)
@@ -3683,7 +3683,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
+			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3735,7 +3735,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	err = bh.Exec(ctx, "begin;")
