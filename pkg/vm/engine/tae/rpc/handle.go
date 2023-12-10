@@ -955,7 +955,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
-var districtMatchRegexp = regexp.MustCompile(`\_\d+\_district`)
+var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
 
 func IsDistrictTable(name string) bool {
 	return districtMatchRegexp.MatchString(name)
