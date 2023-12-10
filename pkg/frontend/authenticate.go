@@ -8248,19 +8248,16 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 		}
 
 		if user.AuthOption == nil {
-			err = moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
-			return err
+			return moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
 		}
 
 		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
-			err = moerr.NewInternalError(ctx, "only support password verification now")
-			return err
+			return moerr.NewInternalError(ctx, "only support password verification now")
 		}
 
 		password := user.AuthOption.Str
 		if len(password) == 0 {
-			err = moerr.NewInternalError(ctx, "password is empty string")
-			return err
+			return moerr.NewInternalError(ctx, "password is empty string")
 		}
 
 		//encryption the password
