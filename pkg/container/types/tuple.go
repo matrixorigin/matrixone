@@ -115,7 +115,7 @@ func printTuple(tuple Tuple) string {
 		case int16:
 			res += fmt.Sprintf("(int16: %v)", t)
 		case int32:
-			res += fmt.Sprintf("(int32: %v)", t)
+			res += fmt.Sprintf("%v", t)
 		case int64:
 			res += fmt.Sprintf("(int64: %v)", t)
 		case uint8:
