@@ -168,6 +168,8 @@ func TestCommitWithLockTables(t *testing.T) {
 }
 
 func TestCommitWithLockTablesChanged(t *testing.T) {
+	tableID1 := uint64(10)
+	tableID2 := uint64(20)
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		lockservice.RunLockServicesForTest(
 			zap.DebugLevel,
@@ -176,34 +178,34 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 				s := ls[0]
 
-				_, err := s.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				_, err := s.Lock(ctx, tableID1, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
-				_, err = s.Lock(ctx, 2, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				_, err = s.Lock(ctx, tableID2, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
 				assert.NoError(t, err)
 
 				ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 					sr.Responses[0].TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
 					sr.Responses[0].CommitResponse = &txn.TxnCommitResponse{
-						InvalidLockTables: []uint64{1},
+						InvalidLockTables: []uint64{tableID1},
 					}
 					return sr, nil
 				})
 
 				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
 				tc.option.lockService = s
-				tc.AddLockTable(lock.LockTable{Table: 1})
-				tc.AddLockTable(lock.LockTable{Table: 2})
+				tc.AddLockTable(lock.LockTable{Table: tableID1})
+				tc.AddLockTable(lock.LockTable{Table: tableID2})
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 				err = tc.Commit(ctx)
 				assert.Error(t, err)
 
 				// table 1 will be removed
-				bind, err := s.GetLockTableBind(1)
+				bind, err := s.GetLockTableBind(tableID1)
 				require.NoError(t, err)
 				require.Equal(t, lock.LockTable{}, bind)
 
 				// table 2 will be kept
-				bind, err = s.GetLockTableBind(2)
+				bind, err = s.GetLockTableBind(tableID2)
 				require.NoError(t, err)
 				require.NotEqual(t, lock.LockTable{}, bind)
 			},
