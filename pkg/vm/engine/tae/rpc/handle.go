@@ -961,6 +961,21 @@ func IsDistrictTable(name string) bool {
 	return districtMatchRegexp.MatchString(name)
 }
 
+func PrintTuple(tuple types.Tuple) string {
+	res := "("
+	for i, t := range tuple {
+		switch t := t.(type) {
+		case int32:
+			res += fmt.Sprintf("%v", t)
+		}
+		if i != len(tuple)-1 {
+			res += ","
+		}
+	}
+	res += ")"
+	return res
+}
+
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
@@ -1046,7 +1061,7 @@ func (h *Handle) HandleWrite(
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
 				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
-				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), pk.String())
+				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
 		//Appends a batch of data into table.
@@ -1122,7 +1137,7 @@ func (h *Handle) HandleWrite(
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
 			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
-			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), pk.String(), rowID.String())
+			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
