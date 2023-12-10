@@ -1044,7 +1044,6 @@ func (h *Handle) HandleWrite(
 		}
 		//if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district")
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-			logutil.Infof("IsDistrictTable11 %v", tb.Schema().(*catalog2.Schema).Name)
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
 				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), pk.String())
@@ -1119,7 +1118,6 @@ func (h *Handle) HandleWrite(
 	//defer pkVec.Close()
 	//if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district") {
 	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-		logutil.Infof("IsDistrictTable %v", tb.Schema().(*catalog2.Schema).Name)
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
