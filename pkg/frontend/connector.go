@@ -226,6 +226,9 @@ func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.D
 }
 
 func (mce *MysqlCmdExecutor) handleDropDynamicTable(ctx context.Context, st *tree.DropTable) error {
+	if mce.routineMgr == nil || mce.routineMgr.getParameterUnit() == nil || mce.routineMgr.getParameterUnit().TaskService == nil {
+		return moerr.NewInternalError(ctx, "task service not ready yet")
+	}
 	ts := mce.routineMgr.getParameterUnit().TaskService
 
 	// Query all relevant tasks belonging to the current tenant
