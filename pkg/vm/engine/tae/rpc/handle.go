@@ -1035,6 +1035,16 @@ func (h *Handle) HandleWrite(
 				panic("invalid batch : the length of vectors in batch is not the same")
 			}
 		}
+		if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district") {
+			logutil.Infof("found bmsql_district")
+			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+				d_w_id := types.DecodeInt32(req.Batch.Vecs[0].GetBytesAt(i))
+				d_id := types.DecodeInt32(req.Batch.Vecs[1].GetBytesAt(i))
+				d_next_o_id := types.DecodeInt32(req.Batch.Vecs[4].GetBytesAt(i))
+				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				logutil.Infof("d_w_id: %d, d_id: %d, d_next_o_id: %d, pk: %v", d_w_id, d_id, d_next_o_id, pk.String())
+			}
+		}
 		//Appends a batch of data into table.
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
@@ -1102,6 +1112,15 @@ func (h *Handle) HandleWrite(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
 	//defer pkVec.Close()
+	if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district") {
+		logutil.Infof("found bmsql_district delete")
+		for i := 0; i < rowIDVec.Length(); i++ {
+
+			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			logutil.Infof("delete rowID: %v, pk: %v", rowID.String(), pk.String())
+		}
+	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
 }
