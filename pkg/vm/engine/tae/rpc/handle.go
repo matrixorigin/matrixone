@@ -955,6 +955,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
+// TODO: debug for #13342, remove me later
 var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
 
 func IsDistrictTable(name string) bool {
@@ -1057,7 +1058,7 @@ func (h *Handle) HandleWrite(
 				panic("invalid batch : the length of vectors in batch is not the same")
 			}
 		}
-		//if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district")
+		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
 				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
@@ -1131,7 +1132,7 @@ func (h *Handle) HandleWrite(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
 	//defer pkVec.Close()
-	//if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district") {
+	// TODO: debug for #13342, remove me later
 	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 		for i := 0; i < rowIDVec.Length(); i++ {
 
