@@ -2079,13 +2079,14 @@ func (ses *Session) getCNLabels() map[string]string {
 }
 
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+// func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+func (ses *Session) getGlobalSystemVariableValue(varName string) (val interface{}, err error) {
 	var sql string
-	var err error
+	//var err error
 	var erArray []ExecResult
 	var accountId uint32
 	var variableValue string
-	var val interface{}
+	//var val interface{}
 	ctx := ses.GetRequestContext()
 
 	// check the variable name isValid or not
