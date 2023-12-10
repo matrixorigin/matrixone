@@ -178,6 +178,18 @@ var (
 	TxnStatementUpdateStatsDurationHistogram    = txnStatementDurationHistogram.WithLabelValues("update-stats")
 	TxnStatementUpdateInfoFromZonemapHistogram  = txnStatementDurationHistogram.WithLabelValues("update-info-from-zonemap")
 	TxnStatementUpdateStatsInfoMapHistogram     = txnStatementDurationHistogram.WithLabelValues("update-stats-info-map")
+	TxnStatementNodesHistogram                  = txnStatementDurationHistogram.WithLabelValues("nodes")
+	TxnStatementCompileScopeHistogram           = txnStatementDurationHistogram.WithLabelValues("compileScope")
+	TxnStatementCompileQueryHistogram           = txnStatementDurationHistogram.WithLabelValues("compileQuery")
+	TxnStatementCompilePlanScopeHistogram       = txnStatementDurationHistogram.WithLabelValues("compilePlanScope")
+	TxnStatementBuildPlanHistogram              = txnStatementDurationHistogram.WithLabelValues("BuildPlan")
+	TxnStatementBuildSelectHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildSelect")
+	TxnStatementBuildInsertHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildInsert")
+	TxnStatementBuildExplainHistogram           = txnStatementDurationHistogram.WithLabelValues("BuildExplain")
+	TxnStatementBuildReplaceHistogram           = txnStatementDurationHistogram.WithLabelValues("BuildReplace")
+	TxnStatementBuildUpdateHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildUpdate")
+	TxnStatementBuildDeleteHistogram            = txnStatementDurationHistogram.WithLabelValues("BuildDelete")
+	TxnStatementBuildLoadHistogram              = txnStatementDurationHistogram.WithLabelValues("BuildLoad")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
