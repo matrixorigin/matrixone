@@ -787,6 +787,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `lower`, `to_lower`
+	{
+		functionId: LOWER,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInToLower
+				},
+			},
+		},
+	},
+
 	// function `lpad`
 	{
 		functionId: LPAD,
@@ -1565,6 +1586,27 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SHA2Func
+				},
+			},
+		},
+	},
+
+	// function `upper`, `to_upper`
+	{
+		functionId: UPPER,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInToUpper
 				},
 			},
 		},

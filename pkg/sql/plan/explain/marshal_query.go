@@ -191,6 +191,22 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
+	case plan.Node_ASSERT:
+		return "assert", nil
+	case plan.Node_BROADCAST:
+		return "broadcast", nil
+	case plan.Node_SPLIT:
+		return "split", nil
+	case plan.Node_GATHER:
+		return "gather", nil
+	case plan.Node_REPLACE:
+		return "replace", nil
+	case plan.Node_TIME_WINDOW:
+		return "time_window", nil
+	case plan.Node_Fill:
+		return "fill", nil
+	case plan.Node_PARTITION:
+		return "partition", nil
 	case plan.Node_FUNCTION_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.TableDef != nil && m.node.TableDef.TblFunc != nil {
@@ -471,6 +487,41 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_LOCK_OP:
 		labels = append(labels, Label{
 			Name:  Label_Lock_Op, //"lock op",
+			Value: []string{},
+		})
+	case plan.Node_TIME_WINDOW:
+		labels = append(labels, Label{
+			Name:  Label_Time_Window,
+			Value: []string{},
+		})
+	case plan.Node_PARTITION:
+		labels = append(labels, Label{
+			Name:  Label_Partition,
+			Value: []string{},
+		})
+	case plan.Node_BROADCAST:
+		labels = append(labels, Label{
+			Name:  Label_Boardcast,
+			Value: []string{},
+		})
+	case plan.Node_SPLIT:
+		labels = append(labels, Label{
+			Name:  Label_Split,
+			Value: []string{},
+		})
+	case plan.Node_GATHER:
+		labels = append(labels, Label{
+			Name:  Label_Gather,
+			Value: []string{},
+		})
+	case plan.Node_ASSERT:
+		labels = append(labels, Label{
+			Name:  Label_Assert,
+			Value: []string{},
+		})
+	case plan.Node_ON_DUPLICATE_KEY:
+		labels = append(labels, Label{
+			Name:  Label_On_Duplicate_Key,
 			Value: []string{},
 		})
 	default:
