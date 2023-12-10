@@ -82,6 +82,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="internal"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="leak"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="total"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="retry"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="total"`) + `[$interval]))`,
@@ -91,6 +92,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				"user-txn",
 				"internal-txn",
+				"leak",
 				"statement",
 				"statement-retry",
 				"lock",
