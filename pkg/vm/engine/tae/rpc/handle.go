@@ -1038,9 +1038,9 @@ func (h *Handle) HandleWrite(
 		if strings.Contains(tb.Schema().(*catalog2.Schema).Name, "bmsql_district") {
 			logutil.Infof("found bmsql_district")
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				d_w_id := types.DecodeInt32(req.Batch.Vecs[0].GetBytesAt(i))
-				d_id := types.DecodeInt32(req.Batch.Vecs[1].GetBytesAt(i))
-				d_next_o_id := types.DecodeInt32(req.Batch.Vecs[4].GetBytesAt(i))
+				d_w_id := types.DecodeInt32(req.Batch.Vecs[0].GetRawBytesAt(i))
+				d_id := types.DecodeInt32(req.Batch.Vecs[1].GetRawBytesAt(i))
+				d_next_o_id := types.DecodeInt32(req.Batch.Vecs[4].GetRawBytesAt(i))
 				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("d_w_id: %d, d_id: %d, d_next_o_id: %d, pk: %v", d_w_id, d_id, d_next_o_id, pk.String())
 			}
