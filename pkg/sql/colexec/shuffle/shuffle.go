@@ -56,6 +56,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	var index int
 
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	// clean last sent batch
 	if ap.ctr.lastSentIdx != -1 {
 		// todo: reuse this batch, need to fix this
@@ -78,7 +84,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	for index == -1 {
 		// do input
-		result, err := arg.children[0].Call(proc)
+
+		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 		if err != nil {
 			return result, err
 		}
