@@ -142,6 +142,9 @@ func (c *Compile) reset() {
 		}
 		c.anal.analInfos = nil
 	}
+	for i := range c.scope {
+		c.scope[i].release()
+	}
 	c.scope = nil
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil

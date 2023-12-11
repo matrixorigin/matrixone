@@ -229,7 +229,7 @@ type Compile struct {
 
 	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
 
-	lock sync.RWMutex
+	lock *sync.RWMutex
 
 	isInternal bool
 

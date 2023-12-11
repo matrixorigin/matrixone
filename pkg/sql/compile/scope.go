@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"runtime/debug"
 	"sync"
@@ -59,6 +60,17 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
+
+func newScope(magic magicType, nodeInfo engine.Node) *Scope {
+	s := reuse.Alloc[Scope](nil)
+	s.Magic = magic
+	s.NodeInfo = nodeInfo
+	return s
+}
+
+func (s *Scope) release() {
+	reuse.Free[Scope](s, nil)
+}
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
@@ -462,16 +474,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic: Normal,
-			DataSource: &Source{
-				R:            rds[i],
-				SchemaName:   s.DataSource.SchemaName,
-				RelationName: s.DataSource.RelationName,
-				Attributes:   s.DataSource.Attributes,
-				AccountId:    s.DataSource.AccountId,
-			},
-			NodeInfo: s.NodeInfo,
+		ss[i] = newScope(Normal, s.NodeInfo)
+		ss[i].DataSource = &Source{
+			R:            rds[i],
+			SchemaName:   s.DataSource.SchemaName,
+			RelationName: s.DataSource.RelationName,
+			Attributes:   s.DataSource.Attributes,
+			AccountId:    s.DataSource.AccountId,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -527,10 +536,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic:    Merge,
-			NodeInfo: s.NodeInfo,
-		}
+		ss[i] = newScope(Merge, s.NodeInfo)
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
@@ -596,12 +602,9 @@ func (s *Scope) LoadRun(c *Compile) error {
 		{
 			bat.SetRowCount(1)
 		}
-		ss[i] = &Scope{
-			Magic: Normal,
-			DataSource: &Source{
-				Bat: bat,
-			},
-			NodeInfo: s.NodeInfo,
+		ss[i] = newScope(Normal, s.NodeInfo)
+		ss[i].DataSource = &Source{
+			Bat: bat,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -950,4 +953,8 @@ func (s *Scope) replace(c *Compile) error {
 	}
 	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
+}
+
+func (s Scope) Name() string {
+	return "compile.Scope"
 }

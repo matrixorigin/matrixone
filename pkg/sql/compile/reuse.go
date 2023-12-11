@@ -15,8 +15,10 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 func init() {
@@ -24,10 +26,20 @@ func init() {
 		func() *Compile {
 			return &Compile{
 				affectRows: &atomic.Uint64{},
+				lock:       &sync.RWMutex{},
 			}
 		},
 		func(c *Compile) { c.reset() },
 		reuse.DefaultOptions[Compile]().
+			WithEnableChecker(),
+	)
+
+	reuse.CreatePool[Scope](
+		func() *Scope {
+			return &Scope{}
+		},
+		func(s *Scope) { *s = Scope{} },
+		reuse.DefaultOptions[Scope]().
 			WithEnableChecker(),
 	)
 }
