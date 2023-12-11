@@ -81,7 +81,7 @@ var (
 	S3WriteIODurationHistogram = s3IODurationHistogram.WithLabelValues("write")
 	S3ReadIODurationHistogram  = s3IODurationHistogram.WithLabelValues("read")
 	S3ListIODurationHistogram  = s3IODurationHistogram.WithLabelValues("list")
-	S3StatIODurationHistogram  = s3IODurationHistogram.WithLabelValues("list")
+	S3StatIODurationHistogram  = s3IODurationHistogram.WithLabelValues("stat")
 
 	s3ConnDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
