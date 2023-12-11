@@ -114,9 +114,9 @@ func ReadOneBlock(
 	typs []types.Type,
 	m *mpool.MPool,
 	fs fileservice.FileService,
-	policies ...fileservice.Policy,
+	policy fileservice.Policy,
 ) (ioVec *fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policies...)
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
 }
 
 func ReadOneBlockWithMeta(
@@ -129,15 +129,14 @@ func ReadOneBlockWithMeta(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
-	policies ...fileservice.Policy,
+	policy fileservice.Policy,
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
+		Policy:   policy,
 	}
-	if len(policies) > 0 {
-		ioVec.Policy = policies[0]
-	}
+
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
