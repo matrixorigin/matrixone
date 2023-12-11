@@ -32,13 +32,15 @@ func TestParseGoroutineLine(t *testing.T) {
 				ID:             628,
 				State:          "IO wait",
 				BlockedMinutes: 8,
+				rawState:       "goroutine 628 [IO wait, 8 minutes]:",
 			},
 		},
 		{
 			line: "goroutine 628 [runnable]:",
 			expect: Goroutine{
-				ID:    628,
-				State: "runnable",
+				ID:       628,
+				State:    "runnable",
+				rawState: "goroutine 628 [runnable]:",
 			},
 		},
 	}
