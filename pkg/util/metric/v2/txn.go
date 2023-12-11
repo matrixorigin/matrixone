@@ -292,6 +292,18 @@ var (
 	TxnMergeReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("merge-reader")
 	TxnBlockMergeReaderDurationHistogram = txnReaderDurationHistogram.WithLabelValues("block-merge-reader")
 
+	txnPKExactlyEqReaderHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_exactly_eq_reader_count",
+			Help:      "Bucketed histogram of pk exactly equal reader read count.",
+			Buckets:   prometheus.LinearBuckets(0, 10, 10),
+		}, []string{"type"})
+
+	TxnPKExactlyEqReaderDirtyBlkCountHistogram = txnPKExactlyEqReaderHistogram.WithLabelValues("dirty-blk")
+	TxnPKExactlyEqReaderCountHistogram         = txnPKExactlyEqReaderHistogram.WithLabelValues("count")
+
 	txnRangesSelectivityHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

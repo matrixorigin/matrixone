@@ -1682,6 +1682,10 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 	expr *plan.Expr,
 	dirtyBlks []*catalog.BlockInfo,
 ) ([]engine.Reader, error) {
+	if len(dirtyBlks) > 0 {
+		v2.TxnPKExactlyEqReaderDirtyBlkCountHistogram.Observe(float64(len(dirtyBlks)))
+	}
+
 	txn := tbl.db.txn
 	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
