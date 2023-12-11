@@ -78,6 +78,8 @@ func TestLockBlockedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -88,14 +90,14 @@ func TestLockBlockedOnRemote(t *testing.T) {
 			row1 := []byte{1}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				// txn2 try lock row1 on l2
-				mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row1}, pb.Granularity_Row)
+				mustAddTestLock(t, ctx, l2, tableID, txn2, [][]byte{row1}, pb.Granularity_Row)
 				close(c)
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
 		},
@@ -136,6 +138,8 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -151,7 +155,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -159,7 +163,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 				// blocked by txn1
 				res, err := l2.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{row1},
 					txn2,
 					option)
@@ -168,7 +172,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 					t,
 					!res.Timestamp.IsEmpty())
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(
 				ctx,
 				txn1,
@@ -183,6 +187,8 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -198,7 +204,7 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -206,14 +212,14 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 				// blocked by txn1
 				res, err := l2.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{row1},
 					txn2,
 					option)
 				require.NoError(t, err)
 				assert.False(t, res.Timestamp.IsEmpty())
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
 		},
@@ -554,7 +560,7 @@ func TestIssue12554(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			table := uint64(1)
+			table := uint64(10)
 
 			// txn1 hold lock row1 on l1
 			mustAddTestLock(t, ctx, l1, table, txn1, [][]byte{row1}, pb.Granularity_Row)
@@ -597,7 +603,7 @@ func runBindChangedTests(
 
 			txnID1 := []byte("txn1")
 			txnID2 := []byte("txn2")
-			table1 := uint64(1)
+			table1 := uint64(10)
 			// make table bind on l1
 			mustAddTestLock(t, ctx, l1, table1, txnID1, [][]byte{{1}}, pb.Granularity_Row)
 

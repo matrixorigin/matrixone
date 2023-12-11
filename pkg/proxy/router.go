@@ -97,6 +97,7 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 		Label: pb.RequestLabel{
 			Labels: s.reqLabel.allLabels(),
 		},
+		ConnectionID: s.proxyConnID,
 		InternalConn: s.internalConn,
 	}
 	data, err := info.Encode()

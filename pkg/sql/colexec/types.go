@@ -49,8 +49,6 @@ type ReceiveInfo struct {
 // Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
 	sync.Mutex
-	id uint64
-	mp map[uint64]*process.WaitRegister
 
 	hakeeper      logservice.CNHAKeeperClient
 	CNSegmentId   types.Uuid
