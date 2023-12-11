@@ -64,18 +64,12 @@ func (c *DashboardCreator) initPKExactlyEqualReaderRow() dashboard.Option {
 	return dashboard.Row(
 		"PK Exactly Equal Reader",
 		c.getHistogram(
-			"dirty blk count when new reader",
-			c.getMetricWithFilter("mo_txn_pk_exactly_eq_reader_count_bucket", `type="dirty-blk"`),
+			"pk exactly equal reader block selectivity",
+			c.getMetricWithFilter(
+				"mo_txn_pk_exactly_eq_reader_block_selectivity_percentage_bucket",
+				`type="block-selectivity"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
-			axis.Unit(""),
-			axis.Min(0)),
-
-		c.getHistogram(
-			"read count",
-			c.getMetricWithFilter("mo_txn_pk_exactly_eq_reader_count_bucket", `type="count"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
+			12,
 			axis.Unit(""),
 			axis.Min(0)),
 	)

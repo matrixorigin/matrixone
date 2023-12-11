@@ -618,6 +618,7 @@ type readerForPKExactlyEqual struct {
 	closed   bool
 	bmReader *blockMergeReader
 	readCnt  int
+	needCnt  int
 	txnID    string
 }
 

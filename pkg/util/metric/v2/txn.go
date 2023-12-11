@@ -296,13 +296,12 @@ var (
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "pk_exactly_eq_reader_count",
-			Help:      "Bucketed histogram of pk exactly equal reader read count.",
-			Buckets:   prometheus.LinearBuckets(0, 10, 10),
+			Name:      "pk_exactly_eq_reader_block_selectivity_percentage",
+			Help:      "Bucketed histogram of pk exactly equal reader block selectivity percentage.",
+			Buckets:   prometheus.LinearBuckets(0, 0.05, 21),
 		}, []string{"type"})
 
-	TxnPKExactlyEqReaderDirtyBlkCountHistogram = txnPKExactlyEqReaderHistogram.WithLabelValues("dirty-blk")
-	TxnPKExactlyEqReaderCountHistogram         = txnPKExactlyEqReaderHistogram.WithLabelValues("count")
+	TxnPKExactlyEqReaderBlockSelectivityHistogram = txnPKExactlyEqReaderHistogram.WithLabelValues("block-selectivity") // block selectivity
 
 	txnRangesSelectivityHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

@@ -1682,9 +1682,9 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 	expr *plan.Expr,
 	dirtyBlks []*catalog.BlockInfo,
 ) ([]engine.Reader, error) {
-	if len(dirtyBlks) > 0 {
-		v2.TxnPKExactlyEqReaderDirtyBlkCountHistogram.Observe(float64(len(dirtyBlks)))
-	}
+	//if len(dirtyBlks) > 0 {
+	//	v2.TxnPKExactlyEqReaderDirtyBlkCountHistogram.Observe(float64(len(dirtyBlks)))
+	//}
 
 	txn := tbl.db.txn
 	ts := txn.op.SnapshotTS()
@@ -1734,6 +1734,7 @@ func (tbl *txnTable) newReaderForPKExactlyEqual(
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 		txnID:    hex.EncodeToString(tbl.db.txn.op.Txn().ID),
+		needCnt:  len(dirtyBlks),
 	}
 
 	if len(dirtyBlks) > 0 {

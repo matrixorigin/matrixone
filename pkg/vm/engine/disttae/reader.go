@@ -646,8 +646,7 @@ func (r *readerForPKExactlyEqual) Read(
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 	if r.closed {
-		//record r.readerCnt
-		v2.TxnPKExactlyEqReaderCountHistogram.Observe(float64(r.readCnt))
+		//v2.TxnPKExactlyEqReaderCountHistogram.Observe(float64(r.readCnt))
 		return nil, nil
 	}
 	//prepare data for read.
@@ -771,12 +770,13 @@ func (r *readerForPKExactlyEqual) Read(
 			if err != nil {
 				return nil, err
 			}
+			r.readCnt++
 			if bat != nil && bat.RowCount() > 0 {
 				r.closed = true
+				v2.TxnPKExactlyEqReaderBlockSelectivityHistogram.Observe(float64(r.readCnt) / float64(r.needCnt))
 				//logutil.Infof("readerForPKExactlyEqual finds pk in block, txn[%s]",
 				//	r.txnID)
 			}
-			r.readCnt++
 			return bat, nil
 		}
 		return nil, nil
