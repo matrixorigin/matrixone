@@ -108,6 +108,12 @@ build: config cgo
 	$(info [Build binary])
 	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+# build mo-debug tool
+.PHONY: mo-debug
+mo-debug: config cgo
+	$(info [Build mo-debug tool])
+	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
