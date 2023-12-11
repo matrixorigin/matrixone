@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -253,10 +252,6 @@ func (a *AwsSDKv2) List(
 	prefix string,
 	fn func(bool, string, int64) (bool, error),
 ) error {
-	start := time.Now()
-	defer func() {
-		v2.S3ListV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 
 	select {
 	case <-ctx.Done():
@@ -319,10 +314,6 @@ func (a *AwsSDKv2) Stat(
 	err error,
 ) {
 
-	start := time.Now()
-	defer func() {
-		v2.S3StatV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 	select {
 	case <-ctx.Done():
 		err = ctx.Err()
@@ -360,10 +351,6 @@ func (a *AwsSDKv2) Exists(
 	bool,
 	error,
 ) {
-	start := time.Now()
-	defer func() {
-		v2.S3ExistsV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 	output, err := a.headObject(
 		ctx,
 		&s3.HeadObjectInput{
@@ -392,10 +379,7 @@ func (a *AwsSDKv2) Write(
 ) (
 	err error,
 ) {
-	start := time.Now()
-	defer func() {
-		v2.S3WriteV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+
 	_, err = a.putObject(
 		ctx,
 		&s3.PutObjectInput{
@@ -423,10 +407,6 @@ func (a *AwsSDKv2) Read(
 	err error,
 ) {
 
-	start := time.Now()
-	defer func() {
-		v2.S3ReadV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 	if max == nil {
 		// read to end
 		r, err := a.getObject(

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -120,10 +119,6 @@ func (a *AliyunSDK) List(
 	prefix string,
 	fn func(bool, string, int64) (bool, error),
 ) error {
-	start := time.Now()
-	defer func() {
-		v2.S3ListV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 
 	if err := ctx.Err(); err != nil {
 		return err
@@ -175,10 +170,6 @@ func (a *AliyunSDK) Stat(
 	err error,
 ) {
 
-	start := time.Now()
-	defer func() {
-		v2.S3StatV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -208,10 +199,7 @@ func (a *AliyunSDK) Exists(
 	bool,
 	error,
 ) {
-	start := time.Now()
-	defer func() {
-		v2.S3ExistsV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -239,10 +227,7 @@ func (a *AliyunSDK) Write(
 ) (
 	err error,
 ) {
-	start := time.Now()
-	defer func() {
-		v2.S3WriteV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+
 	err = a.putObject(
 		ctx,
 		key,
@@ -267,10 +252,6 @@ func (a *AliyunSDK) Read(
 	err error,
 ) {
 
-	start := time.Now()
-	defer func() {
-		v2.S3ReadV2IODurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 	defer func() {
 		if a.is404(err) {
 			err = moerr.NewFileNotFoundNoCtx(key)

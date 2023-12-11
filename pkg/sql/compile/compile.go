@@ -1626,7 +1626,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	defer span.End()
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementCompileExternscanHistogram.Observe(time.Since(start).Seconds())
+		if time.Now().Sub(start) > time.Second {
+			logutil.Infof("compileExternScan cost %v", time.Now().Sub(start))
+		}
 	}()
 
 	t := time.Now()

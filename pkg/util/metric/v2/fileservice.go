@@ -78,16 +78,10 @@ var (
 			Help:      "Bucketed histogram of s3 io duration.",
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
-	S3WriteIODurationHistogram      = s3IODurationHistogram.WithLabelValues("write")
-	S3ReadIODurationHistogram       = s3IODurationHistogram.WithLabelValues("read")
-	S3ListIODurationHistogram       = s3IODurationHistogram.WithLabelValues("list")
-	S3StatIODurationHistogram       = s3IODurationHistogram.WithLabelValues("stat")
-	S3StreamReadIODurationHistogram = s3IODurationHistogram.WithLabelValues("streamread")
-	S3ListV2IODurationHistogram     = s3IODurationHistogram.WithLabelValues("listv2")
-	S3StatV2IODurationHistogram     = s3IODurationHistogram.WithLabelValues("statv2")
-	S3WriteV2IODurationHistogram    = s3IODurationHistogram.WithLabelValues("writev2")
-	S3ReadV2IODurationHistogram     = s3IODurationHistogram.WithLabelValues("readv2")
-	S3ExistsV2IODurationHistogram   = s3IODurationHistogram.WithLabelValues("existsv2")
+	S3WriteIODurationHistogram = s3IODurationHistogram.WithLabelValues("write")
+	S3ReadIODurationHistogram  = s3IODurationHistogram.WithLabelValues("read")
+	S3ListIODurationHistogram  = s3IODurationHistogram.WithLabelValues("list")
+	S3StatIODurationHistogram  = s3IODurationHistogram.WithLabelValues("stat")
 
 	s3ConnDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
