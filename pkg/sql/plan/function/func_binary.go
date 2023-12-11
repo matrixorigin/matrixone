@@ -1310,6 +1310,9 @@ type number interface {
 func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	tc := func(inputs []types.Type, t types.T) bool {
 		for _, input := range inputs {
+			if (input.Oid == types.T_char && t == types.T_varchar) || (input.Oid == types.T_varchar && t == types.T_char) {
+				continue
+			}
 			if input.Oid != t && input.Oid != types.T_any {
 				return false
 			}

@@ -144,6 +144,9 @@ func NewMinioSDK(
 		for _, path := range args.CertFiles {
 			content, err := os.ReadFile(path)
 			if err != nil {
+				logutil.Info("load cert file error",
+					zap.Any("err", err),
+				)
 				// ignore
 				continue
 			}
@@ -176,6 +179,11 @@ func NewMinioSDK(
 		return nil, err
 	}
 
+	logutil.Info("new object storage",
+		zap.Any("sdk", "minio"),
+		zap.Any("arguments", args),
+	)
+
 	// validate
 	ok, err := client.BucketExists(ctx, args.Bucket)
 	if err != nil {
@@ -187,12 +195,6 @@ func NewMinioSDK(
 			args.Bucket,
 		)
 	}
-
-	logutil.Info("new object storage",
-		zap.Any("sdk", "minio"),
-		zap.Any("endpoint", args.Endpoint),
-		zap.Any("bucket", args.Bucket),
-	)
 
 	return &MinioSDK{
 		name:            args.Name,
