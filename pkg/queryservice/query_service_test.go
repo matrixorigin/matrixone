@@ -194,7 +194,10 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc Qu
 		}
 		sessions := make([]*status.Session, 0, len(ss))
 		for _, ses := range ss {
-			sessions = append(sessions, ses.StatusSession())
+			sessionStatus := ses.StatusSession()
+			if sessionStatus != nil {
+				sessions = append(sessions, ses.StatusSession())
+			}
 		}
 		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
 			Sessions: sessions,

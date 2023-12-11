@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -190,7 +191,10 @@ func (s *service) processList(tenant string, sysTenant bool) ([]*status.Session,
 	}
 	sessions := make([]*status.Session, 0, len(ss))
 	for _, ses := range ss {
-		sessions = append(sessions, ses.StatusSession())
+		sessionStatus := ses.StatusSession()
+		if sessionStatus != nil {
+			sessions = append(sessions, ses.StatusSession())
+		}
 	}
 	return sessions, nil
 }

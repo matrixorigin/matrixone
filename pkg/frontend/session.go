@@ -2188,9 +2188,30 @@ func (ses *Session) StatusSession() *status.Session {
 	)
 
 	accountName, userName, roleName = getUserProfile(ses.GetTenantInfo())
-	//if the query is processing, the end time is invalid.
-	//we can not clear the session info under this condition.
-	if !ses.GetQueryInProgress() {
+	if ses.GetQueryInProgress() {
+		return &status.Session{
+			NodeID:        ses.getRoutineManager().baseService.ID(),
+			ConnID:        ses.GetConnectionID(),
+			SessionID:     ses.GetUUIDString(),
+			Account:       accountName,
+			User:          userName,
+			Host:          ses.getRoutineManager().baseService.SQLAddress(),
+			DB:            ses.GetDatabaseName(),
+			SessionStart:  ses.GetSessionStart(),
+			Command:       ses.GetCmd().String(),
+			Info:          ses.GetSqlOfStmt(),
+			TxnID:         uuid2Str(ses.GetTxnId()),
+			StatementID:   ses.GetStmtId().String(),
+			StatementType: ses.GetStmtType(),
+			QueryType:     ses.GetQueryType(),
+			SQLSourceType: ses.GetSqlSourceType(),
+			QueryStart:    ses.GetQueryStart(),
+			ClientHost:    ses.GetMysqlProtocol().Peer(),
+			Role:          roleName,
+		}
+	} else {
+		//if the query is processing, the end time is invalid.
+		//we can not clear the session info under this condition.
 		endAt := ses.GetQueryEnd()
 		//if the current time is more than 3 second after the query end time, the session is timeout.
 		//we clear the session statement info
@@ -2218,26 +2239,8 @@ func (ses *Session) StatusSession() *status.Session {
 			}
 		}
 	}
-	return &status.Session{
-		NodeID:        ses.getRoutineManager().baseService.ID(),
-		ConnID:        ses.GetConnectionID(),
-		SessionID:     ses.GetUUIDString(),
-		Account:       accountName,
-		User:          userName,
-		Host:          ses.getRoutineManager().baseService.SQLAddress(),
-		DB:            ses.GetDatabaseName(),
-		SessionStart:  ses.GetSessionStart(),
-		Command:       ses.GetCmd().String(),
-		Info:          ses.GetSqlOfStmt(),
-		TxnID:         uuid2Str(ses.GetTxnId()),
-		StatementID:   ses.GetStmtId().String(),
-		StatementType: ses.GetStmtType(),
-		QueryType:     ses.GetQueryType(),
-		SQLSourceType: ses.GetSqlSourceType(),
-		QueryStart:    ses.GetQueryStart(),
-		ClientHost:    ses.GetMysqlProtocol().Peer(),
-		Role:          roleName,
-	}
+
+	return nil
 }
 
 func uuid2Str(uid uuid.UUID) string {
