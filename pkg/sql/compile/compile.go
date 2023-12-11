@@ -539,6 +539,10 @@ func (c *Compile) shouldReturnCtxErr() bool {
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
@@ -553,7 +557,9 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 			return nil, err
 		}
 		for _, s := range scopes {
-			s.Plan = pn
+			if s.Plan == nil {
+				s.Plan = pn
+			}
 		}
 		return scopes, nil
 	case *plan.Plan_Ddl:
@@ -661,7 +667,15 @@ func (c *Compile) lockMetaTables() error {
 
 		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
 		if err != nil {
-			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
+			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+				moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+
+			// other errors, just throw  out
+			return err
 		}
 	}
 	return nil
@@ -725,6 +739,11 @@ func (c *Compile) removeUnavailableCN() {
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
+	}()
 	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 	if err != nil {
 		return nil, err
@@ -937,6 +956,10 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 }
 
 func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
@@ -1115,6 +1138,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		if n.DeleteCtx.CanTruncate {
+			return []*Scope{{
+				Magic: TruncateTable,
+				Plan: &plan.Plan{
+					Plan: &plan.Plan_Ddl{
+						Ddl: &plan.DataDefinition{
+							DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+							Definition: &plan.DataDefinition_TruncateTable{
+								TruncateTable: n.DeleteCtx.TruncateTable,
+							},
+						},
+					},
+				},
+			}}, nil
+		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))

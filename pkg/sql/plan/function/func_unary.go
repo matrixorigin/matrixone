@@ -469,10 +469,6 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			return int64(system.MemoryUsed()), nil
 		case "available":
 			return int64(system.MemoryAvailable()), nil
-		case "max-usage":
-			return int64(system.MemoryMaxUsage()), nil
-		case "fail-count":
-			return int64(system.MemoryFailCount()), nil
 		default:
 			return -1, moerr.NewInvalidInput(proc.Ctx, "unsupported memory command: %s", v)
 		}

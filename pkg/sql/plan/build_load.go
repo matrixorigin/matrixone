@@ -17,14 +17,20 @@ package plan
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
 	}

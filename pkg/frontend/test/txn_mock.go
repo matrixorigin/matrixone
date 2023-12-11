@@ -398,6 +398,20 @@ func (mr *MockTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockTxnOperator)(nil).GetWorkspace))
 }
 
+// IsOpenLog mocks base method.
+func (m *MockTxnOperator) IsOpenLog() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsOpenLog")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsOpenLog indicates an expected call of IsOpenLog.
+func (mr *MockTxnOperatorMockRecorder) IsOpenLog() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOpenLog", reflect.TypeOf((*MockTxnOperator)(nil).IsOpenLog))
+}
+
 // IsRetry mocks base method.
 func (m *MockTxnOperator) IsRetry() bool {
 	m.ctrl.T.Helper()
@@ -463,6 +477,18 @@ func (m *MockTxnOperator) Rollback(ctx context.Context) error {
 func (mr *MockTxnOperatorMockRecorder) Rollback(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockTxnOperator)(nil).Rollback), ctx)
+}
+
+// SetOpenLog mocks base method.
+func (m *MockTxnOperator) SetOpenLog(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetOpenLog", arg0)
+}
+
+// SetOpenLog indicates an expected call of SetOpenLog.
+func (mr *MockTxnOperatorMockRecorder) SetOpenLog(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOpenLog", reflect.TypeOf((*MockTxnOperator)(nil).SetOpenLog), arg0)
 }
 
 // Snapshot mocks base method.

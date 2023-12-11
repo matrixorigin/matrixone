@@ -252,7 +252,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemSourceRel {
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
+	} else if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/gogo/protobuf/proto"
@@ -253,6 +254,194 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 	// Assertions
 	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
 	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
+}
+func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
+
+	// Define types and attributes as per your schema
+	typs := []types.Type{
+		types.New(types.T_char, 30, 0),
+		types.New(types.T_int32, 32, 0),
+		types.New(types.T_int16, 16, 0),
+		types.New(types.T_int8, 8, 0),
+		types.New(types.T_uint8, 8, 0),
+		types.New(types.T_uint64, 64, 0),
+		types.New(types.T_float32, 32, 0),
+		types.New(types.T_datetime, 64, 0),
+		types.New(types.T_json, 64, 0),
+	}
+	attrs := []string{
+		"1", "2", "3", "4", "5", "6", "7", "8", "9",
+	}
+	configs := map[string]interface{}{
+		"value": "json",
+	}
+	// Create test msgs data
+	msgs := []*kafka.Message{
+		{
+			Value: []byte(`{
+            "1": "test_name1",
+            "2": 99,
+            "3": 123,
+            "4": 1,
+            "5": 2,
+            "6": 1234567890123,
+            "7": 123.3,
+            "8": "2021-01-01",
+            "9": "{\"a\": 1}"
+        }`),
+		},
+		{
+			Value: []byte(`{
+				"1": "test_name2",
+				"2": 150,
+				"3": 456,
+				"4": 3,
+				"5": 4,
+				"6": 9876543210987,
+				"7": 456.7,
+				"8": "2000-12-04",
+				"9": "{\"c1\": \"\\\"\",\"c2\":\"\\\\:\",\"c3\": \"\\\\,\",\"c4\":\"\\\\\\\"\\\\:\\\\,\",\"c5\":\"\\\\{\",\"c6\":\"\\\\}\"}"
+		}
+		`),
+		},
+		{
+			Value: []byte(`{
+            "1": "test_name3",
+            "2": 2147483648,
+            "3": 32768,
+            "4": 128,
+            "5": 256,
+            "6": 1844674407370955161644444,
+            "7": "123.33.3",
+            "8": "2021-01-01T00:00:00",
+            "9": "invalid_json"
+        }`),
+		},
+	}
+
+	expected := [][]interface{}{
+		{
+			"test_name1",
+			int32(99),
+			int16(123),
+			int8(1),
+			uint8(2),
+			uint64(1234567890123),
+			float32(123.3),
+			types.Datetime(63745056000000000),
+			"\x01\x01\x00\x00\x00\x1c\x00\x00\x00\x13\x00\x00\x00\x01\x00\t\x14\x00\x00\x00a\x01\x00\x00\x00\x00\x00\x00\x00",
+		},
+		{
+			"test_name2",
+			int32(150),
+			int16(456),
+			int8(3),
+			uint8(4),
+			uint64(9876543210987),
+			float32(456.7),
+			types.Datetime(63111484800000000),
+			"\x01\x06\x00\x00\x00k\x00\x00\x00J\x00\x00\x00\x02\x00L\x00\x00\x00\x02\x00N\x00\x00\x00\x02\x00P\x00\x00\x00\x02\x00R\x00\x00\x00\x02\x00T\x00\x00\x00\x02\x00\fV\x00\x00\x00\fX\x00\x00\x00\f[\x00\x00\x00\f^\x00\x00\x00\fe\x00\x00\x00\fh\x00\x00\x00c1c2c3c4c5c6\x01\"\x02\\:\x02\\,\x06\\\"\\:\\,\x02\\{\x02\\}",
+		},
+		{
+			"test_name3",
+			nil, // int32 overflow
+			nil, // int16 overflow
+			nil, // int8 overflow
+			nil, // uint8 overflow
+			nil, // uint64 overflow
+			nil, // valid float32
+			nil, // invalid datetime
+			nil, // invalid JSON
+		},
+	}
+
+	// Call PopulateBatchFromMSG
+	batch, err := PopulateBatchFromMSG(context.Background(), nil, typs, attrs, msgs, configs, mpool.MustNewZero())
+	if err != nil {
+		t.Fatalf("PopulateBatchFromMSG failed: %s", err)
+	}
+
+	// Assertions
+	if batch == nil {
+		t.Errorf("Expected non-nil batch")
+	} else {
+
+		// Check the data in the batch
+		for colIdx, attr := range attrs {
+			vec := batch.Vecs[colIdx]
+			if vec.Length() != len(msgs) {
+				t.Errorf("Expected %d rows in column '%s', got %d", len(msgs), attr, vec.Length())
+			} else {
+				for rowIdx := 0; rowIdx < vec.Length(); rowIdx++ {
+					expectedValue := expected[rowIdx][colIdx]
+					actualValue := getNonNullValue(vec, uint32(rowIdx))
+					if vec.GetNulls().Contains(uint64(rowIdx)) {
+						actualValue = nil
+					}
+					assert.Equal(t, expectedValue, actualValue, fmt.Sprintf("Mismatch in row %d, column '%s'", rowIdx, attr))
+				}
+			}
+		}
+	}
+
+}
+
+func getNonNullValue(col *vector.Vector, row uint32) any {
+
+	switch col.GetType().Oid {
+	case types.T_bool:
+		return vector.GetFixedAt[bool](col, int(row))
+	case types.T_int8:
+		return vector.GetFixedAt[int8](col, int(row))
+	case types.T_int16:
+		return vector.GetFixedAt[int16](col, int(row))
+	case types.T_int32:
+		return vector.GetFixedAt[int32](col, int(row))
+	case types.T_int64:
+		return vector.GetFixedAt[int64](col, int(row))
+	case types.T_uint8:
+		return vector.GetFixedAt[uint8](col, int(row))
+	case types.T_uint16:
+		return vector.GetFixedAt[uint16](col, int(row))
+	case types.T_uint32:
+		return vector.GetFixedAt[uint32](col, int(row))
+	case types.T_uint64:
+		return vector.GetFixedAt[uint64](col, int(row))
+	case types.T_decimal64:
+		return vector.GetFixedAt[types.Decimal64](col, int(row))
+	case types.T_decimal128:
+		return vector.GetFixedAt[types.Decimal128](col, int(row))
+	case types.T_uuid:
+		return vector.GetFixedAt[types.Uuid](col, int(row))
+	case types.T_float32:
+		return vector.GetFixedAt[float32](col, int(row))
+	case types.T_float64:
+		return vector.GetFixedAt[float64](col, int(row))
+	case types.T_date:
+		return vector.GetFixedAt[types.Date](col, int(row))
+	case types.T_time:
+		return vector.GetFixedAt[types.Time](col, int(row))
+	case types.T_datetime:
+		return vector.GetFixedAt[types.Datetime](col, int(row))
+	case types.T_timestamp:
+		return vector.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return vector.GetFixedAt[types.Enum](col, int(row))
+	case types.T_TS:
+		return vector.GetFixedAt[types.TS](col, int(row))
+	case types.T_Rowid:
+		return vector.GetFixedAt[types.Rowid](col, int(row))
+	case types.T_Blockid:
+		return vector.GetFixedAt[types.Blockid](col, int(row))
+	case types.T_json:
+		return col.GetStringAt(int(row))
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
+		return col.GetStringAt(int(row))
+	default:
+		//return vector.ErrVecTypeNotSupport
+		panic(any("No Support"))
+	}
 }
 
 func TestRetrieveDataWIthProtobuf(t *testing.T) {

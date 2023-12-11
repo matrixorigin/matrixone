@@ -155,6 +155,9 @@ type TxnOperator interface {
 	ResetRetry(bool)
 	IsRetry() bool
 
+	SetOpenLog(bool)
+	IsOpenLog() bool
+
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))

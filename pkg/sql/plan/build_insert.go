@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}

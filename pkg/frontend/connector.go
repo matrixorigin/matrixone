@@ -42,6 +42,9 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
 	dbName := string(st.Table.Schema())
+	if dbName == "" {
+		dbName = mce.ses.GetDatabaseName()
+	}
 	tableName := string(st.Table.Name())
 	_, tableDef := mce.ses.GetTxnCompileCtx().Resolve(dbName, tableName)
 	if tableDef == nil {
@@ -80,7 +83,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		}
 	}
 
-	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
+	options[moconnector.OptConnectorSql] = "use " + mce.ses.GetDatabaseName() + "; " + tree.String(st.AsSource, dialect.MYSQL)
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,
@@ -222,6 +225,40 @@ func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.D
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleDropDynamicTable(ctx context.Context, st *tree.DropTable) error {
+	if mce.routineMgr == nil || mce.routineMgr.getParameterUnit() == nil || mce.routineMgr.getParameterUnit().TaskService == nil {
+		return moerr.NewInternalError(ctx, "task service not ready yet")
+	}
+	ts := mce.routineMgr.getParameterUnit().TaskService
+
+	// Query all relevant tasks belonging to the current tenant
+	tasks, err := ts.QueryDaemonTask(mce.ses.requestCtx,
+		taskservice.WithTaskType(taskservice.EQ, pb.TaskType_TypeKafkaSinkConnector.String()),
+		taskservice.WithAccountID(taskservice.EQ, mce.ses.accountId),
+		taskservice.WithTaskStatusCond(pb.TaskStatus_Running, pb.TaskStatus_Created, pb.TaskStatus_Paused, pb.TaskStatus_PauseRequested),
+	)
+	if err != nil || len(tasks) == 0 {
+		return err
+	}
+
+	// Filter the tasks within the loop
+	for _, tn := range st.Names {
+		dbName := string(tn.Schema())
+		if dbName == "" {
+			dbName = mce.ses.GetDatabaseName()
+		}
+		fullTableName := dbName + "." + string(tn.Name())
+
+		for _, task := range tasks {
+			if task.Details.Details.(*pb.Details_Connector).Connector.TableName == fullTableName {
+				if err := mce.handleCancelDaemonTask(ctx, task.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
 func (mce *MysqlCmdExecutor) handleShowConnectors(ctx context.Context, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()

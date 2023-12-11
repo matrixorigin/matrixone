@@ -66,20 +66,12 @@ func WithRuntimeOptions(opts *options.Options) RuntimeOption {
 	}
 }
 
-func WithRuntimeThrottle(t *Throttle) RuntimeOption {
-	return func(r *Runtime) {
-		r.Throttle = t
-	}
-}
-
 type Runtime struct {
 	Now        func() types.TS
 	VectorPool struct {
 		Small     *containers.VectorPool
 		Transient *containers.VectorPool
 	}
-
-	Throttle *Throttle
 
 	Fs *objectio.ObjectFS
 
@@ -110,9 +102,6 @@ func (r *Runtime) fillDefaults() {
 	}
 	if r.VectorPool.Transient == nil {
 		r.VectorPool.Transient = MakeDefaultTransientPool("trasient-vector-pool")
-	}
-	if r.Throttle == nil {
-		r.Throttle = NewThrottle()
 	}
 }
 

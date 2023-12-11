@@ -18,6 +18,9 @@ import (
 	"context"
 	liberrors "errors"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"strconv"
-	"strings"
 )
 
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
@@ -53,9 +54,9 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	}
 
 	// Build a list of table.Columns based on the query result
-	cols := []table.Column{}
+	cols := make([]table.Column, 0, cnt)
 	errors := []error{}
-	for i := uint64(0); i < result.RowCount(); i++ {
+	for i := uint64(0); i < cnt; i++ {
 		name, err := result.StringValueByName(ctx, i, "column_name")
 		if err != nil {
 			errors = append(errors, err)
@@ -193,6 +194,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
+	if errs := u.RunUpgradeSqls(ctx); len(errs) > 0 {
+		logutil.Errorf("modify table column failed")
+		errors = append(errors, errs...)
+	}
+
 	if len(errors) > 0 {
 		//panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errors))
 		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
@@ -302,6 +308,36 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 	if len(errors) > 0 {
 		return errors
 	}
+	return nil
+}
+
+func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	errors := []error{}
+	// Execute upgrade SQL
+	for _, sql := range sqls {
+		currentSchema, err := u.GetCurrentSchema(ctx, exec, sql.schema, sql.table)
+		if err != nil {
+			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
+			continue
+			//return err
+		}
+		if ok := sql.modified(currentSchema); ok {
+			continue
+		}
+
+		if err := exec.Exec(ctx, sql.sql, ie.NewOptsBuilder().Finish()); err != nil {
+			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
+		}
+	}
+	if errors != nil {
+		return errors
+	}
+
 	return nil
 }
 

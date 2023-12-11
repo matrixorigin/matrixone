@@ -55,28 +55,6 @@ func CPUAvailable() float64 {
 	return math.Round((1 - usage) * float64(cpuNum))
 }
 
-func getCGroupReader() (*cgroup.Reader, error) {
-	reader, err := cgroup.NewReader("", true)
-	if err != nil {
-		logutil.Errorf("failed to create cgroup reader: %v", err)
-		return nil, err
-	}
-	return reader, nil
-}
-
-func getCGroupStats() (*cgroup.Stats, error) {
-	reader, err := getCGroupReader()
-	if err != nil {
-		return nil, err
-	}
-	stats, err := reader.GetStatsForProcess(pid)
-	if err != nil || stats == nil {
-		logutil.Errorf("failed to get cgroup stats: %v", err)
-		return nil, err
-	}
-	return stats, nil
-}
-
 // MemoryTotal returns the total size of memory of this node.
 func MemoryTotal() uint64 {
 	return memoryTotal
@@ -85,11 +63,12 @@ func MemoryTotal() uint64 {
 // MemoryAvailable returns the available size of memory of this node.
 func MemoryAvailable() uint64 {
 	if InContainer() {
-		stats, err := getCGroupStats()
+		used, err := cgroup.GetMemUsage(pid)
 		if err != nil {
+			logutil.Errorf("failed to get memory usage: %v", err)
 			return 0
 		}
-		return stats.Memory.Mem.Limit - stats.Memory.Mem.Usage
+		return memoryTotal - uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()
@@ -101,11 +80,12 @@ func MemoryAvailable() uint64 {
 
 func MemoryUsed() uint64 {
 	if InContainer() {
-		stats, err := getCGroupStats()
+		used, err := cgroup.GetMemUsage(pid)
 		if err != nil {
+			logutil.Errorf("failed to get memory usage: %v", err)
 			return 0
 		}
-		return stats.Memory.Mem.Usage
+		return uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()
@@ -113,30 +93,6 @@ func MemoryUsed() uint64 {
 		logutil.Errorf("failed to get memory stats: %v", err)
 	}
 	return mem.Used
-}
-
-func MemoryMaxUsage() uint64 {
-	if InContainer() {
-		stats, err := getCGroupStats()
-		if err != nil {
-			return 0
-		}
-		return stats.Memory.Mem.MaxUsage
-	}
-	logutil.Warnf("process does not run in a container, cannot get max usage of memory")
-	return 0
-}
-
-func MemoryFailCount() uint64 {
-	if InContainer() {
-		stats, err := getCGroupStats()
-		if err != nil {
-			return 0
-		}
-		return stats.Memory.Mem.FailCount
-	}
-	logutil.Warnf("process does not run in a container, cannot get fail count of memory")
-	return 0
 }
 
 // MemoryGolang returns the total size of golang's memory.
@@ -153,31 +109,27 @@ func GoRoutines() int {
 
 func runWithContainer(stopper *stopper.Stopper) {
 	if err := stopper.RunNamedTask("system runner", func(ctx context.Context) {
-		reader, err := getCGroupReader()
-		if err != nil {
-			return
-		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		var prevStats *cgroup.Stats
+		var prevStats *cgroup.CPUAccountingSubsystem
 		for {
 			select {
 			case <-ticker.C:
-				stats, err := reader.GetStatsForProcess(pid)
-				if err != nil || stats == nil {
-					logutil.Errorf("failed to get cgroup stats: %v", err)
+				stats, err := cgroup.GetCPUAcctStats(pid)
+				if err != nil {
+					logutil.Errorf("failed to get cpu acct cgroup stats: %v", err)
 					continue
 				}
 				if prevStats != nil {
-					work := stats.CPUAccounting.Stats.UserNanos + stats.CPUAccounting.Stats.SystemNanos -
-						(prevStats.CPUAccounting.Stats.UserNanos + prevStats.CPUAccounting.Stats.SystemNanos)
-					total := stats.CPUAccounting.TotalNanos - prevStats.CPUAccounting.TotalNanos
+					work := stats.Stats.UserNanos + stats.Stats.SystemNanos -
+						(prevStats.Stats.UserNanos + prevStats.Stats.SystemNanos)
+					total := uint64(cpuNum) * uint64(time.Second)
 					if total != 0 {
 						usage := float64(work) / float64(total)
 						cpuUsage.Store(math.Float64bits(usage))
 					}
 				}
-				prevStats = stats
+				prevStats = &stats
 
 			case <-ctx.Done():
 				return
@@ -224,16 +176,21 @@ func Run(stopper *stopper.Stopper) {
 func init() {
 	pid = os.Getpid()
 	if InContainer() {
-		stats, err := getCGroupStats()
+		cpu, err := cgroup.GetCPUStats(pid)
 		if err != nil {
-			logutil.Errorf("failed to get cgroup stats: %v", err)
+			logutil.Errorf("failed to get cgroup cpu stats: %v", err)
 		} else {
-			if stats.CPU.CFS.PeriodMicros != 0 {
-				cpuNum = int(stats.CPU.CFS.QuotaMicros / stats.CPU.CFS.PeriodMicros)
+			if cpu.CFS.PeriodMicros != 0 && cpu.CFS.QuotaMicros != 0 {
+				cpuNum = int(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros)
 			} else {
 				cpuNum = runtime.NumCPU()
 			}
-			memoryTotal = stats.Memory.Mem.Limit
+		}
+		limit, err := cgroup.GetMemLimit(pid)
+		if err != nil {
+			logutil.Errorf("failed to get cgroup mem limit: %v", err)
+		} else {
+			memoryTotal = uint64(limit)
 		}
 	} else {
 		cpuNum = runtime.NumCPU()
