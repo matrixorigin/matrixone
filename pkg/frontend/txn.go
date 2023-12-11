@@ -380,6 +380,13 @@ func (th *TxnHandler) RollbackTxn() error {
 		// metric count
 		tenant := ses.GetTenantName()
 		incTransactionCounter(tenant)
+		if txnOp == nil {
+			logutil.Warnf("txn: nil")
+		} else {
+			txnID := uuid.UUID(txnOp.Txn().ID).String()
+			logutil.Warnf("txn: %s", txnID)
+			logutil.Warnf("stmt: %s, txn-id: %s", ses.sql, txnID)
+		}
 		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
 		if err != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
