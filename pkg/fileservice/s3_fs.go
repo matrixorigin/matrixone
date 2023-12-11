@@ -182,6 +182,10 @@ func (s *S3FS) keyToPath(key string) string {
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
+	start := time.Now()
+	defer func() {
+		v2.S3ListIODurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -225,7 +229,10 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
-
+	start := time.Now()
+	defer func() {
+		v2.S3StatIODurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return nil, err
