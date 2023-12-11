@@ -24,24 +24,19 @@ import (
 
 func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	size := int64(len(value.Bytes()))
-	atomic.AddInt64(&s.size, size)
-	if _, ok := s.kv.Get(h, key); ok { // why replace ? nothing todo
+	item := s.allocItem()
+	item.h = h
+	item.Key = key
+	item.Value = value
+	item.Size = size
+	if ok := s.kv.Set(h, key, item); ok {
 		return
-	} else {
-		// insert
-		item := s.allocItem()
-		item.h = h
-		item.Key = key
-		item.Value = value
-		item.Size = size
-		s.evicts.PushFront(item)
-		s.kv.Set(h, key, item)
 	}
-
+	atomic.AddInt64(&s.size, size)
+	s.evicts.PushFront(item)
 	if s.postSet != nil {
 		s.postSet(key, value)
 	}
-
 	if atomic.LoadInt64(&s.size) >= s.capacity {
 		s.evict(ctx)
 	}

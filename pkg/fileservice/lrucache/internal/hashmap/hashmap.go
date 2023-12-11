@@ -45,10 +45,12 @@ func (m *Map[K, V]) Get(h uint64, k K) (*V, bool) {
 	}
 }
 
-func (m *Map[K, V]) Set(h uint64, k K, v *V) {
+// Set sets the value for the given key.
+// return true if the key already exists.
+func (m *Map[K, V]) Set(h uint64, k K, v *V) bool {
 	m.Lock()
 	defer m.Unlock()
-	m.set(h, k, v)
+	return m.set(h, k, v)
 }
 
 func (m *Map[K, V]) Delete(h uint64, k K) {
@@ -87,7 +89,7 @@ func (m *Map[K, V]) Len() int {
 	return int(atomic.LoadInt32(&m.count))
 }
 
-func (m *Map[K, V]) set(h uint64, k K, v *V) {
+func (m *Map[K, V]) set(h uint64, k K, v *V) bool {
 	maybeExists := true
 	n := bucket[K, V]{h: h, key: k, val: v, dist: 0}
 	for i := uint32(h >> m.shift); ; i++ {
@@ -95,12 +97,12 @@ func (m *Map[K, V]) set(h uint64, k K, v *V) {
 		if maybeExists && b.h == h && b.key == k { // exists, update
 			b.h = n.h
 			b.val = n.val
-			return
+			return true
 		}
 		if b.val == nil { // empty bucket, insert here
 			atomic.AddInt32(&m.count, 1)
 			*b = n
-			return
+			return false
 		}
 		if b.dist < n.dist {
 			n, *b = *b, n
