@@ -90,7 +90,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		for i, proj := range node.ProjectList {
 			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
 				if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
-					if _, ok := proj.Expr.(*plan.Expr_C); !ok {
+					if _, ok := proj.Expr.(*plan.Expr_Lit); !ok {
 						allColRef = false
 						break
 					}
@@ -420,8 +420,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		for i, filter := range filters {
 			switch joinSides[i] {
 			case JoinSideNone:
-				if c, ok := filter.Expr.(*plan.Expr_C); ok {
-					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
+				if c, ok := filter.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := c.Lit.Value.(*plan.Literal_Bval); ok {
 						if c.Bval {
 							break
 						}

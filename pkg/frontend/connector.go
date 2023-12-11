@@ -92,6 +92,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		ts,
 		dbName+"."+tableName,
 		options,
+		st.IfNotExists,
 	); err != nil {
 		return err
 	}
@@ -121,6 +122,7 @@ func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree
 		ts,
 		dbName+"."+tableName,
 		options,
+		false,
 	); err != nil {
 		return err
 	}
@@ -179,6 +181,7 @@ func createConnector(
 	ts taskservice.TaskService,
 	tableName string,
 	rawOpts map[string]string,
+	ifNotExists bool,
 ) error {
 	options, err := moconnector.MakeStmtOpts(ctx, rawOpts)
 	if err != nil {
@@ -200,6 +203,10 @@ func createConnector(
 				t.TaskType.String()))
 		}
 		if dc.Connector.TableName == tableName && duplicate(t, options) {
+			// do not return error if ifNotExists is true since the table is not actually created
+			if ifNotExists {
+				return nil
+			}
 			return moerr.NewErrDuplicateConnector(ctx, tableName)
 		}
 	}
