@@ -285,6 +285,9 @@ func (s *StatementInfo) freeNoLocked() {
 
 func (s *StatementInfo) free() {
 	s.RoleId = 0
+	s.StatementID = NilStmtID
+	s.TransactionID = NilTxnID
+	s.SessionID = NilSesID
 	s.Statement = ""
 	s.StatementFingerprint = ""
 	s.StatementTag = ""
