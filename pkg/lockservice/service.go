@@ -25,12 +25,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+)
+
+var (
+	// All shared tables is shared by all tenants. We will use 1+TableID(high 4 bytes) + tenantID(low 4 bytes)
+	// as table id to avoid conflict.
+	sharedTables = map[uint64]uint64{
+		// can not use catalog.MO_TABLES_ID, because cycle import.
+		1: 1<<63 | 1<<32,
+		2: 1<<63 | 2<<32,
+		3: 1<<63 | 3<<32,
+	}
 )
 
 type service struct {
@@ -106,6 +118,7 @@ func (s *service) Lock(
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
 
+	tableID = encodeSharedTableID(ctx, tableID)
 	if options.ForwardTo != "" {
 		return s.forwardLock(ctx, tableID, rows, txnID, options)
 	}
@@ -539,4 +552,33 @@ func getUUIDFromServiceIdentifier(id string) string {
 		return id
 	}
 	return id[19:]
+}
+
+func encodeSharedTableID(
+	ctx context.Context,
+	tableID uint64) uint64 {
+	v, ok := sharedTables[tableID]
+	if !ok {
+		return tableID
+	}
+
+	tenantID, ok := ctx.Value(defines.TenantIDKey{}).(uint32)
+	if !ok {
+		tenantID = 0
+	}
+
+	return v | uint64(tenantID)
+}
+
+func decodeSharedTableID(tableID uint64) (tenantID uint32, sharedTableID uint64, ok bool) {
+	if tableID&(1<<63) == 0 {
+		return 0, 0, false
+	}
+	tableID = tableID << 1 >> 1
+	return uint32(tableID << 32 >> 32), tableID >> 32, true
+}
+
+func isSharedTable(id uint64) bool {
+	_, ok := sharedTables[id]
+	return ok
 }
