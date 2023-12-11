@@ -310,18 +310,33 @@ func (s *StatementInfo) freeNoLocked() {
 }
 
 func (s *StatementInfo) free() {
+	s.StatementID = NilStmtID
+	s.TransactionID = NilTxnID
+	s.SessionID = NilSesID
+	s.Account = ""
+	s.User = ""
+	s.Host = ""
 	s.RoleId = 0
+	s.Database = ""
 	s.Statement = ""
+	s.StmtBuilder.Reset()
 	s.StatementFingerprint = ""
 	s.StatementTag = ""
-	s.FreeExecPlan()
+	s.SqlSourceType = ""
 	s.RequestAt = time.Time{}
-	s.ResponseAt = time.Time{}
+	s.StatementType = ""
+	s.QueryType = ""
 	s.Status = StatementStatusRunning
 	s.Error = nil
+	s.ResponseAt = time.Time{}
+	s.Duration = 0
+	s.FreeExecPlan() // handle s.ExecPlan
 	s.RowsRead = 0
 	s.BytesScan = 0
+	s.AggrCount = 0
+	// s.AggrMemoryTime // skip
 	s.ResultCount = 0
+	s.ConnType = 0
 	s.end = false
 	s.reported = false
 	s.exported = false
