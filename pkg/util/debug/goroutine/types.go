@@ -61,8 +61,11 @@ func (g Goroutine) IsEmpty() bool {
 }
 
 func (g Goroutine) CreateBy() (string, string) {
-	idx := len(g.methods) - 1
-	return g.methods[idx-g.realFuncLevel], g.files[idx-g.realFuncLevel]
+	idx := len(g.methods) - 1 - g.realFuncLevel
+	if idx == -1 && g.realFuncLevel > 0 {
+		idx += g.realFuncLevel
+	}
+	return g.methods[idx], g.files[idx]
 }
 
 func (g Goroutine) Last() string {
