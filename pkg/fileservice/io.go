@@ -17,6 +17,9 @@ package fileservice
 import (
 	"io"
 	"sync/atomic"
+	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type readCloser struct {
@@ -42,6 +45,10 @@ type countingReader struct {
 var _ io.Reader = new(countingReader)
 
 func (c *countingReader) Read(data []byte) (int, error) {
+	start := time.Now()
+	defer func() {
+		v2.S3StreamReadIODurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	n, err := c.R.Read(data)
 	c.C.Add(int64(n))
 	return n, err
