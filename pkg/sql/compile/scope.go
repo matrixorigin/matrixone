@@ -62,10 +62,14 @@ import (
 	"go.uber.org/zap"
 )
 
-func newScope(magic magicType, nodeInfo engine.Node) *Scope {
+func newScope(magic magicType) *Scope {
 	s := reuse.Alloc[Scope](nil)
 	s.Magic = magic
-	s.NodeInfo = nodeInfo
+	return s
+}
+
+func (s *Scope) withPlan(pn *plan.Plan) *Scope {
+	s.Plan = pn
 	return s
 }
 
@@ -484,7 +488,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = newScope(Normal, s.NodeInfo)
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
 			R:            rds[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -546,7 +551,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = newScope(Merge, s.NodeInfo)
+		ss[i] = newScope(Merge)
+		ss[i].NodeInfo = s.NodeInfo
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
@@ -612,7 +618,8 @@ func (s *Scope) LoadRun(c *Compile) error {
 		{
 			bat.SetRowCount(1)
 		}
-		ss[i] = newScope(Normal, s.NodeInfo)
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
 			Bat: bat,
 		}
