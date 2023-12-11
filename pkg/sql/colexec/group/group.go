@@ -188,7 +188,7 @@ func (ctr *container) generateAggStructures(arg *Argument) error {
 func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := ap.children[0].Call(proc)
+			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -265,7 +265,7 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := ap.children[0].Call(proc)
+			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
 			if err != nil {
 				return result, err
 			}
