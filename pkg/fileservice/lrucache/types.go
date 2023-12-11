@@ -15,6 +15,7 @@
 package lrucache
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/dolthub/maphash"
@@ -28,6 +29,7 @@ type LRU[K comparable, V BytesLike] struct {
 }
 
 type shard[K comparable, V BytesLike] struct {
+	checkMu sync.Mutex
 	// only allow one goroutine to evicting at a time
 	evicting  atomic.Bool
 	capacity  int64

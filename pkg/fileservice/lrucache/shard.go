@@ -34,6 +34,9 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	}
 	atomic.AddInt64(&s.size, size)
 	s.evicts.PushFront(item)
+	// because the overlap check is not atomic, we need to lock
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
 	if s.postSet != nil {
 		s.postSet(key, value)
 	}
@@ -71,9 +74,9 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 			if elem == nil {
 				return
 			}
-			s.size -= elem.Size
-			s.evicts.Remove(elem)
 			s.kv.Delete(elem.h, elem.Key)
+			atomic.AddInt64(&s.size, -elem.Size)
+			s.evicts.Remove(elem)
 			if s.postEvict != nil {
 				s.postEvict(elem.Key, elem.Value)
 			}
