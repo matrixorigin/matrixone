@@ -420,7 +420,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2.a update AlgoParams for the index to be re-indexed
 					// NOTE: this will throw error if the algo type is not supported for reindex.
 					// So Step 4. will not be executed if error is thrown here.
-					switch catalog.ToLower(alterIndex.IndexAlgo) {
+					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
+					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
 						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
 					default:
@@ -445,10 +446,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 
 					// 4. Add to multiTableIndexes
-					if _, ok := multiTableIndexes[alterIndex.IndexAlgo]; !ok {
-						multiTableIndexes[alterIndex.IndexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[indexAlgo]; !ok {
+						multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
 					}
-					multiTableIndexes[alterIndex.IndexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
+					multiTableIndexes[indexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
 				}
 			}
 
@@ -1092,18 +1093,20 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
 	for _, indexDef := range indexTableDef.Indexes {
 
+		indexAlgo := indexDef.IndexAlgo
 		if indexDef.Unique {
 			// 1. Unique Index related logic
 			err = s.handleUniqueIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
+		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexAlgo) {
 			// 2. Regular Secondary index
 			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
 			// 3. IVF indexDefs are aggregated and handled later
-			if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
-				multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+			if _, ok := multiTableIndexes[indexAlgo]; !ok {
+				multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
 			}
-			multiTableIndexes[indexDef.IndexAlgo][indexDef.IndexAlgoTableType] = indexDef
+			indexAlgoTableType := catalog.ToLower(indexDef.IndexAlgoTableType)
+			multiTableIndexes[indexAlgo][indexAlgoTableType] = indexDef
 		}
 		if err != nil {
 			return err

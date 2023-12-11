@@ -127,6 +127,9 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1)%10 AS CHAR);
+
+		NOTE: We still hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
+		We need to see how to reduce the critical section.
 	*/
 
 	maxVersions := 10
