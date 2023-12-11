@@ -35,6 +35,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+var (
+	dumpUUID = uuid.UUID{}
+)
+
 type TxnHandler struct {
 	storage     engine.Engine
 	txnClient   TxnClient
@@ -233,7 +237,11 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	//	txnOp.GetWorkspace().StartStatement()
 	//	th.enableStartStmt()
 	//}
-	th.ses.SetTxnId(txnOp.Txn().ID)
+	if err != nil {
+		th.ses.SetTxnId(dumpUUID[:])
+	} else {
+		th.ses.SetTxnId(txnOp.Txn().ID)
+	}
 	return txnCtx, txnOp, err
 }
 
@@ -341,6 +349,7 @@ func (th *TxnHandler) CommitTxn() error {
 		ses.updateLastCommitTS(txnOp.Txn().CommitTS)
 	}
 	th.SetTxnOperatorInvalid()
+	th.ses.SetTxnId(dumpUUID[:])
 	return err
 }
 
@@ -405,6 +414,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		}
 	}
 	th.SetTxnOperatorInvalid()
+	th.ses.SetTxnId(dumpUUID[:])
 	return err
 }
 
