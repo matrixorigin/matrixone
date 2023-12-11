@@ -87,7 +87,7 @@ func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
 
 	if schema.HasSortKey() {
 		col := schema.GetSingleSortKey()
-		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap().Clone()
 	}
 
 	s.loaded = true

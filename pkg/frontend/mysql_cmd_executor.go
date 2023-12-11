@@ -2689,6 +2689,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			if st, ok := cw.GetAst().(*tree.DropTable); ok {
+				// handle dynamic table drop, cancel all the running daemon task
+				_ = mce.handleDropDynamicTable(requestCtx, st)
+
 				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 			}
 
@@ -2985,7 +2988,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.CancelDaemonTask:
 		selfHandle = true
-		err = mce.handleCancelDaemonTask(requestCtx, st)
+		err = mce.handleCancelDaemonTask(requestCtx, st.TaskID)
 		if err != nil {
 			return
 		}
