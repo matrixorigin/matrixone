@@ -55,6 +55,12 @@ func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc fu
 var ErrFilteredOut = moerr.NewInternalError(context.Background(), "filtered out")
 
 func (a *Aggregator) Close() {
+	// Free the StatementInfo in the Grouped
+	for _, item := range a.Grouped {
+		if stmt, ok := item.(*StatementInfo); ok {
+			stmt.freeNoLocked()
+		}
+	}
 	// clean up the Grouped map
 	a.Grouped = make(map[interface{}]Item)
 	// release resources related to the context if necessary
