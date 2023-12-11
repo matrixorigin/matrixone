@@ -100,7 +100,7 @@ type mockClientConn struct {
 	clientInfo clientInfo // need to set it explicitly
 	router     Router
 	tun        *tunnel
-	redoStmts  []string
+	redoStmts  []internalStmt
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -154,15 +154,15 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		sendResp([]byte(cn.addr), resp)
 		return nil
 	case *setVarEvent:
-		c.redoStmts = append(c.redoStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
 		sendResp([]byte("ok"), resp)
 		return nil
 	case *prepareEvent:
-		c.redoStmts = append(c.redoStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
 		sendResp([]byte("ok"), resp)
 		return nil
-	case *useEvent:
-		c.redoStmts = append(c.redoStmts, ev.stmt)
+	case *initDBEvent:
+		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: ev.db})
 		sendResp([]byte("ok"), resp)
 		return nil
 	default:

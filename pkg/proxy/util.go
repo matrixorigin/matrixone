@@ -43,6 +43,13 @@ func isCmdQuery(p []byte) bool {
 	return false
 }
 
+func isCmdInitDB(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdInitDB) {
+		return true
+	}
+	return false
+}
+
 // isOKPacket returns true if []byte is a MySQL OK packet.
 func isOKPacket(p []byte) bool {
 	if len(p) > 4 && p[4] == 0 {
@@ -87,7 +94,7 @@ func bytesToPacket(bs []byte) *frontend.Packet {
 		return nil
 	}
 	p := &frontend.Packet{
-		Length:     int32(bs[0]) | int32(bs[1])<<8 | int32(bs[2])<<8,
+		Length:     int32(bs[0]) | int32(bs[1])<<8 | int32(bs[2])<<16,
 		SequenceID: int8(bs[3]),
 		Payload:    bs[4:],
 	}

@@ -43,7 +43,10 @@ const (
 type MySQLCmd byte
 
 // cmdQuery is a query cmd.
-const cmdQuery MySQLCmd = 0x03
+const (
+	cmdQuery  MySQLCmd = 0x03
+	cmdInitDB MySQLCmd = 0x02
+)
 
 // MySQLConn contains a buffer to save data which may be only part
 // of a packet.
@@ -213,7 +216,7 @@ func (b *msgBuf) handleOKPacket(msg []byte) {
 
 // handleEOFPacket handles the EOF packet from server to update the txn state.
 func (b *msgBuf) handleEOFPacket(msg []byte) {
-	status := binary.LittleEndian.Uint16(msg[3:])
+	status := binary.LittleEndian.Uint16(msg[7:])
 	b.setTxnStatus(status)
 }
 
