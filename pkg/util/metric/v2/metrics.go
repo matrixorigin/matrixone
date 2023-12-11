@@ -15,6 +15,8 @@
 package v2
 
 import (
+	"math"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -151,4 +153,8 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+}
+
+func getDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
 }
