@@ -440,10 +440,6 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) (*batch.Batch
 	batch := batch.NewWithSize(len(typs))
 	for i, typ := range typs {
 		typ.Size = int32(typ.Oid.TypeLen())
-		switch typ.Oid {
-		case types.T_datetime:
-			typ.Scale = 6
-		}
 		vec := vector.NewVec(typ)
 		err := vec.PreExtend(batchSize, pool)
 		if err != nil {
@@ -556,216 +552,262 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			cols[rowIdx] = val
 		case types.T_int8:
 			var val int8
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < math.MinInt8 || v > math.MaxInt8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(v)
+			case float32:
+				if v < math.MinInt8 || v > math.MaxInt8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseInt(strVal, 10, 8)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int8(parsedValue)
 			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 8)
-			if err != nil {
+			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			val = int8(parsedValue)
-			cols := vector.MustFixedCol[int8](vec)
-			cols[rowIdx] = val
 		case types.T_int16:
 			var val int16
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < math.MinInt16 || v > math.MaxInt16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int16(v)
+			case float32:
+				if v < math.MinInt16 || v > math.MaxInt16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int16(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseInt(strVal, 10, 16)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int16(parsedValue)
 			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 16)
-			if err != nil {
+			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-			val = int16(parsedValue)
-			cols := vector.MustFixedCol[int16](vec)
-			cols[rowIdx] = val
 		case types.T_int32:
 			var val int32
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < math.MinInt32 || v > math.MaxInt32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int32(v)
+			case float32:
+				if v < math.MinInt32 || v > math.MaxInt32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int32(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseInt(strVal, 10, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int32(parsedValue)
 			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 32)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = int32(parsedValue)
 			cols := vector.MustFixedCol[int32](vec)
 			cols[rowIdx] = val
 		case types.T_int64:
 			var val int64
 			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < math.MinInt64 || v > math.MaxInt64 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int64(v)
+			case float32:
+				if v < math.MinInt64 || v > math.MaxInt64 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = int64(v)
 			default:
 				strVal = fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseInt(strVal, 10, 64)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = parsedValue
 			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = parsedValue
-			cols := vector.MustFixedCol[int64](vec)
-			cols[rowIdx] = val
-		case types.T_int128:
-			var val int64
-			var strVal string
-			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
-			default:
-				strVal = fmt.Sprintf("%v", v)
-			}
-			parsedValue, err := strconv.ParseInt(strVal, 10, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = parsedValue
 			cols := vector.MustFixedCol[int64](vec)
 			cols[rowIdx] = val
 		case types.T_uint8:
 			var val uint8
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < 0 || v > math.MaxUint8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(v)
+			case float32:
+				if v < 0 || v > math.MaxUint8 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 8)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint8(parsedValue)
 			}
-			parsedValue, err := strconv.ParseUint(strVal, 10, 8)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = uint8(parsedValue)
 			cols := vector.MustFixedCol[uint8](vec)
 			cols[rowIdx] = val
 		case types.T_uint16:
 			var val uint16
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < 0 || v > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(v)
+			case float32:
+				if v < 0 || v > math.MaxUint16 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 16)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint16(parsedValue)
 			}
-			parsedValue, err := strconv.ParseUint(strVal, 10, 16)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = uint16(parsedValue)
 			cols := vector.MustFixedCol[uint16](vec)
 			cols[rowIdx] = val
 		case types.T_uint32:
 			var val uint32
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < 0 || v > math.MaxUint32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint32(v)
+			case float32:
+				if v < 0 || v > math.MaxUint32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint32(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint32(parsedValue)
 			}
-			parsedValue, err := strconv.ParseUint(strVal, 10, 32)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = uint32(parsedValue)
 			cols := vector.MustFixedCol[uint32](vec)
 			cols[rowIdx] = val
 		case types.T_uint64:
 			var val uint64
-			var strVal string
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < 0 || v > math.MaxUint64 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(v)
+			case float32:
+				if v < 0 || v > math.MaxUint64 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseUint(strVal, 10, 64)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = uint64(parsedValue)
 			}
-			parsedValue, err := strconv.ParseUint(strVal, 10, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = parsedValue
-			cols := vector.MustFixedCol[uint64](vec)
-			cols[rowIdx] = val
-		case types.T_uint128:
-			var val uint64
-			var strVal string
-			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
-			default:
-				strVal = fmt.Sprintf("%v", v)
-			}
-			parsedValue, err := strconv.ParseUint(strVal, 10, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = parsedValue
 			cols := vector.MustFixedCol[uint64](vec)
 			cols[rowIdx] = val
 		case types.T_float32:
 			var val float32
-			var strVal string
+
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				if v < -math.MaxFloat32 || v > math.MaxFloat32 {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float32(v)
+			case float32:
+				val = float32(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseFloat(strVal, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float32(parsedValue)
 			}
-			parsedValue, err := strconv.ParseFloat(strVal, 32)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = float32(parsedValue)
 			cols := vector.MustFixedCol[float32](vec)
 			cols[rowIdx] = val
 		case types.T_float64:
 			var val float64
-			var strVal string
+
 			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
+			case float64:
+				val = float64(v)
+			case float32:
+				val = float64(v)
 			default:
-				strVal = fmt.Sprintf("%v", v)
+				strVal := fmt.Sprintf("%v", v)
+				parsedValue, err := strconv.ParseFloat(strVal, 32)
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				val = float64(parsedValue)
 			}
-			parsedValue, err := strconv.ParseFloat(strVal, 64)
-			if err != nil {
-				nulls.Add(vec.GetNulls(), uint64(rowIdx))
-				continue
-			}
-			val = parsedValue
 			cols := vector.MustFixedCol[float64](vec)
 			cols[rowIdx] = val
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			var strVal string
-			switch v := fieldValue.(type) {
-			case string:
-				strVal = v
-			default:
-				strVal = fmt.Sprintf("%s", v)
-			}
+			strVal = fmt.Sprintf("%v", fieldValue)
 			buf.WriteString(strVal)
 			bs := buf.Bytes()
 			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
