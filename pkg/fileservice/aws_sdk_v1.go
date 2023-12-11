@@ -98,6 +98,9 @@ func NewAwsSDKv1(
 		for _, path := range args.CertFiles {
 			content, err := os.ReadFile(path)
 			if err != nil {
+				logutil.Info("load cert file error",
+					zap.Any("err", err),
+				)
 				// ignore
 				continue
 			}
@@ -133,6 +136,11 @@ func NewAwsSDKv1(
 
 	client := s3.New(sess, config)
 
+	logutil.Info("new object storage",
+		zap.Any("sdk", "aws v1"),
+		zap.Any("arguments", args),
+	)
+
 	// head bucket to validate
 	_, err = client.HeadBucket(&s3.HeadBucketInput{
 		Bucket: ptrTo(args.Bucket),
@@ -140,12 +148,6 @@ func NewAwsSDKv1(
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
-
-	logutil.Info("new object storage",
-		zap.Any("sdk", "aws v1"),
-		zap.Any("endpoint", args.Endpoint),
-		zap.Any("bucket", args.Bucket),
-	)
 
 	return &AwsSDKv1{
 		name:            args.Name,
