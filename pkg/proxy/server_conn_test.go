@@ -78,7 +78,7 @@ func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet) (*frontend.Packet, error) {
 	return nil, nil
 }
-func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
+func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
 	sendResp(makeOKPacket(), resp)
 	return true, nil
 }
@@ -573,7 +573,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	resp := make(chan []byte, 10)
-	_, err = sc.ExecStmt("kill query", resp)
+	_, err = sc.ExecStmt(internalStmt{cmdType: cmdQuery, s: "kill query"}, resp)
 	require.NoError(t, err)
 	res := <-resp
 	ok := isOKPacket(res)

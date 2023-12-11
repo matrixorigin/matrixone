@@ -713,7 +713,7 @@ func TestUseEvent(t *testing.T) {
 	errChan := make(chan error, 1)
 	go func() {
 		<-sendEventCh
-		if _, err := client2.Write(makeSimplePacket("use d1")); err != nil {
+		if _, err := client2.Write(makeInitDBPacket("d1")); err != nil {
 			errChan <- err
 			return
 		}
@@ -747,6 +747,6 @@ func TestEventType_String(t *testing.T) {
 	e6 := prepareEvent{}
 	require.Equal(t, "Prepare", e6.eventType().String())
 
-	e7 := useEvent{}
+	e7 := initDBEvent{}
 	require.Equal(t, "Use", e7.eventType().String())
 }
