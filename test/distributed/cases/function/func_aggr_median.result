@@ -88,7 +88,6 @@ drop table if exists t1;
 create table t1 (a int,b varchar(10));
 select median(b) from t1;
 invalid argument aggregate function median, bad value [VARCHAR]
-
 SELECT median(1);
 median(1)
 1.0
@@ -115,7 +114,7 @@ invalid argument aggregate function median, bad value [VARCHAR]
 SELECT median("4");
 invalid argument aggregate function median, bad value [VARCHAR]
 SELECT median('');
-invalid argument aggregate function median, bad value [VARCHAR]
+invalid argument aggregate function median, bad value [CHAR]
 DROP TABLE IF EXISTS median_01;
 CREATE TABLE median_01(id int, d1 tinyint, d2 smallint unsigned, d3 bigint);
 INSERT INTO median_01 VALUES(1, -128, 65534, 5554584122);

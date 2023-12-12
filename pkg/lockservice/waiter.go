@@ -72,7 +72,7 @@ type waiter struct {
 	refCount *atomic.Int32
 	c        chan notifyValue
 	event    event
-	waitAt   time.Time
+	waitAt   atomic.Value
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -230,7 +230,7 @@ func (w *waiter) notify(value notifyValue) bool {
 }
 
 func (w *waiter) startWait() {
-	w.waitAt = time.Now()
+	w.waitAt.Store(time.Now())
 }
 
 func (w *waiter) reset() {

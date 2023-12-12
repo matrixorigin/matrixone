@@ -64,6 +64,14 @@ var (
 			return err == nil
 		},
 	}
+
+	integerOpt = OptConstraint{
+		Type: OptTypeInteger,
+		Validator: func(s string) bool {
+			_, err := strconv.Atoi(s)
+			return err == nil
+		},
+	}
 )
 
 func enumOpt(items ...string) OptConstraint {
@@ -89,16 +97,23 @@ const (
 
 	OptConnectorSql = "sql"
 
-	OptConnectorRel = "relkind"
+	OptConnectorRel       = "relkind"
+	OptConnectorPartition = "partition"
+
+	OptConnectorBufferLimit = "bufferLimit"
+	OptConnectorTimeWindow  = "timeWindow"
 )
 
 var ConnectorOptConstraint = map[string]OptConstraint{
-	OptConnectorType:    enumOpt(SourceKafka),
-	OptConnectorServers: addressOpt,
-	OptConnectorTopic:   stringOpt,
-	OptConnectorValue:   enumOpt(FormatJson),
-	OptConnectorSql:     stringOpt,
-	OptConnectorRel:     stringOpt,
+	OptConnectorType:        enumOpt(SourceKafka),
+	OptConnectorServers:     addressOpt,
+	OptConnectorTopic:       stringOpt,
+	OptConnectorValue:       enumOpt(FormatJson),
+	OptConnectorSql:         stringOpt,
+	OptConnectorRel:         stringOpt,
+	OptConnectorPartition:   integerOpt,
+	OptConnectorBufferLimit: integerOpt,
+	OptConnectorTimeWindow:  integerOpt,
 }
 
 var ConnectorEssentialOpts = map[string]struct{}{

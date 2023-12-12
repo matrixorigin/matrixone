@@ -1777,3 +1777,52 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 	}
 	return false
 }
+
+func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
+	// dcl tcl is not support
+	var schemas []*plan.ObjectRef
+	var paramTypes []int32
+
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			getParamRule := NewGetParamRule()
+			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+			err := VisitQuery.Visit(ctx.GetContext())
+			if err != nil {
+				return nil, nil, err
+			}
+			// TODO : need confirm
+			if len(getParamRule.params) > 0 {
+				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
+			}
+		}
+
+	case *plan.Plan_Query:
+		// collect args
+		getParamRule := NewGetParamRule()
+		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+		err := VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// sort arg
+		getParamRule.SetParamOrder()
+		args := getParamRule.params
+		schemas = getParamRule.schemas
+		paramTypes = getParamRule.paramTypes
+
+		// reset arg order
+		resetParamRule := NewResetParamOrderRule(args)
+		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
+		err = VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return schemas, paramTypes, nil
+}

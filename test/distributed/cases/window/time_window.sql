@@ -98,9 +98,7 @@ select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '20
 -- @bvt:issue#12440
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(next);
 -- @bvt:issue
--- @bvt:issue#12534
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(linear);
--- @bvt:issue
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(none);
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(VALUE,200);
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 24, hour);

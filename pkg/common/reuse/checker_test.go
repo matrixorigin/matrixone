@@ -21,35 +21,31 @@ import (
 )
 
 func TestDoubleFree(t *testing.T) {
-	enableChecker = true
-	defer func() {
-		enableChecker = false
-	}()
-	c := newChecker[person](true)
-	p := &person{}
-	c.created(p)
+	RunReuseTests(func() {
+		c := newChecker[person](true)
+		p := &person{}
+		c.created(p)
 
-	c.got(p)
-	c.free(p)
+		c.got(p)
+		c.free(p)
 
-	defer func() {
-		assert.NotNil(t, recover())
-	}()
-	c.free(p)
+		defer func() {
+			assert.NotNil(t, recover())
+		}()
+		c.free(p)
+	})
 }
 
 func TestLeakFree(t *testing.T) {
-	enableChecker = true
-	defer func() {
-		enableChecker = false
-	}()
-	c := newChecker[person](true)
-	p := &person{}
-	c.created(p)
-	c.got(p)
+	RunReuseTests(func() {
+		c := newChecker[person](true)
+		p := &person{}
+		c.created(p)
+		c.got(p)
 
-	defer func() {
-		assert.NotNil(t, recover())
-	}()
-	c.gc(p)
+		defer func() {
+			assert.NotNil(t, recover())
+		}()
+		c.gc(p)
+	})
 }

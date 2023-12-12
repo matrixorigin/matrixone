@@ -11855,7 +11855,7 @@ yydefault:
 //line mysql_sql.y:3032
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -16458,7 +16458,7 @@ yydefault:
 				IfNotExists:    yyDollar[4].ifNotExistsUnion(),
 				Table:          *yyDollar[5].tableNameUnion(),
 				AsSource:       yyDollar[7].selectUnion(),
-				Options:        yyDollar[8].tableOptionsUnion(),
+				DTOptions:      yyDollar[8].tableOptionsUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL

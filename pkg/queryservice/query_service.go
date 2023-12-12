@@ -253,16 +253,5 @@ func RequestMultipleCn(ctx context.Context,
 }
 
 func checkMethodVersion(ctx context.Context, req *pb.Request) error {
-	if version, ok := methodVersions[req.GetCmdMethod()]; !ok {
-		return moerr.NewInternalError(ctx, "unsupported method %s", req.GetCmdMethod().String())
-	} else {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOProtocolVersion)
-		if !ok {
-			return moerr.NewInternalError(ctx, "failed to get protocol version")
-		}
-		if v.(int64) < version {
-			return moerr.NewInternalError(ctx, "unsupported protocol version %d", version)
-		}
-	}
-	return nil
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }

@@ -139,7 +139,13 @@ _wstart    _wend    max(col2)    min(col3)    avg(col4)
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(next);
 
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(linear);
-
+_wstart    _wend    max(col2)    min(col3)    avg(col4)
+2020-01-01 00:00:00    2020-01-02 00:00:00    127    null    3.2151654354E10
+2020-01-02 00:00:00    2020-01-03 00:00:00    0    null    9.223372036854776E18
+2020-01-03 00:00:00    2020-01-04 00:00:00    64    null    4.6117021053734748E18
+2020-01-04 00:00:00    2020-01-05 00:00:00    100    -1921    3.2173892173092E13
+2020-01-05 00:00:00    2020-01-06 00:00:00    200    0    3.7219739821E10
+2020-01-06 00:00:00    2020-01-07 00:00:00    200    0    294095.0
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(none);
 _wstart    _wend    max(col2)    min(col3)    avg(col4)
 2020-01-01 00:00:00    2020-01-02 00:00:00    127    null    3.2151654354E10

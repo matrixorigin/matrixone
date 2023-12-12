@@ -76,10 +76,12 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_io_duration_seconds",
 			Help:      "Bucketed histogram of s3 io duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	S3WriteIODurationHistogram = s3IODurationHistogram.WithLabelValues("write")
 	S3ReadIODurationHistogram  = s3IODurationHistogram.WithLabelValues("read")
+	S3ListIODurationHistogram  = s3IODurationHistogram.WithLabelValues("list")
+	S3StatIODurationHistogram  = s3IODurationHistogram.WithLabelValues("stat")
 
 	s3ConnDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -87,7 +89,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_conn_duration_seconds",
 			Help:      "Bucketed histogram of s3 get conn duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	S3GetConnDurationHistogram      = s3ConnDurationHistogram.WithLabelValues("get-conn")
 	S3DNSResolveDurationHistogram   = s3ConnDurationHistogram.WithLabelValues("dns-resolve")
@@ -111,7 +113,7 @@ var (
 			Subsystem: "fs",
 			Name:      "local_io_duration_seconds",
 			Help:      "Bucketed histogram of local io duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	LocalWriteIODurationHistogram = localIODurationHistogram.WithLabelValues("write")
 	LocalReadIODurationHistogram  = localIODurationHistogram.WithLabelValues("read")

@@ -46,6 +46,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
 			c.initTxnRangesLoadedObjectMetaRow(),
+			c.initFastRangesRow(),
+			c.initRangesRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
 		)...)
@@ -73,6 +75,69 @@ func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initRangesRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn Ranges Selectivity",
+		c.getHistogram(
+			"ranges block selectivity",
+			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="block_selectivity"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6,
+			axis.Unit(""),
+			axis.Min(0)),
+
+		c.getHistogram(
+			"ranges result len",
+			c.getMetricWithFilter("mo_txn_ranges_duration_size_bucket", `type="ranges_len"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6,
+			axis.Unit(""),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initFastRangesRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn Fast Ranges Selectivity",
+		c.getHistogram(
+			"fast ranges block selectivity",
+			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="fast_block_selectivity"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			4,
+			axis.Unit(""),
+			axis.Min(0)),
+
+		c.getHistogram(
+			"fast ranges zone map selectivity",
+			c.getMetricWithFilter("mo_txn_ranges_selectivity_percentage_bucket", `type="fast_zm_selectivity"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			4,
+			axis.Unit(""),
+			axis.Min(0)),
+
+		c.getHistogram(
+			"fast ranges result len",
+			c.getMetricWithFilter("mo_txn_ranges_duration_size_bucket", `type="fast_ranges_len"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			4,
+			axis.Unit(""),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn table ranges",
+		c.getHistogram(
+			"Txn table ranges duration",
+			c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
 func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"Txn overview",
@@ -82,6 +147,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="internal"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="leak"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="total"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="retry"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="total"`) + `[$interval]))`,
@@ -91,6 +157,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				"user-txn",
 				"internal-txn",
+				"leak",
 				"statement",
 				"statement-retry",
 				"lock",
@@ -295,25 +362,6 @@ func (c *DashboardCreator) initTxnShowAccountsRow() dashboard.Option {
 			12,
 			axis.Unit("s"),
 			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn table ranges",
-		c.getHistogram(
-			"Txn table ranges duration",
-			c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6,
-			axis.Unit("s"),
-			axis.Min(0)),
-
-		c.getHistogram(
-			"Txn table ranges count",
-			c.getMetricWithFilter(`mo_txn_ranges_duration_size_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			6),
 	)
 }
 

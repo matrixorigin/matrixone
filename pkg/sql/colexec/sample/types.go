@@ -57,6 +57,9 @@ type Argument struct {
 }
 
 type container struct {
+	// safe check.
+	workDone bool
+
 	samplePool *sPool
 
 	isGroupBy     bool
@@ -146,6 +149,10 @@ func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 
 func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) IsMergeSampleByRow() bool {
+	return arg.Type == mergeSampleByRow
 }
 
 func (arg *Argument) IsByPercent() bool {

@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,154 +31,168 @@ var (
 )
 
 func TestAdd(t *testing.T) {
-	for name, factory := range storages {
-		t.Run(name, func(t *testing.T) {
-			s := factory()
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			t.Run(name, func(t *testing.T) {
+				s := factory()
 
-			k1 := []byte("k1")
-			s.Add(k1, newTestLock(k1))
-			assert.Equal(t, 1, s.Len())
+				k1 := []byte("k1")
+				s.Add(k1, newTestLock(k1))
+				assert.Equal(t, 1, s.Len())
 
-			v, ok := s.Get(k1)
-			assert.True(t, ok)
-			assert.Equal(t, k1, v.holders.txns[0].TxnID)
-		})
-	}
+				v, ok := s.Get(k1)
+				assert.True(t, ok)
+				assert.Equal(t, k1, v.holders.txns[0].TxnID)
+			})
+		}
+	})
 }
 
 func TestDelete(t *testing.T) {
-	for name, factory := range storages {
-		t.Run(name, func(t *testing.T) {
-			s := factory()
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			t.Run(name, func(t *testing.T) {
+				s := factory()
 
-			k1 := []byte("k1")
-			k2 := []byte("k2")
-			s.Add(k1, Lock{})
-			s.Add(k2, Lock{})
+				k1 := []byte("k1")
+				k2 := []byte("k2")
+				s.Add(k1, Lock{})
+				s.Add(k2, Lock{})
 
-			s.Delete(k1)
-			assert.Equal(t, 1, s.Len())
-			v, ok := s.Get(k1)
-			assert.False(t, ok)
-			assert.Empty(t, v)
+				s.Delete(k1)
+				assert.Equal(t, 1, s.Len())
+				v, ok := s.Get(k1)
+				assert.False(t, ok)
+				assert.Empty(t, v)
 
-			s.Delete(k2)
-			assert.Equal(t, 0, s.Len())
-			v, ok = s.Get(k2)
-			assert.False(t, ok)
-			assert.Empty(t, v)
-		})
-	}
+				s.Delete(k2)
+				assert.Equal(t, 0, s.Len())
+				v, ok = s.Get(k2)
+				assert.False(t, ok)
+				assert.Empty(t, v)
+			})
+		}
+	})
 }
 
 func TestSeek(t *testing.T) {
-	for name, factory := range storages {
-		t.Run(name, func(t *testing.T) {
-			s := factory()
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			t.Run(name, func(t *testing.T) {
+				s := factory()
 
-			k1 := []byte("k1")
-			k2 := []byte("k2")
-			k3 := []byte("k3")
+				k1 := []byte("k1")
+				k2 := []byte("k2")
+				k3 := []byte("k3")
 
-			checkSeek(t, s, k1, nil, nil)
+				checkSeek(t, s, k1, nil, nil)
 
-			s.Add(k1, newTestLock(k1))
-			checkSeek(t, s, k1, k1, k1)
-			checkSeek(t, s, k2, nil, nil)
-			checkSeek(t, s, k3, nil, nil)
+				s.Add(k1, newTestLock(k1))
+				checkSeek(t, s, k1, k1, k1)
+				checkSeek(t, s, k2, nil, nil)
+				checkSeek(t, s, k3, nil, nil)
 
-			s.Add(k2, newTestLock(k2))
-			checkSeek(t, s, k1, k1, k1)
-			checkSeek(t, s, k2, k2, k2)
-			checkSeek(t, s, k3, nil, nil)
+				s.Add(k2, newTestLock(k2))
+				checkSeek(t, s, k1, k1, k1)
+				checkSeek(t, s, k2, k2, k2)
+				checkSeek(t, s, k3, nil, nil)
 
-			s.Add(k3, newTestLock(k3))
-			checkSeek(t, s, k1, k1, k1)
-			checkSeek(t, s, k2, k2, k2)
-			checkSeek(t, s, k3, k3, k3)
-		})
-	}
+				s.Add(k3, newTestLock(k3))
+				checkSeek(t, s, k1, k1, k1)
+				checkSeek(t, s, k2, k2, k2)
+				checkSeek(t, s, k3, k3, k3)
+			})
+		}
+	})
 }
 
 func TestPrev(t *testing.T) {
-	for name, factory := range storages {
-		t.Run(name, func(t *testing.T) {
-			s := factory()
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			t.Run(name, func(t *testing.T) {
+				s := factory()
 
-			k1 := []byte("k1")
-			k2 := []byte("k2")
-			k3 := []byte("k3")
-			s.Add(k1, Lock{})
-			s.Add(k2, Lock{})
-			s.Add(k3, Lock{})
+				k1 := []byte("k1")
+				k2 := []byte("k2")
+				k3 := []byte("k3")
+				s.Add(k1, Lock{})
+				s.Add(k2, Lock{})
+				s.Add(k3, Lock{})
 
-			v, _, ok := s.Prev(k3)
-			assert.True(t, ok)
-			assert.Equal(t, k2, v)
+				v, _, ok := s.Prev(k3)
+				assert.True(t, ok)
+				assert.Equal(t, k2, v)
 
-			v, _, ok = s.Prev(k2)
-			assert.True(t, ok)
-			assert.Equal(t, k1, v)
+				v, _, ok = s.Prev(k2)
+				assert.True(t, ok)
+				assert.Equal(t, k1, v)
 
-			_, _, ok = s.Prev(k1)
-			assert.False(t, ok)
-		})
-	}
+				_, _, ok = s.Prev(k1)
+				assert.False(t, ok)
+			})
+		}
+	})
 }
 
 func BenchmarkAdd(b *testing.B) {
-	for name, factory := range storages {
-		b.Run(name, func(b *testing.B) {
-			s := factory()
-			keys := make([][]byte, b.N)
-			for i := 0; i < b.N; i++ {
-				keys[i] = make([]byte, 4)
-				binary.BigEndian.PutUint32(keys[i], rand.Uint32())
-			}
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			b.Run(name, func(b *testing.B) {
+				s := factory()
+				keys := make([][]byte, b.N)
+				for i := 0; i < b.N; i++ {
+					keys[i] = make([]byte, 4)
+					binary.BigEndian.PutUint32(keys[i], rand.Uint32())
+				}
 
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				s.Add(keys[i], newTestLock(keys[i]))
-			}
-		})
-	}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					s.Add(keys[i], newTestLock(keys[i]))
+				}
+			})
+		}
+	})
 }
 
 func BenchmarkSeek(b *testing.B) {
-	for name, factory := range storages {
-		b.Run(name, func(b *testing.B) {
-			s := factory()
-			keys := make([][]byte, b.N)
-			for i := 0; i < b.N; i++ {
-				keys[i] = make([]byte, 4)
-				binary.BigEndian.PutUint32(keys[i], rand.Uint32())
-			}
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			b.Run(name, func(b *testing.B) {
+				s := factory()
+				keys := make([][]byte, b.N)
+				for i := 0; i < b.N; i++ {
+					keys[i] = make([]byte, 4)
+					binary.BigEndian.PutUint32(keys[i], rand.Uint32())
+				}
 
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				s.Seek(keys[i])
-			}
-		})
-	}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					s.Seek(keys[i])
+				}
+			})
+		}
+	})
 }
 
 func BenchmarkDelete(b *testing.B) {
-	for name, factory := range storages {
-		b.Run(name, func(b *testing.B) {
-			s := factory()
-			keys := make([][]byte, b.N)
-			for i := 0; i < b.N; i++ {
-				keys[i] = make([]byte, 4)
-				binary.BigEndian.PutUint32(keys[i], rand.Uint32())
-				s.Add(keys[i], newTestLock(keys[i]))
-			}
+	reuse.RunReuseTests(func() {
+		for name, factory := range storages {
+			b.Run(name, func(b *testing.B) {
+				s := factory()
+				keys := make([][]byte, b.N)
+				for i := 0; i < b.N; i++ {
+					keys[i] = make([]byte, 4)
+					binary.BigEndian.PutUint32(keys[i], rand.Uint32())
+					s.Add(keys[i], newTestLock(keys[i]))
+				}
 
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				s.Delete(keys[i])
-			}
-		})
-	}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					s.Delete(keys[i])
+				}
+			})
+		}
+	})
 }
 
 func checkSeek(t *testing.T, s LockStorage, key []byte, expectKey, expectValue []byte) {

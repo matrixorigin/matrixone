@@ -61,80 +61,74 @@ func TestGetAndFree(t *testing.T) {
 }
 
 func TestCheckDoubleFree(t *testing.T) {
-	enableChecker = true
-	defer func() {
-		enableChecker = false
-	}()
+	RunReuseTests(func() {
+		for name, spi := range providers {
+			t.Run(name, func(t *testing.T) {
+				for key := range pools {
+					delete(pools, key)
+				}
+				use(spi)
+				CreatePool[person](
+					func() *person { return &person{} },
+					func(p *person) {
+						names := p.names[:0]
+						*p = person{}
+						p.names = names
+					},
+					DefaultOptions[person]().WithEnableChecker(),
+				)
 
-	for name, spi := range providers {
-		t.Run(name, func(t *testing.T) {
-			for key := range pools {
-				delete(pools, key)
-			}
-			use(spi)
-			CreatePool[person](
-				func() *person { return &person{} },
-				func(p *person) {
-					names := p.names[:0]
-					*p = person{}
-					p.names = names
-				},
-				DefaultOptions[person]().WithEnableChecker(),
-			)
+				p := Alloc[person](nil)
+				assert.Empty(t, p.names)
+				assert.Equal(t, 0, p.age)
+				p.names = append(p.names, "hello")
+				p.age = 10
+				Free(p, nil)
 
-			p := Alloc[person](nil)
-			assert.Empty(t, p.names)
-			assert.Equal(t, 0, p.age)
-			p.names = append(p.names, "hello")
-			p.age = 10
-			Free(p, nil)
-
-			defer func() {
-				assert.NotNil(t, recover())
-			}()
-			Free(p, nil)
-		})
-	}
+				defer func() {
+					assert.NotNil(t, recover())
+				}()
+				Free(p, nil)
+			})
+		}
+	})
 }
 
 func TestCheckLeakFree(t *testing.T) {
-	enableChecker = true
-	defer func() {
-		enableChecker = false
-	}()
-
-	for name, spi := range providers {
-		// mpool not support leak free check
-		if spi == MpoolBased {
-			continue
-		}
-
-		t.Run(name, func(t *testing.T) {
-			for key := range pools {
-				delete(pools, key)
+	RunReuseTests(func() {
+		for name, spi := range providers {
+			// mpool not support leak free check
+			if spi == MpoolBased {
+				continue
 			}
-			use(spi)
-			CreatePool[person](
-				func() *person { return &person{} },
-				func(p *person) {
-					names := p.names[:0]
-					*p = person{}
-					p.names = names
-				},
-				DefaultOptions[person]().
-					WithEnableChecker().
-					withGCRecover(func() {
-						assert.NotNil(t, recover())
-					}),
-			)
 
-			p := Alloc[person](nil)
-			assert.Empty(t, p.names)
-			assert.Equal(t, 0, p.age)
-			p = nil
-			debug.FreeOSMemory()
-		})
-	}
+			t.Run(name, func(t *testing.T) {
+				for key := range pools {
+					delete(pools, key)
+				}
+				use(spi)
+				CreatePool[person](
+					func() *person { return &person{} },
+					func(p *person) {
+						names := p.names[:0]
+						*p = person{}
+						p.names = names
+					},
+					DefaultOptions[person]().
+						WithEnableChecker().
+						withGCRecover(func() {
+							assert.NotNil(t, recover())
+						}),
+				)
+
+				p := Alloc[person](nil)
+				assert.Empty(t, p.names)
+				assert.Equal(t, 0, p.age)
+				p = nil
+				debug.FreeOSMemory()
+			})
+		}
+	})
 }
 
 func BenchmarkGet(b *testing.B) {

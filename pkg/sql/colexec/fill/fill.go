@@ -39,8 +39,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ctr.InitReceiver(proc, true)
 
 	f := true
-	for i, id := range ap.AggIds {
-		if id == function.MAX || id == function.MIN || id == function.SUM || id == function.AVG {
+	for i := len(ap.AggIds) - 1; i >= 0; i-- {
+		if ap.AggIds[i] == function.MAX || ap.AggIds[i] == function.MIN || ap.AggIds[i] == function.SUM || ap.AggIds[i] == function.AVG {
 			ctr.colIdx = i
 			f = false
 			break
@@ -306,43 +306,36 @@ func processPrev(ctr *container, ap *Argument, proc *process.Process, anal proce
 	return result, nil
 }
 
-func processLinear(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+func processLinearCol(ctr *container, proc *process.Process, idx int) error {
 	var err error
-	result := vm.NewCallResult()
+
+	ctr.nullIdx = 0
+	ctr.nullRow = 0
+	ctr.preIdx = 0
+	ctr.preRow = 0
+	ctr.curIdx = 0
+	ctr.curRow = 0
+	ctr.status = receiveBat
+	ctr.subStatus = findNullPre
+	k := 0
+
 	for {
 		switch ctr.status {
 		case receiveBat:
-			bat, _, err := ctr.ReceiveFromAllRegs(anal)
-			if err != nil {
-				return result, err
+			if k == len(ctr.bats) {
+				return nil
 			}
-			if bat == nil {
-				ctr.status = withoutNewBat
-				continue
-			}
-			ctr.bats = append(ctr.bats, bat)
+			k++
 			if ctr.subStatus == findNullPre {
 				ctr.status = findNullPre
 			} else {
 				ctr.status = findValue
 			}
 		case findNullPre:
-			if ctr.preIdx > 0 {
-				ctr.preIdx--
-				ctr.nullIdx--
-				if ctr.buf != nil {
-					proc.PutBatch(ctr.buf)
-					ctr.buf = nil
-				}
-				ctr.buf = ctr.bats[0]
-				ctr.bats = ctr.bats[1:]
-				result.Batch = ctr.buf
-				return result, nil
-			}
 			b := ctr.bats[ctr.nullIdx]
 
 			if ctr.nullIdx > ctr.preRow {
-				if b.Vecs[ctr.colIdx].IsNull(uint64(ctr.nullIdx)) {
+				if b.Vecs[idx].IsNull(uint64(ctr.nullIdx)) {
 					ctr.status = findValue
 					continue
 				}
@@ -351,7 +344,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			hasNullPre := false
 			ctr.preRow = ctr.nullRow - 1
 			for ; ctr.nullRow < b.RowCount(); ctr.nullRow++ {
-				if ctr.preRow >= 0 && b.Vecs[ctr.colIdx].IsNull(uint64(ctr.nullRow)) && !b.Vecs[ctr.colIdx].IsNull(uint64(ctr.preRow)) {
+				if ctr.preRow >= 0 && b.Vecs[idx].IsNull(uint64(ctr.nullRow)) && !b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
 					hasNullPre = true
 					break
 				}
@@ -362,7 +355,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			if hasNullPre {
 				ctr.status = findValue
 			} else {
-				if b.Vecs[ctr.colIdx].IsNull(uint64(ctr.preRow)) {
+				if b.Vecs[idx].IsNull(uint64(ctr.preRow)) {
 					ctr.preIdx++
 					ctr.nullRow = 0
 				}
@@ -376,7 +369,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			b := ctr.bats[ctr.curIdx]
 			hasValue := false
 			for ; ctr.curRow < b.RowCount(); ctr.curRow++ {
-				if !b.Vecs[ctr.colIdx].IsNull(uint64(ctr.curRow)) {
+				if !b.Vecs[idx].IsNull(uint64(ctr.curRow)) {
 					hasValue = true
 					break
 				}
@@ -388,36 +381,34 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 				ctr.status = receiveBat
 			}
 		case fillValue:
-			for i, exe := range ctr.exes {
-				b := batch.NewWithSize(2)
-				b.Vecs[0] = proc.GetVector(*ctr.bats[ctr.preIdx].Vecs[i].GetType())
-				err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[i], ctr.preRow, proc)
-				if err != nil {
-					return result, err
-				}
-				b.Vecs[1] = proc.GetVector(*ctr.bats[ctr.curIdx].Vecs[i].GetType())
-				err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[i], ctr.curRow, proc)
-				if err != nil {
-					return result, err
-				}
-				b.SetRowCount(1)
-				ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b})
-				if err != nil {
-					return result, err
-				}
+			b := batch.NewWithSize(2)
+			b.Vecs[0] = proc.GetVector(*ctr.bats[ctr.preIdx].Vecs[idx].GetType())
+			err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[idx], ctr.preRow, proc)
+			if err != nil {
+				return err
 			}
+			b.Vecs[1] = proc.GetVector(*ctr.bats[ctr.curIdx].Vecs[idx].GetType())
+			err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[idx], ctr.curRow, proc)
+			if err != nil {
+				return err
+			}
+			b.SetRowCount(1)
+			ctr.valVecs[idx], err = ctr.exes[idx].EvalWithoutResultReusing(proc, []*batch.Batch{b})
+			if err != nil {
+				return err
+			}
+
 			ctr.preRow++
 			for ; ctr.preIdx < ctr.curIdx-1; ctr.preIdx++ {
 				for ; ctr.preRow < ctr.bats[ctr.preIdx].RowCount(); ctr.preRow++ {
 
-					for i, vec := range ctr.bats[ctr.preIdx].Vecs {
-						if !vec.IsNull(uint64(ctr.preRow)) {
-							continue
-						}
-						err = setValue(vec, ctr.valVecs[i], ctr.preRow, 0, proc)
-						if err != nil {
-							return result, err
-						}
+					vec := ctr.bats[ctr.preIdx].Vecs[idx]
+					if !vec.IsNull(uint64(ctr.preRow)) {
+						continue
+					}
+					err = setValue(vec, ctr.valVecs[idx], ctr.preRow, 0, proc)
+					if err != nil {
+						return err
 					}
 
 				}
@@ -427,36 +418,62 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			}
 
 			for ; ctr.preRow < ctr.curRow; ctr.preRow++ {
-				for i, vec := range ctr.bats[ctr.preIdx].Vecs {
-					if !vec.IsNull(uint64(ctr.preRow)) {
-						continue
-					}
-					err = setValue(vec, ctr.valVecs[i], ctr.preRow, 0, proc)
-					if err != nil {
-						return result, err
-					}
+				vec := ctr.bats[ctr.preIdx].Vecs[idx]
+				if !vec.IsNull(uint64(ctr.preRow)) {
+					continue
+				}
+				err = setValue(vec, ctr.valVecs[idx], ctr.preRow, 0, proc)
+				if err != nil {
+					return err
 				}
 			}
 
 			ctr.nullIdx = ctr.preIdx
 			ctr.nullRow = ctr.preRow
 			ctr.status = findNullPre
-		case withoutNewBat:
-			if len(ctr.bats) > 0 {
-				if ctr.buf != nil {
-					proc.PutBatch(ctr.buf)
-					ctr.buf = nil
-				}
-				ctr.buf = ctr.bats[0]
-				ctr.bats = ctr.bats[1:]
-				result.Batch = ctr.buf
-				return result, nil
-			}
+		}
+	}
+}
+
+func processLinear(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
+	var err error
+	result := vm.NewCallResult()
+	if ctr.done {
+		if ctr.idx == len(ctr.bats) {
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
+		result.Batch = ctr.bats[ctr.idx]
+		result.Status = vm.ExecNext
+		ctr.idx++
+		return result, nil
 	}
+	for {
+		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		if err != nil {
+			return result, err
+		}
+		if end {
+			break
+		}
+		ctr.bats = append(ctr.bats, bat)
+	}
+	if len(ctr.bats) == 0 {
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+	for i := range ctr.bats[0].Vecs {
+		if err = processLinearCol(ctr, proc, i); err != nil {
+			return result, err
+		}
+	}
+	ctr.done = true
+	result.Batch = ctr.bats[ctr.idx]
+	result.Status = vm.ExecNext
+	ctr.idx++
+	return result, nil
 }
 
 func processDefault(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {

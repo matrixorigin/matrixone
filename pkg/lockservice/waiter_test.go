@@ -19,92 +19,113 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAcquireWaiter(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	defer w.close()
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		defer w.close()
 
-	assert.Equal(t, 0, len(w.c))
-	assert.Equal(t, int32(1), w.refCount.Load())
+		assert.Equal(t, 0, len(w.c))
+		assert.Equal(t, int32(1), w.refCount.Load())
+	})
 }
 
 func TestWait(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	defer w.close()
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		defer w.close()
 
-	w.setStatus(blocking)
-	go func() {
-		time.Sleep(time.Millisecond * 10)
-		w.notify(notifyValue{})
-	}()
+		w.setStatus(blocking)
+		go func() {
+			time.Sleep(time.Millisecond * 10)
+			w.notify(notifyValue{})
+		}()
 
-	assert.NoError(t, w.wait(context.Background()).err)
+		assert.NoError(t, w.wait(context.Background()).err)
+	})
 }
 
 func TestWaitWithTimeout(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	w.setStatus(blocking)
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		defer w.close()
+		w.setStatus(blocking)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-	defer cancel()
-	assert.Error(t, w.wait(ctx).err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
+		assert.Error(t, w.wait(ctx).err)
+	})
 }
 
 func TestWaitAndNotifyConcurrent(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	w.setStatus(blocking)
-	defer w.close()
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		w.setStatus(blocking)
+		defer w.close()
 
-	w.beforeSwapStatusAdjustFunc = func() {
-		w.setStatus(notified)
-		w.c <- notifyValue{}
-	}
+		w.beforeSwapStatusAdjustFunc = func() {
+			w.setStatus(notified)
+			w.c <- notifyValue{}
+		}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
-	defer cancel()
-	assert.NoError(t, w.wait(ctx).err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
+		defer cancel()
+		assert.NoError(t, w.wait(ctx).err)
+	})
+
 }
 
 func TestWaitMultiTimes(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-	defer cancel()
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+		defer w.close()
 
-	for i := 0; i < 100; i++ {
-		w.setStatus(blocking)
-		w.notify(notifyValue{})
-		assert.NoError(t, w.wait(ctx).err)
-		w.resetWait()
-	}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+		defer cancel()
+
+		for i := 0; i < 100; i++ {
+			w.setStatus(blocking)
+			w.notify(notifyValue{})
+			assert.NoError(t, w.wait(ctx).err)
+			w.resetWait()
+		}
+	})
 }
 
 func TestNotifyAfterCompleted(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{})
-	require.Equal(t, 0, len(w.c))
-	defer w.close()
-	w.setStatus(completed)
-	assert.False(t, w.notify(notifyValue{}))
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{})
+		require.Equal(t, 0, len(w.c))
+		defer w.close()
+		w.setStatus(completed)
+		assert.False(t, w.notify(notifyValue{}))
+	})
 }
 
 func TestNotifyAfterAlreadyNotified(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{})
-	w.setStatus(blocking)
-	defer w.close()
-	assert.True(t, w.notify(notifyValue{}))
-	assert.NoError(t, w.wait(context.Background()).err)
-	assert.False(t, w.notify(notifyValue{}))
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{})
+		w.setStatus(blocking)
+		defer w.close()
+		assert.True(t, w.notify(notifyValue{}))
+		assert.NoError(t, w.wait(context.Background()).err)
+		assert.False(t, w.notify(notifyValue{}))
+	})
 }
 
 func TestNotifyWithStatusChanged(t *testing.T) {
-	w := acquireWaiter(pb.WaitTxn{})
-	defer w.close()
+	reuse.RunReuseTests(func() {
+		w := acquireWaiter(pb.WaitTxn{})
+		defer w.close()
 
-	w.beforeSwapStatusAdjustFunc = func() {
-		w.setStatus(completed)
-	}
-	assert.False(t, w.notify(notifyValue{}))
+		w.beforeSwapStatusAdjustFunc = func() {
+			w.setStatus(completed)
+		}
+		assert.False(t, w.notify(notifyValue{}))
+	})
 }

@@ -126,6 +126,14 @@ func (s *StorageTxnOperator) IsRetry() bool {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) SetOpenLog(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsOpenLog() bool {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
 	panic("unimplemented")
 }

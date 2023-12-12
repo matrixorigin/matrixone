@@ -6442,7 +6442,7 @@ create_table_stmt:
             IfNotExists: $4,
             Table: *$5,
             AsSource: $7,
-            Options: $8,
+            DTOptions: $8,
         }
     }
 load_param_opt_2:

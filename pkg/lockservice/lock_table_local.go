@@ -112,6 +112,10 @@ func (l *localLockTable) doLock(
 			// no waiter, all locks are added
 			if c.w == nil {
 				v2.TxnAcquireLockWaitDurationHistogram.Observe(time.Since(c.createAt).Seconds())
+				if old != nil {
+					old.disableNotify()
+					old.close()
+				}
 				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
@@ -139,7 +143,7 @@ func (l *localLockTable) doLock(
 
 		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
 		if v.err != nil {
-			// TODO: c.w's ref is 2, after close is 1. leak.
+			c.txn.clearBlocked(c.w)
 			c.w.close()
 			c.done(v.err)
 			return
@@ -298,8 +302,6 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			hold, newHolder := lock.tryHold(c)
 			if hold {
 				if c.w != nil {
-					c.w.disableNotify()
-					c.w.close()
 					c.w = nil
 				}
 				// only new holder can added lock into txn.
@@ -345,7 +347,10 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 			return err
 		}
 		if len(conflict) > 0 {
-			c.w = acquireWaiter(c.waitTxn)
+			if c.w == nil {
+				c.w = acquireWaiter(c.waitTxn)
+			}
+
 			c.offset = i
 			l.handleLockConflictLocked(c, conflict, conflictWith)
 			return nil
@@ -408,6 +413,9 @@ func (l *localLockTable) addRangeLockLocked(
 			hold, _ = l2.tryHold(c)
 			if !hold {
 				panic("BUG: must get shared lock")
+			}
+			if c.w != nil {
+				c.w = nil
 			}
 			if newHolder {
 				c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
@@ -476,6 +484,10 @@ func (l *localLockTable) addRangeLockLocked(
 		if len(conflictKey) > 0 {
 			hold, newHolder := conflictWith.tryHold(c)
 			if hold {
+				if c.w != nil {
+					c.w = nil
+				}
+
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {

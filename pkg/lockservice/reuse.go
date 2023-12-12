@@ -55,16 +55,14 @@ func init() {
 			return &pb.Request{}
 		},
 		func(v *pb.Request) { v.Reset() },
-		reuse.DefaultOptions[pb.Request]().
-			WithEnableChecker())
+		reuse.DefaultOptions[pb.Request]())
 
 	reuse.CreatePool[pb.Response](
 		func() *pb.Response {
 			return &pb.Response{}
 		},
 		func(v *pb.Response) { v.Reset() },
-		reuse.DefaultOptions[pb.Response]().
-			WithEnableChecker())
+		reuse.DefaultOptions[pb.Response]())
 
 	reuse.CreatePool[cowSlice](
 		func() *cowSlice {

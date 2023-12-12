@@ -53,7 +53,7 @@ func TestSamplePool(t *testing.T) {
 
 	{
 		// sample 5 rows by second column.
-		pool1 := newSamplePoolByRows(proc, 5, 1, true)
+		pool1 := newSamplePoolByRows(proc, 5, 1)
 		err := pool1.sampleFromColumn(1, b1.Vecs[1], b1)
 		require.NoError(t, err)
 		err = pool1.sampleFromColumn(1, b2.Vecs[1], b2)
@@ -78,7 +78,7 @@ func TestSamplePool(t *testing.T) {
 
 	{
 		// sample 5 rows by 2 columns.
-		pool2 := newSamplePoolByRows(proc, 5, 2, true)
+		pool2 := newSamplePoolByRows(proc, 5, 2)
 		err := pool2.sampleFromColumns(1, b1.Vecs, b1)
 		require.NoError(t, err)
 		err = pool2.sampleFromColumns(1, b2.Vecs, b2)
@@ -143,4 +143,26 @@ func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error)
 	}
 	b.SetRowCount(len(rows))
 	return b, nil
+}
+
+func TestSamplePoolOthers(t *testing.T) {
+	// merge sample and sample by percent cannot be tested full.
+	s1 := newSamplePoolByRows(nil, 1, 1)
+	s2 := newSamplePoolByPercent(nil, 1.0, 1)
+	s3 := newSamplePoolByRowsForMerge(nil, 1, 1)
+
+	s1.setPerfFields(false)
+	s2.setPerfFields(false)
+	s3.setPerfFields(false)
+	require.Equal(t, true, s1.canCheckFull)
+	require.Equal(t, false, s2.canCheckFull)
+	require.Equal(t, false, s3.canCheckFull)
+
+	// once sample for each group, full check is not supported.
+	s1.setPerfFields(true)
+	s2.setPerfFields(true)
+	s3.setPerfFields(true)
+	require.Equal(t, false, s1.canCheckFull)
+	require.Equal(t, false, s2.canCheckFull)
+	require.Equal(t, false, s3.canCheckFull)
 }

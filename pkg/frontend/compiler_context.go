@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -282,6 +284,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil, nil
@@ -326,6 +332,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	var sql string
 	var erArray []ExecResult
 
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementResolveUdfDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
 
@@ -590,6 +600,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	dbName := obj.GetSchemaName()
 	checkSub := true

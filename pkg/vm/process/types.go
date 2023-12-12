@@ -48,6 +48,7 @@ const (
 // Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
+	ChildrenCallStop(time.Time)
 	Start()
 	Alloc(int64)
 	Input(*batch.Batch, bool)
@@ -455,6 +456,8 @@ type analyze struct {
 	wait     time.Duration
 	dopIdx   int
 	analInfo *AnalyzeInfo
+
+	childrenCallDuration time.Duration
 }
 
 func (si *SessionInfo) GetUser() string {

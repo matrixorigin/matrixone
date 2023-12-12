@@ -16,7 +16,9 @@ package table_scan
 
 import (
 	"bytes"
+	"time"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,9 +32,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	t := time.Now()
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+	}()
 
 	result := vm.NewCallResult()
 	select {

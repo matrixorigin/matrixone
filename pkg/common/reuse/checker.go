@@ -16,6 +16,8 @@ package reuse
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"unsafe"
 )
@@ -33,26 +35,24 @@ type checker[T ReusableObject] struct {
 		sync.RWMutex
 		// we use uintptr as key, to check leak free in gc triggered.
 		// We cannot hold the *T in checker.
-		m map[uintptr]step
+		m             map[uintptr]step
+		createStack   map[uintptr]string
+		lastFreeStack map[uintptr]string
 	}
 }
 
 func newChecker[T ReusableObject](enable bool) *checker[T] {
-	if !enableChecker {
-		enable = false
-	}
-
 	c := &checker[T]{
 		enable: enable,
 	}
-	if c.enable {
-		c.mu.m = make(map[uintptr]step)
-	}
+	c.mu.m = make(map[uintptr]step)
+	c.mu.createStack = make(map[uintptr]string)
+	c.mu.lastFreeStack = make(map[uintptr]string)
 	return c
 }
 
 func (c *checker[T]) created(v *T) {
-	if !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -63,7 +63,7 @@ func (c *checker[T]) created(v *T) {
 }
 
 func (c *checker[T]) got(v *T) {
-	if !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -78,13 +78,17 @@ func (c *checker[T]) got(v *T) {
 
 	switch s {
 	case inUse:
-		panic(fmt.Sprintf("double got from pool for type: %T", v))
+		panic(fmt.Sprintf("double got from pool for type: %T, %+v \n create by: <<<%s>>>\n",
+			v, v, c.mu.createStack[k]))
 	}
 	c.mu.m[k] = inUse
+	if enableVerbose.Load() {
+		c.mu.createStack[k] = string(debug.Stack())
+	}
 }
 
 func (c *checker[T]) free(v *T) {
-	if !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -94,19 +98,23 @@ func (c *checker[T]) free(v *T) {
 	k := uintptr(unsafe.Pointer(v))
 	s, ok := c.mu.m[k]
 	if !ok {
-		panic("missing status")
+		return
 	}
 
 	switch s {
 	// the v is marked idle, means already free
 	case idle:
-		panic(fmt.Sprintf("double free for type: %T", v))
+		panic(fmt.Sprintf("double free for type: %T, %+v \n create by: <<<%s>>>\n last free by: <<<%s>>> \n",
+			v, v, c.mu.createStack[k], c.mu.lastFreeStack[k]))
 	}
 	c.mu.m[k] = idle
+	if enableVerbose.Load() {
+		c.mu.lastFreeStack[k] = string(debug.Stack())
+	}
 }
 
 func (c *checker[T]) gc(v *T) {
-	if !c.enable {
+	if !enableChecker.Load() || !c.enable {
 		return
 	}
 
@@ -116,14 +124,40 @@ func (c *checker[T]) gc(v *T) {
 	k := uintptr(unsafe.Pointer(v))
 	s, ok := c.mu.m[k]
 	if !ok {
-		panic("missing status")
+		return
 	}
 
 	switch s {
 	// the v is marked in use, but v is release by gc
 	case inUse:
-		panic(fmt.Sprintf("missing free for type: %T, %+v", v, v))
+		panic(fmt.Sprintf("missing free for type: %T, %+v \n create by: <<<%s>>>\n",
+			v, v, c.mu.createStack[k]))
 	}
 
 	delete(c.mu.m, k)
+}
+
+func RunReuseTests(fn func()) {
+	enableChecker.Store(true)
+	defer func() {
+		enableChecker.Store(false)
+	}()
+	fn()
+	c := make(chan struct{})
+	func() {
+		v := &waiterGC{
+			data: make([]byte, 1024),
+		}
+		runtime.SetFinalizer(
+			v,
+			func(v *waiterGC) {
+				close(c)
+			})
+	}()
+	debug.FreeOSMemory()
+	<-c
+}
+
+type waiterGC struct {
+	data []byte
 }

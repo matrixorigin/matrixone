@@ -22,6 +22,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +55,7 @@ func TestLockRemote(t *testing.T) {
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				assert.NoError(t, err)
 			})
-
+			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -81,6 +82,7 @@ func TestUnlockRemote(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			l.unlock(txn, nil, timestamp.Timestamp{})
+			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -131,6 +133,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			l.unlock(txn, nil, timestamp.Timestamp{})
 			<-c
+			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -173,6 +176,7 @@ func TestUnlockRemoteWithCannotRetryAfterTimeout(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
 			l.unlock(txn, nil, timestamp.Timestamp{})
+			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -231,6 +235,7 @@ func TestUnlockRemoteWithCannotRetry(t *testing.T) {
 				case <-time.After(time.Second):
 					close(c)
 				}
+				reuse.Free(txn, nil)
 			},
 			func(lt pb.LockTable) {},
 		)
@@ -307,6 +312,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 
 			l.getLock(txnID, pb.WaitTxn{TxnID: []byte{1}}, nil)
 			assert.Equal(t, newBind, <-c)
+			reuse.Free(txn, nil)
 		},
 		func(bind pb.LockTable) {
 			c <- bind
