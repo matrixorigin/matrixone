@@ -50,7 +50,7 @@ func (a *analyze) Stop() {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
 		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
 		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
-		//atomic.StoreInt64(&a.analInfo.TimeConsumedArray[], consumeTime)
+		a.analInfo.AddSingleParallelTimeConsumed(a.parallelIdx, consumeTime)
 	}
 }
 

@@ -57,7 +57,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	defer analyze(proc, arg.info.Idx)()
+	defer analyze(proc, arg.info.Idx, arg.info.ParallelIdx)()
 	if arg.ToWriteS3 {
 		return arg.insert_s3(proc)
 	}
@@ -66,7 +66,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx)
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -170,7 +170,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx)
 	anal.Start()
 	defer anal.Stop()
 
@@ -251,9 +251,9 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, resu
 	return
 }
 
-func analyze(proc *process.Process, idx int) func() {
+func analyze(proc *process.Process, idx int, parallelIdx int) func() {
 	t := time.Now()
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(idx, parallelIdx)
 	anal.Start()
 	return func() {
 		anal.Stop()

@@ -174,9 +174,10 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx     int
-	IsFirst bool
-	IsLast  bool
+	Idx         int
+	ParallelIdx int
+	IsFirst     bool
+	IsLast      bool
 }
 
 type Instructions []Instruction

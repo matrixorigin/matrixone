@@ -58,12 +58,22 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
+	var currentIDX, currentParallelIDX int
 	for i := 0; i < len(ins); i++ {
 		info := &OperatorInfo{
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
 		}
+		if i == 0 || currentIDX != info.Idx {
+			currentIDX = info.Idx
+			if currentIDX >= 0 && currentIDX < len(proc.AnalInfos) {
+				currentParallelIDX = proc.AnalInfos[currentIDX].AddNewParallel()
+			} else {
+				currentParallelIDX = -1
+			}
+		}
+		info.ParallelIdx = currentParallelIDX
 		ins[i].Arg.SetInfo(info)
 
 		if i > 0 {

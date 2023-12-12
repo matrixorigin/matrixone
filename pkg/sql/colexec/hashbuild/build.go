@@ -85,7 +85,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.Info.Idx)
+	anal := proc.GetAnalyze(arg.Info.Idx, arg.Info.ParallelIdx)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()

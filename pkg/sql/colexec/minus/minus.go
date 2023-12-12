@@ -49,7 +49,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx)
 	analyze.Start()
 	defer analyze.Stop()
 	result := vm.NewCallResult()

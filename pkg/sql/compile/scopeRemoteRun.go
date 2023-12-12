@@ -209,7 +209,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	var end bool
 	var err error
 
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {

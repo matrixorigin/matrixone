@@ -132,8 +132,7 @@ type AnalyzeInfo struct {
 	// OutputRows, number of rows output by node
 	OutputRows int64
 	// TimeConsumed, time taken by the node in milliseconds
-	TimeConsumed      int64
-	TimeConsumedArray []int64
+	TimeConsumed int64
 	// WaitTimeConsumed, time taken by the node waiting for channel in milliseconds
 	WaitTimeConsumed int64
 	// InputSize, data size accepted by node
@@ -156,6 +155,10 @@ type AnalyzeInfo struct {
 	ScanTime int64
 	// InsertTime, insert cost time in load flow
 	InsertTime int64
+
+	// time consumed by every single parallel
+	mu                sync.Mutex
+	TimeConsumedArray []int64
 }
 
 type ExecStatus int
@@ -452,11 +455,10 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 }
 
 type analyze struct {
-	start    time.Time
-	wait     time.Duration
-	dopIdx   int
-	analInfo *AnalyzeInfo
-
+	parallelIdx          int
+	start                time.Time
+	wait                 time.Duration
+	analInfo             *AnalyzeInfo
 	childrenCallDuration time.Duration
 }
 
@@ -495,6 +497,19 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+func (a *AnalyzeInfo) AddNewParallel() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TimeConsumedArray = append(a.TimeConsumedArray, 0)
+	return len(a.TimeConsumedArray) - 1
+}
+
+func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parrallelIdx int, t int64) {
+	if parrallelIdx >= 0 && parrallelIdx < len(a.TimeConsumedArray) {
+		a.TimeConsumedArray[parrallelIdx] += t
+	}
 }
 
 func (a *AnalyzeInfo) Reset() {
