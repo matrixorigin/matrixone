@@ -18,18 +18,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -822,8 +820,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
 	isConstantNull := false
-	if ef, ok := expr.Expr.(*plan.Expr_C); ok {
-		isConstantNull = ef.C.Isnull
+	if ef, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		isConstantNull = ef.Lit.Isnull
 	}
 	if !isConstantNull {
 		return nil

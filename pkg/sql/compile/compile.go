@@ -3491,7 +3491,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					if _, ok := args.Expr.(*plan.Expr_C); ok {
+					if _, ok := args.Expr.(*plan.Expr_Lit); ok {
 						if agg.F.Func.ObjName == "count" {
 							agg.F.Func.ObjName = "starcount"
 							continue

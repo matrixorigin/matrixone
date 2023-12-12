@@ -18,11 +18,10 @@ import (
 	"context"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -48,7 +47,7 @@ type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
 type Stats = plan.Stats
-type Const = plan.Const
+type Const = plan.Literal
 type MaxValue = plan.MaxValue
 type Expr = plan.Expr
 type Node = plan.Node
