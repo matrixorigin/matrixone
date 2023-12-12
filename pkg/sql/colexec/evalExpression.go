@@ -194,10 +194,12 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				}
 			}
 
-			firstParam := executor.parameterResults[0]
 			execLen := 1
-			if !firstParam.IsConst() {
-				execLen = firstParam.Length()
+			if len(executor.parameterResults) > 0 {
+				firstParam := executor.parameterResults[0]
+				if !firstParam.IsConst() {
+					execLen = firstParam.Length()
+				}
 			}
 
 			if err = executor.resultVector.PreExtendAndReset(execLen); err != nil {
@@ -214,7 +216,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 					m: mp,
 				}
 
-				if firstParam.IsConst() {
+				if execLen == 1 {
 					// ToConst just returns a new pointer to the same memory.
 					// so we need to duplicate it.
 					fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
