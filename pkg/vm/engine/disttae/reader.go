@@ -358,7 +358,7 @@ func (r *blockReader) Read(
 
 	// read the block
 	var policy fileservice.Policy
-	if r.scanType == LARGE {
+	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 	bat, err := blockio.BlockRead(
