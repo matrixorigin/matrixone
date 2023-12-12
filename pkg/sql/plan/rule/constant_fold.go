@@ -99,8 +99,9 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 
 			return &plan.Expr{
 				Typ: e.Typ,
-				Expr: &plan.Expr_Bin{
-					Bin: &plan.BinaryData{
+				Expr: &plan.Expr_Vec{
+					Vec: &plan.LiteralVec{
+						Len:  int32(vec.Length()),
 						Data: data,
 					},
 				},
@@ -132,6 +133,23 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	defer vec.Free(proc.Mp())
+
+	if !vec.IsConst() && vec.Length() > 1 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return e
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
+					Data: data,
+				},
+			},
+		}
+	}
 
 	c := GetConstantValue(vec, false, 0)
 	if c == nil {
@@ -167,9 +185,9 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	} else {
 		existRealTimeFunc := false
 		for i, expr := range ef.F.Args {
-			if ac, cok := expr.Expr.(*plan.Expr_C); cok && ac.C.Src != nil {
-				if _, pok := ac.C.Src.Expr.(*plan.Expr_V); !pok {
-					ef.F.Args[i] = ac.C.Src
+			if ac, cok := expr.Expr.(*plan.Expr_Lit); cok && ac.Lit.Src != nil {
+				if _, pok := ac.Lit.Src.Expr.(*plan.Expr_V); !pok {
+					ef.F.Args[i] = ac.Lit.Src
 					existRealTimeFunc = true
 				}
 			}
@@ -189,89 +207,89 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		}
 	}
 
-	ec := &plan.Expr_C{
-		C: c,
+	ec := &plan.Expr_Lit{
+		Lit: c,
 	}
 	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	e.Expr = ec
 	return e
 }
 
-func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const {
+func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
-		return &plan.Const{Isnull: true}
+		return &plan.Literal{Isnull: true}
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		return &plan.Const{
-			Value: &plan.Const_Bval{
+		return &plan.Literal{
+			Value: &plan.Literal_Bval{
 				Bval: vector.MustFixedCol[bool](vec)[row],
 			},
 		}
 	case types.T_int8:
-		return &plan.Const{
-			Value: &plan.Const_I8Val{
+		return &plan.Literal{
+			Value: &plan.Literal_I8Val{
 				I8Val: int32(vector.MustFixedCol[int8](vec)[row]),
 			},
 		}
 	case types.T_int16:
-		return &plan.Const{
-			Value: &plan.Const_I16Val{
+		return &plan.Literal{
+			Value: &plan.Literal_I16Val{
 				I16Val: int32(vector.MustFixedCol[int16](vec)[row]),
 			},
 		}
 	case types.T_int32:
-		return &plan.Const{
-			Value: &plan.Const_I32Val{
+		return &plan.Literal{
+			Value: &plan.Literal_I32Val{
 				I32Val: vector.MustFixedCol[int32](vec)[row],
 			},
 		}
 	case types.T_int64:
-		return &plan.Const{
-			Value: &plan.Const_I64Val{
+		return &plan.Literal{
+			Value: &plan.Literal_I64Val{
 				I64Val: vector.MustFixedCol[int64](vec)[row],
 			},
 		}
 	case types.T_uint8:
-		return &plan.Const{
-			Value: &plan.Const_U8Val{
+		return &plan.Literal{
+			Value: &plan.Literal_U8Val{
 				U8Val: uint32(vector.MustFixedCol[uint8](vec)[row]),
 			},
 		}
 	case types.T_uint16:
-		return &plan.Const{
-			Value: &plan.Const_U16Val{
+		return &plan.Literal{
+			Value: &plan.Literal_U16Val{
 				U16Val: uint32(vector.MustFixedCol[uint16](vec)[row]),
 			},
 		}
 	case types.T_uint32:
-		return &plan.Const{
-			Value: &plan.Const_U32Val{
+		return &plan.Literal{
+			Value: &plan.Literal_U32Val{
 				U32Val: vector.MustFixedCol[uint32](vec)[row],
 			},
 		}
 	case types.T_uint64:
-		return &plan.Const{
-			Value: &plan.Const_U64Val{
+		return &plan.Literal{
+			Value: &plan.Literal_U64Val{
 				U64Val: vector.MustFixedCol[uint64](vec)[row],
 			},
 		}
 	case types.T_float32:
-		return &plan.Const{
-			Value: &plan.Const_Fval{
+		return &plan.Literal{
+			Value: &plan.Literal_Fval{
 				Fval: vector.MustFixedCol[float32](vec)[row],
 			},
 		}
 	case types.T_float64:
-		return &plan.Const{
-			Value: &plan.Const_Dval{
+		return &plan.Literal{
+			Value: &plan.Literal_Dval{
 				Dval: vector.MustFixedCol[float64](vec)[row],
 			},
 		}
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
-		return &plan.Const{
-			Value: &plan.Const_Sval{
+		return &plan.Literal{
+			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
@@ -279,20 +297,20 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		if !transAll {
 			return nil
 		}
-		return &plan.Const{
-			Value: &plan.Const_Sval{
+		return &plan.Literal{
+			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(0),
 			},
 		}
 	case types.T_timestamp:
-		return &plan.Const{
-			Value: &plan.Const_Timestampval{
+		return &plan.Literal{
+			Value: &plan.Literal_Timestampval{
 				Timestampval: int64(vector.MustFixedCol[types.Timestamp](vec)[row]),
 			},
 		}
 	case types.T_date:
-		return &plan.Const{
-			Value: &plan.Const_Dateval{
+		return &plan.Literal{
+			Value: &plan.Literal_Dateval{
 				Dateval: int32(vector.MustFixedCol[types.Date](vec)[row]),
 			},
 		}
@@ -300,8 +318,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		if !transAll {
 			return nil
 		}
-		return &plan.Const{
-			Value: &plan.Const_Timeval{
+		return &plan.Literal{
+			Value: &plan.Literal_Timeval{
 				Timeval: int64(vector.MustFixedCol[types.Time](vec)[row]),
 			},
 		}
@@ -309,8 +327,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		if !transAll {
 			return nil
 		}
-		return &plan.Const{
-			Value: &plan.Const_Datetimeval{
+		return &plan.Literal{
+			Value: &plan.Literal_Datetimeval{
 				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),
 			},
 		}
@@ -318,14 +336,14 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		if !transAll {
 			return nil
 		}
-		return &plan.Const{
-			Value: &plan.Const_EnumVal{
+		return &plan.Literal{
+			Value: &plan.Literal_EnumVal{
 				EnumVal: uint32(vector.MustFixedCol[types.Enum](vec)[row]),
 			},
 		}
 	case types.T_decimal64:
-		return &plan.Const{
-			Value: &plan.Const_Decimal64Val{
+		return &plan.Literal{
+			Value: &plan.Literal_Decimal64Val{
 				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedCol[types.Decimal64](vec)[row])},
 			},
 		}
@@ -333,7 +351,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		decimalValue := &plan.Decimal128{}
 		decimalValue.A = int64(vector.MustFixedCol[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedCol[types.Decimal128](vec)[row].B64_127)
-		return &plan.Const{Value: &plan.Const_Decimal128Val{Decimal128Val: decimalValue}}
+		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
 	default:
 		return nil
 	}
@@ -341,7 +359,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	switch ef := e.Expr.(type) {
-	case *plan.Expr_C, *plan.Expr_T:
+	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
