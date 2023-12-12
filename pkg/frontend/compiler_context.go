@@ -505,6 +505,9 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
+		if val == nil {
+			return nil, err
+		}
 		return val.Value, err
 	}
 }
