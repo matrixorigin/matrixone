@@ -263,10 +263,10 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	case *plan.Expr_V:
 		return GetVarValue(rule.getContext(), rule.compCtx, rule.proc, rule.bat, e)
-	case *plan.Expr_C:
-		if exprImpl.C.Src != nil {
-			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_V); ok {
-				return GetVarValue(rule.getContext(), rule.compCtx, rule.proc, rule.bat, exprImpl.C.Src)
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Src != nil {
+			if _, ok := exprImpl.Lit.Src.Expr.(*plan.Expr_V); ok {
+				return GetVarValue(rule.getContext(), rule.compCtx, rule.proc, rule.bat, exprImpl.Lit.Src)
 			}
 		}
 		return e, nil
@@ -329,8 +329,8 @@ func GetVarValue(
 			expr = makePlan2NullConstExprWithType()
 		} else {
 			expr = &plan.Expr{
-				Expr: &plan.Expr_C{
-					C: &Const{
+				Expr: &plan.Expr_Lit{
+					Lit: &Const{
 						Isnull: true,
 					},
 				},
@@ -353,8 +353,8 @@ func GetVarValue(
 	if err != nil {
 		return nil, err
 	}
-	if c, ok := expr.Expr.(*plan.Expr_C); ok {
-		c.C.Src = e
+	if c, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		c.Lit.Src = e
 	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
 		vec, err1 := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{emptyBat})
 		if err1 != nil {
@@ -363,8 +363,8 @@ func GetVarValue(
 		constValue := rule.GetConstantValue(vec, true, 0)
 		constValue.Src = e
 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-		expr.Expr = &plan.Expr_C{
-			C: constValue,
+		expr.Expr = &plan.Expr_Lit{
+			Lit: constValue,
 		}
 		vec.Free(proc.Mp())
 	}
@@ -434,10 +434,10 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 			}
 		}
 		return e, nil
-	case *plan.Expr_C:
-		if exprImpl.C.Src != nil {
-			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_F); ok {
-				executor, err := colexec.NewExpressionExecutor(r.proc, exprImpl.C.Src)
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Src != nil {
+			if _, ok := exprImpl.Lit.Src.Expr.(*plan.Expr_F); ok {
+				executor, err := colexec.NewExpressionExecutor(r.proc, exprImpl.Lit.Src)
 				if err != nil {
 					return nil, err
 				}
@@ -446,8 +446,8 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 					return nil, err
 				}
 				constValue := rule.GetConstantValue(vec, false, 0)
-				constValue.Src = exprImpl.C.Src
-				exprImpl.C = constValue
+				constValue.Src = exprImpl.Lit.Src
+				exprImpl.Lit = constValue
 			}
 		}
 		return e, nil

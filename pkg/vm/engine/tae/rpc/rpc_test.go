@@ -21,13 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/panjf2000/ants/v2"
-
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -43,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -140,10 +139,10 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 			attrdef.Attr.Default = &plan.Default{
 				NullAbility: true,
 				Expr: &plan.Expr{
-					Expr: &plan.Expr_C{
-						C: &plan.Const{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
 							Isnull: false,
-							Value: &plan.Const_Sval{
+							Value: &plan.Literal_Sval{
 								Sval: "expr" + strconv.Itoa(i),
 							},
 						},
@@ -320,10 +319,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 			attrdef.Attr.Default = &plan.Default{
 				NullAbility: true,
 				Expr: &plan.Expr{
-					Expr: &plan.Expr_C{
-						C: &plan.Const{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
 							Isnull: false,
-							Value: &plan.Const_Sval{
+							Value: &plan.Literal_Sval{
 								Sval: "expr" + strconv.Itoa(i),
 							},
 						},
@@ -629,10 +628,10 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 			attrdef.Attr.Default = &plan.Default{
 				NullAbility: true,
 				Expr: &plan.Expr{
-					Expr: &plan.Expr_C{
-						C: &plan.Const{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
 							Isnull: false,
-							Value: &plan.Const_Sval{
+							Value: &plan.Literal_Sval{
 								Sval: "expr" + strconv.Itoa(i),
 							},
 						},
@@ -876,10 +875,10 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr1",
 					},
 				},
@@ -890,10 +889,10 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: false,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr2",
 					},
 				},
@@ -1175,10 +1174,10 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr1",
 					},
 				},
@@ -1189,10 +1188,10 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: false,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr2",
 					},
 				},
@@ -1530,10 +1529,10 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	defs[0].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: true,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr1",
 					},
 				},
@@ -1544,10 +1543,10 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	defs[1].(*engine.AttributeDef).Attr.Default = &plan.Default{
 		NullAbility: false,
 		Expr: &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Sval{
+					Value: &plan.Literal_Sval{
 						Sval: "expr2",
 					},
 				},

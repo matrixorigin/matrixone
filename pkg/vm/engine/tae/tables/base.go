@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"sync/atomic"
 
@@ -191,6 +192,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		blk.rt.Fs.Service,
 		location,
 		nil,
+		fileservice.Policy(0),
 	)
 	if err != nil {
 		return

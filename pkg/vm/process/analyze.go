@@ -48,7 +48,7 @@ func (a *analyze) Start() {
 func (a *analyze) Stop() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
-		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait)/time.Nanosecond))
+		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait-a.childrenCallDuration)/time.Nanosecond))
 	}
 }
 
@@ -74,6 +74,10 @@ func (a *analyze) Output(bat *batch.Batch, isLast bool) {
 
 func (a *analyze) WaitStop(start time.Time) {
 	a.wait += time.Since(start)
+}
+
+func (a *analyze) ChildrenCallStop(start time.Time) {
+	a.childrenCallDuration += time.Since(start)
 }
 
 func (a *analyze) DiskIO(bat *batch.Batch) {

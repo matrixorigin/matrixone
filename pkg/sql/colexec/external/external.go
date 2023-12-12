@@ -15,7 +15,6 @@
 package external
 
 import (
-	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -119,7 +118,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		Name2ColIndex: name2ColIndex,
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.exprMono = plan2.CheckExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
@@ -134,7 +133,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 		anal.AddScanTime(t1)
 		span.End()
-		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 
@@ -323,6 +322,9 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	if param.Extern.Parallel {
 		vec.Entries[0].Offset = param.FileOffset[0]
 		vec.Entries[0].Size = param.FileOffset[1] - param.FileOffset[0]
+		if vec.Entries[0].Size < 0 {
+			vec.Entries[0].Size = -1
+		}
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
@@ -341,28 +343,45 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 	if err != nil {
 		return nil, err
 	}
-	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
+				Offset: 0,
+				Size:   BufferSize,
+				Data:   make([]byte, BufferSize),
 			},
 		},
 	}
 	var tailSize []int64
 	var offset []int64
 	for i := 0; i < mcpu; i++ {
-		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
-		if err = fs.Read(param.Ctx, &vec); err != nil {
-			return nil, err
+		off := int64(i) * (fileSize / int64(mcpu))
+		vec.Entries[0].Offset = off
+		for length := 0; ; {
+			if vec.Entries[0].Offset >= fileSize {
+				return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
+			}
+			vec.Entries[0].Data = vec.Entries[0].Data[:BufferSize]
+			if err = fs.Read(param.Ctx, &vec); len(vec.Entries[0].Data) == 0 && err != nil {
+				if err == io.EOF {
+					return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
+				}
+				return nil, err
+			}
+			idx := bytes.IndexByte(vec.Entries[0].Data, '\n')
+			if idx == -1 {
+				length += len(vec.Entries[0].Data)
+				vec.Entries[0].Offset += int64(len(vec.Entries[0].Data))
+				if err = fs.Read(param.Ctx, &vec); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			tailSize = append(tailSize, int64(length+idx))
+			offset = append(offset, off)
+			break
 		}
-		r2 := bufio.NewReader(r)
-		line, _ := r2.ReadString('\n')
-		tailSize = append(tailSize, int64(len(line)))
-		offset = append(offset, vec.Entries[0].Offset)
 	}
 
 	start := int64(0)
@@ -692,7 +711,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+	if isMonoExpr := plan2.CheckExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
 		cnt := plan2.AssignAuxIdForExpr(expr, 0)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
