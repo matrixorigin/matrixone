@@ -134,7 +134,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 		anal.AddScanTime(t1)
 		span.End()
-		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 

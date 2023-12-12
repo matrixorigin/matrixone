@@ -1624,7 +1624,14 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+	start := time.Now()
+	defer func() {
+		if t := time.Since(start); t > time.Second {
+			logutil.Infof("compileExternScan cost %v", t)
+		}
+	}()
 
+	t := time.Now()
 	// lock table's meta
 	if n.ObjRef != nil && n.TableDef != nil {
 		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
@@ -1646,6 +1653,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err != nil {
 			return nil, err
 		}
+	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
 
 	ID2Addr := make(map[int]int, 0)
@@ -1698,6 +1708,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	t = time.Now()
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var err error
@@ -1728,6 +1739,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("read dir cost %v", time.Since(t))
+	}
 
 	if len(fileList) == 0 {
 		ret := &Scope{
@@ -1742,6 +1756,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return c.compileExternScanParallel(n, param, fileList, fileSize)
 	}
 
+	t = time.Now()
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
@@ -1752,6 +1767,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				return nil, err
 			}
 		}
+	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("read file offset cost %v", time.Since(t))
+
 	}
 	ss := make([]*Scope, 1)
 	if param.Parallel {
