@@ -85,6 +85,7 @@ func NewService(
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
 		cfg:         cfg,
+		logger:      logutil.GetGlobalLogger().Named("cn-service"),
 		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
@@ -98,10 +99,6 @@ func NewService(
 	}
 	srv.initQueryService()
 
-	for _, opt := range options {
-		opt(srv)
-	}
-	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initCacheServer(); err != nil {
