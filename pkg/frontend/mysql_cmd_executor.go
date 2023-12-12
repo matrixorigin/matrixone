@@ -371,6 +371,19 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 		}
 		stm.Report(ctx)
 	}
+	// set frontend statement's txn-id
+	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+			_, txn, err = handler.GetTxn()
+			if err != nil {
+				logError(ses, ses.GetDebugString(),
+					"Failed to record statement transaction ID",
+					zap.Error(err))
+			} else {
+				upSes.tStmt.SetTxnID(txn.Txn().ID)
+			}
+		}
+	}
 }
 
 func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
