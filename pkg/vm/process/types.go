@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -513,7 +512,8 @@ func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
 	if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArray) {
 		a.TimeConsumedArray[parallelIdx] += t
 		if a.TimeConsumedArray[parallelIdx] < 0 {
-			logutil.Infof("!!!!!!!! wrong")
+			a.TimeConsumedArray[parallelIdx] = -1
+			//logutil.Infof("!!!!!!!! wrong")
 		}
 	}
 }

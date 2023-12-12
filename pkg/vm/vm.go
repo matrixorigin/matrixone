@@ -60,36 +60,19 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
-	var buf bytes.Buffer
-	String(ins, &buf)
-	logutil.Infof("pipeline: %v", buf.String())
-
-	isOutputPipeline := false
-	for i := 0; i < len(ins); i++ {
-		if ins[i].Op == Output {
-			ins[i].Idx = -1 //useless
-			isOutputPipeline = true
-		}
-	}
-
 	idxMap := make(map[int]int, 0)
 	for i := 0; i < len(ins); i++ {
-		if ins[i].Op == Output {
-			ins[i].Idx = -1 //useless
-		}
-
 		info := &OperatorInfo{
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
 		}
-
 		switch ins[i].Op {
-		case Output, Merge, Connector:
+		case Output, Merge, Connector, Dispatch:
 			info.ParallelIdx = -1
 			// do nothing for parallel analyze info
 		default:
-			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) && !isOutputPipeline {
+			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
 				if pidx, ok := idxMap[info.Idx]; ok {
 					info.ParallelIdx = pidx
 				} else {
@@ -99,9 +82,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 				}
 			}
 		}
-
 		ins[i].Arg.SetInfo(info)
-
 		if i > 0 {
 			ins[i].Arg.AppendChild(ins[i-1].Arg)
 		}
