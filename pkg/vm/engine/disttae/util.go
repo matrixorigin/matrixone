@@ -22,10 +22,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -41,7 +38,9 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -100,7 +99,7 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
-func getValidCompositePKCnt(vals []*plan.Const) int {
+func getValidCompositePKCnt(vals []*plan.Literal) int {
 	if len(vals) == 0 {
 		return 0
 	}
@@ -118,7 +117,7 @@ func getValidCompositePKCnt(vals []*plan.Const) int {
 func getCompositPKVals(
 	expr *plan.Expr,
 	pks []string,
-	vals []*plan.Const,
+	vals []*plan.Literal,
 	proc *process.Process,
 ) (ok bool, hasNull bool) {
 	switch exprImpl := expr.Expr.(type) {
@@ -189,8 +188,8 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr
 				}
 				return &plan.Expr{
 					Typ: plan2.DeepCopyType(exprImpl.F.Args[1].Typ),
-					Expr: &plan.Expr_C{
-						C: constVal,
+					Expr: &plan.Expr_Lit{
+						Lit: constVal,
 					},
 				}
 			}
@@ -204,8 +203,8 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr
 				}
 				return &plan.Expr{
 					Typ: plan2.DeepCopyType(exprImpl.F.Args[0].Typ),
-					Expr: &plan.Expr_C{
-						C: constVal,
+					Expr: &plan.Expr_Lit{
+						Lit: constVal,
 					},
 				}
 			}
@@ -235,56 +234,56 @@ func getNonCompositePKSearchFuncByExpr(
 	var searchPKFunc func(*vector.Vector) []int32
 
 	switch exprImpl := valExpr.Expr.(type) {
-	case *plan.Expr_C:
-		if exprImpl.C.Isnull {
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Isnull {
 			return false, true, nil
 		}
 
-		switch val := exprImpl.C.Value.(type) {
-		case *plan.Const_I8Val:
+		switch val := exprImpl.Lit.Value.(type) {
+		case *plan.Literal_I8Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]int8{int8(val.I8Val)})
-		case *plan.Const_I16Val:
+		case *plan.Literal_I16Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]int16{int16(val.I16Val)})
-		case *plan.Const_I32Val:
+		case *plan.Literal_I32Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]int32{int32(val.I32Val)})
-		case *plan.Const_I64Val:
+		case *plan.Literal_I64Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]int64{val.I64Val})
-		case *plan.Const_Fval:
+		case *plan.Literal_Fval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]float32{val.Fval})
-		case *plan.Const_Dval:
+		case *plan.Literal_Dval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]float64{val.Dval})
-		case *plan.Const_U8Val:
+		case *plan.Literal_U8Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint8{uint8(val.U8Val)})
-		case *plan.Const_U16Val:
+		case *plan.Literal_U16Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint16{uint16(val.U16Val)})
-		case *plan.Const_U32Val:
+		case *plan.Literal_U32Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint32{uint32(val.U32Val)})
-		case *plan.Const_U64Val:
+		case *plan.Literal_U64Val:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint64{val.U64Val})
-		case *plan.Const_Dateval:
+		case *plan.Literal_Dateval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Date{types.Date(val.Dateval)})
-		case *plan.Const_Timeval:
+		case *plan.Literal_Timeval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Time{types.Time(val.Timeval)})
-		case *plan.Const_Datetimeval:
+		case *plan.Literal_Datetimeval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Datetime{types.Datetime(val.Datetimeval)})
-		case *plan.Const_Timestampval:
+		case *plan.Literal_Timestampval:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Timestamp{types.Timestamp(val.Timestampval)})
-		case *plan.Const_Decimal64Val:
+		case *plan.Literal_Decimal64Val:
 			searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal64{types.Decimal64(val.Decimal64Val.A)}, types.CompareDecimal64)
-		case *plan.Const_Decimal128Val:
+		case *plan.Literal_Decimal128Val:
 			v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
 			searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal128{v}, types.CompareDecimal128)
-		case *plan.Const_Sval:
+		case *plan.Literal_Sval:
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Sval)})
-		case *plan.Const_Jsonval:
+		case *plan.Literal_Jsonval:
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Jsonval)})
-		case *plan.Const_EnumVal:
+		case *plan.Literal_EnumVal:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
 		}
 
-	case *plan.Expr_Bin:
+	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(exprImpl.Bin.Data)
+		vec.UnmarshalBinary(exprImpl.Vec.Data)
 
 		switch vec.GetType().Oid {
 		case types.T_int8:
@@ -348,54 +347,54 @@ func getPkValueByExpr(
 	}
 
 	switch exprImpl := valExpr.Expr.(type) {
-	case *plan.Expr_C:
-		if exprImpl.C.Isnull {
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Isnull {
 			return false, true, nil
 		}
-		switch val := exprImpl.C.Value.(type) {
-		case *plan.Const_I8Val:
+		switch val := exprImpl.Lit.Value.(type) {
+		case *plan.Literal_I8Val:
 			return transferIval(val.I8Val, oid)
-		case *plan.Const_I16Val:
+		case *plan.Literal_I16Val:
 			return transferIval(val.I16Val, oid)
-		case *plan.Const_I32Val:
+		case *plan.Literal_I32Val:
 			return transferIval(val.I32Val, oid)
-		case *plan.Const_I64Val:
+		case *plan.Literal_I64Val:
 			return transferIval(val.I64Val, oid)
-		case *plan.Const_Dval:
+		case *plan.Literal_Dval:
 			return transferDval(val.Dval, oid)
-		case *plan.Const_Sval:
+		case *plan.Literal_Sval:
 			return transferSval(val.Sval, oid)
-		case *plan.Const_Bval:
+		case *plan.Literal_Bval:
 			return transferBval(val.Bval, oid)
-		case *plan.Const_U8Val:
+		case *plan.Literal_U8Val:
 			return transferUval(val.U8Val, oid)
-		case *plan.Const_U16Val:
+		case *plan.Literal_U16Val:
 			return transferUval(val.U16Val, oid)
-		case *plan.Const_U32Val:
+		case *plan.Literal_U32Val:
 			return transferUval(val.U32Val, oid)
-		case *plan.Const_U64Val:
+		case *plan.Literal_U64Val:
 			return transferUval(val.U64Val, oid)
-		case *plan.Const_Fval:
+		case *plan.Literal_Fval:
 			return transferFval(val.Fval, oid)
-		case *plan.Const_Dateval:
+		case *plan.Literal_Dateval:
 			return transferDateval(val.Dateval, oid)
-		case *plan.Const_Timeval:
+		case *plan.Literal_Timeval:
 			return transferTimeval(val.Timeval, oid)
-		case *plan.Const_Datetimeval:
+		case *plan.Literal_Datetimeval:
 			return transferDatetimeval(val.Datetimeval, oid)
-		case *plan.Const_Decimal64Val:
+		case *plan.Literal_Decimal64Val:
 			return transferDecimal64val(val.Decimal64Val.A, oid)
-		case *plan.Const_Decimal128Val:
+		case *plan.Literal_Decimal128Val:
 			return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
-		case *plan.Const_Timestampval:
+		case *plan.Literal_Timestampval:
 			return transferTimestampval(val.Timestampval, oid)
-		case *plan.Const_Jsonval:
+		case *plan.Literal_Jsonval:
 			return transferSval(val.Jsonval, oid)
-		case *plan.Const_EnumVal:
+		case *plan.Literal_EnumVal:
 			return transferUval(val.EnumVal, oid)
 		}
 
-	case *plan.Expr_Bin:
+	case *plan.Expr_Vec:
 	}
 
 	return false, false, nil
@@ -429,23 +428,23 @@ func computeRangeByIntPk(expr *plan.Expr, pkName string, parentFun string) (bool
 	var leftConstant, rightConstat int64
 	var ok bool
 
-	getConstant := func(e *plan.Expr_C) (bool, int64) {
-		switch val := e.C.Value.(type) {
-		case *plan.Const_I8Val:
+	getConstant := func(e *plan.Expr_Lit) (bool, int64) {
+		switch val := e.Lit.Value.(type) {
+		case *plan.Literal_I8Val:
 			return true, int64(val.I8Val)
-		case *plan.Const_I16Val:
+		case *plan.Literal_I16Val:
 			return true, int64(val.I16Val)
-		case *plan.Const_I32Val:
+		case *plan.Literal_I32Val:
 			return true, int64(val.I32Val)
-		case *plan.Const_I64Val:
+		case *plan.Literal_I64Val:
 			return true, val.I64Val
-		case *plan.Const_U8Val:
+		case *plan.Literal_U8Val:
 			return true, int64(val.U8Val)
-		case *plan.Const_U16Val:
+		case *plan.Literal_U16Val:
 			return true, int64(val.U16Val)
-		case *plan.Const_U32Val:
+		case *plan.Literal_U32Val:
 			return true, int64(val.U32Val)
-		case *plan.Const_U64Val:
+		case *plan.Literal_U64Val:
 			if val.U64Val > uint64(math.MaxInt64) {
 				return false, 0
 			}
@@ -477,7 +476,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkName string, parentFun string) (bool
 
 		case ">", "<", ">=", "<=", "=":
 			switch subExpr := exprImpl.F.Args[0].Expr.(type) {
-			case *plan.Expr_C:
+			case *plan.Expr_Lit:
 				ok, leftConstant = getConstant(subExpr)
 				if !ok {
 					return false, nil
@@ -502,7 +501,7 @@ func computeRangeByIntPk(expr *plan.Expr, pkName string, parentFun string) (bool
 			}
 
 			switch subExpr := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
+			case *plan.Expr_Lit:
 				if leftArg == typeColumn {
 					ok, rightConstat = getConstant(subExpr)
 					if !ok {
@@ -1052,104 +1051,104 @@ func EvalSelectedOnVarlenColumnFactory(
 // it evaluates the filter expression only on the selected rows and returns the selected rows
 // which are evaluated to true
 func getCompositeFilterFuncByExpr(
-	expr *plan.Const, isSorted bool,
+	expr *plan.Literal, isSorted bool,
 ) func(*vector.Vector, []int32, *[]int32) {
 	switch val := expr.Value.(type) {
-	case *plan.Const_Bval:
+	case *plan.Literal_Bval:
 		return EvalSelectedOnFixedSizeColumnFactory(val.Bval)
-	case *plan.Const_I8Val:
+	case *plan.Literal_I8Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(int8(val.I8Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(int8(val.I8Val))
-	case *plan.Const_I16Val:
+	case *plan.Literal_I16Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(int16(val.I16Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(int16(val.I16Val))
-	case *plan.Const_I32Val:
+	case *plan.Literal_I32Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(int32(val.I32Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(int32(val.I32Val))
-	case *plan.Const_I64Val:
+	case *plan.Literal_I64Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(int64(val.I64Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(int64(val.I64Val))
-	case *plan.Const_U8Val:
+	case *plan.Literal_U8Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(uint8(val.U8Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(uint8(val.U8Val))
-	case *plan.Const_U16Val:
+	case *plan.Literal_U16Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(uint16(val.U16Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(uint16(val.U16Val))
-	case *plan.Const_U32Val:
+	case *plan.Literal_U32Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(uint32(val.U32Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(uint32(val.U32Val))
-	case *plan.Const_U64Val:
+	case *plan.Literal_U64Val:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(uint64(val.U64Val))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(uint64(val.U64Val))
-	case *plan.Const_Fval:
+	case *plan.Literal_Fval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(float32(val.Fval))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(float32(val.Fval))
-	case *plan.Const_Dval:
+	case *plan.Literal_Dval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(val.Dval)
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(val.Dval)
-	case *plan.Const_Timeval:
+	case *plan.Literal_Timeval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(types.Time(val.Timeval))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(types.Time(val.Timeval))
-	case *plan.Const_Timestampval:
+	case *plan.Literal_Timestampval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(types.Timestamp(val.Timestampval))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(types.Timestamp(val.Timestampval))
-	case *plan.Const_Dateval:
+	case *plan.Literal_Dateval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(types.Date(val.Dateval))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(types.Date(val.Dateval))
-	case *plan.Const_Datetimeval:
+	case *plan.Literal_Datetimeval:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(types.Datetime(val.Datetimeval))
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(types.Datetime(val.Datetimeval))
-	case *plan.Const_Decimal64Val:
+	case *plan.Literal_Decimal64Val:
 		v := types.Decimal64(val.Decimal64Val.A)
 		if isSorted {
 			return EvalSelectedOnFixedSizeSortedColumnFactory(v, types.CompareDecimal64)
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(v)
-	case *plan.Const_Decimal128Val:
+	case *plan.Literal_Decimal128Val:
 		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
 		if isSorted {
 			return EvalSelectedOnFixedSizeSortedColumnFactory(v, types.CompareDecimal128)
 		}
 		return EvalSelectedOnFixedSizeColumnFactory(v)
-	case *plan.Const_Sval:
+	case *plan.Literal_Sval:
 		if isSorted {
 			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Sval))
 		}
 		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Sval))
-	case *plan.Const_Jsonval:
+	case *plan.Literal_Jsonval:
 		if isSorted {
 			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
 		}
 		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
-	case *plan.Const_EnumVal:
+	case *plan.Literal_EnumVal:
 		if isSorted {
 			return EvalSelectedOnOrderedSortedColumnFactory(val.EnumVal)
 		}
@@ -1159,47 +1158,47 @@ func getCompositeFilterFuncByExpr(
 	}
 }
 
-func serialTupleByConstExpr(expr *plan.Const, packer *types.Packer) {
+func serialTupleByConstExpr(expr *plan.Literal, packer *types.Packer) {
 	switch val := expr.Value.(type) {
-	case *plan.Const_Bval:
+	case *plan.Literal_Bval:
 		packer.EncodeBool(val.Bval)
-	case *plan.Const_I8Val:
+	case *plan.Literal_I8Val:
 		packer.EncodeInt8(int8(val.I8Val))
-	case *plan.Const_I16Val:
+	case *plan.Literal_I16Val:
 		packer.EncodeInt16(int16(val.I16Val))
-	case *plan.Const_I32Val:
+	case *plan.Literal_I32Val:
 		packer.EncodeInt32(val.I32Val)
-	case *plan.Const_I64Val:
+	case *plan.Literal_I64Val:
 		packer.EncodeInt64(val.I64Val)
-	case *plan.Const_U8Val:
+	case *plan.Literal_U8Val:
 		packer.EncodeUint8(uint8(val.U8Val))
-	case *plan.Const_U16Val:
+	case *plan.Literal_U16Val:
 		packer.EncodeUint16(uint16(val.U16Val))
-	case *plan.Const_U32Val:
+	case *plan.Literal_U32Val:
 		packer.EncodeUint32(val.U32Val)
-	case *plan.Const_U64Val:
+	case *plan.Literal_U64Val:
 		packer.EncodeUint64(val.U64Val)
-	case *plan.Const_Fval:
+	case *plan.Literal_Fval:
 		packer.EncodeFloat32(val.Fval)
-	case *plan.Const_Dval:
+	case *plan.Literal_Dval:
 		packer.EncodeFloat64(val.Dval)
-	case *plan.Const_Timeval:
+	case *plan.Literal_Timeval:
 		packer.EncodeTime(types.Time(val.Timeval))
-	case *plan.Const_Timestampval:
+	case *plan.Literal_Timestampval:
 		packer.EncodeTimestamp(types.Timestamp(val.Timestampval))
-	case *plan.Const_Dateval:
+	case *plan.Literal_Dateval:
 		packer.EncodeDate(types.Date(val.Dateval))
-	case *plan.Const_Datetimeval:
+	case *plan.Literal_Datetimeval:
 		packer.EncodeDatetime(types.Datetime(val.Datetimeval))
-	case *plan.Const_Decimal64Val:
+	case *plan.Literal_Decimal64Val:
 		packer.EncodeDecimal64(types.Decimal64(val.Decimal64Val.A))
-	case *plan.Const_Decimal128Val:
+	case *plan.Literal_Decimal128Val:
 		packer.EncodeDecimal128(types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)})
-	case *plan.Const_Sval:
+	case *plan.Literal_Sval:
 		packer.EncodeStringType(util.UnsafeStringToBytes(val.Sval))
-	case *plan.Const_Jsonval:
+	case *plan.Literal_Jsonval:
 		packer.EncodeStringType(util.UnsafeStringToBytes(val.Jsonval))
-	case *plan.Const_EnumVal:
+	case *plan.Literal_EnumVal:
 		packer.EncodeEnum(types.Enum(val.EnumVal))
 	default:
 		panic(fmt.Sprintf("unexpected const expr %v", expr))
@@ -1207,7 +1206,7 @@ func serialTupleByConstExpr(expr *plan.Const, packer *types.Packer) {
 }
 
 func getConstValueByExpr(expr *plan.Expr,
-	proc *process.Process) *plan.Const {
+	proc *process.Process) *plan.Literal {
 	exec, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
 		return nil
@@ -1220,10 +1219,10 @@ func getConstValueByExpr(expr *plan.Expr,
 	return rule.GetConstantValue(vec, true, 0)
 }
 
-func getConstExpr(oid int32, c *plan.Const) *plan.Expr {
+func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 	return &plan.Expr{
 		Typ:  &plan.Type{Id: oid},
-		Expr: &plan.Expr_C{C: c},
+		Expr: &plan.Expr_Lit{Lit: c},
 	}
 }
 
@@ -1237,9 +1236,9 @@ func extractCompositePKValueFromEqualExprs(
 	put := pool.Get(&packer)
 	defer put.Put()
 
-	vals := make([]*plan.Const, len(pkDef.Names))
+	vals := make([]*plan.Literal, len(pkDef.Names))
 	for _, expr := range exprs {
-		tmpVals := make([]*plan.Const, len(pkDef.Names))
+		tmpVals := make([]*plan.Literal, len(pkDef.Names))
 		if _, hasNull := getCompositPKVals(
 			expr, pkDef.Names, tmpVals, proc,
 		); hasNull {
