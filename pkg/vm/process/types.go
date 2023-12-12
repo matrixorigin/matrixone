@@ -506,15 +506,19 @@ func (a *AnalyzeInfo) AddNewParallel() int {
 	return len(a.TimeConsumedArray) - 1
 }
 
+func (a *AnalyzeInfo) DeepCopyArray() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := make([]int64, 0, len(a.TimeConsumedArray))
+	result = append(result, a.TimeConsumedArray...)
+	return result
+}
+
 func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArray) {
 		a.TimeConsumedArray[parallelIdx] += t
-		if a.TimeConsumedArray[parallelIdx] < 0 {
-			a.TimeConsumedArray[parallelIdx] = -1
-			//logutil.Infof("!!!!!!!! wrong")
-		}
 	}
 }
 

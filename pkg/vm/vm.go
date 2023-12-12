@@ -60,6 +60,10 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
+	var buf bytes.Buffer
+	String(ins, &buf)
+	logutil.Infof("pipeline: %v", buf.String())
+
 	idxMap := make(map[int]int, 0)
 	for i := 0; i < len(ins); i++ {
 		info := &OperatorInfo{
@@ -68,7 +72,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			IsLast:  ins[i].IsLast,
 		}
 		switch ins[i].Op {
-		case Output, Merge, Connector, Dispatch:
+		case Output, Merge, Connector, Dispatch, MergeBlock, MergeGroup, MergeCTE, MergeDelete, MergeLimit, MergeOffset, MergeOrder, MergeRecursive, MergeTop:
 			info.ParallelIdx = -1
 			// do nothing for parallel analyze info
 		default:

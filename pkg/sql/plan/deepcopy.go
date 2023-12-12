@@ -1066,6 +1066,9 @@ func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
 }
 
 func DeepCopySliceInt64(s []int64) []int64 {
+	if s == nil {
+		return nil
+	}
 	result := make([]int64, 0, len(s))
 	result = append(result, s...)
 	return result
