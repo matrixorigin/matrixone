@@ -119,7 +119,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		Name2ColIndex: name2ColIndex,
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.exprMono = plan2.CheckExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
@@ -134,7 +134,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 		anal.AddScanTime(t1)
 		span.End()
-		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 
@@ -692,7 +692,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+	if isMonoExpr := plan2.CheckExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
 		cnt := plan2.AssignAuxIdForExpr(expr, 0)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
