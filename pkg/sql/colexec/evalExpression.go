@@ -149,7 +149,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_Vec:
-		vec := proc.GetVector(types.T_any.ToType())
+		vec := vector.NewVec(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
 			return nil, err
