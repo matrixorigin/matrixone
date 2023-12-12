@@ -6364,6 +6364,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
+	ses.tStmt.SkipTxnOnce = true
 	defer bh.Close()
 
 	//the set of roles the (k+1) th iteration during the execution

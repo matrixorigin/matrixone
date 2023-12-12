@@ -229,6 +229,9 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+
+	// SkipTxnOnce, only for flow control
+	SkipTxnOnce bool
 }
 
 type Key struct {
