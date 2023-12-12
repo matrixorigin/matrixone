@@ -45,10 +45,12 @@ type container struct {
 }
 
 type Argument struct {
-	ctr    *container
-	Result []int32
-	Cond   *plan.Expr
-	Typs   []types.Type
+	ctr     *container
+	Result  []int32
+	Cond    *plan.Expr
+	Typs    []types.Type
+	bat     *batch.Batch
+	lastrow int
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
