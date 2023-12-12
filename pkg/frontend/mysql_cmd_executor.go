@@ -359,18 +359,26 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 		}
 		stm.Report(ctx)
 	}
+
 	// set frontend statement's txn-id
-	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() {
-		if upSes.tStmt.SkipTxnOnce {
-			upSes.tStmt.SkipTxnOnce = false
-		} else if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() /* not record txn-id */ {
+		// background session has valid txn
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			_, txn, err = handler.GetTxn()
 			if err != nil {
 				logError(ses, ses.GetDebugString(),
 					"Failed to record statement transaction ID",
 					zap.Error(err))
 			} else {
-				upSes.tStmt.SetTxnID(txn.Txn().ID)
+				// set upstream (the frontend session) statement's txn-id
+				// PS: only skip ONE txn
+				if stmt := upSes.tStmt; stmt.NeedSkipTxn() /* normally set by determineUserHasPrivilegeSet */ {
+					// need to skip the whole txn, so it records the skipped txn-id
+					stmt.SetSkipTxn(false)
+					stmt.SetSkipTxnId(txn.Txn().ID)
+				} else if txnId := txn.Txn().ID; !stmt.SkipTxnId(txnId) {
+					upSes.tStmt.SetTxnID(txnId)
+				}
 			}
 		}
 	}
