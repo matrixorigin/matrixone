@@ -15,7 +15,6 @@
 package external
 
 import (
-	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -342,27 +341,47 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 		return nil, err
 	}
 	var r io.ReadCloser
+
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
-				Size:              -1,
+				Size:              BufferSize,
 				ReadCloserForRead: &r,
 			},
 		},
 	}
 	var tailSize []int64
 	var offset []int64
+	buf := make([]byte, BufferSize)
 	for i := 0; i < mcpu; i++ {
 		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
 		if err = fs.Read(param.Ctx, &vec); err != nil {
 			return nil, err
 		}
-		r2 := bufio.NewReader(r)
-		line, _ := r2.ReadString('\n')
-		tailSize = append(tailSize, int64(len(line)))
-		offset = append(offset, vec.Entries[0].Offset)
+		for len := 0; ; {
+			if vec.Entries[0].Offset >= fileSize {
+				return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
+			}
+			n, err := r.Read(buf)
+			if err != nil {
+				r.Close()
+				if err == io.EOF {
+					return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
+				}
+				return nil, err
+			}
+			idx := bytes.IndexByte(buf[len:n], '\n')
+			if idx == -1 {
+				len += n
+				continue
+			}
+			tailSize = append(tailSize, int64(len+idx))
+			offset = append(offset, vec.Entries[0].Offset)
+			break
+		}
+		r.Close()
 	}
 
 	start := int64(0)
