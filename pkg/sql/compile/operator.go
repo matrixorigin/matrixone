@@ -974,23 +974,23 @@ func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Proces
 	}
 
 	var err error
-	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 	itr := &timewin.Interval{}
 	itr.Typ, err = types.IntervalTypeOf(str)
 	if err != nil {
 		panic(err)
 	}
-	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
+	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 
 	var sld *timewin.Interval
 	if n.Sliding != nil {
 		sld = &timewin.Interval{}
-		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 		sld.Typ, err = types.IntervalTypeOf(str)
 		if err != nil {
 			panic(err)
 		}
-		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
+		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 	}
 
 	return &timewin.Argument{
@@ -1785,8 +1785,8 @@ func constructJoinConditions(exprs []*plan.Expr, proc *process.Process) [][]*pla
 }
 
 func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
-	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
-		b, ok := e.C.Value.(*plan.Const_Bval)
+	if e, ok := expr.Expr.(*plan.Expr_Lit); ok { // constant bool
+		b, ok := e.Lit.Value.(*plan.Literal_Bval)
 		if !ok {
 			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 		}
@@ -1795,9 +1795,9 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 		return expr, &plan.Expr{
 			Typ: expr.Typ,
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Value: &plan.Const_Bval{Bval: true},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Bval{Bval: true},
 				},
 			},
 		}

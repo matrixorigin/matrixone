@@ -23,9 +23,9 @@ import (
 
 var (
 	constTrue = &plan.Expr{
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Bval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{
 					Bval: true,
 				},
 			},
@@ -37,9 +37,9 @@ var (
 	}
 
 	constFalse = &plan.Expr{
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Bval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{
 					Bval: false,
 				},
 			},

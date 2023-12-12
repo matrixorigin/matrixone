@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"strings"
 
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -1093,10 +1092,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			NotNull: true,
 			Default: &plan.Default{
 				Expr: &Expr{
-					Expr: &plan.Expr_C{
-						C: &Const{
+					Expr: &plan.Expr_Lit{
+						Lit: &Const{
 							Isnull: false,
-							Value:  &plan.Const_U32Val{U32Val: catalog.System_Account},
+							Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
 						},
 					},
 					Typ: &plan.Type{
