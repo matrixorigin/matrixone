@@ -363,7 +363,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 				return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
 			}
 			vec.Entries[0].Data = vec.Entries[0].Data[:BufferSize]
-			if err = fs.Read(param.Ctx, &vec); err != nil {
+			if err = fs.Read(param.Ctx, &vec); len(vec.Entries[0].Data) == 0 && err != nil {
 				if err == io.EOF {
 					return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
 				}
