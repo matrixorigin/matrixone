@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
@@ -146,11 +145,6 @@ func (km *ElkanClusterer) InitCentroids() error {
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
 	case kmeans.KmeansPlusPlus:
-		expectedVectorCnt := int(catalog.CalcSampleCount(int64(km.clusterCnt), int64(km.vectorCnt)))
-		if km.vectorCnt > expectedVectorCnt {
-			return moerr.NewInternalErrorNoCtx("kmeans++ is not supported for large scale clustering. "+
-				"Sample it to %d vectors and try again", expectedVectorCnt)
-		}
 		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	default:
 		initializer = NewRandomInitializer()

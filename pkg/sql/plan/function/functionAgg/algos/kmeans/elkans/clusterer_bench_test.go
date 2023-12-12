@@ -30,8 +30,8 @@ cpu: Apple M2 Pro
 row count: 10_000
 dims: 1024
 k: 10
-Benchmark_kmeans/Spherical_Elkan_Random-10         	1000000000	         0.8017 ns/op
-Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       	 1		 1901432791 ns/op
+Benchmark_kmeans/Spherical_Elkan_Random-10         	1000000000	         0.8271 ns/op
+Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       	 1		 1913628958 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
@@ -59,18 +59,18 @@ func Benchmark_kmeans(b *testing.B) {
 
 	})
 
-	// Will not work for large datasets without sampling
-	//b.Run("Spherical_Elkan_Kmeans++", func(b *testing.B) {
-	//	b.ResetTimer()
-	//	kmeansPlusPlus, _ := NewKMeans(data, k,
-	//		500, 0.01,
-	//		kmeans.L2Distance, kmeans.KmeansPlusPlus)
-	//	_, err := kmeansPlusPlus.Cluster()
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//	b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
-	//})
+	//Will not work for large datasets without sampling
+	b.Run("Spherical_Elkan_Kmeans++", func(b *testing.B) {
+		b.ResetTimer()
+		kmeansPlusPlus, _ := NewKMeans(data, k,
+			500, 0.01,
+			kmeans.L2Distance, kmeans.KmeansPlusPlus)
+		_, err := kmeansPlusPlus.Cluster()
+		if err != nil {
+			panic(err)
+		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
+	})
 
 }
 
