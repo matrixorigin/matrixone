@@ -3603,3 +3603,8 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 	}
 	return svbt.IsTrue(newValue), nil
 }
+
+type UserDefinedVar struct {
+	Value interface{}
+	Sql   string
+}
