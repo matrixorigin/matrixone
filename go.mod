@@ -21,6 +21,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.2.0
 	github.com/docker/go-units v0.5.0
+	github.com/dolthub/maphash v0.1.0
 	github.com/elastic/gosigar v0.14.2
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
