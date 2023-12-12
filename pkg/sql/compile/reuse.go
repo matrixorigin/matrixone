@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,7 @@ func init() {
 			return &Compile{
 				affectRows: &atomic.Uint64{},
 				lock:       &sync.RWMutex{},
+				counterSet: &perfcounter.CounterSet{},
 			}
 		},
 		func(c *Compile) { c.reset() },

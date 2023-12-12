@@ -179,7 +179,7 @@ func (c *Compile) reset() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.counterSet = perfcounter.CounterSet{}
+	c.counterSet = &perfcounter.CounterSet{}
 }
 
 // helper function to judge if init temporary engine is needed
