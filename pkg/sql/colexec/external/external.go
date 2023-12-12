@@ -343,52 +343,43 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 	if err != nil {
 		return nil, err
 	}
-	var r io.ReadCloser
-
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset:            0,
-				Size:              BufferSize,
-				ReadCloserForRead: &r,
+				Offset: 0,
+				Size:   BufferSize,
+				Data:   make([]byte, BufferSize),
 			},
 		},
 	}
 	var tailSize []int64
 	var offset []int64
-	buf := make([]byte, BufferSize)
 	for i := 0; i < mcpu; i++ {
 		off := int64(i) * (fileSize / int64(mcpu))
 		vec.Entries[0].Offset = off
-		for len := 0; ; {
+		for length := 0; ; {
 			if vec.Entries[0].Offset >= fileSize {
 				return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
 			}
+			vec.Entries[0].Data = vec.Entries[0].Data[:BufferSize]
 			if err = fs.Read(param.Ctx, &vec); err != nil {
-				return nil, err
-			}
-			n, err := r.Read(buf)
-			if n <= 0 && err != nil {
-				r.Close()
 				if err == io.EOF {
 					return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
 				}
 				return nil, err
 			}
-			idx := bytes.IndexByte(buf[:n], '\n')
+			idx := bytes.IndexByte(vec.Entries[0].Data, '\n')
 			if idx == -1 {
-				len += n
-				r.Close()
-				vec.Entries[0].Offset += int64(n)
+				length += len(vec.Entries[0].Data)
+				vec.Entries[0].Offset += int64(len(vec.Entries[0].Data))
 				if err = fs.Read(param.Ctx, &vec); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			tailSize = append(tailSize, int64(len+idx))
+			tailSize = append(tailSize, int64(length+idx))
 			offset = append(offset, vec.Entries[0].Offset)
-			r.Close()
 			break
 		}
 	}
