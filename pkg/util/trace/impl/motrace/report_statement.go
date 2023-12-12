@@ -230,8 +230,10 @@ type StatementInfo struct {
 	jsonByte   []byte
 	statsArray statistic.StatsArray
 
-	// SkipTxnOnce, only for flow control
-	SkipTxnOnce bool
+	// skipTxnOnce, readonly, for flow control
+	// see more on NeedSkipTxn() and SkipTxnId()
+	skipTxnOnce bool
+	skipTxnID   []byte
 }
 
 type Key struct {
@@ -346,6 +348,9 @@ func (s *StatementInfo) free() {
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	// clean skipTxn ctrl
+	s.skipTxnOnce = false
+	s.skipTxnID = nil
 	stmtPool.Put(s)
 }
 
@@ -477,6 +482,25 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
 	}
+}
+
+// SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
+// usage:
+// Step1: SetSkipTxn(true)
+// Step2:
+//
+//	if NeedSkipTxn() {
+//		SetSkipTxn(false)
+//		SetSkipTxnId(target_txn_id)
+//	} else SkipTxnId(current_txn_id) {
+//		// record current txn id
+//	}
+func (s *StatementInfo) SetSkipTxn(skip bool)   { s.skipTxnOnce = skip }
+func (s *StatementInfo) SetSkipTxnId(id []byte) { s.skipTxnID = id }
+func (s *StatementInfo) NeedSkipTxn() bool      { return s.skipTxnOnce }
+func (s *StatementInfo) SkipTxnId(id []byte) bool {
+	// s.skipTxnID == nil, means NO skipTxnId
+	return s.skipTxnID != nil && bytes.Compare(s.skipTxnID, id) == 0
 }
 
 func GetLongQueryTime() time.Duration {

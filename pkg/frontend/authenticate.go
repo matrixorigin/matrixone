@@ -6364,7 +6364,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
-	ses.tStmt.SkipTxnOnce = true
+	ses.tStmt.SetSkipTxn(true) // for reset frontend query's txn-id
 	defer bh.Close()
 
 	//the set of roles the (k+1) th iteration during the execution
@@ -7720,17 +7720,18 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return err
-	}
-
 	createNewAccount := func() (rtnErr error) {
 		rtnErr = bh.Exec(ctx, "begin;")
 		defer func() {
 			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		//USE the mo_catalog
+		// MOVE into txn, make sure only create ONE txn.
+		rtnErr = bh.Exec(ctx, "use mo_catalog;")
 		if rtnErr != nil {
 			return rtnErr
 		}
