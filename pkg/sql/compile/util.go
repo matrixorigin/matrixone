@@ -118,6 +118,10 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 }
 
 // genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
+// NOTE: Here the columns are part of meta, centroids, entries table.
+// meta      -> key varchar(65535), value varchar(65535)
+// centroids -> version int64, centroid_id int64, centroid vecf32(xx)
+// entries   -> version int64, entry_id int64, pk xx
 // TODO: later on merge with genCreateIndexTableSql
 func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string

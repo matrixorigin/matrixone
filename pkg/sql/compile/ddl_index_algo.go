@@ -75,7 +75,7 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`), count(`%s`) from `%s`.`%s`;",
@@ -123,16 +123,16 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		To ensure that we don't get in this state, we need to have maxVersions based reindex frequency and avg query duration etc.
 		For now, lets keep it as 10.
 
+		NOTE: We still hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
+			We need to see how to reduce the critical section.
+
 		Sample SQL:
 
 		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1)%10 AS CHAR);
-
-		NOTE: We still hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-		We need to see how to reduce the critical section.
 	*/
 
-	maxVersions := 10
+	maxVersions := 3
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
 		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1)%% %d  AS CHAR);",
 		qryDatabase,
@@ -153,7 +153,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, _ *plan.IndexDef, qryDatabase string, _ *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string,
 	entriesTableName string) error {
@@ -234,10 +234,10 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 		SELECT
 		(SELECT CAST(`value` AS BIGINT) FROM meta WHERE `key` = 'version'),
-		ROW_NUMBER() OVER (),
+		ROW_NUMBER() OVER(),
 		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
 		FROM
-		(SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM `tbl`) AS `__mo_index_centroids_tbl`
+		(SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
 		CROSS JOIN
 		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
 	*/
