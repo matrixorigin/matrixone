@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,6 +38,7 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			buf.WriteString(" -> ")
 		}
 		in.Arg.String(buf)
+		buf.WriteString(" analyze index: " + strconv.Itoa(in.Idx))
 	}
 }
 
@@ -58,22 +60,40 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
-	var currentIDX, currentParallelIDX int
+	var buf bytes.Buffer
+	String(ins, &buf)
+	logutil.Infof("pipeline: %v", buf.String())
+
+	isOutputPipeline := false
 	for i := 0; i < len(ins); i++ {
+		if ins[i].Op == Output {
+			ins[i].Idx = -1 //useless
+			isOutputPipeline = true
+		}
+	}
+
+	idxMap := make(map[int]int, 0)
+	for i := 0; i < len(ins); i++ {
+		if ins[i].Op == Output {
+			ins[i].Idx = -1 //useless
+		}
+
 		info := &OperatorInfo{
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
 		}
-		if i == 0 || currentIDX != info.Idx {
-			currentIDX = info.Idx
-			if currentIDX >= 0 && currentIDX < len(proc.AnalInfos) {
-				currentParallelIDX = proc.AnalInfos[currentIDX].AddNewParallel()
+
+		if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) && !isOutputPipeline {
+			if pidx, ok := idxMap[info.Idx]; ok {
+				info.ParallelIdx = pidx
 			} else {
-				currentParallelIDX = -1
+				pidx = proc.AnalInfos[info.Idx].AddNewParallel()
+				idxMap[info.Idx] = pidx
+				info.ParallelIdx = pidx
 			}
 		}
-		info.ParallelIdx = currentParallelIDX
+
 		ins[i].Arg.SetInfo(info)
 
 		if i > 0 {
