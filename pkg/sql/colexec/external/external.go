@@ -322,6 +322,9 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	if param.Extern.Parallel {
 		vec.Entries[0].Offset = param.FileOffset[0]
 		vec.Entries[0].Size = param.FileOffset[1] - param.FileOffset[0]
+		if vec.Entries[0].Size < 0 {
+			vec.Entries[0].Size = -1
+		}
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
