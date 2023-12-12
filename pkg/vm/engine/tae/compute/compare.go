@@ -17,10 +17,10 @@ package compute
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func CompareOrdered[T types.OrderedT](a, b T) int {

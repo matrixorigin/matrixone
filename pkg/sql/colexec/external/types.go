@@ -33,6 +33,8 @@ import (
 var _ vm.Operator = new(Argument)
 
 const (
+	// 4KB is a good balance between memory usage and performance
+	BufferSize               = 4 << 10
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
 )
 

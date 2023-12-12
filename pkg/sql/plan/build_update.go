@@ -92,8 +92,8 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 }
 
 func isDefaultValExpr(e *Expr) bool {
-	if ce, ok := e.Expr.(*plan.Expr_C); ok {
-		_, isDefVal := ce.C.Value.(*plan.Const_Defaultval)
+	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
+		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
 		return isDefVal
 	}
 	return false

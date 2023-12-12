@@ -18,15 +18,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"sort"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
-	"math"
-	"sort"
-	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -661,11 +662,11 @@ func TestGetExprValue(t *testing.T) {
 				switch ret := value.(type) {
 				case *plan.Expr:
 					if types.T(ret.GetTyp().GetId()) == types.T_decimal64 {
-						cvey.So(ret.GetC().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
+						cvey.So(ret.GetLit().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
 					} else if types.T(ret.GetTyp().GetId()) == types.T_decimal128 {
 						temp := kase.want.(types.Decimal128)
-						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
-						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
+						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
+						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
 					} else {
 						panic(fmt.Sprintf("unknown expr type %v", ret.GetTyp()))
 					}
