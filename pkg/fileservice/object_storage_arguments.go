@@ -97,6 +97,8 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.OIDCTokenFilePath = value
 		case "oidc-role-arn":
 			o.OIDCRoleARN = value
+		case "cert-files":
+			o.CertFiles = strings.Split(value, ",")
 
 		default:
 			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)

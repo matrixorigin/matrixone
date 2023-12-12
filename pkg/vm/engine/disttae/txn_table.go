@@ -268,7 +268,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	found := false
 
 	for i := range cols {
-		if !cols[i].Hidden && (name == AllColumns || cols[i].Name == name) {
+		if name == AllColumns || cols[i].Name == name {
 			neededCols[cols[i].Name] = cols[i]
 			found = true
 		}
