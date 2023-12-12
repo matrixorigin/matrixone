@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -573,7 +574,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string) {
 					// dump all goroutines to stderr
 					profile.ProfileGoroutine(os.Stderr, 2)
-					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
+					v2.TxnLeakCounter.Inc()
+					runtime.DefaultRuntime().Logger().Error("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
 						zap.String("create-by", createBy),

@@ -2590,7 +2590,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
+	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
+	defer ses.SetQueryEnd(time.Now())
+	defer ses.SetQueryInProgress(false)
 	ses.SetQueryInExecute(true)
 
 	// per statement profiler
@@ -3538,6 +3541,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
+
+	if judgeIsClientBIQuery(input) {
+		dialectEquivalentRewrite(input)
+	}
+
 	pu := ses.GetParameterUnit()
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.

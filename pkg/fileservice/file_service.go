@@ -59,6 +59,7 @@ type FileService interface {
 }
 
 type IOVector struct {
+
 	// FilePath indicates where to find the file
 	// a path has two parts, service name and file name, separated by ':'
 	// service name is optional, if omitted, the receiver FileService will use the default name of the service
@@ -68,16 +69,22 @@ type IOVector struct {
 	// example:
 	// s3:a/b/c S3:a/b/c represents the same file 'a/b/c' located in 'S3' service
 	FilePath string
+
 	// io entries
 	// empty Entries is not allowed
 	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
+
 	// ExpireAt specifies the expire time of the file
 	// implementations may or may not delete the file after this time
 	// zero value means no expire
 	ExpireAt time.Time
+
 	// Policy controls policy for the vector
 	Policy Policy
+
+	// Caches indicates extra caches to operate on
+	Caches []IOVectorCache
 }
 
 type IOEntry struct {
