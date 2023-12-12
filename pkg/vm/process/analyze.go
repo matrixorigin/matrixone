@@ -48,7 +48,9 @@ func (a *analyze) Start() {
 func (a *analyze) Stop() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
-		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait-a.childrenCallDuration)/time.Nanosecond))
+		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
+		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
+		//atomic.StoreInt64(&a.analInfo.TimeConsumedArray[], consumeTime)
 	}
 }
 
