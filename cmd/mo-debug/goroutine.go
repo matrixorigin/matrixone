@@ -42,46 +42,48 @@ var (
 		Short:      "goroutine tool",
 		Long:       "MO debug tool. Helps to analyze MO problems like Goroutine, Txn, etc.",
 		SuggestFor: []string{"goroutine"},
-		Run: func(
-			cmd *cobra.Command,
-			args []string) {
-
-			scanner := bufio.NewScanner(os.Stdin)
-			for {
-				fmt.Printf(">>> ")
-				if scanner.Scan() {
-					line := strings.ToLower(strings.TrimSpace(scanner.Text()))
-					if strings.HasPrefix(line, "parse") {
-						handleParse(line)
-					} else if strings.HasPrefix(line, "filter") {
-						handleFilter(line)
-					} else if strings.HasPrefix(line, "top") {
-						handleTop(line)
-					} else if strings.HasPrefix(line, "dump") {
-						handleDump(line)
-					} else {
-						switch line {
-						case "count":
-							fmt.Printf("%d\n", len(targets))
-						case "reset":
-							resetTargets()
-						case "group":
-							handleGroup()
-						case "help":
-							handleHelp()
-						case "exit":
-							return
-						default:
-							handleHelp()
-						}
-					}
-					continue
-				}
-				return
-			}
-		},
+		Run:        handleGoroutineCommand,
 	}
 )
+
+func handleGoroutineCommand(
+	cmd *cobra.Command,
+	args []string) {
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Printf(">>> ")
+		if scanner.Scan() {
+			line := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			if strings.HasPrefix(line, "parse") {
+				handleParse(line)
+			} else if strings.HasPrefix(line, "filter") {
+				handleFilter(line)
+			} else if strings.HasPrefix(line, "top") {
+				handleTop(line)
+			} else if strings.HasPrefix(line, "dump") {
+				handleDump(line)
+			} else {
+				switch line {
+				case "count":
+					fmt.Printf("%d\n", len(targets))
+				case "reset":
+					resetTargets()
+				case "group":
+					handleGroup()
+				case "help":
+					handleHelp()
+				case "exit":
+					return
+				default:
+					handleHelp()
+				}
+			}
+			continue
+		}
+		return
+	}
+}
 
 func handleHelp() {
 	fmt.Println("command list")
