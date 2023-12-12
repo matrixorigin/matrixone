@@ -82,7 +82,6 @@ var debugMagicNames = map[magicType]string{
 	Normal:         "Normal",
 	Remote:         "Remote",
 	Parallel:       "Parallel",
-	Pushdown:       "Pushdown",
 	CreateDatabase: "CreateDatabase",
 	CreateTable:    "CreateTable",
 	CreateIndex:    "CreateIndex",

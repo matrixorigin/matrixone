@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,8 +47,7 @@ func processlistPrepare(proc *process.Process, arg *Argument) error {
 func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
-		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account,
-			proc.SessionInfo.GetUser(), proc.QueryService)
+		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account, proc.QueryService)
 		if err != nil {
 			return false, err
 		}
@@ -170,29 +168,14 @@ func isSysTenant(tenant string) bool {
 }
 
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
-func fetchSessions(ctx context.Context, tenant string, user string, qs queryservice.QueryService) ([]*status.Session, error) {
+func fetchSessions(ctx context.Context, tenant string, qs queryservice.QueryService) ([]*status.Session, error) {
 	var nodes []string
-	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": tenant}, clusterservice.EQ)
 	sysTenant := isSysTenant(tenant)
-	if sysTenant {
-		if strings.EqualFold(user, "dump") || strings.EqualFold(user, "root") {
-			clusterservice.GetMOCluster().GetCNService(
-				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
-					nodes = append(nodes, s.QueryAddress)
-					return true
-				})
-		} else {
-			disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
-				func(s *metadata.CNService) {
-					nodes = append(nodes, s.QueryAddress)
-				})
-		}
-	} else {
-		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
+		func(s metadata.CNService) bool {
 			nodes = append(nodes, s.QueryAddress)
+			return true
 		})
-	}
 
 	var retErr error
 	var sessions []*status.Session
@@ -208,7 +191,11 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 
 	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
 		if rsp != nil && rsp.ShowProcessListResponse != nil {
-			sessions = append(sessions, rsp.ShowProcessListResponse.Sessions...)
+			for _, ss := range rsp.ShowProcessListResponse.Sessions {
+				if sysTenant || strings.EqualFold(ss.Account, tenant) {
+					sessions = append(sessions, ss)
+				}
+			}
 		}
 	}
 

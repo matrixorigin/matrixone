@@ -969,6 +969,20 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	{
+		// lockMoTable will lock Table  mo_catalog.mo_tables
+		// for the row with db_name=dbName & table_name = tblName。
+		dbName := c.db
+		if qry.GetDatabase() != "" {
+			dbName = qry.GetDatabase()
+		}
+		tblName := qry.GetTableDef().GetName()
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1250,6 +1264,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
 	oldId := tqry.GetTableId()
+	keepAutoIncrement := false
+	affectedRows := int64(0)
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
@@ -1286,6 +1302,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			}
 			err = e
 		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if tqry.IsDelete {
+		keepAutoIncrement = true
+		affectedRows, err = rel.Rows(c.ctx)
 		if err != nil {
 			return err
 		}
@@ -1374,7 +1398,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		c.ctx,
 		oldId,
 		newId,
-		false,
+		keepAutoIncrement,
 		c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1386,6 +1410,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	c.addAffectedRows(uint64(affectedRows))
 	return nil
 }
 

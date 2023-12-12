@@ -369,7 +369,14 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		getStatementStartAt(requestCtx),
 	)
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
-		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		plan, err := buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		if err != nil {
+			return nil, err
+		}
+		if plan.IsPrepare {
+			_, _, err = plan2.ResetPreparePlan(cwft.ses.GetTxnCompileCtx(), plan)
+		}
+		return plan, err
 	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
