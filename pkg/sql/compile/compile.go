@@ -242,7 +242,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}
 
 	// with values
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = c.proc.Ctx
 
 	// session info and callback function to write back query result.
