@@ -84,13 +84,19 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			IsLast:  ins[i].IsLast,
 		}
 
-		if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) && !isOutputPipeline {
-			if pidx, ok := idxMap[info.Idx]; ok {
-				info.ParallelIdx = pidx
-			} else {
-				pidx = proc.AnalInfos[info.Idx].AddNewParallel()
-				idxMap[info.Idx] = pidx
-				info.ParallelIdx = pidx
+		switch ins[i].Op {
+		case Output, Merge, Connector:
+			info.ParallelIdx = -1
+			// do nothing for parallel analyze info
+		default:
+			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) && !isOutputPipeline {
+				if pidx, ok := idxMap[info.Idx]; ok {
+					info.ParallelIdx = pidx
+				} else {
+					pidx = proc.AnalInfos[info.Idx].AddNewParallel()
+					idxMap[info.Idx] = pidx
+					info.ParallelIdx = pidx
+				}
 			}
 		}
 
