@@ -145,7 +145,7 @@ func TestGetLockTableBind(t *testing.T) {
 }
 
 func TestIterLocks(t *testing.T) {
-	table := uint64(1)
+	table := uint64(10)
 	getRunner(false)(
 		t,
 		table,

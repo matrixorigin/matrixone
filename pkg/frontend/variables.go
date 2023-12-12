@@ -30,22 +30,50 @@ import (
 )
 
 var (
-	errorConvertToBoolFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
-	errorConvertToIntFailed              = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
-	errorConvertToUintFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable uint type failed")
-	errorConvertToDoubleFailed           = moerr.NewInternalError(context.Background(), "convert to the system variable double type failed")
-	errorConvertToEnumFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable enum type failed")
-	errorConvertToSetFailed              = moerr.NewInternalError(context.Background(), "convert to the system variable set type failed")
-	errorConvertToStringFailed           = moerr.NewInternalError(context.Background(), "convert to the system variable string type failed")
-	errorConvertToNullFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable null type failed")
-	errorConvertFromStringToBoolFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable bool type failed")
-	errorConvertFromStringToIntFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable int type failed")
-	errorConvertFromStringToUintFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable uint type failed")
-	errorConvertFromStringToDoubleFailed = moerr.NewInternalError(context.Background(), "convert from string to the system variable double type failed")
-	errorConvertFromStringToEnumFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable enum type failed")
-	errorConvertFromStringToSetFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable set type failed")
-	errorConvertFromStringToNullFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable null type failed")
+	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
+	errorConvertToIntFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
+	errorConvertToUintFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable uint type failed")
+	errorConvertToDoubleFailed                 = moerr.NewInternalError(context.Background(), "convert to the system variable double type failed")
+	errorConvertToEnumFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable enum type failed")
+	errorConvertToSetFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable set type failed")
+	errorConvertToStringFailed                 = moerr.NewInternalError(context.Background(), "convert to the system variable string type failed")
+	errorConvertToNullFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable null type failed")
+	errorConvertFromStringToBoolFailedFormat   = "convert from string %s to the system variable bool type failed"
+	errorConvertFromStringToIntFailedFormat    = "convert from string %s to the system variable int type failed"
+	errorConvertFromStringToUintFailedFormat   = "convert from string %s to the system variable uint type failed"
+	errorConvertFromStringToDoubleFailedFormat = "convert from string %s to the system variable double type failed"
+	errorConvertFromStringToEnumFailedFormat   = "convert from string %s to the system variable enum type failed"
+	errorConvertFromStringToSetFailedFormat    = "convert from string %s to the system variable set type failed"
+	errorConvertFromStringToNullFailedFormat   = "convert from string %s  to the system variable null type failed"
 )
+
+func getErrorConvertFromStringToBoolFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToBoolFailedFormat, str)
+}
+
+func getErrorConvertFromStringToIntFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToIntFailedFormat, str)
+}
+
+func getErrorConvertFromStringToUintFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToUintFailedFormat, str)
+}
+
+func getErrorConvertFromStringToDoubleFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToDoubleFailedFormat, str)
+}
+
+func getErrorConvertFromStringToEnumFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToEnumFailedFormat, str)
+}
+
+func getErrorConvertFromStringToSetFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToSetFailedFormat, str)
+}
+
+func getErrorConvertFromStringToNullFailed(str string) error {
+	return moerr.NewInternalError(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+}
 
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
 func errorSystemVariableIsSession() string    { return "the system variable is session" }
@@ -141,7 +169,7 @@ func (svnt SystemVariableNullType) Zero() interface{} {
 
 func (svnt SystemVariableNullType) ConvertFromString(value string) (interface{}, error) {
 	if len(value) != 0 {
-		return nil, errorConvertFromStringToNullFailed
+		return nil, getErrorConvertFromStringToNullFailed(value)
 	}
 	return nil, nil
 }
@@ -271,10 +299,10 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 
 	convertVal, err := strconv.ParseInt(value, 10, 8)
 	if err != nil {
-		return nil, errorConvertFromStringToBoolFailed
+		return nil, getErrorConvertFromStringToBoolFailed(value)
 	}
 	if convertVal != 1 && convertVal != 0 {
-		return nil, moerr.NewInvalidArgNoCtx("Bool Type convert from string bad value :%s", value)
+		return nil, getErrorConvertFromStringToBoolFailed(value)
 	}
 	return int8(convertVal), nil
 
@@ -363,7 +391,7 @@ func (svit SystemVariableIntType) Zero() interface{} {
 func (svit SystemVariableIntType) ConvertFromString(value string) (interface{}, error) {
 	convertVal, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
-		return nil, errorConvertFromStringToIntFailed
+		return nil, getErrorConvertFromStringToIntFailed(value)
 	}
 	return convertVal, nil
 }
@@ -446,7 +474,7 @@ func (svut SystemVariableUintType) Zero() interface{} {
 func (svut SystemVariableUintType) ConvertFromString(value string) (interface{}, error) {
 	convertVal, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return nil, errorConvertFromStringToUintFailed
+		return nil, getErrorConvertFromStringToUintFailed(value)
 	}
 	return convertVal, nil
 }
@@ -514,7 +542,7 @@ func (svdt SystemVariableDoubleType) Zero() interface{} {
 func (svdt SystemVariableDoubleType) ConvertFromString(value string) (interface{}, error) {
 	convertVal, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return nil, errorConvertFromStringToDoubleFailed
+		return nil, getErrorConvertFromStringToDoubleFailed(value)
 	}
 	return convertVal, nil
 }
@@ -616,7 +644,7 @@ func (svet SystemVariableEnumType) Zero() interface{} {
 func (svet SystemVariableEnumType) ConvertFromString(value string) (interface{}, error) {
 	lowerName := strings.ToLower(value)
 	if val, ok := svet.tagName2Id[lowerName]; !ok {
-		return nil, errorConvertFromStringToEnumFailed
+		return nil, getErrorConvertFromStringToEnumFailed(value)
 	} else {
 		return val, nil
 	}
@@ -788,7 +816,7 @@ func (svst SystemVariableSetType) Zero() interface{} {
 func (svst SystemVariableSetType) ConvertFromString(value string) (interface{}, error) {
 	bits, err := svst.string2bits(value)
 	if err != nil {
-		return nil, errorConvertFromStringToSetFailed
+		return nil, getErrorConvertFromStringToSetFailed(value)
 	}
 	return svst.bits2string(bits)
 }

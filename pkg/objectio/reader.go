@@ -183,7 +183,7 @@ func (r *objectReaderV1) ReadSubBlock(
 	ioVecs = make([]*fileservice.IOVector, 0)
 	for i := uint32(0); i < meta.BlockCount(); i++ {
 		var ioVec *fileservice.IOVector
-		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory)
+		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
 		if err != nil {
 			return
 		}
@@ -205,7 +205,7 @@ func (r *objectReaderV1) ReadOneSubBlock(
 		return
 	}
 	meta, _ := metaHeader.SubMeta(dataType)
-	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory)
+	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
