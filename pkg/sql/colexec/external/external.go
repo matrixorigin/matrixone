@@ -379,7 +379,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 				continue
 			}
 			tailSize = append(tailSize, int64(length+idx))
-			offset = append(offset, vec.Entries[0].Offset)
+			offset = append(offset, off)
 			break
 		}
 	}
