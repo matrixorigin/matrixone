@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
@@ -375,12 +376,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
-	c := &Compile{
-		proc: proc,
-		e:    cnInfo.storeEngine,
-		anal: &anaylze{analInfos: proc.AnalInfos},
-		addr: receiver.cnInformation.cnAddr,
-	}
+	c := reuse.Alloc[Compile](nil)
+	c.proc = proc
+	c.e = cnInfo.storeEngine
+	c.anal = &anaylze{analInfos: proc.AnalInfos}
+	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 

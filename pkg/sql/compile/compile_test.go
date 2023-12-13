@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"os"
 	"testing"
 	"time"
@@ -174,7 +175,8 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -184,7 +186,8 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 	}
 
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()

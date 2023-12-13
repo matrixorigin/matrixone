@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -247,12 +248,10 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		nil)
 	vp.AnalInfos = []*process.AnalyzeInfo{}
 	vp.Reg = process.Register{}
-	c := &Compile{
-		proc: vp,
-	}
-	s := &Scope{
-		Proc: vp,
-	}
+	c := reuse.Alloc[Compile](nil)
+	c.proc = vp
+	s := reuse.Alloc[Scope](nil)
+	s.Proc = vp
 	sender := &messageSenderOnClient{
 		ctx:          ctx,
 		streamSender: streamSender,
@@ -316,14 +315,12 @@ func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
 
-	s := &Scope{
-		Proc: proc,
-	}
-	c := &Compile{
-		anal: &anaylze{},
-		ctx:  ctx,
-		proc: proc,
-	}
+	s := reuse.Alloc[Scope](nil)
+	s.Proc = proc
+	c := reuse.Alloc[Compile](nil)
+	c.anal = &anaylze{}
+	c.ctx = ctx
+	c.proc = proc
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, rs.Instructions[1].Idx, -1)
 }
@@ -335,19 +332,17 @@ func Test_convertPipelineUuid(t *testing.T) {
 			{Idx: 1, Uuid: id[:]},
 		},
 	}
-	s := &Scope{
-		RemoteReceivRegInfos: make([]RemoteReceivRegInfo, 0),
-	}
+	s := reuse.Alloc[Scope](nil)
+	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0)
 	err := convertPipelineUuid(p, s)
 	require.Nil(t, err)
 }
 
 func Test_convertScopeRemoteReceivInfo(t *testing.T) {
 	id, _ := uuid.NewUUID()
-	s := &Scope{
-		RemoteReceivRegInfos: []RemoteReceivRegInfo{
-			{Idx: 1, Uuid: id},
-		},
+	s := reuse.Alloc[Scope](nil)
+	s.RemoteReceivRegInfos = []RemoteReceivRegInfo{
+		{Idx: 1, Uuid: id},
 	}
 	ret := convertScopeRemoteReceivInfo(s)
 	require.Equal(t, ret[0].Idx, int32(1))
