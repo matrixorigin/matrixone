@@ -94,8 +94,8 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		stmt.ResponseAt = s.ResponseAt
 		stmt.end = s.end
 
-		// remove the TransactionID
-		stmt.TransactionID = NilTxnID
+		// stmt.TransactionID = NilTxnID /* try hard to keep the txn-id. more in StatementInfoUpdate() */
+
 		// modified value
 		stmt.StatementTag = ""
 		stmt.StatementFingerprint = ""
@@ -117,6 +117,10 @@ func StatementInfoUpdate(existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
+	// nil aggregated stmt record's txn-id, if including diff transactions.
+	if e.TransactionID != n.TransactionID {
+		e.TransactionID = NilTxnID
+	}
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
