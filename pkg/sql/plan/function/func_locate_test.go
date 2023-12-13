@@ -24,10 +24,6 @@ import (
 )
 
 func Test_getSubstring(t *testing.T) {
-	type args struct {
-		str   string
-		start int
-	}
 	tests := []struct {
 		name  string
 		str   string
