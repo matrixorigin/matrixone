@@ -97,6 +97,7 @@ func (ec *engineColumnInfo) GetType() types.T {
 
 type PrepareStmt struct {
 	Name           string
+	Sql            string
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
