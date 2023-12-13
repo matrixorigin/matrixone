@@ -408,6 +408,19 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		wait()
 	}
 
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
+	}
+
 	if s.memCache != nil {
 		if err := s.memCache.Read(ctx, vector); err != nil {
 			return err
@@ -460,6 +473,19 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		defer unlock()
 	} else {
 		wait()
+	}
+
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
 	}
 
 	if s.memCache != nil {

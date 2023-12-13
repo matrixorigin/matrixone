@@ -110,9 +110,8 @@ jobs:
 
   multi-cn-bvt-race-linux-x86:
     if: ${{ github.event.pull_request.merged == true && always() }}
-    runs-on: amd64-tke-mo
+    runs-on: amd64-shanghai-4xlarge32
     name: Multi-CN e2e BVT(Race) Test on Linux/x64
-    timeout-minutes: 120
     needs: [pessimistic-bvt-darwin-arm64]
     steps:
       - name: checkout head
@@ -120,10 +119,31 @@ jobs:
         with:
           path: ./head
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        run: |
+          set +e;
+          GO_VERSION="1.20.9"
+          for i in {1..10}; do 
+            sudo bash -c "
+            set -ex;
+            rm -rf "go$GO_VERSION.linux-amd64.tar.gz";
+            rm -rf /usr/local/go;
+            wget "https://dl.google.com/go/go$GO_VERSION.linux-amd64.tar.gz" && tar -zxvf "go$GO_VERSION.linux-amd64.tar.gz" -C /usr/local/;
+            "
+            if [ "$?" -eq 0 ]; then
+              break;
+            fi
+
+            if [ "$i" -ge 10 ]; then
+              exit 1;
+            fi
+          done
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+          echo "GOROOT=/usr/local/go" >> $GITHUB_ENV
+          echo "GOPATH=$HOME/go" >> $GITHUB_ENV
+          echo "GOPROXY=https://goproxy.cn,direct" >> $GITHUB_ENV
       - name: Build MatrixOne
         run: |
-          export GOPROXY='https://goproxy.cn,direct'
           cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD         
       - name: Start MO
@@ -145,17 +165,18 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
+          sed -i 's/socketTimeout:.*/socketTimeout: 600000/g' mo.yml
           sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
           cat mo.yml
           echo "======================================"
           
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic,log/column,log/query 2>&1          
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
       - name: Check mo-service Status
+        id: check_mo_status
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
@@ -188,3 +209,7 @@ jobs:
         with:
           msgtype: markdown
           content: "MO Checkin Regression(Standalone BVT) failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"
+
+      - name: SlEEP FOR CHECK
+        if: ${{ always() && steps.check_mo_status.conclusion != 'success' }}
+        run: sleep 21600

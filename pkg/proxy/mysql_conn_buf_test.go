@@ -54,8 +54,8 @@ func TestMySQLConnPreRecv(t *testing.T) {
 		}()
 		sc := newMySQLConn("source", src, 10, nil, nil)
 		size, err := sc.preRecv()
-		require.ErrorContains(t, err, "mysql protocol error")
-		require.Equal(t, 0, size)
+		require.NoError(t, err)
+		require.Equal(t, mysqlHeadLen+(1<<24-1), size)
 	})
 
 	t.Run("protocol_error/length-normal", func(t *testing.T) {

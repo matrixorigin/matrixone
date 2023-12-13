@@ -145,7 +145,6 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 		err = mo.rm.Handler(rs, msg, received)
 		if err != nil {
 			if strings.Contains(err.Error(), quitStr) {
-				logutil.Warn("mo quit", zap.Error(err))
 				return nil
 			} else {
 				logutil.Error("session handle failed, close this session", zap.Error(err))

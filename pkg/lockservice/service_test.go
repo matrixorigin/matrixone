@@ -25,6 +25,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -1561,4 +1562,15 @@ func mustAddTestLock(t *testing.T,
 		txnID,
 		lock,
 		granularity)
+}
+
+func TestSharedTableID(t *testing.T) {
+	tenantID := uint32(955)
+	tableID := uint64(2)
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, tenantID)
+	tenantID2, tableID2, ok := decodeSharedTableID(encodeSharedTableID(ctx, tableID))
+	require.True(t, ok)
+	require.Equal(t, tenantID, tenantID2)
+	require.Equal(t, tableID, tableID2)
 }

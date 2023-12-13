@@ -211,6 +211,9 @@ str_to_date(09:22:23.33, %H:%i:%s.%f)
 SELECT str_to_date('09:22', '%H:%i');
 str_to_date(09:22, %H:%i)
 09:22:00
+SELECT str_to_date('2008-01-01',replace(replace(replace(replace(replace(replace(replace('yyyy-MM-dd','a','%p'),'ss','%s'),'mm','%i'),'HH','%H'),'yyyy','%Y'),'dd','%d'),'MM','%m'));
+str_to_date(2008-01-01, replace(replace(replace(replace(replace(replace(replace(yyyy-MM-dd, a, %p), ss, %s), mm, %i), HH, %H), yyyy, %Y), dd, %d), MM, %m))
+2008-01-01
 SELECT TO_DATE('04/31/2004', '%m/%d/%Y');
 to_date(04/31/2004, %m/%d/%Y)
 null

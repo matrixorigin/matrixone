@@ -1652,12 +1652,17 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 
 	var ret *plan2.Plan
 	var err error
+	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId = defines.GetAccountId(requestCtx)
+		if len(ses.sql) > 8 {
+			prefix := strings.ToLower(ses.sql[:8])
+			isPrepareStmt = prefix == "execute " || prefix == "prepare "
+		}
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, false)
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -1679,7 +1684,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, false)
+		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1689,9 +1694,10 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, false)
+		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
 	if ret != nil {
+		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil {
 			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
@@ -3713,6 +3719,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
+
+	if judgeIsClientBIQuery(input) {
+		dialectEquivalentRewrite(input)
+	}
+
 	pu := ses.GetParameterUnit()
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
