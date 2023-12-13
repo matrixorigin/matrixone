@@ -80,7 +80,7 @@ func (sd *StagesDuration) Log() {
 
 func (sd *StagesDuration) Record(elapsed int64, stage string) {
 	sd.mu.Lock()
-	sd.mu.Unlock()
+	defer sd.mu.Unlock()
 
 	sd.total += elapsed
 	sd.stages[stage] += elapsed
