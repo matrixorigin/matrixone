@@ -158,7 +158,6 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 }
 
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(ap.bat)
 	anal.Input(ap.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
