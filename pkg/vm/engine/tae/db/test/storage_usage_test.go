@@ -17,7 +17,9 @@ package test
 import (
 	"context"
 	"fmt"
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -417,8 +419,8 @@ func Test_StorageUsageCache(t *testing.T) {
 
 func mockDeletesAndInserts(
 	usages []logtail.UsageData,
-	dbDelRanges []int, tblDelRanges []int,
-	segDelRanges []int, segInsRanges []int) (
+	delDbIds, delTblIds map[uint64]int,
+	delSegIdxes, insSegIdxes []int) (
 	[]interface{}, []*catalog.SegmentEntry, []*catalog.SegmentEntry) {
 	var deletes []interface{}
 	var segInserts []*catalog.SegmentEntry
@@ -427,13 +429,13 @@ func mockDeletesAndInserts(
 	// mock deletes, inserts
 	{
 		// db deletes
-		for idx := dbDelRanges[0]; idx < dbDelRanges[1]; idx++ {
+		for _, idx := range delDbIds {
 			deletes = append(deletes,
 				catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId))
 		}
 
 		// tbl deletes
-		for idx := tblDelRanges[0]; idx < tblDelRanges[1]; idx++ {
+		for _, idx := range delTblIds {
 			deletes = append(deletes,
 				catalog.MockTableEntryWithDB(
 					catalog.MockDBEntryWithAccInfo(
@@ -441,7 +443,7 @@ func mockDeletesAndInserts(
 		}
 
 		// segment deletes
-		for idx := segDelRanges[0]; idx < segDelRanges[1]; idx++ {
+		for _, idx := range delSegIdxes {
 			segDeletes = append(segDeletes,
 				catalog.MockSegEntryWithTbl(
 					catalog.MockTableEntryWithDB(
@@ -450,7 +452,7 @@ func mockDeletesAndInserts(
 		}
 
 		// segment inserts
-		for idx := segInsRanges[0]; idx < segInsRanges[1]; idx++ {
+		for _, idx := range insSegIdxes {
 			segInserts = append(segInserts,
 				catalog.MockSegEntryWithTbl(
 					catalog.MockTableEntryWithDB(
@@ -466,13 +468,39 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
 
-	dbDelRanges, tblDelRanges := []int{0, 5}, []int{2, 7}
-	segDelRanges, segInsRanges := []int{4, 9}, []int{0, len(usages)}
+	delDbCnt, delTblCnt, delSegCnt := 2, 3, 7
+	delDbIds := make(map[uint64]int)
+	delTblIds := make(map[uint64]int)
+	var delSegIdxes, insSegIdxes []int
+
+	// generate deletes
+	{
+		for i := 0; i < delDbCnt; i++ {
+			idx := rand.Int() % len(usages)
+			delDbIds[usages[idx].DbId] = idx
+		}
+
+		for i := 0; i < delTblCnt; i++ {
+			idx := rand.Int() % len(usages)
+			delTblIds[usages[idx].TblId] = idx
+		}
+
+		for i := 0; i < delSegCnt; i++ {
+			delSegIdxes = append(delSegIdxes, rand.Int()%len(usages))
+		}
+
+		for i := 0; i < len(usages); i++ {
+			insSegIdxes = append(insSegIdxes, i)
+		}
+
+	}
 
 	deletes, segDeletes, segInserts := mockDeletesAndInserts(
-		usages, dbDelRanges, tblDelRanges, segDelRanges, segInsRanges)
+		usages, delDbIds, delTblIds, delSegIdxes, insSegIdxes)
 
 	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
+	defer iCollector.Close()
+
 	iCollector.Usage.Deletes = deletes
 	iCollector.Usage.SegDeletes = segDeletes
 	iCollector.Usage.SegInserts = segInserts
@@ -481,8 +509,130 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 
 	memo := logtail.GetTNUsageMemo()
 
-	// test exist
+	var delUsages []logtail.UsageData
+
+	// test apply inserts and deletes
 	{
+		for _, idx := range delDbIds {
+			ret, exist := memo.Get(usages[idx])
+			require.Equal(t, logtail.UsageData{}, ret)
+			require.False(t, exist)
+		}
+
+		for _, idx := range delTblIds {
+			ret, exist := memo.Get(usages[idx])
+			require.Equal(t, logtail.UsageData{}, ret)
+			require.False(t, exist)
+
+		}
+
+		for _, idx := range delTblIds {
+			// collect table first, cause the memo apply table delete first,
+			// we need to keep this order for the `test append to ckp`
+			delUsages = append(delUsages, usages[idx])
+		}
+
+		for idx := range usages {
+			if _, ok := delTblIds[usages[idx].TblId]; ok {
+				continue
+			}
+
+			if _, ok := delDbIds[usages[idx].DbId]; ok {
+				delUsages = append(delUsages, usages[idx])
+			}
+		}
+
+		for _, idx := range delSegIdxes {
+			if _, ok := delDbIds[usages[idx].DbId]; ok {
+				continue
+			}
+
+			if _, ok := delTblIds[usages[idx].TblId]; ok {
+				continue
+			}
+
+			ret, exist := memo.Get(usages[idx])
+			require.True(t, exist)
+			require.Equal(t, ret.Size, int64(0))
+			delUsages = append(delUsages, usages[idx])
+		}
 	}
+
+	// test append to checkpoint
+	{
+		ckpData := iCollector.OrphanData()
+		defer ckpData.Close()
+
+		delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
+		//insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
+
+		accCol := vector.MustFixedCol[uint32](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+		tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		sizeCol := vector.MustFixedCol[int64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+
+		//require.Equal(t, len(accCol), len(delUsages))
+
+		for idx := range accCol {
+			//require.Equal(t, accCol[idx], delUsages[idx].AccId)
+			//require.Equal(t, dbCol[idx], delUsages[idx].DbId)
+			//require.Equal(t, tblCol[idx], delUsages[idx].TblId)
+			//require.Equal(t, sizeCol[idx], delUsages[idx].Size)
+			fmt.Println("acc", accCol[idx], delUsages[idx].AccId)
+			fmt.Println("db", dbCol[idx], delUsages[idx].DbId)
+			fmt.Println("tbl", tblCol[idx], delUsages[idx].TblId)
+			fmt.Println("size", sizeCol[idx], delUsages[idx].Size)
+			fmt.Println()
+		}
+
+	}
+
+}
+
+func Test_FillUsageBatOfGlobal(t *testing.T) {
+	accCnt, dbCnt, tblCnt := 10, 10, 10
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+
+	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
+	defer gCollector.Close()
+
+	memo := logtail.GetTNUsageMemo()
+	for idx := range usages {
+		memo.Update(usages[idx], false)
+	}
+
+	// test memo reply to global ckp
+	{
+		logtail.FillUsageBatOfGlobal(gCollector)
+
+		ckpData := gCollector.OrphanData()
+		defer ckpData.Close()
+
+		delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
+		require.Equal(t, delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).Length(), 0)
+
+		insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
+		require.Equal(t, insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).Length(), len(usages))
+
+		// usage datas in memo ordered
+		sort.Slice(usages, func(i, j int) bool {
+			return memo.GetCache().LessFunc()(usages[i], usages[j])
+		})
+
+		accCol := vector.MustFixedCol[uint32](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
+		tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+		sizeCol := vector.MustFixedCol[int64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+
+		for idx := 0; idx < len(accCol); idx++ {
+			require.Equal(t, accCol[idx], usages[idx].AccId)
+			require.Equal(t, dbCol[idx], usages[idx].DbId)
+			require.Equal(t, tblCol[idx], usages[idx].TblId)
+			require.Equal(t, sizeCol[idx], usages[idx].Size)
+		}
+	}
+}
+
+func Test_EstablishFromCheckpoints(t *testing.T) {
 
 }

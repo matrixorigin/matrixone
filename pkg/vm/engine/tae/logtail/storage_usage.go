@@ -291,6 +291,14 @@ func GetTNUsageMemo() *TNUsageMemo {
 	return tnUsageMemo
 }
 
+func (m *TNUsageMemo) GetCache() *StorageUsageCache {
+	return m.cache
+}
+
+func (m *TNUsageMemo) Get(usage UsageData) (old UsageData, exist bool) {
+	return m.cache.Get(usage)
+}
+
 func (m *TNUsageMemo) CacheLen() int {
 	return m.cache.CacheLen()
 }
@@ -377,19 +385,19 @@ func (m *TNUsageMemo) applyDeletes(
 			continue
 		}
 
-		if iter.Item().DbId != db.ID {
+		if iter.Item().DbId != db.ID || iter.Item().AccId != db.GetTenantID() {
 			iter.Release()
 			continue
 		}
 
 		tbls = append(tbls, iter.Item().TblId)
-		for iter.Next() && iter.Item().DbId == db.ID {
+		for iter.Next() && iter.Item().DbId == db.ID && iter.Item().AccId == db.GetTenantID() {
 			tbls = append(tbls, iter.Item().TblId)
-			appendToStorageUsageBat(ckpData, iter.Item(), true, mp)
 		}
 
 		iter.Release()
 		for idx := 0; idx < len(tbls); idx++ {
+			appendToStorageUsageBat(ckpData, iter.Item(), true, mp)
 			tnUsageMemo.cache.Delete(UsageData{
 				db.GetTenantID(), db.ID, tbls[idx], 0,
 			})
