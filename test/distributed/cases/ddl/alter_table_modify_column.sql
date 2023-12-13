@@ -969,4 +969,14 @@ show create table mix01;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 drop table mix01;
 
+-- begin, alter table modify column, commit, then select
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 modify column col1 float;
+commit;
+select * from table01;
+select col1 from table01;
+drop table table01;
 drop database test;
