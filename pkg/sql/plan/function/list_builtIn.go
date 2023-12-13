@@ -292,7 +292,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `endswith`
 	{
 		functionId: ENDSWITH,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1225,7 +1225,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1250,7 +1250,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1327,7 +1327,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `startswith`
 	{
 		functionId: STARTSWITH,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1340,6 +1340,48 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StartsWith
+				},
+			},
+		},
+	},
+
+	// function `prefix_eq`
+	{
+		functionId: PREFIX_EQ,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixEq
+				},
+			},
+		},
+	},
+
+	// function `prefix_in`
+	{
+		functionId: PREFIX_IN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixIn
 				},
 			},
 		},
@@ -2129,7 +2171,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `ceil`, `ceiling`
 	{
 		functionId: CEIL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2313,7 +2355,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `floor`
 	{
 		functionId: FLOOR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2680,7 +2722,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `PI`
 	{
 		functionId: PI,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2757,7 +2799,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `round`
 	{
 		functionId: ROUND,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -3007,7 +3049,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date`
 	{
 		functionId: DATE,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -3996,7 +4038,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `year`
 	{
 		functionId: YEAR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 

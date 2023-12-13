@@ -168,6 +168,9 @@ const (
 	PI             // PI
 	POSITION       // POSITION
 	POW            // POW
+	PREFIX_EQ      // PREFIX_EQ
+	PREFIX_IN      // PREFIX_IN
+	PREFIX_BETWEEN // PREFIX_BETWEEN
 	RADIAN         // RADIAN
 	RANDOM         // RANDOM
 	RANK           // RANK
@@ -401,16 +404,19 @@ var functionIdRegister = map[string]int32{
 	"isnotnull":   ISNOTNULL,
 	//"isunknown":    ISUNKNOWN,
 	//"isnotunknown": ISNOTUNKNOWN,
-	"istrue":     ISTRUE,
-	"isnottrue":  ISNOTTRUE,
-	"isfalse":    ISFALSE,
-	"isnotfalse": ISNOTFALSE,
-	"&":          OP_BIT_AND,
-	"|":          OP_BIT_OR,
-	"^":          OP_BIT_XOR,
-	"<<":         OP_BIT_SHIFT_LEFT,
-	">>":         OP_BIT_SHIFT_RIGHT,
-	"decode":     DECODE,
+	"istrue":         ISTRUE,
+	"isnottrue":      ISNOTTRUE,
+	"isfalse":        ISFALSE,
+	"isnotfalse":     ISNOTFALSE,
+	"&":              OP_BIT_AND,
+	"|":              OP_BIT_OR,
+	"^":              OP_BIT_XOR,
+	"<<":             OP_BIT_SHIFT_LEFT,
+	">>":             OP_BIT_SHIFT_RIGHT,
+	"decode":         DECODE,
+	"prefix_eq":      PREFIX_EQ,
+	"prefix_in":      PREFIX_IN,
+	"prefix_between": PREFIX_BETWEEN,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
