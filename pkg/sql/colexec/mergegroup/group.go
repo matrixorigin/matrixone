@@ -174,6 +174,8 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	flg := ctr.bat == nil
 	if !flg {
 		defer proc.PutBatch(bat)
+	} else {
+		ctr.bat = bat
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -191,9 +193,6 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 			}
 		}
 	}
-	if flg {
-		ctr.bat = bat
-	}
 	return nil
 }
 
@@ -203,6 +202,8 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	flg := ctr.bat == nil
 	if !flg {
 		defer proc.PutBatch(bat)
+	} else {
+		ctr.bat = bat
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
@@ -215,13 +216,10 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 			return err
 		}
 		if !flg {
-			if err := ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
+			if err = ctr.batchFill(i, n, bat, vals, rowCount, proc); err != nil {
 				return err
 			}
 		}
-	}
-	if flg {
-		ctr.bat = bat
 	}
 	return nil
 }

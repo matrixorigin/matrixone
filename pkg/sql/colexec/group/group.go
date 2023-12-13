@@ -379,7 +379,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err = ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -400,7 +400,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err = ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
 		}
 	}
