@@ -440,7 +440,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
+		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar), "")
 		convey.So(err, convey.ShouldBeNil)
 
 		req := &Request{
@@ -871,7 +871,7 @@ func Test_HandlePrepareStmt(t *testing.T) {
 	}
 	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		_, err := mce.handlePrepareStmt(context.TODO(), stmt)
+		_, err := mce.handlePrepareStmt(context.TODO(), stmt, "")
 		return err
 	})
 }
