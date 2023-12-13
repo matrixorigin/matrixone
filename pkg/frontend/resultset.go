@@ -224,6 +224,14 @@ func (mc *MysqlColumn) GetAutoIncr() bool {
 	return mc.auto_incr
 }
 
+func (mc *MysqlColumn) Length() uint32 {
+	return mc.length
+}
+
+func (mc *MysqlColumn) SetLength(length uint32) {
+	mc.length = length
+}
+
 // Discussion: for some MatrixOne types and Type.Scale value are needed for stringification, I think we
 // need to add a field
 // MoTypes []types.Type

@@ -22,6 +22,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
+
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,14 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
-	"unicode"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -1803,7 +1804,7 @@ func setColFlag(column *MysqlColumn) {
 func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_VAR_STRING:
 		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
