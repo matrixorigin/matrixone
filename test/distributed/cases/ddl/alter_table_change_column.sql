@@ -1158,6 +1158,6 @@ insert into table01 values(100,200);
 alter table table01 change column col1 NewCol1 float;
 commit;
 select * from table01;
-select col1 from table01;
+select newcol1 from table01;
 drop table table01;
 drop database db2;
