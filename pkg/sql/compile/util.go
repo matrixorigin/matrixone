@@ -75,6 +75,7 @@ var (
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
+	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 )
 
 var (
@@ -113,6 +114,52 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 			sql += " primary key"
 		}
 	}
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+// genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
+// NOTE: Here the columns are part of meta, centroids, entries table.
+// meta      -> key varchar(65535), value varchar(65535)
+// centroids -> version int64, centroid_id int64, centroid vecf32(xx)
+// entries   -> version int64, entry_id int64, pk xx
+// TODO: later on merge with genCreateIndexTableSql
+func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if i >= 1 {
+			sql += ","
+		}
+		sql += "`" + planCol.Name + "`" + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_array_float32:
+			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
+		case types.T_array_float64:
+			sql += fmt.Sprintf("VECF64(%d)", planCol.Typ.Width)
+		default:
+			sql += typeId.String()
+		}
+
+	}
+
+	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
+		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
+		sql += pkStr
+	}
+
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
