@@ -47,7 +47,6 @@ const (
 	Normal
 	Remote
 	Parallel
-	Pushdown
 	CreateDatabase
 	CreateTable
 	CreateIndex
@@ -65,7 +64,6 @@ const (
 	CreateSequence
 	DropSequence
 	AlterSequence
-	MagicDelete
 	Replace
 )
 
@@ -136,14 +134,16 @@ type Scope struct {
 }
 
 // canRemote checks whether the current scope can be executed remotely.
-func (s *Scope) canRemote(c *Compile) bool {
+func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
 	// check the remote address.
 	// if it was empty or equal to the current address, return false.
-	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
-		return false
-	}
-	if isSameCN(c.addr, s.NodeInfo.Addr) {
-		return false
+	if checkAddr {
+		if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
+			return false
+		}
+		if isSameCN(c.addr, s.NodeInfo.Addr) {
+			return false
+		}
 	}
 
 	// some operators cannot be remote.
@@ -151,6 +151,11 @@ func (s *Scope) canRemote(c *Compile) bool {
 	//  cannot generate this remote pipeline if the operator type is not supported.
 	for _, op := range s.Instructions {
 		if op.CannotRemote() {
+			return false
+		}
+	}
+	for _, pre := range s.PreScopes {
+		if !pre.canRemote(c, false) {
 			return false
 		}
 	}

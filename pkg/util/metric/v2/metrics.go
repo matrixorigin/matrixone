@@ -44,6 +44,7 @@ func init() {
 	initRPCMetrics()
 	initMemMetrics()
 	initTraceMetrics()
+	initProxyMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -149,4 +150,15 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+}
+
+func initProxyMetrics() {
+	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(proxyDisconnectCounter)
+	registry.MustRegister(proxyTransferCounter)
+	registry.MustRegister(ProxyTransferDurationHistogram)
+	registry.MustRegister(ProxyDrainCounter)
+	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
+	registry.MustRegister(ProxyTransferQueueSizeGauge)
+	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
 }

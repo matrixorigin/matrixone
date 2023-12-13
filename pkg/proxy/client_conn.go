@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -128,7 +129,7 @@ type clientConn struct {
 	// 1. set variable stmts
 	// 2. prepare stmts
 	// 3. use stmts
-	redoStmts []string
+	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
@@ -137,6 +138,13 @@ type clientConn struct {
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
 	}
+}
+
+// internalStmt is used internally in proxy, which indicates the stmt
+// need to execute.
+type internalStmt struct {
+	cmdType MySQLCmd
+	s       string
 }
 
 var _ ClientConn = (*clientConn)(nil)
@@ -266,8 +274,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleSetVar(ev)
 	case *prepareEvent:
 		return c.handlePrepare(ev)
-	case *useEvent:
-		return c.handleUse(ev)
+	case *initDBEvent:
+		return c.handleInitDB(ev)
 	default:
 	}
 	return nil
@@ -305,7 +313,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("access error")
 	}
 
-	ok, err := sc.ExecStmt(stmt, resp)
+	ok, err := sc.ExecStmt(internalStmt{cmdType: cmdQuery, s: stmt}, resp)
 	if err != nil {
 		c.log.Error("failed to send query to server",
 			zap.String("query", stmt), zap.Error(err))
@@ -333,19 +341,19 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
 	return nil
 }
 
 // handleSetVar handles the prepare event.
 func (c *clientConn) handlePrepare(e *prepareEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
 	return nil
 }
 
 // handleUse handles the use event.
-func (c *clientConn) handleUse(e *useEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+func (c *clientConn) handleInitDB(e *initDBEvent) error {
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: e.db})
 	return nil
 }
 
@@ -362,6 +370,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 
 	if c.router == nil {
+		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, moerr.NewInternalErrorNoCtx("no router available")
 	}
 
@@ -383,6 +392,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		// NB: The selected CNServer must have label hash in it.
 		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
 		if err != nil {
+			v2.ProxyConnectRouteFailCounter.Inc()
 			return nil, err
 		}
 		// We have to set proxy connection ID after cn is returned.
@@ -399,6 +409,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
 		if err != nil {
 			if isRetryableErr(err) {
+				v2.ProxyConnectRetryCounter.Inc()
 				badCNServers[cn.uuid] = struct{}{}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
@@ -406,6 +417,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 					zap.Any("bad backend servers", badCNServers))
 				continue
 			} else {
+				v2.ProxyConnectCommonFailCounter.Inc()
 				return nil, err
 			}
 		} else {
@@ -416,10 +428,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	if sendToClient {
 		// r is the packet received from CN server, send r to client.
 		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
+			v2.ProxyConnectCommonFailCounter.Inc()
 			return nil, err
 		}
 	}
 	if !isOKPacket(r) {
+		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
 	}
@@ -427,10 +441,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	// Re-execute the statements.
 	for _, stmt := range c.redoStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			v2.ProxyConnectCommonFailCounter.Inc()
 			return nil, err
 		}
 	}
 
+	v2.ProxyConnectSuccessCounter.Inc()
 	return sc, nil
 }
 

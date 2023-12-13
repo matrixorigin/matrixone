@@ -70,19 +70,21 @@ type container struct {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
-	if ctr.hashTable != nil {
-		ctr.hashTable.Free()
-		ctr.hashTable = nil
-	}
-	if ctr.btc != nil {
-		ctr.btc.Clean(proc.Mp())
-		ctr.btc = nil
-	}
-	if ctr.cnts != nil {
-		for i := range ctr.cnts {
-			proc.Mp().PutSels(ctr.cnts[i])
+	if ctr != nil {
+		if ctr.hashTable != nil {
+			ctr.hashTable.Free()
+			ctr.hashTable = nil
 		}
-		ctr.cnts = nil
+		if ctr.btc != nil {
+			ctr.btc.Clean(proc.Mp())
+			ctr.btc = nil
+		}
+		if ctr.cnts != nil {
+			for i := range ctr.cnts {
+				proc.Mp().PutSels(ctr.cnts[i])
+			}
+			ctr.cnts = nil
+		}
+		ctr.FreeAllReg()
 	}
-	ctr.FreeAllReg()
 }
