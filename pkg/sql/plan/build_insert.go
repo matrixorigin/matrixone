@@ -371,7 +371,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}, {
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
-						List: colExprs[0][:useInExprCount+1],
+						List: colExprs[0],
 					},
 				},
 				Typ: &plan.Type{
@@ -380,22 +380,6 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}})
 			if err != nil {
 				return nil
-			}
-			if fe, ok := expr.Expr.(*plan.Expr_F); ok {
-				if fe.F.Func.ObjName != "in" {
-					// give up this opt
-					return nil
-				}
-				fe.F.Args[1] = &plan.Expr{
-					Expr: &plan.Expr_List{
-						List: &plan.ExprList{
-							List: colExprs[0],
-						},
-					},
-					Typ: &plan.Type{
-						Id: int32(types.T_tuple),
-					},
-				}
 			}
 			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
 			if err != nil {
