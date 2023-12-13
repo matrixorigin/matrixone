@@ -74,6 +74,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		// copy value
 		stmt.StatementID = s.StatementID
 		stmt.SessionID = s.SessionID
+		stmt.TransactionID = s.TransactionID
 		stmt.Account = s.Account
 		stmt.User = s.User
 		stmt.Host = s.Host
