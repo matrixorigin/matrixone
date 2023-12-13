@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -190,6 +191,18 @@ func (a *anaylze) S3IOOutputCount(idx int, count int64) {
 
 func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
+}
+
+func (a anaylze) Name() string {
+	return "compile.anaylze"
+}
+
+func newAnaylze() *anaylze {
+	return reuse.Alloc[anaylze](nil)
+}
+
+func (a *anaylze) release() {
+	reuse.Free[anaylze](a, nil)
 }
 
 // Compile contains all the information needed for compilation.

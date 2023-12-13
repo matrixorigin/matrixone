@@ -44,4 +44,13 @@ func init() {
 		reuse.DefaultOptions[Scope]().
 			WithEnableChecker(),
 	)
+
+	reuse.CreatePool[anaylze](
+		func() *anaylze {
+			return &anaylze{}
+		},
+		func(a *anaylze) { *a = anaylze{} },
+		reuse.DefaultOptions[anaylze]().
+			WithEnableChecker(),
+	)
 }

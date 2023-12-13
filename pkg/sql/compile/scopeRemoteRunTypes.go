@@ -379,7 +379,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
 	c.e = cnInfo.storeEngine
-	c.anal = &anaylze{analInfos: proc.AnalInfos}
+	c.anal = newAnaylze()
+	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)

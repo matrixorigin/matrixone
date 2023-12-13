@@ -318,7 +318,7 @@ func Test_refactorScope(t *testing.T) {
 	s := reuse.Alloc[Scope](nil)
 	s.Proc = proc
 	c := reuse.Alloc[Compile](nil)
-	c.anal = &anaylze{}
+	c.anal = newAnaylze()
 	c.ctx = ctx
 	c.proc = proc
 	rs := appendWriteBackOperator(c, s)
@@ -600,11 +600,8 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
-	target := &anaylze{
-		analInfos: []*process.AnalyzeInfo{
-			{},
-		},
-	}
+	target := newAnaylze()
+	target.analInfos = []*process.AnalyzeInfo{{}}
 	ana := &pipeline.AnalysisList{
 		List: []*plan2.AnalyzeInfo{
 			{},

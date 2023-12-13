@@ -139,7 +139,7 @@ func (c *Compile) reset() {
 		for i := range c.anal.analInfos {
 			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
-		c.anal.analInfos = nil
+		c.anal.release()
 	}
 	for i := range c.scope {
 		c.scope[i].release()
@@ -3217,11 +3217,10 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	for i := range anals {
 		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
 	}
-	c.anal = &anaylze{
-		qry:       qry,
-		analInfos: anals,
-		curr:      int(qry.Steps[0]),
-	}
+	c.anal = newAnaylze()
+	c.anal.qry = qry
+	c.anal.analInfos = anals
+	c.anal.curr = int(qry.Steps[0])
 	for _, node := range c.anal.qry.Nodes {
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
