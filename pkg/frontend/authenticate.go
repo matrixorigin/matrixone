@@ -6364,8 +6364,13 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
-	ses.tStmt.SetSkipTxn(true) // for reset frontend query's txn-id
 	defer bh.Close()
+
+	if ses.tStmt != nil {
+		// for reset frontend query's txn-id
+		// NEED to skip this background session txn, which used by authenticateUserCanExecuteStatement()
+		ses.tStmt.SetSkipTxn(true)
+	}
 
 	//the set of roles the (k+1) th iteration during the execution
 	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}

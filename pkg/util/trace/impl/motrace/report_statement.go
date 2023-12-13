@@ -505,7 +505,7 @@ func (s *StatementInfo) SetSkipTxnId(id []byte) { s.skipTxnID = id }
 func (s *StatementInfo) NeedSkipTxn() bool      { return s.skipTxnOnce }
 func (s *StatementInfo) SkipTxnId(id []byte) bool {
 	// s.skipTxnID == nil, means NO skipTxnId
-	return s.skipTxnID != nil && bytes.Compare(s.skipTxnID, id) == 0
+	return s.skipTxnID != nil && bytes.Equal(s.skipTxnID, id)
 }
 
 func GetLongQueryTime() time.Duration {
