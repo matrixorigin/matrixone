@@ -2027,7 +2027,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				case float64:
 					data = mp.appendUint64(data, math.Float64bits(v))
 				case string:
-					data = mp.appendStringLenEnc(data, v)
+					val, err := strconv.ParseFloat(v, 64)
+					if err != nil {
+						return nil, err
+					}
+					data = mp.appendUint64(data, math.Float64bits(val))
 				default:
 				}
 			}
