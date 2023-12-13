@@ -11,9 +11,9 @@ insert into s_t1 values (3, 1, null), (3, 2, null), (3, 2, null);
 select c1, sample(c2, 1 rows), sample(c3, 1 rows) from s_t1;
 /* 2. cannot fixed sample function (non-scalar function) and aggregate function (scalar function) */
 select c1, max(c2), sample(c3, 1 rows) from s_t1;
-/* 3. sample(column list, N rows) requires 1 <= N <= 1000 */
+/* 3. sample(column list, N rows) requires 1 <= N <= 11000 */
 select sample(c1, 0 rows) from s_t1;
-select sample(c1, 1001 rows) from s_t1;
+select sample(c1, 11001 rows) from s_t1;
 /* 4. sample(column list, K percent) requires 0.00 <= K <= 100.00, should watch that 99.994 was accepted but will treat as 99.99 */
 select sample(c1, 101 percent) from s_t1;
 select sample(c1, 100.01 percent) from s_t1;

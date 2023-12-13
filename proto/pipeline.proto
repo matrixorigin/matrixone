@@ -537,5 +537,6 @@ message RuntimeFilter {
   }
 
   RuntimeFilterType typ = 1;
-  bytes data = 2;
+  int32 card = 2;
+  bytes data = 3;
 }

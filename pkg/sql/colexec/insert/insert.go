@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -65,9 +66,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				return result, err
 			}
@@ -161,6 +174,11 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err

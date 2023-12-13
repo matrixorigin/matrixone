@@ -23,16 +23,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -325,15 +323,15 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if ret {
 		switch s.DataTypeMap[col.Name] {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
 			}
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_U64Val); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
 			}
 		case types.T_date:
-			if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_Dateval); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
 			}
 		}
@@ -344,7 +342,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if ret {
 		switch leftFuncName {
 		case "year":
-			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
 				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
@@ -386,17 +384,25 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in", "startswith":
+		case "in", "prefix_eq":
 			// use ndv map,do not need nodeID
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
 				return 10 / ndv
 			}
 			return 0.5
+		case "prefix_in":
+			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			// use ndv map,do not need nodeID
+			ndv := getExprNdv(expr, builder)
+			if ndv > 10*card {
+				return 10 * card / ndv
+			}
+			return 0.5
 		default:
 			return 0.15
 		}
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		return 1
 	}
 	return 1
@@ -439,7 +445,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 
 // harsh estimate of block selectivity, will improve it in the future
 func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
-	if !CheckExprIsMonotonic(ctx, expr) {
+	if !CheckExprIsZonemappable(ctx, expr) {
 		return 1
 	}
 	ret, col := CheckFilter(expr)
@@ -739,8 +745,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				node.Stats.Outcnt = float64(c.I64Val)
 			}
 		}

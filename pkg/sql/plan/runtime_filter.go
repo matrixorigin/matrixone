@@ -107,7 +107,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	for _, expr := range node.OnList {
 		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
-			if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
+			if !CheckExprIsZonemappable(builder.GetContext(), args[0]) {
 				return
 			}
 			probeExprs = append(probeExprs, args[0])

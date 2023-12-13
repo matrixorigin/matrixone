@@ -60,7 +60,7 @@ func (mce *MysqlCmdExecutor) handlePauseDaemonTask(ctx context.Context, st *tree
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, st *tree.CancelDaemonTask) error {
+func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, taskID uint64) error {
 	ses := mce.ses
 	ts := ses.pu.TaskService
 	if ts == nil {
@@ -68,14 +68,14 @@ func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, st *tre
 			"task service not ready yet, please try again later.")
 	}
 	tasks, err := ts.QueryDaemonTask(ctx,
-		taskservice.WithTaskIDCond(taskservice.EQ, st.TaskID),
+		taskservice.WithTaskIDCond(taskservice.EQ, taskID),
 		taskservice.WithAccountID(taskservice.EQ, ses.accountId),
 	)
 	if err != nil {
 		return err
 	}
 	if len(tasks) != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
+		return moerr.NewErrTaskNotFound(ctx, taskID)
 	}
 	// Already in canceled status.
 	if tasks[0].TaskStatus == task.TaskStatus_Canceled || tasks[0].TaskStatus == task.TaskStatus_CancelRequested {
@@ -90,7 +90,7 @@ func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, st *tre
 		return err
 	}
 	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
+		return moerr.NewErrTaskNotFound(ctx, taskID)
 	}
 	return nil
 }

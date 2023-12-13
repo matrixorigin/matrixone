@@ -268,7 +268,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	found := false
 
 	for i := range cols {
-		if !cols[i].Hidden && (name == AllColumns || cols[i].Name == name) {
+		if name == AllColumns || cols[i].Name == name {
 			neededCols[cols[i].Name] = cols[i]
 			found = true
 		}
@@ -519,7 +519,8 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 					nil,
 					tbl.db.txn.engine.fs,
 					location,
-					tbl.db.txn.proc.GetMPool())
+					tbl.db.txn.proc.GetMPool(),
+					fileservice.Policy(0))
 				if err != nil {
 					return err
 				}
@@ -1523,7 +1524,7 @@ func (tbl *txnTable) makeEncodedPK(
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
 		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Const, len(pk.Names))
+			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull = getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
 				return
@@ -2005,7 +2006,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bat, err := blockio.BlockRead(
 			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes, tbl.db.txn.op.SnapshotTS(),
 			nil, nil, nil,
-			tbl.db.txn.engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(),
+			tbl.db.txn.engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
 		)
 		if err != nil {
 			return rowid, false, err

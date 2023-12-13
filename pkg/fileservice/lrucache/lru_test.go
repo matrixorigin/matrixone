@@ -16,8 +16,10 @@ package lrucache
 
 import (
 	"context"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,18 +28,10 @@ func TestLRU(t *testing.T) {
 	ctx := context.Background()
 
 	l.Set(ctx, 1, []byte{42})
-	_, ok := l.kv[1]
-	assert.True(t, ok)
-	_, ok = l.kv[2]
-	assert.False(t, ok)
 	val, _ := l.Get(ctx, 1)
 	assert.Equal(t, Bytes([]byte{42}), val)
 
 	l.Set(ctx, 2, []byte{43})
-	_, ok = l.kv[1]
-	assert.False(t, ok)
-	_, ok = l.kv[2]
-	assert.True(t, ok)
 	val, _ = l.Get(ctx, 2)
 	assert.Equal(t, Bytes([]byte{43}), val)
 }
@@ -59,39 +53,53 @@ func TestLRUCallbacks(t *testing.T) {
 			evictEntryMap[key] = value
 			postEvictInvokedMap[key] = true
 		})
+	s := &l.shards[0]
+	s.capacity = 1
 
 	// PostSet
-	l.Set(ctx, 1, []byte{42})
+	h := l.hasher.Hash(1)
+	s.Set(ctx, h, 1, []byte{42})
 	assert.True(t, postSetInvokedMap[1])
 	postSetInvokedMap[1] = false // resetting
 	assert.False(t, postEvictInvokedMap[1])
 
-	l.Set(ctx, 1, []byte{43})
-	assert.True(t, postSetInvokedMap[1])
-	assert.True(t, postEvictInvokedMap[1]) // set on the same key, so evicted
-
 	// PostSet and PostEvict
-	l.Set(ctx, 2, []byte{44})
+	h = l.hasher.Hash(2)
+	s.Set(ctx, h, 2, []byte{44})
 	assert.True(t, postEvictInvokedMap[1])        //postEvictInvokedMap is updated by PostEvict
-	assert.Equal(t, []byte{43}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
+	assert.Equal(t, []byte{42}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
 }
 
 func BenchmarkLRUSet(b *testing.B) {
+	var k cache.CacheKey
+
+	k.Path = "tmp"
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[int, Bytes](capacity, nil, nil, nil)
+	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	v := make([]byte, 1)
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Set(ctx, i%capacity, []byte{byte(i)})
+		k.Offset = int64(i) % (capacity)
+		v[0] = byte(i)
+		l.Set(ctx, k, v)
 	}
 }
 
 func BenchmarkLRUParallelSet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[int, Bytes](capacity, nil, nil, nil)
+	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		var k cache.CacheKey
+
+		k.Path = "tmp"
+		v := make([]byte, 1)
 		for i := 0; pb.Next(); i++ {
-			l.Set(ctx, i%capacity, []byte{byte(i)})
+			k.Offset = int64(i) % (capacity)
+			v[0] = byte(i)
+			l.Set(ctx, k, v)
 		}
 	})
 }
@@ -99,13 +107,47 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New[int, Bytes](capacity, nil, nil, nil)
+	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		var k cache.CacheKey
+
+		k.Path = "tmp"
+		v := make([]byte, 1)
 		for i := 0; pb.Next(); i++ {
-			l.Set(ctx, i%capacity, []byte{byte(i)})
+			k.Offset = int64(i) % (capacity)
+			v[0] = byte(i)
+			l.Set(ctx, k, v)
 			if i%2 == 0 {
-				l.Get(ctx, i%capacity)
+				l.Get(ctx, k)
 			}
 		}
 	})
+}
+
+func BenchmarkLRULargeParallelSetOrGet(b *testing.B) {
+	var wg sync.WaitGroup
+
+	ctx := context.Background()
+	const capacity = 1024
+	l := New[cache.CacheKey, Bytes](capacity, nil, nil, nil)
+	b.ResetTimer()
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var k cache.CacheKey
+			k.Path = "tmp"
+			v := make([]byte, 1)
+			for i := 0; i < b.N; i++ {
+				k.Offset = int64(i) % (capacity * 10)
+				v[0] = byte(i)
+				l.Set(ctx, k, v)
+				if i%2 == 0 {
+					l.Get(ctx, k)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
