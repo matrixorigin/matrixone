@@ -94,6 +94,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
+			if ap.lastrow == 0 {
+				ap.bat = nil
+			}
 			return result, nil
 
 		default:
@@ -150,7 +153,6 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	ctr.rbat.AddRowCount(ap.bat.RowCount())
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }
@@ -350,7 +352,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	}
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }
