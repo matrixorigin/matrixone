@@ -80,7 +80,7 @@ func (sd *StagesDuration) Record(elapsed int64, stage string) {
 
 func (sd *StagesDuration) ClearOnlyElapsed() {
 	sd.total = 0
-	for k, _ := range sd.stages {
+	for k := range sd.stages {
 		sd.stages[k] = 0
 	}
 }
