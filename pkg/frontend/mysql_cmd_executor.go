@@ -4323,7 +4323,6 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Success: false,
 		Uuid:    util.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)
