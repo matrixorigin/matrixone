@@ -52,13 +52,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 	return nil
 }
 
-func Run(ins Instructions, proc *process.Process) (end bool, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(proc.Ctx, e)
-			logutil.Errorf("panic in vm.Run: %v", err)
-		}
-	}()
+func setAnalyzeInfo(ins Instructions, proc *process.Process) {
+	var buf bytes.Buffer
+	String(ins, &buf)
+	logutil.Infof("pipeline: %v", buf.String())
 
 	idxMap := make(map[int]int, 0)
 	for i := 0; i < len(ins); i++ {
@@ -68,7 +65,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			IsLast:  ins[i].IsLast,
 		}
 		switch ins[i].Op {
-		case Output, Merge, Connector, Dispatch, MergeBlock, MergeGroup, MergeCTE, MergeDelete, MergeLimit, MergeOffset, MergeOrder, MergeRecursive, MergeTop:
+		case Shuffle, Projection, Output, Merge, Connector, Dispatch, MergeBlock, MergeGroup, MergeCTE, MergeDelete, MergeLimit, MergeOffset, MergeOrder, MergeRecursive, MergeTop:
 			info.ParallelIdx = -1
 			// do nothing for parallel analyze info
 		default:
@@ -83,9 +80,21 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			}
 		}
 		ins[i].Arg.SetInfo(info)
-		if i > 0 {
-			ins[i].Arg.AppendChild(ins[i-1].Arg)
+	}
+}
+
+func Run(ins Instructions, proc *process.Process) (end bool, err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(proc.Ctx, e)
+			logutil.Errorf("panic in vm.Run: %v", err)
 		}
+	}()
+
+	setAnalyzeInfo(ins, proc)
+
+	for i := 1; i < len(ins); i++ {
+		ins[i].Arg.AppendChild(ins[i-1].Arg)
 	}
 
 	root := ins[len(ins)-1].Arg
@@ -98,32 +107,4 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		end = result.Status == ExecStop || result.Batch == nil
 	}
 	return end, nil
-
-	// return fubarRun(ins, proc, 0)
 }
-
-// func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
-// 	var fubarStack []int
-// 	var result CallResult
-
-// 	for i := start; i < len(ins); i++ {
-// 		if result, err = ins[i].Arg.Call(proc); err != nil {
-// 			return result.Status == ExecStop || end, err
-// 		}
-
-// 		if result.Status == process.ExecStop {
-// 			end = true
-// 		} else if result.Status == process.ExecHasMore {
-// 			fubarStack = append(fubarStack, i)
-// 		}
-// 	}
-
-// 	// run the stack backwards.
-// 	for i := len(fubarStack) - 1; i >= 0; i-- {
-// 		end, err = fubarRun(ins, proc, fubarStack[i])
-// 		if end || err != nil {
-// 			return end, err
-// 		}
-// 	}
-// 	return end, err
-// }

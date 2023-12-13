@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -793,14 +794,20 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 }
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
-	fmt.Fprintf(buf, "timeConsumed=%dms, dop=%v, timeConsumedEachParallel=[", a.AnalyzeInfo.TimeConsumed/1000000, len(a.AnalyzeInfo.TimeConsumedArray))
-	for i := range a.AnalyzeInfo.TimeConsumedArray {
-		if i != 0 {
-			fmt.Fprintf(buf, ",")
+	fmt.Fprintf(buf, "timeConsumed=%dms", a.AnalyzeInfo.TimeConsumed/1000000)
+
+	dop := len(a.AnalyzeInfo.TimeConsumedArray)
+	if dop > 1 {
+		fmt.Fprintf(buf, " dop=%v timeConsumedEachParallel=[", dop)
+		sort.Slice(a.AnalyzeInfo.TimeConsumedArray, func(i, j int) bool { return a.AnalyzeInfo.TimeConsumedArray[i] < a.AnalyzeInfo.TimeConsumedArray[j] })
+		for i := range a.AnalyzeInfo.TimeConsumedArray {
+			if i != 0 {
+				fmt.Fprintf(buf, ",")
+			}
+			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArray[i]/1000000)
 		}
-		fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArray[i]/1000000)
+		fmt.Fprintf(buf, "]")
 	}
-	fmt.Fprintf(buf, "]")
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
