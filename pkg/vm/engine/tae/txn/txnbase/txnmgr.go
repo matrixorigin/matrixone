@@ -531,12 +531,17 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
 	for _, item := range items {
-		t0 := time.Now()
+		t0, t1 := time.Now(), time.Now()
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
+
+			dur := time.Since(t1)
+			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(dur.Seconds())
+			onPrepareWALStages.Record(dur.Milliseconds(), "op.Txn.PrepareWAL")
+
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
 					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
@@ -550,13 +555,27 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
 				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
 			}
+
+			t1 = time.Now()
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+
+			dur = time.Since(t1)
+			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(dur.Seconds())
+			onPrepareWALStages.Record(dur.Milliseconds(), "onEndPrepareWAL")
 		}
+
+		t1 = time.Now()
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
 
-		v2.TxnOnPrepareWALDurationHistogram.Observe(time.Since(t0).Seconds())
+		dur := time.Since(t1)
+		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(dur.Seconds())
+		onPrepareWALStages.Record(dur.Milliseconds(), "mgr.FlushQueue.Enqueue")
+
+		onPrepareWALStages.Log()
+		onPrepareWALStages.ClearOnlyElapsed()
+		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
