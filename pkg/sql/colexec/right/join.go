@@ -104,8 +104,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.bat.Clean(proc.Mp())
 				return result, err
 			}
-			proc.PutBatch(ap.bat)
 			if ap.lastrow == 0 {
+				proc.PutBatch(ap.bat)
 				ap.bat = nil
 			}
 			return result, nil

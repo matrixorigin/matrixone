@@ -95,6 +95,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			if ap.lastrow == 0 {
+				proc.PutBatch(ap.bat)
 				ap.bat = nil
 			}
 			return result, nil
@@ -127,7 +128,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(ap.bat)
 	anal.Input(ap.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)

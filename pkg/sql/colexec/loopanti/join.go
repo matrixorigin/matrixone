@@ -80,8 +80,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				err = ctr.probe(arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 			}
-			proc.PutBatch(arg.bat)
 			if arg.lastrow == 0 {
+				proc.PutBatch(arg.bat)
 				arg.bat = nil
 			}
 			return result, err

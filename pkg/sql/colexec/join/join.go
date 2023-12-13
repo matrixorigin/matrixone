@@ -96,7 +96,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+				proc.PutBatch(ap.bat)
 				return result, err
+			}
+			if ap.lastrow == 0 {
+				proc.PutBatch(ap.bat)
+				ap.bat = nil
 			}
 			return result, nil
 
@@ -128,7 +133,6 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 }
 
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(ap.bat)
 
 	anal.Input(ap.bat, isFirst)
 	if ctr.rbat != nil {
@@ -232,7 +236,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	ctr.rbat.AddRowCount(rowCount)
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }

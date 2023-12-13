@@ -90,6 +90,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			} else {
 				err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				if ap.lastrow == 0 {
+					proc.PutBatch(ap.bat)
+					ap.bat = nil
+				}
 				return result, err
 			}
 
@@ -157,13 +161,12 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	}
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }
 
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(ap.bat)
+
 	anal.Input(ap.bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -285,7 +288,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	}
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }
