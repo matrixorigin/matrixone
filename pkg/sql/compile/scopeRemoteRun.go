@@ -1606,20 +1606,21 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 	return &plan.AnalyzeInfo{
-		InputRows:        info.InputRows,
-		OutputRows:       info.OutputRows,
-		InputSize:        info.InputSize,
-		OutputSize:       info.OutputSize,
-		TimeConsumed:     info.TimeConsumed,
-		MemorySize:       info.MemorySize,
-		WaitTimeConsumed: info.WaitTimeConsumed,
-		DiskIO:           info.DiskIO,
-		S3IOByte:         info.S3IOByte,
-		S3IOInputCount:   info.S3IOInputCount,
-		S3IOOutputCount:  info.S3IOOutputCount,
-		NetworkIO:        info.NetworkIO,
-		ScanTime:         info.ScanTime,
-		InsertTime:       info.InsertTime,
+		InputRows:         info.InputRows,
+		OutputRows:        info.OutputRows,
+		InputSize:         info.InputSize,
+		OutputSize:        info.OutputSize,
+		TimeConsumed:      info.TimeConsumed,
+		TimeConsumedArray: info.TimeConsumedArray,
+		MemorySize:        info.MemorySize,
+		WaitTimeConsumed:  info.WaitTimeConsumed,
+		DiskIO:            info.DiskIO,
+		S3IOByte:          info.S3IOByte,
+		S3IOInputCount:    info.S3IOInputCount,
+		S3IOOutputCount:   info.S3IOOutputCount,
+		NetworkIO:         info.NetworkIO,
+		ScanTime:          info.ScanTime,
+		InsertTime:        info.InsertTime,
 	}
 }
 

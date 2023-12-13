@@ -514,6 +514,12 @@ func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
 	pa.TimeConsumedArray = append(pa.TimeConsumedArray, a.TimeConsumedArray...)
 }
 
+func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TimeConsumedArray = append(a.TimeConsumedArray, pa.TimeConsumedArray...)
+}
+
 func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
