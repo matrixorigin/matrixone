@@ -65,8 +65,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.InitReceiver(proc, false)
 	rowCount := int64(arg.N)
-	if rowCount < 10000 {
-		rowCount = 10000
+	if rowCount < 100000 {
+		rowCount = 100000
 	}
 
 	inFilterCardLimit := int64(plan.InFilterCardLimit)
@@ -87,9 +87,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	} else {
 		//@see https://hur.st/bloomfilter/
 		var probability float64
-		if rowCount < 10001 {
-			probability = 0.0001
-		} else if rowCount < 100001 {
+		if rowCount < 100001 {
 			probability = 0.00001
 		} else if rowCount < 1000001 {
 			probability = 0.000003

@@ -786,16 +786,16 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	var startNum, endNum, stepNum float64
 	var flag1, flag2, flag3 bool
 	getInt32Val := func(e *Expr) (float64, bool) {
-		if s, ok := e.Expr.(*plan.Expr_C); ok {
-			if v, ok := s.C.Value.(*plan.Const_I32Val); ok && !s.C.Isnull {
+		if s, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if v, ok := s.Lit.Value.(*plan.Literal_I32Val); ok && !s.Lit.Isnull {
 				return float64(v.I32Val), true
 			}
 		}
 		return 0, false
 	}
 	getInt64Val := func(e *Expr) (float64, bool) {
-		if s, ok := e.Expr.(*plan.Expr_C); ok {
-			if v, ok := s.C.Value.(*plan.Const_I64Val); ok && !s.C.Isnull {
+		if s, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if v, ok := s.Lit.Value.(*plan.Literal_I64Val); ok && !s.Lit.Isnull {
 				return float64(v.I64Val), true
 			}
 		}
