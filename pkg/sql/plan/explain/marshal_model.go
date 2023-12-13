@@ -28,7 +28,6 @@ type ExplainData struct {
 	Steps        []Step `json:"steps"`
 	Code         uint16 `json:"code"`
 	Message      string `json:"message"`
-	Success      bool   `json:"success"`
 	Uuid         string `json:"uuid"`
 	NewPlanStats statistic.StatsInfo
 }
@@ -116,9 +115,8 @@ func NewStatisticValue(name string, unit string) *StatisticValue {
 
 func NewExplainData(uuid uuid.UUID) *ExplainData {
 	return &ExplainData{
-		Steps:   make([]Step, 0),
-		Success: true,
-		Uuid:    uuid.String(),
+		Steps: make([]Step, 0),
+		Uuid:  uuid.String(),
 	}
 }
 
@@ -126,7 +124,6 @@ func NewExplainDataFail(uuid uuid.UUID, code uint16, msg string) *ExplainData {
 	return &ExplainData{
 		Code:    code,
 		Message: msg,
-		Success: false,
 		Uuid:    uuid.String(),
 	}
 }
