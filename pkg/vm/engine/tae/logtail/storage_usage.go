@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 	"unsafe"
@@ -38,11 +39,15 @@ import (
 
 // 1. show accounts
 //
-//	internal `show accounts`       --------\
-//										    |<=====> cn cache <====> (missed or expired) ===> tn cache
-//  mysql client `show accounts`   --------/
-//
-//
+//	internal `show accounts`       -------\
+//									    |<=====> cn cache <====> (missed or expired) ===> tn cache
+//  mysql client `show accounts`   -------/													 ^
+//																			 ________________|
+//         																	|	update       |
+//																			|				 |
+//                                                                  incremental ckp	         |
+//																							 |
+//  								            when tn restart --> replay from ckps --------|
 // 2. collecting storage usage
 //
 // when doing incremental ckp
@@ -89,6 +94,29 @@ type UsageData struct {
 
 var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64}
 
+// MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
+// the accIds, dbIds and tblIds are random produced
+func MockUsageData(accCnt, dbCnt, tblCnt int) (result []UsageData) {
+	for x := 0; x < accCnt; x++ {
+		accId := rand.Uint32()
+
+		for y := 0; y < dbCnt; y++ {
+			dbId := rand.Uint64()
+
+			for z := 0; z < tblCnt; z++ {
+				result = append(result, UsageData{
+					AccId: accId,
+					DbId:  dbId,
+					TblId: rand.Uint64(),
+					Size:  int64(rand.Int63() % 0x3ffff),
+				})
+			}
+		}
+	}
+
+	return
+}
+
 func (u UsageData) String() string {
 	return fmt.Sprintf("account id = %d; database id = %d; table id = %d; size = %d",
 		u.AccId, u.DbId, u.TblId, u.Size)
@@ -116,7 +144,8 @@ type StorageUsageCache struct {
 	lazyThreshold time.Duration
 	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
-	data *btree.BTreeG[UsageData]
+	data     *btree.BTreeG[UsageData]
+	lessFunc func(a UsageData, b UsageData) bool
 }
 
 type StorageUsageCacheOption = func(c *StorageUsageCache)
@@ -128,14 +157,38 @@ func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 	})
 }
 
+func WithLessFunc(less func(a UsageData, b UsageData) bool) StorageUsageCacheOption {
+	return StorageUsageCacheOption(func(c *StorageUsageCache) {
+		c.lessFunc = less
+	})
+}
+
 func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	cache := new(StorageUsageCache)
-	cache.data = btree.NewBTreeG[UsageData](usageLess)
+
+	cache.fillDefault()
+
 	for _, opt := range opts {
 		opt(cache)
 	}
+
+	cache.data = btree.NewBTreeG[UsageData](cache.lessFunc)
 	cache.data.Clear()
+
 	return cache
+}
+
+func (c *StorageUsageCache) fillDefault() {
+	c.lessFunc = usageLess
+	c.lazyThreshold = 0
+}
+
+func (c *StorageUsageCache) LessFunc() func(a UsageData, b UsageData) bool {
+	return c.lessFunc
+}
+
+func (c *StorageUsageCache) CacheLen() int {
+	return c.data.Len()
 }
 
 // MemUsed returns the memory used in megabytes
@@ -145,7 +198,7 @@ func (c *StorageUsageCache) MemUsed() float64 {
 	treeCost := uint64(unsafe.Sizeof(btree.BTreeG[UsageData]{})) + itemCnt/2*12
 	itemCost := itemCnt * uint64(unsafe.Sizeof(UsageData{}))
 
-	return math.Round(float64(treeCost+itemCost)/1048576.0*1e6) / 10e6
+	return math.Round(float64(treeCost+itemCost)/1048576.0*10e6) / 10e6
 }
 
 func (c *StorageUsageCache) Iter() btree.IterG[UsageData] {
@@ -165,12 +218,13 @@ func (c *StorageUsageCache) String() string {
 		c.lazyThreshold.Seconds(), c.lastUpdate.String())
 }
 
-func (c *StorageUsageCache) SetUpdateTime(t time.Time) {
+func (c *StorageUsageCache) setUpdateTime(t time.Time) {
 	c.lastUpdate = t
 }
 
 func (c *StorageUsageCache) Update(usage UsageData) {
 	c.data.Set(usage)
+	c.setUpdateTime(time.Now())
 }
 
 func (c *StorageUsageCache) ClearForUpdate() {
@@ -216,6 +270,7 @@ func (c *StorageUsageCache) Get(usage UsageData) (ret UsageData, exist bool) {
 
 func (c *StorageUsageCache) Delete(usage UsageData) {
 	c.data.Delete(usage)
+	c.setUpdateTime(time.Now())
 }
 
 type TNUsageMemo struct {
@@ -234,6 +289,10 @@ var tnUsageMemo = NewTNUsageMemo()
 
 func GetTNUsageMemo() *TNUsageMemo {
 	return tnUsageMemo
+}
+
+func (m *TNUsageMemo) CacheLen() int {
+	return m.cache.CacheLen()
 }
 
 func (m *TNUsageMemo) MemoryUsed() float64 {
@@ -310,16 +369,16 @@ func (m *TNUsageMemo) applyDeletes(
 		}
 	}
 
-	iter := tnUsageMemo.cache.data.Iter()
 	var tbls []uint64
 	for _, db := range dbs {
-
+		iter := tnUsageMemo.cache.Iter()
 		if found := iter.Seek(UsageData{
 			db.GetTenantID(), db.ID, 0, 0}); !found {
 			continue
 		}
 
 		if iter.Item().DbId != db.ID {
+			iter.Release()
 			continue
 		}
 
@@ -329,16 +388,15 @@ func (m *TNUsageMemo) applyDeletes(
 			appendToStorageUsageBat(ckpData, iter.Item(), true, mp)
 		}
 
+		iter.Release()
 		for idx := 0; idx < len(tbls); idx++ {
-			tnUsageMemo.cache.data.Delete(UsageData{
+			tnUsageMemo.cache.Delete(UsageData{
 				db.GetTenantID(), db.ID, tbls[idx], 0,
 			})
 		}
 
 		tbls = tbls[:0]
 	}
-
-	iter.Release()
 }
 
 func (m *TNUsageMemo) applySegInserts(inserts []UsageData, ckpData *CheckpointData, mp *mpool.MPool) {
@@ -433,6 +491,10 @@ const UsageBatMetaTableId uint64 = StorageUsageMagic
 var lastInsUsage UsageData = zeroUsageData
 var lastDelUsage UsageData = zeroUsageData
 
+// this function will accumulate all size of one table into one row.
+// [acc1, db1, table1, size1]  \
+// [acc1, db1, table1, size2]    ===> [acc1, db1, table1, size1 + size2 + size3]
+// [acc1, db1, table1, size3]  /
 func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp *mpool.MPool) {
 	appendFunc := func(vecs []*vector.Vector) {
 		vector.AppendFixed[int64](vecs[UsageSize], usage.Size, false, mp)
@@ -488,27 +550,22 @@ func segments2Usages(segs []*catalog.SegmentEntry) (usages []UsageData, loaded i
 	// prefetch with batch, need to consider the capacity
 	// of the prefetch cache
 	batchCnt := 100
-	i := 0
-	for idx := 1; idx <= len(segs); idx++ {
-		// prefetch obj meta
-		blk := segs[idx-1].GetFirstBlkEntry()
-		if blk != nil && len(blk.GetMetaLoc()) != 0 {
-			loaded++
-			blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
+	lIdx, pIdx := 0, 0
+	for lIdx < len(segs) {
+		// batch prefect segments
+		for pIdx = lIdx; pIdx < len(segs) && pIdx < lIdx+batchCnt; pIdx++ {
+			blk := segs[pIdx].GetFirstBlkEntry()
+			if blk != nil && len(blk.GetMetaLoc()) != 0 && !segs[pIdx].Stat.GetLoaded() {
+				loaded++
+				blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
+			}
 		}
 
-		// deal with the previously prefetched batch
-		for idx%batchCnt == 0 && i < idx {
-			segs[i].LoadObjectInfo()
-			usages = append(usages, toUsage(segs[i]))
-			i++
+		// load prefetched segments
+		for ; lIdx < pIdx; lIdx++ {
+			segs[lIdx].LoadObjectInfo()
+			usages = append(usages, toUsage(segs[lIdx]))
 		}
-	}
-
-	// deal with the left segments
-	for ; i < len(segs); i++ {
-		segs[i].LoadObjectInfo()
-		usages = append(usages, toUsage(segs[i]))
 	}
 
 	return
