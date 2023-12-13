@@ -110,6 +110,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			}
 		case *tree.AlterOptionAlterIndex:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+		case *tree.AlterOptionAlterReIndex:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterTableName:
@@ -277,7 +279,18 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 
 	if !skipConstraint {
 		if tableDef.Indexes != nil {
+
+			// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+			// other multi-table indexes.
+			indexNames := make(map[string]bool)
+
 			for _, indexdef := range tableDef.Indexes {
+				if _, ok := indexNames[indexdef.IndexName]; ok {
+					continue
+				} else {
+					indexNames[indexdef.IndexName] = true
+				}
+
 				var indexStr string
 				if indexdef.Unique {
 					indexStr = "UNIQUE KEY "
@@ -312,7 +325,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				if indexdef.IndexAlgoParams != "" {
 					var paramList string
 					var err error
-					paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 					if err != nil {
 						return "", err
 					}
@@ -634,6 +647,8 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 				algorithm = plan.AlterTable_INPLACE
 			}
 		case *tree.AlterOptionAlterIndex:
+			algorithm = plan.AlterTable_INPLACE
+		case *tree.AlterOptionAlterReIndex:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
