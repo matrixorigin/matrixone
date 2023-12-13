@@ -7,3 +7,4 @@ alter table t add column b int;
 commit;
 select * from t;
 a    b
+drop database test;
