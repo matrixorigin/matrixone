@@ -29,7 +29,6 @@ import (
 	morpc "github.com/matrixorigin/matrixone/pkg/common/morpc"
 )
 
-
 // MockMessage is a mock of Message interface.
 type MockMessage struct {
 	ctrl     *gomock.Controller

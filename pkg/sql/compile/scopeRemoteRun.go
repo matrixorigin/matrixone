@@ -739,7 +739,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *fuzzyfilter.Argument:
-		in.FuzzyFilter = &pipeline.FuzzyFilter{}
+		in.FuzzyFilter = &pipeline.FuzzyFilter{
+			N:                      float32(t.N),
+			PkName:                 t.PkName,
+			PkTyp:                  &plan.Type{Id: int32(t.PkTyp.Oid)},
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
@@ -1180,8 +1185,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			IsIgnore:        t.IsIgnore,
 		}
 	case vm.FuzzyFilter:
-		// t := opr.GetFuzzyFilter()
-		v.Arg = new(fuzzyfilter.Argument)
+		t := opr.GetFuzzyFilter()
+		v.Arg = &fuzzyfilter.Argument{
+			N:      float64(t.N),
+			PkName: t.PkName,
+			PkTyp: types.Type{
+				Oid: types.T(t.PkTyp.Id),
+			},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+		}
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
