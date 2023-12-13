@@ -6,3 +6,4 @@ create table t(a int);
 alter table t add column b int;
 commit;
 select * from t;
+drop database test;
