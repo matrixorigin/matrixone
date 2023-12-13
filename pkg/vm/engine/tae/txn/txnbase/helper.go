@@ -16,8 +16,9 @@ package txnbase
 
 import (
 	"bytes"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -45,3 +46,43 @@ func UnmarshalID(buf []byte) *common.ID {
 	}
 	return &id
 }
+
+// for debug
+type StagesDuration struct {
+	name string
+	// stage name --> duration (ms)
+	stages map[string]int64
+	// total stages duration ms
+	total int64
+	// the threshold to print log (ms)
+	logThreshold int64
+}
+
+func NewStagesDurationWithLogThreshold(ms int64, name string) *StagesDuration {
+	sd := new(StagesDuration)
+	sd.logThreshold = ms
+	sd.name = name
+	sd.stages = make(map[string]int64, 0)
+	return sd
+}
+
+func (sd *StagesDuration) Log() {
+	if sd.total >= sd.logThreshold {
+		logutil.Info(fmt.Sprintf(
+			"[stages durations]: %s elapsed %d ms; stages: %v", sd.name, sd.total, sd.stages))
+	}
+}
+
+func (sd *StagesDuration) Record(elapsed int64, stage string) {
+	sd.total += elapsed
+	sd.stages[stage] += elapsed
+}
+
+func (sd *StagesDuration) ClearOnlyElapsed() {
+	sd.total = 0
+	for k, _ := range sd.stages {
+		sd.stages[k] = 0
+	}
+}
+
+var onPrepareWALStages = NewStagesDurationWithLogThreshold(1000, "onPrepareWAL")

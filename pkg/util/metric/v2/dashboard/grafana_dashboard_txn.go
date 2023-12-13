@@ -254,13 +254,23 @@ func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	return dashboard.Row(
 		"txn on prepare wal duration",
-		c.getHistogram(
-			"txn on prepare wal duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_total"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_prepare_wal"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_end_prepare"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_flush_queue"`),
+			},
+			[]string{
+				"total",
+				"prepare wal",
+				"end prepare",
+				"enqueue flush",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0))...,
 	)
 }
 
