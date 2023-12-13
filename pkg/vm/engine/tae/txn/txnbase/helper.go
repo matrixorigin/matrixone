@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"sync"
 )
 
 const (
@@ -49,6 +50,7 @@ func UnmarshalID(buf []byte) *common.ID {
 
 // for debug
 type StagesDuration struct {
+	mu   sync.Mutex
 	name string
 	// stage name --> duration (ms)
 	stages map[string]int64
@@ -67,6 +69,9 @@ func NewStagesDurationWithLogThreshold(ms int64, name string) *StagesDuration {
 }
 
 func (sd *StagesDuration) Log() {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
 	if sd.total >= sd.logThreshold {
 		logutil.Info(fmt.Sprintf(
 			"[stages durations]: %s elapsed %d ms; stages: %v", sd.name, sd.total, sd.stages))
@@ -74,11 +79,17 @@ func (sd *StagesDuration) Log() {
 }
 
 func (sd *StagesDuration) Record(elapsed int64, stage string) {
+	sd.mu.Lock()
+	sd.mu.Unlock()
+
 	sd.total += elapsed
 	sd.stages[stage] += elapsed
 }
 
 func (sd *StagesDuration) ClearOnlyElapsed() {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
 	sd.total = 0
 	for k := range sd.stages {
 		sd.stages[k] = 0
