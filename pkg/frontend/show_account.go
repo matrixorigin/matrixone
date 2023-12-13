@@ -220,9 +220,6 @@ func updateStorageUsageCache(accIds []int32, sizes []int64) {
 			Size:  sizes[x],
 		})
 	}
-
-	// update this timestamp
-	cnUsageCache.SetUpdateTime(time.Now())
 }
 
 // getAccountStorageUsage calculates the storage usage of all accounts

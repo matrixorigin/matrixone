@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"math"
-	"math/rand"
 	"path"
 	"testing"
 	"time"
@@ -220,20 +219,8 @@ func mockObjectFileService(ctx context.Context, dirName string) *objectio.Object
 //
 //}
 
-func mockUsageDatas(cnt int) (datas []logtail.UsageData) {
-	for i := 0; i < cnt; i++ {
-		datas = append(datas, logtail.UsageData{
-			AccId: rand.Uint32(),
-			DbId:  rand.Uint64(),
-			TblId: rand.Uint64(),
-			Size:  rand.Int63(),
-		})
-	}
-	return
-}
-
 func Test_ShowAccounts(t *testing.T) {
-	datas := mockUsageDatas(10)
+	datas := logtail.MockUsageData(10)
 
 	for i := 0; i < len(datas)-2; i++ {
 		cnUsageCache.Update(datas[i])
