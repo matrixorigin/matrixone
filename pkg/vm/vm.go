@@ -57,6 +57,15 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 	String(ins, &buf)
 	logutil.Infof("pipeline: %v", buf.String())
 
+	for i := 0; i < len(ins); i++ {
+		switch ins[i].Op {
+		case Output:
+			ins[i].Idx = -1
+		case TableScan:
+			ins[i].Idx = ins[i+1].Idx
+		}
+	}
+
 	idxMap := make(map[int]int, 0)
 	for i := 0; i < len(ins); i++ {
 		info := &OperatorInfo{
@@ -66,8 +75,7 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 		}
 		switch ins[i].Op {
 		case Shuffle, Projection, Output, Merge, Connector, Dispatch, MergeBlock, MergeGroup, MergeCTE, MergeDelete, MergeLimit, MergeOffset, MergeOrder, MergeRecursive, MergeTop:
-			info.ParallelIdx = -1
-			// do nothing for parallel analyze info
+			info.ParallelIdx = -1 // do nothing for parallel analyze info
 		default:
 			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
 				if pidx, ok := idxMap[info.Idx]; ok {
