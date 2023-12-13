@@ -368,8 +368,8 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		Comment:            indexDef.Comment,
 		Visible:            indexDef.Visible,
 		IndexAlgo:          indexDef.IndexAlgo,
-		IndexAlgoParams:    indexDef.IndexAlgoParams,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
+		IndexAlgoParams:    indexDef.IndexAlgoParams,
 	}
 	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
 
