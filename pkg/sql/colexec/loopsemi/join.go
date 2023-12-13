@@ -84,6 +84,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			err := ctr.probe(arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 			proc.PutBatch(arg.bat)
+			if arg.lastrow == 0 {
+				arg.bat = nil
+			}
 			return result, err
 
 		default:
@@ -161,7 +164,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }

@@ -105,6 +105,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			proc.PutBatch(ap.bat)
+			if ap.lastrow == 0 {
+				ap.bat = nil
+			}
 			return result, nil
 
 		case SendLast:
@@ -370,7 +373,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	ctr.rbat.AddRowCount(rowCountIncrese)
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.bat = nil
 	ap.lastrow = 0
 	return nil
 }
