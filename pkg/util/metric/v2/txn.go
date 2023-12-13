@@ -172,7 +172,6 @@ var (
 	TxnStatementCompileDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("compile")
 	TxnStatementScanDurationHistogram           = txnStatementDurationHistogram.WithLabelValues("scan")
 	TxnStatementExternalScanDurationHistogram   = txnStatementDurationHistogram.WithLabelValues("external-scan")
-	TxnStatementInsertS3DurationHistogram       = txnStatementDurationHistogram.WithLabelValues("insert-s3")
 	TxnStatementStatsDurationHistogram          = txnStatementDurationHistogram.WithLabelValues("stats")
 	TxnStatementResolveDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("resolve")
 	TxnStatementResolveUdfDurationHistogram     = txnStatementDurationHistogram.WithLabelValues("resolve-udf")

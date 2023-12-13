@@ -15,6 +15,7 @@
 package external
 
 import (
+	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/flate"
@@ -326,9 +327,6 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	if param.Extern.Parallel {
 		vec.Entries[0].Offset = param.FileOffset[0]
 		vec.Entries[0].Size = param.FileOffset[1] - param.FileOffset[0]
-		if vec.Entries[0].Size < 0 {
-			vec.Entries[0].Size = -1
-		}
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
 		return nil, nil
@@ -347,45 +345,28 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64,
 	if err != nil {
 		return nil, err
 	}
+	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
-				Offset: 0,
-				Size:   BufferSize,
-				Data:   make([]byte, BufferSize),
+				Offset:            0,
+				Size:              -1,
+				ReadCloserForRead: &r,
 			},
 		},
 	}
 	var tailSize []int64
 	var offset []int64
 	for i := 0; i < mcpu; i++ {
-		off := int64(i) * (fileSize / int64(mcpu))
-		vec.Entries[0].Offset = off
-		for length := 0; ; {
-			if vec.Entries[0].Offset >= fileSize {
-				return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
-			}
-			vec.Entries[0].Data = vec.Entries[0].Data[:BufferSize]
-			if err = fs.Read(param.Ctx, &vec); len(vec.Entries[0].Data) == 0 && err != nil {
-				if err == io.EOF {
-					return nil, moerr.NewInternalError(param.Ctx, "the file '%s' is illegal csv file", param.Filepath)
-				}
-				return nil, err
-			}
-			idx := bytes.IndexByte(vec.Entries[0].Data, '\n')
-			if idx == -1 {
-				length += len(vec.Entries[0].Data)
-				vec.Entries[0].Offset += int64(len(vec.Entries[0].Data))
-				if err = fs.Read(param.Ctx, &vec); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			tailSize = append(tailSize, int64(length+idx))
-			offset = append(offset, off)
-			break
+		vec.Entries[0].Offset = int64(i) * (fileSize / int64(mcpu))
+		if err = fs.Read(param.Ctx, &vec); err != nil {
+			return nil, err
 		}
+		r2 := bufio.NewReader(r)
+		line, _ := r2.ReadString('\n')
+		tailSize = append(tailSize, int64(len(line)))
+		offset = append(offset, vec.Entries[0].Offset)
 	}
 
 	start := int64(0)
