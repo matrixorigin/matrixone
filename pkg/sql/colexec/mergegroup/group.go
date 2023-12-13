@@ -175,16 +175,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	if !flg {
 		defer proc.PutBatch(bat)
 	} else {
-		if bat.GetCnt() == 1 {
-			ctr.bat = bat
-		} else {
-			var err error
-			defer proc.PutBatch(bat)
-			ctr.bat, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
-		}
+		ctr.bat = bat
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -212,16 +203,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	if !flg {
 		defer proc.PutBatch(bat)
 	} else {
-		if bat.GetCnt() == 1 {
-			ctr.bat = bat
-		} else {
-			var err error
-			defer proc.PutBatch(bat)
-			ctr.bat, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return err
-			}
-		}
+		ctr.bat = bat
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i
