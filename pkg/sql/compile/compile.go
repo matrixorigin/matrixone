@@ -34,7 +34,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -134,9 +133,9 @@ func putCompile(c *Compile) {
 		return
 	}
 	if c.anal != nil {
-		for i := range c.anal.analInfos {
-			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
-		}
+		//for i := range c.anal.analInfos {
+		//	buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
+		//}
 		c.anal.analInfos = nil
 	}
 	if c.scope != nil {
@@ -3226,9 +3225,11 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	if len(qry.Nodes) == 0 {
 		panic("empty plan")
 	}
+
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
+		//anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
+		anals[i] = process.NewAnalyzeInfo(int32(i))
 	}
 	c.anal = &anaylze{
 		qry:       qry,
@@ -3259,7 +3260,6 @@ func (c *Compile) fillAnalyzeInfo() {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputSize, atomic.LoadInt64(&anal.InputSize))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.OutputSize, atomic.LoadInt64(&anal.OutputSize))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed, atomic.LoadInt64(&anal.TimeConsumed))
-		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumedArray = anal.DeepCopyArray()
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize, atomic.LoadInt64(&anal.MemorySize))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.WaitTimeConsumed, atomic.LoadInt64(&anal.WaitTimeConsumed))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.DiskIO, atomic.LoadInt64(&anal.DiskIO))
@@ -3269,6 +3269,7 @@ func (c *Compile) fillAnalyzeInfo() {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
+		anal.DeepCopyArray(c.anal.qry.Nodes[i].AnalyzeInfo)
 	}
 }
 

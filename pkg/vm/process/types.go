@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -506,12 +507,11 @@ func (a *AnalyzeInfo) AddNewParallel() int {
 	return len(a.TimeConsumedArray) - 1
 }
 
-func (a *AnalyzeInfo) DeepCopyArray() []int64 {
+func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	result := make([]int64, 0, len(a.TimeConsumedArray))
-	result = append(result, a.TimeConsumedArray...)
-	return result
+	pa.TimeConsumedArray = pa.TimeConsumedArray[:0]
+	pa.TimeConsumedArray = append(pa.TimeConsumedArray, a.TimeConsumedArray...)
 }
 
 func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
@@ -527,7 +527,6 @@ func (a *AnalyzeInfo) Reset() {
 	a.InputRows = 0
 	a.OutputRows = 0
 	a.TimeConsumed = 0
-	a.TimeConsumedArray = nil
 	a.WaitTimeConsumed = 0
 	a.InputSize = 0
 	a.OutputSize = 0
@@ -539,4 +538,7 @@ func (a *AnalyzeInfo) Reset() {
 	a.NetworkIO = 0
 	a.ScanTime = 0
 	a.InsertTime = 0
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TimeConsumedArray = a.TimeConsumedArray[:0]
 }
