@@ -1,4 +1,4 @@
-name: MatrixOne e2e CI(Standalone)
+name: liucan_e2e_bvt(Standalone)
 
 on:
   push:
