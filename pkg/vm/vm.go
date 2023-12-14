@@ -16,8 +16,6 @@ package vm
 
 import (
 	"bytes"
-	"strconv"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,7 +36,6 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			buf.WriteString(" -> ")
 		}
 		in.Arg.String(buf)
-		buf.WriteString(" analyze index: " + strconv.Itoa(in.Idx))
 	}
 }
 
@@ -53,10 +50,6 @@ func Prepare(ins Instructions, proc *process.Process) error {
 }
 
 func setAnalyzeInfo(ins Instructions, proc *process.Process) {
-	var buf bytes.Buffer
-	String(ins, &buf)
-	logutil.Infof("pipeline: %v", buf.String())
-
 	for i := 0; i < len(ins); i++ {
 		switch ins[i].Op {
 		case Output:
