@@ -212,10 +212,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ctr := arg.ctr
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err

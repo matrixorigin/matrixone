@@ -96,6 +96,21 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 		if !b.Valid {
 			panic("BUG")
 		}
+
+		// For upgrade, we must abort all old cn version's transactions.
+		// Because the previous version does not support shared Table
+		// segregation by tenant, then during the upgrade process there will
+		// be 2 versions of CN at the same time, resulting in WW conflicts
+		// that may be missed to be detected.
+		// FIXME(fagongzi): remove this logic in next version.
+		if isSharedTable(b.Table) {
+			_, _, ok := decodeSharedTableID(b.Table)
+			if !ok {
+				invalid = append(invalid, b.Table)
+				continue
+			}
+		}
+
 		current, ok := l.mu.lockTables[b.Table]
 		if !ok ||
 			current.Changed(b) {

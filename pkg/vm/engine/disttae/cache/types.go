@@ -225,13 +225,16 @@ func tableItemLess(a, b *TableItem) bool {
 			Then the item x3 will be lost. The TN will not know the table x3. It is wrong!
 			With sort on the table id, the item x3,x2,x1 will be reserved.
 		*/
-		if a.deleted && !b.deleted { //deleted item head first
+		// the logtail is unordered, so we need to sort the items by table id.
+		// the larger table id is created later.
+		if a.Id > b.Id {
 			return true
-		} else if !a.deleted && b.deleted {
-			return false
-		} else { //a.deleted && b.deleted || !a.deleted && !b.deleted
-			return a.Id < b.Id
 		}
+		if a.Id < b.Id {
+			return false
+		}
+		// for the same table id, the delete item is head.
+		return a.deleted
 	}
 	return a.Ts.Greater(b.Ts)
 }

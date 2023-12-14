@@ -85,6 +85,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	anal := proc.GetAnalyze(arg.Info.Idx)
 	anal.Start()
 	defer anal.Stop()
@@ -434,6 +438,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 		runtimeFilter = &pipeline.RuntimeFilter{
 			Typ:  pipeline.RuntimeFilter_IN,
+			Card: int32(vec.Length()),
 			Data: data,
 		}
 	}
