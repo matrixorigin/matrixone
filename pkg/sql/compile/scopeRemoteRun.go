@@ -554,16 +554,13 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		ctx.plan = p.Qry
 	}
 
-	s := &Scope{
-		Magic:      magicType(p.GetPipelineType()),
-		IsEnd:      p.IsEnd,
-		IsJoin:     p.IsJoin,
-		IsLoad:     p.IsLoad,
-		Plan:       ctx.plan,
-		IsRemote:   isRemote,
-		BuildIdx:   int(p.BuildIdx),
-		ShuffleCnt: int(p.ShuffleCnt),
-	}
+	s := newScope(magicType(p.GetPipelineType()))
+	s.IsEnd = p.IsEnd
+	s.IsJoin = p.IsJoin
+	s.IsLoad = p.IsLoad
+	s.IsRemote = isRemote
+	s.BuildIdx = int(p.BuildIdx)
+	s.ShuffleCnt = int(p.ShuffleCnt)
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err
 	}
