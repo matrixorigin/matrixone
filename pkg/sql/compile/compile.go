@@ -2608,8 +2608,11 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
-	left = append(left, right...)
-	rs := c.newMergeScope(left)
+	l := c.newMergeScope(left)
+	r := c.newMergeScope(right)
+	all := []*Scope{l, r}
+	rs := c.newMergeScope(all)
+
 	rs.Instructions[0].Idx = c.anal.curr
 
 	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])

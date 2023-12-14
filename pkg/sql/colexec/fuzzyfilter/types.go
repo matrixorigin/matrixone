@@ -45,6 +45,7 @@ type Argument struct {
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
 
+	// buildCnt     int
 	// probeCnt     int
 	collisionCnt int
 	rbat         *batch.Batch
