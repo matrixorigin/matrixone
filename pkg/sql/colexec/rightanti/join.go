@@ -157,6 +157,10 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
+	if ctr.matched == nil {
+		return false, nil
+	}
+
 	count := ctr.bat.RowCount() - ctr.matched.Count()
 	ctr.matched.Negate()
 	sels := make([]int32, 0, count)
