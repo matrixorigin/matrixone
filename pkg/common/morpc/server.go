@@ -521,6 +521,10 @@ func (cs *clientSession) Close() error {
 	if cs.mu.closed {
 		return nil
 	}
+	if cs.conn != nil {
+		getLogger().Error("xxx: call rpc server closed",
+			zap.String("remote", cs.RemoteAddress()))
+	}
 	close(cs.closedC)
 	cs.cleanSend()
 	close(cs.c)

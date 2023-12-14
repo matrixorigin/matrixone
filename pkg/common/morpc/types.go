@@ -209,6 +209,12 @@ type Stream interface {
 	Close(closeConn bool) error
 }
 
+// Stream used to asynchronous stream of sending and receiving messages
+type DebugStream interface {
+	Stream
+	Conn() string
+}
+
 // ClientOption client options for create client
 type ClientOption func(*client)
 

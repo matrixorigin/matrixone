@@ -327,7 +327,12 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	defer sender.close()
+	defer func() {
+		if err != nil {
+			logutil.Errorf("xxx: failed %+v, %+v", err, sender.streamSender.(morpc.DebugStream).Conn())
+		}
+		sender.close()
+	}()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
 		return err
