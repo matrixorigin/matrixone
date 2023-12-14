@@ -102,7 +102,7 @@ type Session struct {
 	sql           string
 
 	sysVars         map[string]interface{}
-	userDefinedVars map[string]interface{}
+	userDefinedVars map[string]*UserDefinedVar
 	gSysVars        *GlobalSystemVariables
 
 	//the server status
@@ -543,7 +543,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
-		ses.userDefinedVars = make(map[string]interface{})
+		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
@@ -1168,11 +1168,13 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-	if isInsertValues {
-		prepareStmt.proc = ses.proc
-		prepareStmt.exprList = exprList
+	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
+		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		if isInsertValues {
+			prepareStmt.proc = ses.proc
+			prepareStmt.exprList = exprList
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -1325,15 +1327,15 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session
-func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = value
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
