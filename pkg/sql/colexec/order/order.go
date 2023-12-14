@@ -212,8 +212,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	ctr := arg.ctr
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
 
+	ctr := arg.ctr
 	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx)
 	anal.Start()
 	defer func() {

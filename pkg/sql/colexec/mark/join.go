@@ -78,6 +78,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx)
 	anal.Start()
 	defer anal.Stop()

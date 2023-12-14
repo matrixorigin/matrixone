@@ -30,6 +30,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
 	result, err := arg.children[0].Call(proc)
 	if err != nil {

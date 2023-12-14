@@ -41,12 +41,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 
 	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, proc.Ctx.Err()
-	default:
+	//select {
+	//case <-proc.Ctx.Done():
+	//	result.Batch = nil
+	//	result.Status = vm.ExecStop
+	//	return result, proc.Ctx.Err()
+	//default:
+	//}
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
 	}
 
 	for {
