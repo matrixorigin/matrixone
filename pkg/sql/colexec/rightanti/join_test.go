@@ -102,9 +102,15 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
 				break
 			}
+			if tc.proc.Reg.InputBatch == nil {
+				if len(tc.proc.Reg.MergeReceivers[0].Ch) == 0 && len(tc.proc.Reg.MergeReceivers[1].Ch) == 0 {
+					break
+				} else {
+					continue
+				}
+			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.proc.FreeVectors()
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()
@@ -128,10 +134,17 @@ func TestJoin(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
 				break
 			}
+			if tc.proc.Reg.InputBatch == nil {
+				if len(tc.proc.Reg.MergeReceivers[0].Ch) == 0 && len(tc.proc.Reg.MergeReceivers[1].Ch) == 0 {
+					break
+				} else {
+					continue
+				}
+			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.proc.FreeVectors()
 		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}

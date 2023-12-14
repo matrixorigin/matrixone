@@ -166,6 +166,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	if ctr.matched == nil {
+		rbat.Clean(proc.Mp())
 		return false, nil
 	}
 
