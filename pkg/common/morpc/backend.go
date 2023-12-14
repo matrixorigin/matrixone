@@ -365,7 +365,7 @@ func (rb *remoteBackend) Close() {
 		return
 	}
 	if rb.conn != nil {
-		getLogger().Error("xxx: call rpc client closed",
+		rb.logger.Error("xxx: call rpc client closed",
 			zap.String("remote", rb.remote),
 			zap.String("local", rb.conn.RawConn().LocalAddr().String()))
 	}
@@ -1114,7 +1114,7 @@ func (s *stream) Close(closeConn bool) error {
 }
 
 func (s *stream) Conn() string {
-	return s.rb.conn.RemoteAddress()
+	return s.rb.conn.RawConn().LocalAddr().String()
 }
 
 func (s *stream) ID() uint64 {
