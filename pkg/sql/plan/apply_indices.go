@@ -25,10 +25,10 @@ func (builder *QueryBuilder) applyIndices(nodeID int32) int32 {
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		return builder.applyIndicesForPointSelect(nodeID, node)
+		return builder.applyIndicesForFilters(nodeID, node)
 
 	case plan.Node_JOIN:
-		return builder.applyIndicesForJoin(nodeID, node)
+		return builder.applyIndicesForJoins(nodeID, node)
 
 	default:
 		for i, childID := range node.Children {
@@ -39,14 +39,16 @@ func (builder *QueryBuilder) applyIndices(nodeID int32) int32 {
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan.Node) int32 {
+func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node) int32 {
 	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
 
-	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > InFilterCardLimit {
+	if node.Stats.Selectivity > 0.1 {
 		return nodeID
 	}
+
+	// Apply unique/secondary indices for point select
 
 	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
@@ -59,7 +61,7 @@ func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan
 			continue
 		}
 
-		if _, ok := fn.F.Args[0].Expr.(*plan.Expr_C); ok {
+		if _, ok := fn.F.Args[0].Expr.(*plan.Expr_Lit); ok {
 			if _, ok := fn.F.Args[1].Expr.(*plan.Expr_Col); ok {
 				fn.F.Args[0], fn.F.Args[1] = fn.F.Args[1], fn.F.Args[0]
 			}
@@ -70,7 +72,7 @@ func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan
 			continue
 		}
 
-		if _, ok := fn.F.Args[1].Expr.(*plan.Expr_C); !ok {
+		if _, ok := fn.F.Args[1].Expr.(*plan.Expr_Lit); !ok {
 			continue
 		}
 
@@ -146,7 +148,7 @@ func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan
 			} else {
 				args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
 				args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{args[1]})
-				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "startswith", args)
+				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", args)
 			}
 
 			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
@@ -159,7 +161,7 @@ func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan
 
 			funcName := "="
 			if !idxDef.Unique {
-				funcName = "startswith"
+				funcName = "prefix_eq"
 			}
 			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
 				{
@@ -230,16 +232,136 @@ func (builder *QueryBuilder) applyIndicesForPointSelect(nodeID int32, node *plan
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(nodeID, builder, false, true, true)
-		nodeID = joinNodeID
+		ReCalcNodeStats(joinNodeID, builder, true, true, true)
 
-		break
+		return joinNodeID
+	}
+
+	// Apply single-column unique/secondary indices for IN-expression
+
+	colPos2Idx := make(map[int32]int)
+
+	for i, idxDef := range indexes {
+		if !idxDef.TableExist {
+			continue
+		}
+
+		numParts := len(idxDef.Parts)
+		if !idxDef.Unique {
+			numParts--
+		}
+
+		if numParts == 1 {
+			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
+		}
+	}
+
+	var pkPos int32 = -1
+	if len(node.TableDef.Pkey.Names) == 1 {
+		pkPos = node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
+	}
+
+	for i, expr := range node.FilterList {
+		fn, ok := expr.Expr.(*plan.Expr_F)
+		if !ok {
+			continue
+		}
+
+		col, ok := fn.F.Args[0].Expr.(*plan.Expr_Col)
+		if !ok {
+			continue
+		}
+
+		if col.Col.ColPos == pkPos {
+			return nodeID
+		}
+
+		if fn.F.Func.ObjName != "in" {
+			continue
+		}
+
+		if _, ok := fn.F.Args[1].Expr.(*plan.Expr_Vec); !ok {
+			continue
+		}
+
+		idxPos, ok := colPos2Idx[col.Col.ColPos]
+		if !ok {
+			continue
+		}
+
+		idxTag := builder.genNewTag()
+		idxDef := node.TableDef.Indexes[idxPos]
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+
+		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
+		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
+
+		args := fn.F.Args
+		col.Col.RelPos = idxTag
+		col.Col.ColPos = 0
+		col.Col.Name = idxTableDef.Cols[0].Name
+
+		var idxFilter *plan.Expr
+		if idxDef.Unique {
+			idxFilter = expr
+		} else {
+			args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+			args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{args[1]})
+			idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", args)
+		}
+
+		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
+
+		idxTableNodeID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			ObjRef:      idxObjRef,
+			TableDef:    idxTableDef,
+			FilterList:  []*plan.Expr{idxFilter},
+			Limit:       node.Limit,
+			Offset:      node.Offset,
+			BindingTags: []int32{idxTag},
+		}, builder.ctxByNode[nodeID])
+
+		node.Limit, node.Offset = nil, nil
+
+		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+		pkExpr := &plan.Expr{
+			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: node.BindingTags[0],
+					ColPos: pkIdx,
+				},
+			},
+		}
+
+		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			DeepCopyExpr(pkExpr),
+			{
+				Typ: DeepCopyType(pkExpr.Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag,
+						ColPos: 1,
+					},
+				},
+			},
+		})
+		joinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeID, idxTableNodeID},
+			OnList:   []*plan.Expr{joinCond},
+		}, builder.ctxByNode[nodeID])
+
+		ReCalcNodeStats(joinNodeID, builder, true, true, true)
+
+		return joinNodeID
 	}
 
 	return nodeID
 }
 
-func (builder *QueryBuilder) applyIndicesForJoin(nodeID int32, node *plan.Node) int32 {
+func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node) int32 {
 	node.Children[1] = builder.applyIndices(node.Children[1])
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
@@ -250,7 +372,7 @@ func (builder *QueryBuilder) applyIndicesForJoin(nodeID int32, node *plan.Node) 
 		return nodeID
 	}
 
-	newLeftChildID := builder.applyIndicesForPointSelect(node.Children[0], leftChild)
+	newLeftChildID := builder.applyIndicesForFilters(node.Children[0], leftChild)
 	if newLeftChildID != node.Children[0] {
 		node.Children[0] = newLeftChildID
 		return nodeID

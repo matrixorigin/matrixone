@@ -2126,4 +2126,17 @@ mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 mix01    col5    INT    YES
 drop table mix01;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 change column col1 NewCol1 float;
+commit;
+select * from table01;
+newcol1    col2
+100.0    200
+select newcol1 from table01;
+newcol1
+100.0
+drop table table01;
 drop database db2;

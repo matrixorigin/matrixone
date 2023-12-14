@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -57,6 +58,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	defer analyze(proc, arg.info.Idx)()
 	if arg.ToWriteS3 {
 		return arg.insert_s3(proc)
@@ -65,6 +70,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()

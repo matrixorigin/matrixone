@@ -1524,7 +1524,7 @@ func (tbl *txnTable) makeEncodedPK(
 	pk := tbl.tableDef.Pkey
 	if pk != nil && expr != nil {
 		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Const, len(pk.Names))
+			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull = getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 			if hasNull {
 				return
