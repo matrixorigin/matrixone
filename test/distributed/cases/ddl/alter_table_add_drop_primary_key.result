@@ -486,3 +486,35 @@ col1    FLOAT(0)    NO    PRI    null
 col5    INT(32)    YES        null        
 col4    VARCHAR(100)    YES        null        
 drop table mix01;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+insert into table01 values(200,300);
+alter table table01 add constraint primary key (col2);
+commit;
+select * from table01;
+col1    col2
+100    200
+200    300
+select col1 from table01;
+col1
+100
+200
+drop table table01;
+drop table if exists table01;
+begin;
+create table table01(col1 int primary key, col2 decimal);
+insert into table01 values(100,200);
+insert into table01 values(200,300);
+alter table table01 drop primary key;
+commit;
+select * from table01;
+col1    col2
+100    200
+200    300
+select col1 from table01;
+col1
+100
+200
+drop table table01;

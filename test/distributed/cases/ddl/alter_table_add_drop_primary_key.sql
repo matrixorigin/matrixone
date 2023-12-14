@@ -301,3 +301,26 @@ select * from mix01;
 show create table mix01;
 show columns from mix01;
 drop table mix01;
+
+-- begin, alter table add/drop primary key column, commit, then select
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+insert into table01 values(200,300);
+alter table table01 add constraint primary key (col2);
+commit;
+select * from table01;
+select col1 from table01;
+drop table table01;
+
+drop table if exists table01;
+begin;
+create table table01(col1 int primary key, col2 decimal);
+insert into table01 values(100,200);
+insert into table01 values(200,300);
+alter table table01 drop primary key;
+commit;
+select * from table01;
+select col1 from table01;
+drop table table01;
