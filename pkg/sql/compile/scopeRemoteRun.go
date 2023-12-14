@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -193,6 +194,10 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
+		} else {
+			for i := range c.proc.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
+			}
 		}
 		c.proc.FreeVectors()
 		c.proc.CleanValueScanBatchs()
@@ -1619,6 +1624,7 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		InsertTime:       info.InsertTime,
 	}
 	info.DeepCopyArray(a)
+	reuse.Free[process.AnalyzeInfo](info, nil)
 	return a
 }
 
