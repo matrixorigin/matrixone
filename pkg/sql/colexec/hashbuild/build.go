@@ -434,6 +434,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 		runtimeFilter = &pipeline.RuntimeFilter{
 			Typ:  pipeline.RuntimeFilter_IN,
+			Card: int32(vec.Length()),
 			Data: data,
 		}
 	}

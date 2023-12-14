@@ -287,8 +287,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			typMap[col.Name] = col.Typ
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
-			if indexdef.TableExist {
-
+			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 				if isUpdate {
 					skipDel := true
 					for _, colName := range indexdef.Parts {
@@ -688,8 +687,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, e := range rightConds {
 							projectProjection = append(projectProjection, &plan.Expr{
 								Typ: e.Typ,
-								Expr: &plan.Expr_C{
-									C: &Const{
+								Expr: &plan.Expr_Lit{
+									Lit: &Const{
 										Isnull: true,
 									},
 								},
@@ -930,7 +929,7 @@ func makeInsertPlan(
 	// append plan for the hidden tables of unique keys
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
-			if indexdef.TableExist {
+			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
 				for i, col := range idxTableDef.Cols {

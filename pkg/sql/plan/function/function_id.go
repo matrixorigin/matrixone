@@ -168,6 +168,9 @@ const (
 	PI             // PI
 	POSITION       // POSITION
 	POW            // POW
+	PREFIX_EQ      // PREFIX_EQ
+	PREFIX_IN      // PREFIX_IN
+	PREFIX_BETWEEN // PREFIX_BETWEEN
 	RADIAN         // RADIAN
 	RANDOM         // RANDOM
 	RANK           // RANK
@@ -277,6 +280,7 @@ const (
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
 	INSTR
+	LOCATE // LOCATE
 
 	UUID
 	SERIAL
@@ -401,16 +405,19 @@ var functionIdRegister = map[string]int32{
 	"isnotnull":   ISNOTNULL,
 	//"isunknown":    ISUNKNOWN,
 	//"isnotunknown": ISNOTUNKNOWN,
-	"istrue":     ISTRUE,
-	"isnottrue":  ISNOTTRUE,
-	"isfalse":    ISFALSE,
-	"isnotfalse": ISNOTFALSE,
-	"&":          OP_BIT_AND,
-	"|":          OP_BIT_OR,
-	"^":          OP_BIT_XOR,
-	"<<":         OP_BIT_SHIFT_LEFT,
-	">>":         OP_BIT_SHIFT_RIGHT,
-	"decode":     DECODE,
+	"istrue":         ISTRUE,
+	"isnottrue":      ISNOTTRUE,
+	"isfalse":        ISFALSE,
+	"isnotfalse":     ISNOTFALSE,
+	"&":              OP_BIT_AND,
+	"|":              OP_BIT_OR,
+	"^":              OP_BIT_XOR,
+	"<<":             OP_BIT_SHIFT_LEFT,
+	">>":             OP_BIT_SHIFT_RIGHT,
+	"decode":         DECODE,
+	"prefix_eq":      PREFIX_EQ,
+	"prefix_in":      PREFIX_IN,
+	"prefix_between": PREFIX_BETWEEN,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -577,6 +584,7 @@ var functionIdRegister = map[string]int32{
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
 	"instr":                          INSTR,
+	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 	"json_unquote":                   JSON_UNQUOTE,
@@ -609,6 +617,10 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"to_upper":                       UPPER,
+	"upper":                          UPPER,
+	"to_lower":                       LOWER,
+	"lower":                          LOWER,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,
