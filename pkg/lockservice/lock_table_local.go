@@ -206,6 +206,8 @@ func (l *localLockTable) unlock(
 
 			if !lock.holders.contains(txn.txnID) {
 				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn",
+					zap.Bool("row", lock.isLockRow()),
+					zap.Int("keys-count", locks.len()),
 					zap.String("bind", l.bind.DebugString()),
 					waitTxnArrayField("holders", lock.holders.txns),
 					txnField(txn))
