@@ -334,7 +334,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
