@@ -1,7 +1,8 @@
 name: MatrixOne e2e CI(Standalone)
 
 on:
-  workflow_call:
+  push:
+    branches: [ "liucan_branch_dev" ]
 
 jobs:
   bvt-linux-x86:
