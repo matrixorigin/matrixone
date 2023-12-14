@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -80,10 +81,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	useRoaring := IfCanUseRoaringFilter(arg.PkTyp.Oid)
+	useRoaring := IfCanUseRoaringFilter(types.T(arg.PkTyp.Id))
 
 	if useRoaring {
-		arg.roaringFilter = newroaringFilter(arg.PkTyp.Oid)
+		arg.roaringFilter = newroaringFilter(types.T(arg.PkTyp.Id))
 	} else {
 		//@see https://hur.st/bloomfilter/
 		var probability float64
@@ -319,8 +320,11 @@ func (arg *Argument) appendCollisionKey(proc *process.Process, idx int, bat *bat
 // rbat will contain the keys that have hash collisions
 func (arg *Argument) generate(proc *process.Process) error {
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, proc.GetVector(arg.PkTyp))
-	arg.pass2RuntimeFilter = proc.GetVector(arg.PkTyp)
+	// rbat.SetVector(0, proc.GetVector(arg.PkTyp))
+	// arg.pass2RuntimeFilter = proc.GetVector(arg.PkTyp)
+
+	rbat.SetVector(0, proc.GetVector(types.New(types.T(arg.PkTyp.Id), arg.PkTyp.Width, arg.PkTyp.Scale)))
+	arg.pass2RuntimeFilter = proc.GetVector(types.New(types.T(arg.PkTyp.Id), arg.PkTyp.Width, arg.PkTyp.Scale))
 	arg.rbat = rbat
 	return nil
 }

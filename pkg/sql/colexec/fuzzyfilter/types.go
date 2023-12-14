@@ -40,7 +40,7 @@ type Argument struct {
 	// Estimates of the number of data items obtained from statistical information
 	N      float64
 	PkName string
-	PkTyp  types.Type
+	PkTyp  *plan.Type
 
 	bloomFilter   *bloomfilter.BloomFilter
 	roaringFilter *roaringFilter
