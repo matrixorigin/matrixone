@@ -277,6 +277,7 @@ const (
 	FORMAT       // FORMAT
 	SLEEP        // sleep for a while
 	INSTR
+	LOCATE // LOCATE
 
 	UUID
 	SERIAL
@@ -577,7 +578,7 @@ var functionIdRegister = map[string]int32{
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
 	"instr":                          INSTR,
-	"locate":                         INSTR,
+	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 	"json_unquote":                   JSON_UNQUOTE,
