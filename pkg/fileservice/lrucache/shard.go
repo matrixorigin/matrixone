@@ -111,11 +111,15 @@ func (s *shard[K, V]) Capacity() int64 {
 }
 
 func (s *shard[K, V]) Used() int64 {
-	return atomic.LoadInt64(&s.size)
+	s.RLock()
+	defer s.RUnlock()
+	return s.size
 }
 
 func (s *shard[K, V]) Available() int64 {
-	return s.capacity - s.Used()
+	s.RLock()
+	defer s.RUnlock()
+	return s.capacity - s.size
 }
 
 func (s *shard[K, V]) allocItem() *lruItem[K, V] {
