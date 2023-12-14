@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -192,6 +193,18 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
+func (a anaylze) Name() string {
+	return "compile.anaylze"
+}
+
+func newAnaylze() *anaylze {
+	return reuse.Alloc[anaylze](nil)
+}
+
+func (a *anaylze) release() {
+	reuse.Free[anaylze](a, nil)
+}
+
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope []*Scope
@@ -204,7 +217,7 @@ type Compile struct {
 	//fill will be called when result data is ready.
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
-	affectRows atomic.Uint64
+	affectRows *atomic.Uint64
 	// cn address
 	addr string
 	// db current database name.
@@ -227,14 +240,14 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	counterSet perfcounter.CounterSet
+	counterSet *perfcounter.CounterSet
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
 	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
 
-	lock sync.RWMutex
+	lock *sync.RWMutex
 
 	isInternal bool
 
