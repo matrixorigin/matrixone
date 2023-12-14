@@ -850,39 +850,44 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 
-		stats := &table.Stats
-		stats.Lock()
-		defer stats.Unlock()
+		stat := &table.Stats
+		stat.RLock()
+		statEmpty := stat.LastFlush.IsEmpty()
+		statDealine := stat.FlushDeadline
+		statsFlushMemCap := stat.FlushMemCapacity
+		defer stat.RUnlock()
 
 		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
+		if !statEmpty && asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v",
 				table.GetLastestSchema().Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
-				time.Until(stats.FlushDeadline))
+				time.Until(statDealine))
 		}
 
 		if force {
 			logutil.Infof("[flushtabletail] force flush %s", table.GetLastestSchema().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadlineWithLock()
+				stat.ResetDeadline()
 			}
 			return moerr.GetOkStopCurrRecur()
 		}
 
-		if stats.LastFlush.IsEmpty() {
+		if statEmpty {
+			stat.Lock()
 			// first boot, just bail out, and never enter this branch again
-			stats.LastFlush = stats.LastFlush.Next()
-			stats.ResetDeadlineWithLock()
+			stat.LastFlush = stat.LastFlush.Next()
+			stat.ResetDeadlineWithLock()
+			stat.Unlock()
 			return moerr.GetOkStopCurrRecur()
 		}
 
 		flushReady := func() bool {
-			if stats.FlushDeadline.Before(time.Now()) {
+			if statDealine.Before(time.Now()) {
 				return true
 			}
-			if asize+dsize > stats.FlushMemCapacity {
+			if asize+dsize > statsFlushMemCap {
 				return true
 			}
 			if asize < common.Const1MBytes && dsize > 2*common.Const1MBytes+common.Const1MBytes/2 {
@@ -893,7 +898,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		if flushReady() {
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadlineWithLock()
+				stat.ResetDeadline()
 			}
 		}
 

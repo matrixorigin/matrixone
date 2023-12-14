@@ -103,6 +103,12 @@ func (s *TableCompactStat) ResetDeadlineWithLock() {
 	s.FlushDeadline = time.Now().Add(time.Duration(factor * float64(s.FlushGapDuration)))
 }
 
+func (s *TableCompactStat) ResetDeadline() {
+	s.Lock()
+	defer s.Unlock()
+	s.ResetDeadlineWithLock()
+}
+
 func (s *TableCompactStat) InitWithLock(durationHint time.Duration) {
 	s.FlushGapDuration = durationHint * 5
 	s.FlushMemCapacity = 20 * 1024 * 1024
