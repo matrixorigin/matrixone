@@ -29,14 +29,13 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	item.Key = key
 	item.Value = value
 	item.Size = size
+	s.Lock()
+	defer s.Unlock()
 	if ok := s.kv.Set(h, key, item); ok {
 		return
 	}
-	atomic.AddInt64(&s.size, size)
+	s.size += size
 	s.evicts.PushFront(item)
-	// because the overlap check is not atomic, we need to lock
-	s.checkMu.Lock()
-	defer s.checkMu.Unlock()
 	if s.postSet != nil {
 		s.postSet(key, value)
 	}
@@ -55,14 +54,9 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 			})
 		}
 	}()
-	// only one goroutine can evict at a time
-	if !s.evicting.CompareAndSwap(false, true) {
-		return
-	}
-	defer s.evicting.Store(false)
 
 	for {
-		if atomic.LoadInt64(&s.size) <= s.capacity {
+		if s.size <= s.capacity {
 			return
 		}
 		if s.kv.Len() == 0 {
@@ -75,7 +69,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 				return
 			}
 			s.kv.Delete(elem.h, elem.Key)
-			atomic.AddInt64(&s.size, -elem.Size)
+			s.size -= elem.Size
 			s.evicts.Remove(elem)
 			if s.postEvict != nil {
 				s.postEvict(elem.Key, elem.Value)
@@ -92,6 +86,8 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 }
 
 func (s *shard[K, V]) Get(ctx context.Context, h uint64, key K) (value V, ok bool) {
+	s.RLock()
+	defer s.RUnlock()
 	if elem, ok := s.kv.Get(h, key); ok {
 		atomic.AddInt64(&elem.NumRead, 1)
 		if s.postGet != nil {
@@ -103,6 +99,8 @@ func (s *shard[K, V]) Get(ctx context.Context, h uint64, key K) (value V, ok boo
 }
 
 func (s *shard[K, V]) Flush() {
+	s.Lock()
+	defer s.Unlock()
 	s.size = 0
 	s.evicts = newList[K, V]()
 	s.kv = hashmap.New[K, lruItem[K, V]](int(s.capacity))
@@ -113,11 +111,15 @@ func (s *shard[K, V]) Capacity() int64 {
 }
 
 func (s *shard[K, V]) Used() int64 {
-	return atomic.LoadInt64(&s.size)
+	s.RLock()
+	defer s.RUnlock()
+	return s.size
 }
 
 func (s *shard[K, V]) Available() int64 {
-	return s.capacity - s.Used()
+	s.RLock()
+	defer s.RUnlock()
+	return s.capacity - s.size
 }
 
 func (s *shard[K, V]) allocItem() *lruItem[K, V] {

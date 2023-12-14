@@ -140,6 +140,19 @@ type Operator interface {
 	AppendChild(child Operator)
 }
 
+var CancelResult = CallResult{
+	Status: ExecStop,
+}
+
+func CancelCheck(proc *process.Process) (error, bool) {
+	select {
+	case <-proc.Ctx.Done():
+		return proc.Ctx.Err(), true
+	default:
+		return nil, false
+	}
+}
+
 func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
 	beforeChildrenCall := time.Now()
 	result, err := o.Call(proc)
