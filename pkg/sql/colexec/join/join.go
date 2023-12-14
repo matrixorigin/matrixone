@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -62,6 +63,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if ctr.mp == nil {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				ctr.state = End
+				logutil.Warnf("join ends early!")
 			} else {
 				ctr.state = Probe
 			}
