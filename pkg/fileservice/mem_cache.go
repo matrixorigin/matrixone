@@ -25,6 +25,7 @@ import (
 )
 
 type MemCache struct {
+	size        int64
 	cache       DataCache
 	counterSets []*perfcounter.CounterSet
 }
@@ -52,8 +53,6 @@ func NewLRUCache(
 	}
 
 	postSetFn := func(key CacheKey, value CacheData) {
-		value.Retain()
-
 		if overlapChecker != nil {
 			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -68,8 +67,6 @@ func NewLRUCache(
 	}
 
 	postGetFn := func(key CacheKey, value CacheData) {
-		value.Retain()
-
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)

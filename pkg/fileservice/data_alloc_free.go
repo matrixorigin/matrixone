@@ -12,29 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !race
+// +build !race
+
 package fileservice
 
 import (
 	"sync/atomic"
-	"testing"
+	"unsafe"
 
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
+const dataSize = int(unsafe.Sizeof(Data{}))
 
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
+func newData(n int, size *atomic.Int64) *Data {
+	if n == 0 {
+		return nil
 	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+	size.Add(int64(n + dataSize))
+	b := malloc.Alloc(n + dataSize)
+	d := (*Data)(unsafe.Pointer(&b[0]))
+	d.buf = b[dataSize:]
+	d.ref.init(1)
+	return d
+}
+
+func (d *Data) free(size *atomic.Int64) {
+	n := cap(d.buf) + dataSize
+	size.Add(-int64(n))
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(d)), n)
+	d.buf = nil
+	malloc.Free(buf)
 }

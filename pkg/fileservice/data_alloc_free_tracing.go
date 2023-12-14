@@ -12,37 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// use race flag to enable data alloc/free tracing
+
+//go:build race
+// +build race
+
 package fileservice
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-func TestRCPool(t *testing.T) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 1024)
-		},
-	)
-
-	i := pool.Get()
-	assert.Equal(t, 1024, len(i.Value))
-
-	i.Retain()
-	i.Release()
-	i.Release()
+func newData(n int, size *atomic.Int64) *Data {
+	if n == 0 {
+		return nil
+	}
+	size.Add(int64(n))
+	b := malloc.Alloc(n)
+	d := &Data{buf: b}
+	d.ref.init(1)
+	runtime.SetFinalizer(d, func(d *Data) {
+		if d.buf != nil {
+			logutil.Fatal(fmt.Sprintf("data %p is not freed: refs:%d\n%s",
+				d, d.refs()), d.ref.dump())
+		}
+	})
+	return d
 }
 
-func BenchmarkRCPool(b *testing.B) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 128)
-		},
-	)
-	for i := 0; i < b.N; i++ {
-		s := pool.Get()
-		s.Release()
-	}
+func (d *Data) free(size *atomic.Int64) {
+	size.Add(-int64(cap(d.buf)))
+	malloc.Free(d.buf)
+	d.buf = nil
 }

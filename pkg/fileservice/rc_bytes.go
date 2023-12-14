@@ -14,92 +14,28 @@
 
 package fileservice
 
-// RCBytes represents a reference counting []byte from a pool
-// newly created RCBytes' ref count is 1
-// owner should call Release to give it back to the pool
-// new sharing owner should call Retain to increase ref count
+import "sync/atomic"
+
+// RCBytes represents a reference counting data from cache
+// it is immutable, caller should not modify it and call Release after use
 type RCBytes struct {
-	*RCPoolItem[[]byte]
-}
-
-func (r RCBytes) Bytes() []byte {
-	return r.Value
-}
-
-func (r RCBytes) Slice(length int) CacheData {
-	r.Value = r.Value[:length]
-	return r
+	d *Data
+	// the total size in the cache
+	size *atomic.Int64
 }
 
 func (r RCBytes) Release() {
-	if r.RCPoolItem != nil {
-		r.RCPoolItem.Release()
+	r.d.release(r.size)
+}
+
+func (r RCBytes) Bytes() []byte {
+	if r.d == nil {
+		return nil
 	}
+	return r.d.Buf()
 }
 
-func (r RCBytes) Copy() []byte {
-	ret := make([]byte, len(r.Value))
-	copy(ret, r.Value)
-	return ret
-}
-
-type rcBytesPool struct {
-	sizes []int
-	pools []*RCPool[[]byte]
-}
-
-const (
-	rcBytesPoolMinCap = 1 * 1024
-	rcBytesPoolMaxCap = 1 * 1024 * 1024
-)
-
-// RCBytesPool is the global RCBytes pool
-var RCBytesPool = func() *rcBytesPool {
-	ret := &rcBytesPool{}
-	for size := rcBytesPoolMinCap; size <= rcBytesPoolMaxCap; size *= 2 {
-		size := size
-		ret.sizes = append(ret.sizes, size)
-		ret.pools = append(ret.pools, NewRCPool(func() []byte {
-			return make([]byte, size)
-		}))
-	}
-	return ret
-}()
-
-// Get returns an RCBytes
-func (r *rcBytesPool) Get(size int) RCBytes {
-	if size > rcBytesPoolMaxCap {
-		item := RCBytes{
-			RCPoolItem: &RCPoolItem[[]byte]{
-				Value: make([]byte, size),
-			},
-		}
-		item.Retain()
-		return item
-	}
-
-	for i, poolSize := range r.sizes {
-		if poolSize >= size {
-			item := r.pools[i].Get()
-			item.Value = item.Value[:size]
-			return RCBytes{
-				RCPoolItem: item,
-			}
-		}
-	}
-
-	panic("impossible")
-}
-
-// GetAndCopy gets an RCBytes and copy data to it
-func (r *rcBytesPool) GetAndCopy(from []byte) RCBytes {
-	bs := r.Get(len(from))
-	copy(bs.Value, from)
-	return bs
-}
-
-var _ CacheDataAllocator = new(rcBytesPool)
-
-func (r *rcBytesPool) Alloc(size int) CacheData {
-	return r.Get(size)
+func (r RCBytes) Slice(n int) RCBytes {
+	r.d.Truncate(n)
+	return r
 }

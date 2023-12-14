@@ -21,20 +21,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytes(t *testing.T) {
+func TestData(t *testing.T) {
 	var size atomic.Int64
 
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
-	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
+	d := newData(1, &size)
+	require.NotEqual(t, nil, d)
+	// test refs
+	require.Equal(t, int32(1), d.refs())
+	// test Buf
+	buf := d.Buf()
+	buf[0] = 1
+	require.Equal(t, byte(1), d.Buf()[0])
+	// test Truncate
+	d.Truncate(0)
+	require.Equal(t, 0, len(d.Buf()))
+	// test acquire
+	d.acquire()
+	require.Equal(t, int32(2), d.refs())
 	// test release
-	r.Release()
+	d.release(&size)
+	require.Equal(t, int32(1), d.refs())
+	d.release(&size)
 	require.Equal(t, int64(0), size.Load())
+	// boundary test
+	d = newData(0, &size)
+	require.Equal(t, (*Data)(nil), d)
 }

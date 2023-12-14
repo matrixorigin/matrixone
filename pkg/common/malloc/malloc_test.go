@@ -12,29 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package malloc
 
-import (
-	"sync/atomic"
-	"testing"
+import "testing"
 
-	"github.com/stretchr/testify/require"
-)
-
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
-
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
+func TestAllocFree(t *testing.T) {
+	// Test that Alloc and Free work.
+	for i := 0; i < 100; i++ {
+		b := Alloc(1024)
+		if len(b) != 1024 {
+			t.Errorf("Alloc returned slice of length %d, want 1024", len(b))
+		}
+		Free(b)
 	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+}
+
+func TestAllocZero(t *testing.T) {
+	// Test that Alloc(0) returns a non-nil slice.
+	b := Alloc(0)
+	if b == nil {
+		t.Errorf("Alloc(0) returned nil slice")
+	}
+	Free(b)
 }
