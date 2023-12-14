@@ -135,7 +135,6 @@ func (c Compile) Name() string {
 
 func (c *Compile) reset() {
 	if c.anal != nil {
-		c.anal.analInfos = nil
 		c.anal.release()
 	}
 	for i := range c.scope {
