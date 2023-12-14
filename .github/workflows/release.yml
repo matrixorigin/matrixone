@@ -78,6 +78,17 @@ jobs:
   darwin-x86-build-job:
     runs-on: macos-latest
     steps:
+    # GitHub Hosted MacOS runner cannot connect to time.apple.com, so use time.windows.com
+      - name: Sync System Time
+        run: |
+          set +e;
+          for i in {1..10}; do
+            sudo sntp -sS time.windows.com;
+            if [ "$?" == "0" ]; then
+              exit 0;
+            fi
+          done
+          exit 1;
       - name: Checkout source
         uses: actions/checkout@v3     
       - name: Get tags
@@ -96,12 +107,27 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
           # The password used to import the PKCS12 file.
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-      - name: Install gon via HomeBrew for code signing and app notarization
+
+      - name: Install gon
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '1'
+          repository: matrixorigin/gon
+          ref: master
+          path: ./gon
+      - name: Build gon
+        run: |
+          cd $GITHUB_WORKSPACE/gon;
+          make;
+          chmod +x gon;
+          echo "$(pwd)" >> $GITHUB_PATH;
+
+      - name: Code signing and app notarization
         env:
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+          AC_PROVIDER: ${{ secrets.AC_PROVIDER }}
         run: |
-          brew tap mitchellh/gon
-          brew install mitchellh/gon/gon
+          cd $GITHUB_WORKSPACE
           cp ./optools/sign/gon.json ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
@@ -130,11 +156,21 @@ jobs:
   darwin-arm-build-job:
     runs-on: mac-arm64-mini
     steps:
+      - name: Sync system time
+        run: |
+          set +e;
+          for i in {1..10}; do
+            sudo sntp -sS time.apple.com;
+            if [ "$?" == "0" ]; then
+              exit 0;
+            fi
+          done
+          exit 1;
       - name: Checkout source
         uses: actions/checkout@v3
       - name: Get tags
         run: git fetch --tags origin
-      - name: Check go Version
+      - name: Check go version
         run: |
           go version
       - name: Build normal
@@ -143,9 +179,10 @@ jobs:
       - name: Unlock Code-Signing Certificates
         run: |
           security unlock-keychain -p ${{ secrets.SIGN_KEYCHAIN_PASSWORD }} mo_sign.keychain
-      - name: Install gon via HomeBrew for code signing and app notarization
+      - name: Code signing and app notarization
         env:
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+          AC_PROVIDER: ${{ secrets.AC_PROVIDER }}
         run: |
           cp ./optools/sign/gon.json ./gon.json
           cat ./gon.json
