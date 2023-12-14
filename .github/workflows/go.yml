@@ -2,7 +2,7 @@ name: liucan_e2e_bvt(Standalone)
 
 on:
   push:
-    branches: [ "liucan_branch_dev" ]
+    branches: [ "main" ]
 
 jobs:
   bvt-linux-x86:
