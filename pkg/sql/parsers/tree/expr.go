@@ -1641,8 +1641,8 @@ func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
 
 func (s SampleExpr) Valid() error {
 	if s.typ == SampleRows {
-		if s.n < 1 || s.n > 1000 {
-			return moerr.NewSyntaxErrorNoCtx("sample(expr list, N rows) requires N between 1 and 1000.")
+		if s.n < 1 || s.n > 11_000 {
+			return moerr.NewSyntaxErrorNoCtx("sample(expr list, N rows) requires N between 1 and 11000.")
 		}
 		return nil
 	} else {

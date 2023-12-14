@@ -20,7 +20,7 @@ const DefaultRandSeed = 1
 
 type Clusterer interface {
 	Normalize()
-	InitCentroids()
+	InitCentroids() error
 	Cluster() ([][]float64, error)
 	SSE() float64
 }
@@ -37,6 +37,7 @@ type InitType uint16
 
 const (
 	Random InitType = iota
+	KmeansPlusPlus
 )
 
 // DistanceFunction is a function that computes the distance between two vectors
