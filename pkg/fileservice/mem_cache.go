@@ -25,7 +25,6 @@ import (
 )
 
 type MemCache struct {
-	size        int64
 	cache       DataCache
 	counterSets []*perfcounter.CounterSet
 }
