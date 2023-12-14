@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -374,13 +373,4 @@ func Test_LoadSpecifiedCkpData(t *testing.T) {
 	require.NotNil(t, data)
 
 	data.Close()
-}
-
-func Benchmark_StagesDuration(b *testing.B) {
-	testStages := txnbase.NewStagesDurationWithLogThreshold(1000, "test stage")
-	for idx := 0; idx < b.N; idx++ {
-		testStages.Record(0, "test")
-		testStages.Log()
-		testStages.ClearOnlyElapsed()
-	}
 }
