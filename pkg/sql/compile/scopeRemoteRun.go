@@ -195,6 +195,11 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
 		} else {
+			// there are 3 situations to release analyzeInfo
+			// 1 is free analyzeInfo of Local CN when release analyze
+			// 2 is free analyzeInfo of remote CN before transfer back
+			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+			// this is situation 3
 			for i := range c.proc.AnalInfos {
 				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
 			}
@@ -1624,6 +1629,11 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		InsertTime:       info.InsertTime,
 	}
 	info.DeepCopyArray(a)
+	// there are 3 situations to release analyzeInfo
+	// 1 is free analyzeInfo of Local CN when release analyze
+	// 2 is free analyzeInfo of remote CN before transfer back
+	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+	// this is situation 2
 	reuse.Free[process.AnalyzeInfo](info, nil)
 	return a
 }
