@@ -58,6 +58,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	defer analyze(proc, arg.info.Idx)()
 	if arg.ToWriteS3 {
 		return arg.insert_s3(proc)

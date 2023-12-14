@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"os"
 	"testing"
 	"time"
@@ -124,7 +125,7 @@ func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		tc.proc.TxnOperator = txnOperator
-		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, time.Now())
+		c := NewCompile("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -144,7 +145,7 @@ func TestCompileWithFaults(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, time.Now())
+	c := NewCompile("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
@@ -174,7 +175,8 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -184,7 +186,8 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 	}
 
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()
