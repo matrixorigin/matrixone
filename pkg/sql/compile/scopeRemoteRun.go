@@ -178,17 +178,15 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		s.SetContextRecursively(c.ctx)
 
 		err = s.ParallelRun(c, s.IsRemote)
-		if err == nil {
-			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
+		// record the number of s3 requests
+		c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
+		c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
+		c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
+		c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
+		c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
+		c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
-			receiver.finalAnalysisInfo = c.proc.AnalInfos
-		}
+		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		c.proc.FreeVectors()
 		c.proc.CleanValueScanBatchs()
 		return err
@@ -234,6 +232,14 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		m := val.(*pipeline.Message)
 
 		if errInfo, get := m.TryToGetMoErr(); get {
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				ana := new(pipeline.AnalysisList)
+				if err = ana.Unmarshal(anaData); err != nil {
+					return err
+				}
+				mergeAnalyseInfo(c.anal, ana)
+			}
 			return errInfo
 		}
 		if m.IsEndMessage() {
