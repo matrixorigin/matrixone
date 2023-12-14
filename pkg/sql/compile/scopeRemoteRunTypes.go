@@ -152,6 +152,9 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 			// ch close
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
+		logutil.Errorf("xxx: received %+v, %+v",
+			val.DebugString(),
+			sender.streamSender.(morpc.DebugStream).Conn())
 		return val, nil
 	}
 }

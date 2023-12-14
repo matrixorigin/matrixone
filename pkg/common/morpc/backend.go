@@ -364,6 +364,11 @@ func (rb *remoteBackend) Close() {
 		rb.stateMu.Unlock()
 		return
 	}
+	if rb.conn != nil {
+		rb.logger.Error("xxx: call rpc client closed",
+			zap.String("remote", rb.remote),
+			zap.String("local", rb.conn.RawConn().LocalAddr().String()))
+	}
 	rb.stateMu.state = stateStopped
 	rb.stopWriteLoop()
 	rb.stateMu.Unlock()
@@ -478,7 +483,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						rb.logger.Error("write request failed",
 							zap.Uint64("request-id", id),
 							zap.Error(err))
-						f.messageSent(err)
+						f.messageSent(
+							moerr.NewInternalErrorNoCtx("%s: %s",
+								err.Error(),
+								f.send.Message.DebugString()))
 					}
 				} else {
 					for _, f := range written {
@@ -1103,6 +1111,10 @@ func (s *stream) Close(closeConn bool) error {
 	s.mu.closed = true
 	s.unregisterFunc(s)
 	return nil
+}
+
+func (s *stream) Conn() string {
+	return s.rb.conn.RawConn().LocalAddr().String()
 }
 
 func (s *stream) ID() uint64 {
