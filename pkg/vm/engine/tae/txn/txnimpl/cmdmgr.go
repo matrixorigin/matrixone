@@ -81,16 +81,14 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 	if t3.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(
 			"SLOW-LOG",
-			zap.Duration("duration", t3.Sub(t1)),
-			zap.String("time-killer", "make-log-entry"),
 			zap.String("txn", txn.String()),
+			zap.Duration("make-log-entry-duration", t3.Sub(t1)),
 		)
 	}
 	if t3.Sub(t2) > time.Millisecond*20 {
 		logutil.Warn(
 			"SLOW-LOG",
-			zap.Duration("duration", t3.Sub(t1)),
-			zap.String("time-killer", "append-log-entry"),
+			zap.Duration("append-log-entry-duration", t3.Sub(t1)),
 			zap.String("txn", txn.String()),
 		)
 	}

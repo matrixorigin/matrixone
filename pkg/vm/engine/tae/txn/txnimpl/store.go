@@ -760,8 +760,7 @@ func (store *txnStore) PrepareWAL() (err error) {
 		logutil.Warn(
 			"SLOW-LOG",
 			zap.String("txn", store.txn.String()),
-			zap.Duration("duration", t2.Sub(t1)),
-			zap.String("time-killer", "Apply1PCCommit"),
+			zap.Duration("apply-1pc-commit-duration", t2.Sub(t1)),
 		)
 	}
 	return
