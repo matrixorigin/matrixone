@@ -3217,7 +3217,8 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = process.NewAnalyzeInfo(int32(i))
+		anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		anals[i].NodeId = int32(i)
 	}
 	c.anal = newAnaylze()
 	c.anal.qry = qry

@@ -158,7 +158,7 @@ type AnalyzeInfo struct {
 	InsertTime int64
 
 	// time consumed by every single parallel
-	mu                sync.Mutex
+	mu                *sync.Mutex
 	TimeConsumedArray []int64
 }
 
@@ -526,25 +526,4 @@ func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
 	if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArray) {
 		a.TimeConsumedArray[parallelIdx] += t
 	}
-}
-
-func (a *AnalyzeInfo) Reset() {
-	a.NodeId = 0
-	a.InputRows = 0
-	a.OutputRows = 0
-	a.TimeConsumed = 0
-	a.WaitTimeConsumed = 0
-	a.InputSize = 0
-	a.OutputSize = 0
-	a.MemorySize = 0
-	a.DiskIO = 0
-	a.S3IOByte = 0
-	a.S3IOInputCount = 0
-	a.S3IOOutputCount = 0
-	a.NetworkIO = 0
-	a.ScanTime = 0
-	a.InsertTime = 0
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.TimeConsumedArray = a.TimeConsumedArray[:0]
 }

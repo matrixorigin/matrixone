@@ -15,30 +15,51 @@
 package process
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
-func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
-	return &AnalyzeInfo{
-		NodeId:           nodeId,
-		InputRows:        0,
-		OutputRows:       0,
-		TimeConsumed:     0,
-		WaitTimeConsumed: 0,
-		InputSize:        0,
-		OutputSize:       0,
-		MemorySize:       0,
-		DiskIO:           0,
-		S3IOByte:         0,
-		S3IOInputCount:   0,
-		S3IOOutputCount:  0,
-		NetworkIO:        0,
-		ScanTime:         0,
-		InsertTime:       0,
-	}
+func init() {
+	reuse.CreatePool[AnalyzeInfo](
+		newAnalyzeInfo,
+		resetAnalyzeInfo,
+		reuse.DefaultOptions[AnalyzeInfo]().WithEnableChecker(),
+	)
+}
+
+func (a AnalyzeInfo) Name() string {
+	return "compile.anaylzeinfo"
+}
+
+func newAnalyzeInfo() *AnalyzeInfo {
+	a := &AnalyzeInfo{}
+	a.mu = &sync.Mutex{}
+	return a
+}
+
+func resetAnalyzeInfo(a *AnalyzeInfo) {
+	a.NodeId = 0
+	a.InputRows = 0
+	a.OutputRows = 0
+	a.TimeConsumed = 0
+	a.WaitTimeConsumed = 0
+	a.InputSize = 0
+	a.OutputSize = 0
+	a.MemorySize = 0
+	a.DiskIO = 0
+	a.S3IOByte = 0
+	a.S3IOInputCount = 0
+	a.S3IOOutputCount = 0
+	a.NetworkIO = 0
+	a.ScanTime = 0
+	a.InsertTime = 0
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TimeConsumedArray = a.TimeConsumedArray[:0]
 }
 
 func (a *analyze) Start() {

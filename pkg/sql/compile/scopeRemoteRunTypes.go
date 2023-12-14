@@ -371,9 +371,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
-		proc.AnalInfos[i] = &process.AnalyzeInfo{
-			NodeId: pHelper.analysisNodeList[i],
-		}
+		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 

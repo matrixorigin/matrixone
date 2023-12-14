@@ -645,7 +645,8 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := &process.AnalyzeInfo{InputRows: 100}
+	info := reuse.Alloc[process.AnalyzeInfo](nil)
+	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))
 }

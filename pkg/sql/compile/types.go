@@ -202,6 +202,9 @@ func newAnaylze() *anaylze {
 }
 
 func (a *anaylze) release() {
+	for i := range a.analInfos {
+		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
+	}
 	reuse.Free[anaylze](a, nil)
 }
 
