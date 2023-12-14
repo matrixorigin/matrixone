@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -204,7 +205,10 @@ func (l *localLockTable) unlock(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
-				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn")
+				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn",
+					zap.String("bind", l.bind.DebugString()),
+					waitTxnArrayField("holders", lock.holders.txns),
+					txnField(txn))
 			}
 			if len(startKey) > 0 && !lock.isLockRangeEnd() {
 				panic("BUG: missing range end key")
