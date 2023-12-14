@@ -21,11 +21,9 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"go.uber.org/zap"
 )
 
 const (
@@ -74,16 +72,11 @@ type CNClient struct {
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 	c.Lock()
 	defer c.Unlock()
+
 	if !c.ready {
 		return nil, moerr.NewInternalErrorNoCtx("cn client is not ready")
 	}
 
-	if backend == c.localServiceAddress {
-		runtime.ProcessLevelRuntime().Logger().
-			Fatal("remote run pipeline in local",
-				zap.String("local-address", c.localServiceAddress),
-				zap.String("remote-address", backend))
-	}
 	return c.client.NewStream(backend, true)
 }
 
