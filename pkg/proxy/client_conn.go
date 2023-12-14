@@ -129,7 +129,7 @@ type clientConn struct {
 	// 1. set variable stmts
 	// 2. prepare stmts
 	// 3. use stmts
-	redoStmts []string
+	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
@@ -138,6 +138,13 @@ type clientConn struct {
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
 	}
+}
+
+// internalStmt is used internally in proxy, which indicates the stmt
+// need to execute.
+type internalStmt struct {
+	cmdType MySQLCmd
+	s       string
 }
 
 var _ ClientConn = (*clientConn)(nil)
@@ -267,8 +274,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleSetVar(ev)
 	case *prepareEvent:
 		return c.handlePrepare(ev)
-	case *useEvent:
-		return c.handleUse(ev)
+	case *initDBEvent:
+		return c.handleInitDB(ev)
 	default:
 	}
 	return nil
@@ -306,7 +313,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("access error")
 	}
 
-	ok, err := sc.ExecStmt(stmt, resp)
+	ok, err := sc.ExecStmt(internalStmt{cmdType: cmdQuery, s: stmt}, resp)
 	if err != nil {
 		c.log.Error("failed to send query to server",
 			zap.String("query", stmt), zap.Error(err))
@@ -334,19 +341,19 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
 	return nil
 }
 
 // handleSetVar handles the prepare event.
 func (c *clientConn) handlePrepare(e *prepareEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
 	return nil
 }
 
 // handleUse handles the use event.
-func (c *clientConn) handleUse(e *useEvent) error {
-	c.redoStmts = append(c.redoStmts, e.stmt)
+func (c *clientConn) handleInitDB(e *initDBEvent) error {
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: e.db})
 	return nil
 }
 

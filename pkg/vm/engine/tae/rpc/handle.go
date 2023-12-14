@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -356,17 +356,6 @@ func (h *Handle) handleRequests(
 				req,
 				&db.WriteResp{},
 			)
-			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
-				for _, rreq := range txnCtx.reqs {
-					if crreq, ok := rreq.(*db.WriteReq); ok {
-						logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
-							crreq.Type, crreq.TableID,
-							crreq.TableName, common.MoBatchToString(crreq.Batch, 3),
-							txn.String(),
-						)
-					}
-				}
-			}
 			write++
 		default:
 			err = moerr.NewNotSupported(ctx, "unknown txn request type: %T", req)
@@ -962,6 +951,28 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
+// TODO: debug for #13342, remove me later
+var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
+
+func IsDistrictTable(name string) bool {
+	return districtMatchRegexp.MatchString(name)
+}
+
+func PrintTuple(tuple types.Tuple) string {
+	res := "("
+	for i, t := range tuple {
+		switch t := t.(type) {
+		case int32:
+			res += fmt.Sprintf("%v", t)
+		}
+		if i != len(tuple)-1 {
+			res += ","
+		}
+	}
+	res += ")"
+	return res
+}
+
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
@@ -994,23 +1005,18 @@ func (h *Handle) HandleWrite(
 		)
 		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
-	var dbase handle.Database
-	var tb handle.Relation
 	defer func() {
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
-		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
-			logutil.Infof("[precommit] dup handle catalog on dup %s ", tb.GetMeta().(*catalog2.TableEntry).PPString(common.PPL1, 0, ""))
-		}
 	}()
 
-	dbase, err = txn.GetDatabaseByID(req.DatabaseId)
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return
 	}
 
-	tb, err = dbase.GetRelationByID(req.TableID)
+	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
 		return
 	}
@@ -1046,6 +1052,13 @@ func (h *Handle) HandleWrite(
 			if vec.Length() != len {
 				logutil.Errorf("the length of vec:%d in req.Batch is not equal to the first vec", i)
 				panic("invalid batch : the length of vectors in batch is not the same")
+			}
+		}
+		// TODO: debug for #13342, remove me later
+		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
 		//Appends a batch of data into table.
@@ -1115,6 +1128,15 @@ func (h *Handle) HandleWrite(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
+	// TODO: debug for #13342, remove me later
+	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+		for i := 0; i < rowIDVec.Length(); i++ {
+
+			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+		}
+	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
 }

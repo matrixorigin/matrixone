@@ -577,6 +577,7 @@ var functionIdRegister = map[string]int32{
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
 	"instr":                          INSTR,
+	"locate":                         INSTR,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
 	"json_unquote":                   JSON_UNQUOTE,
@@ -609,6 +610,10 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"to_upper":                       UPPER,
+	"upper":                          UPPER,
+	"to_lower":                       LOWER,
+	"lower":                          LOWER,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,

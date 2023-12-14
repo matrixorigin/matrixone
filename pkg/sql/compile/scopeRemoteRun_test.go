@@ -256,6 +256,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	sender := &messageSenderOnClient{
 		ctx:          ctx,
 		streamSender: streamSender,
+		c:            c,
 	}
 	ch2 := make(chan *batch.Batch)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -695,34 +696,4 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 	_, err = decodeBatch(mp, vp, data)
 	require.Nil(t, err)
-}
-
-func TestScopeContext_addSubPipeline(t *testing.T) {
-	proc := process.New(context.TODO(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	proc.Reg = process.Register{
-		MergeReceivers: []*process.WaitRegister{{}},
-	}
-	ctx := &scopeContext{
-		id:   2,
-		plan: &plan.Plan{},
-		scope: &Scope{
-			NodeInfo: engine.Node{},
-			Proc:     proc,
-		},
-		root:   &scopeContext{id: 0},
-		parent: &scopeContext{id: 1},
-		children: []*scopeContext{
-			{id: 3},
-		},
-		pipe: &pipeline.Pipeline{},
-		regs: nil,
-	}
-	_, err := ctx.addSubPipeline(4, 0, 4, engine.Node{})
-	require.Nil(t, err)
-}
-
-func TestScopeContext_isDescendant(t *testing.T) {
-	ctx := &scopeContext{id: 0, children: []*scopeContext{{id: 1}}}
-	dsc := &scopeContext{id: 2}
-	require.Equal(t, ctx.isDescendant(dsc), false)
 }
