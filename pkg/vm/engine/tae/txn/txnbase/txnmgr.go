@@ -530,10 +530,12 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
+
+	var t1 time.Time
 	var debugT1, debugT2, debugT3 int64
 
 	for _, item := range items {
-		t0, t1 := time.Now(), time.Now()
+		t0 := time.Now()
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			t1 = time.Now()
