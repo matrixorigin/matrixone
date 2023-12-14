@@ -16,7 +16,6 @@ package test
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"math/rand"
 	"testing"
 	"time"
@@ -358,13 +357,4 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		require.Equal(t, len(rels), sizeVec.Length())
 	})
 
-}
-
-func Benchmark_StagesDuration(b *testing.B) {
-	testStages := txnbase.NewStagesDurationWithLogThreshold(1000, "test stage")
-	for idx := 0; idx < b.N; idx++ {
-		testStages.Record(0, "test")
-		testStages.Log()
-		testStages.ClearOnlyElapsed()
-	}
 }

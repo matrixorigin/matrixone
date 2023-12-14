@@ -530,17 +530,20 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
+	var debugT1, debugT2, debugT3 int64
+
 	for _, item := range items {
 		t0, t1 := time.Now(), time.Now()
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+			t1 = time.Now()
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
 
 			dur := time.Since(t1)
 			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(dur.Seconds())
-			onPrepareWALStages.Record(dur.Milliseconds(), "op.Txn.PrepareWAL")
+			debugT1 = dur.Milliseconds()
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
@@ -561,7 +564,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 			dur = time.Since(t1)
 			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(dur.Seconds())
-			onPrepareWALStages.Record(dur.Milliseconds(), "onEndPrepareWAL")
+			debugT2 = dur.Milliseconds()
 		}
 
 		t1 = time.Now()
@@ -571,10 +574,14 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 		dur := time.Since(t1)
 		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(dur.Seconds())
-		onPrepareWALStages.Record(dur.Milliseconds(), "mgr.FlushQueue.Enqueue")
+		debugT3 = dur.Milliseconds()
 
-		onPrepareWALStages.Log()
-		onPrepareWALStages.ClearOnlyElapsed()
+		if total := debugT1 + debugT3 + debugT3; total > time.Second.Milliseconds() {
+			logutil.Info(fmt.Sprintf(
+				"[onPrepareWAL durations]: total = %d ms; prepare wal = %d; end prepare wal = %d; enqueue flush = %d",
+				total, debugT1, debugT2, debugT3))
+		}
+
 		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
