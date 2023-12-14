@@ -576,7 +576,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(dur.Seconds())
 		debugT3 = dur.Milliseconds()
 
-		if total := debugT1 + debugT3 + debugT3; total > time.Second.Milliseconds() {
+		if total := debugT1 + debugT2 + debugT3; total > time.Second.Milliseconds() {
 			logutil.Info(fmt.Sprintf(
 				"[onPrepareWAL durations]: total = %d ms; prepare wal = %d; end prepare wal = %d; enqueue flush = %d",
 				total, debugT1, debugT2, debugT3))
