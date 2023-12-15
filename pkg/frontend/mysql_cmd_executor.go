@@ -270,17 +270,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm := motrace.NewStatementInfo()
 	// set TransactionID
 	var txn TxnOperator
-	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		_, txn, err = handler.GetTxn()
-		if err != nil {
-			logError(ses, ses.GetDebugString(),
-				"Failed to record statement",
-				zap.Error(err))
-			copy(stm.TransactionID[:], motrace.NilTxnID[:])
-		} else {
-			copy(stm.TransactionID[:], txn.Txn().ID)
-		}
+		_, txn = handler.GetTxnOperator()
+		copy(stm.TransactionID[:], txn.Txn().ID)
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
@@ -355,21 +347,32 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	var err error
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			_, txn, err = handler.GetTxn()
-			if err != nil {
-				logError(ses, ses.GetDebugString(),
-					"Failed to record statement transaction ID",
-					zap.Error(err))
-			} else {
-				stm.SetTxnID(txn.Txn().ID)
-			}
+			// 简化获取TxnOperator 逻辑, 详见 https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
+			_, txn = handler.GetTxnOperator()
+			stm.SetTxnID(txn.Txn().ID)
 			ses.SetTxnId(txn.Txn().ID)
 		}
 		stm.Report(ctx)
+	}
+
+	// set frontend statement's txn-id
+	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() /* not record txn-id */ {
+		// background session has valid txn
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+			_, txn = handler.GetTxnOperator()
+			// set upstream (the frontend session) statement's txn-id
+			// PS: only skip ONE txn
+			if stmt := upSes.tStmt; stmt.NeedSkipTxn() /* normally set by determineUserHasPrivilegeSet */ {
+				// need to skip the whole txn, so it records the skipped txn-id
+				stmt.SetSkipTxn(false)
+				stmt.SetSkipTxnId(txn.Txn().ID)
+			} else if txnId := txn.Txn().ID; !stmt.SkipTxnId(txnId) {
+				upSes.tStmt.SetTxnID(txnId)
+			}
+		}
 	}
 }
 
@@ -4273,7 +4276,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:

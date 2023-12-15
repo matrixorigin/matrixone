@@ -325,5 +325,14 @@ insert into prepare01 values (42342, '3');
 select * from prepare01;
 drop table prepare01;
 
+-- begin, alter table rename, commit, then select
+drop table if exists table03;
+begin;
+create table table03(col1 int, col2 char);
+alter table table03 rename to NewCol1;
+commit;
+select * from NewCol1;
+select col1 from NewCol1;
+drop table NewCol1;
 drop database test;
 
