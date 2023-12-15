@@ -61,9 +61,9 @@ func (r *refcnt) release() bool {
 }
 
 func (r *refcnt) trace(msg string) {
-	smg := fmt.Sprintf("%s: refs=%d\n%s", msg, r.refs(), string(debug.Stack()))
+	traceMsg := fmt.Sprintf("%s: refs=%d\n%s", msg, r.refs(), string(debug.Stack()))
 	r.Lock()
-	r.msgs = append(r.msgs, msg)
+	r.msgs = append(r.msgs, traceMsg)
 	r.Unlock()
 }
 

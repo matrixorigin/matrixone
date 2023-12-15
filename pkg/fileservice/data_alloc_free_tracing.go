@@ -20,8 +20,11 @@
 package fileservice
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"runtime"
+	"sync/atomic"
 )
 
 func newData(n int, size *atomic.Int64) *Data {
@@ -35,7 +38,7 @@ func newData(n int, size *atomic.Int64) *Data {
 	runtime.SetFinalizer(d, func(d *Data) {
 		if d.buf != nil {
 			logutil.Fatal(fmt.Sprintf("data %p is not freed: refs:%d\n%s",
-				d, d.refs()), d.ref.dump())
+				d, d.refs(), d.ref.dump()))
 		}
 	})
 	return d

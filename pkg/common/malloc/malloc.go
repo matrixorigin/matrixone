@@ -38,6 +38,7 @@ func Alloc(n int) []byte {
 
 func Free(b []byte) {
 	if cap(b) != 0 {
+		b = b[:cap(b)]
 		C.free(unsafe.Pointer(&b[0]))
 	}
 }
