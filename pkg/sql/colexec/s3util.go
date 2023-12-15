@@ -379,13 +379,8 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 			srcVec := bat.GetVector(int32(i))
 			for j := 0; j < rows; j++ {
 				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
-					break
+					panic(err)
 				}
-			}
-			vec.Free(proc.Mp())
-			srcVec.Free(proc.Mp())
-			if err != nil {
-				panic(err)
 			}
 		}
 		rbat.AddRowCount(rows)
