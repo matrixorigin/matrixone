@@ -131,6 +131,8 @@ type clientConn struct {
 	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
+	// tlsConnectTimeout is the TLS connect timeout value.
+	tlsConnectTimeout time.Duration
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 	// testHelper is used for testing.
@@ -179,6 +181,8 @@ func newClientConn(
 			originIP: originIP,
 		},
 		ipNetList: ipNetList,
+		// set the connection timeout value.
+		tlsConnectTimeout: cfg.TLSConnectTimeout.Duration,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -410,7 +414,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
-					zap.Any("bad backend servers", badCNServers))
+					zap.Any("bad backend servers", badCNServers),
+					zap.String("client->proxy",
+						fmt.Sprintf("%s -> %s", c.RawConn().RemoteAddr(),
+							c.RawConn().LocalAddr())),
+					zap.Error(err),
+				)
 				continue
 			} else {
 				return nil, err
