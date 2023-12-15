@@ -67,6 +67,7 @@ func New[K comparable, V BytesLike](
 			l.shards[i].capacity = 1
 		}
 		l.shards[i].kv = hashmap.New[K, lruItem[K, V]](int(l.capacity))
+		l.capacity += l.shards[i].capacity
 	}
 	return &l
 }
