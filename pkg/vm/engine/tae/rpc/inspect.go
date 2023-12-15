@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/spf13/cobra"
 )
 
@@ -193,6 +194,44 @@ func (c *manualyIgnoreArg) String() string {
 
 func (c *manualyIgnoreArg) Run() error {
 	logtail.TempF.Add(c.id)
+	return nil
+}
+
+type manualyIgnorePrepareCompactArg struct {
+	ctx *inspectContext
+	bid types.Blockid
+}
+
+func (c *manualyIgnorePrepareCompactArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("blk")
+
+	parts := strings.Split(address, "_")
+	if len(parts) != 3 {
+		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+	}
+	uid, err := types.ParseUuid(parts[0])
+	if err != nil {
+		return err
+	}
+	fn, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+	bn, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return err
+	}
+	c.bid = *objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
+	return nil
+}
+
+func (c *manualyIgnorePrepareCompactArg) String() string {
+	return fmt.Sprintf("ignore blk: %v", c.bid.String())
+}
+
+func (c *manualyIgnorePrepareCompactArg) Run() error {
+	tables.AblkTempF.Add(c.bid)
 	return nil
 }
 
@@ -487,6 +526,14 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 
 	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
 	rootCmd.AddCommand(miCmd)
+
+	maiCmd := &cobra.Command{
+		Use:   "abkignore",
+		Short: "manually ignore ablk prepare compact false",
+		Run:   RunFactory(&manualyIgnorePrepareCompactArg{}),
+	}
+	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	rootCmd.AddCommand(maiCmd)
 
 	return rootCmd
 }
