@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
