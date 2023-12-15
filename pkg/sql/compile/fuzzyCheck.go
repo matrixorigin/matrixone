@@ -58,13 +58,15 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
 		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
-	} else if n.TableDef.ParentUniqueCols != nil {
-		if len(n.TableDef.ParentUniqueCols) > 1 {
+	}
+
+	if n.Fuzzymessage != nil {
+		if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
 			f.isCompound = true
-			f.tbl = n.TableDef.ParentTblName // search for data table but not index table
-			f.compoundCols = n.TableDef.ParentUniqueCols
+			f.tbl = n.Fuzzymessage.ParentTableName
+			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
 		} else {
-			f.col = n.TableDef.ParentUniqueCols[0]
+			f.col = n.Fuzzymessage.ParentUniqueCols[0]
 		}
 	}
 

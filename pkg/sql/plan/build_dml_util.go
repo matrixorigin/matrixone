@@ -119,7 +119,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
 	return err
 }
 
@@ -198,7 +198,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil)
 	return err
 }
 
@@ -382,7 +382,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil)
 						if err != nil {
 							return err
 						}
@@ -870,6 +870,7 @@ func makeInsertPlan(
 	isInsertWithoutAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool,
 	indexSourceColTypes []*plan.Type,
+	fuzzymessage *OriginTableMessageForFuzzy,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -945,9 +946,9 @@ func makeInsertPlan(
 					return err
 				}
 
-				// fuzzy filter need to get partial unique key attrs name and its origin table name
-				// for Decimal type, we need colDef to get the scale
-				idxTableDef.ParentTblName = tableDef.Name
+				originTableMessageForFuzzy := &OriginTableMessageForFuzzy{
+					ParentTableName: tableDef.Name,
+				}
 				partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
 				set := make(map[string]int)
 				for i, n := range indexdef.Parts {
@@ -958,13 +959,14 @@ func makeInsertPlan(
 						partialUniqueCols[i] = c
 					}
 				}
-				idxTableDef.ParentUniqueCols = partialUniqueCols
+				originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
+
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
 				if err != nil {
 					return err
 				}
@@ -1206,6 +1208,13 @@ func makeInsertPlan(
 				Children: []int32{tableScanId, lastNodeId}, // right table build hash
 				TableDef: tableDef,
 				ObjRef:   objRef,
+			}
+
+			if fuzzymessage != nil {
+				fuzzyFilterNode.Fuzzymessage = &plan.OriginTableMessageForFuzzy{
+					ParentTableName:  fuzzymessage.ParentTableName,
+					ParentUniqueCols: fuzzymessage.ParentUniqueCols,
+				}
 			}
 
 			if len(pkFilterExprs) == 0 {
