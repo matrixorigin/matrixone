@@ -757,6 +757,19 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) error {
+	if s.rpcStream != nil {
+		s.rpcStream.Close(true)
+		s.rpcStream = nil
+	}
+	// close the old rpc client for make sure the old rpc client is closed.
+	// use a new client to make sure the connection can be established.
+	if s.rpcClient != nil {
+		if err := s.rpcClient.Close(); err != nil {
+			return err
+		}
+		s.rpcClient = nil
+	}
+
 	if s.rpcClient == nil {
 		logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 		codec := morpc.NewMessageCodec(func() morpc.Message {
@@ -778,11 +791,6 @@ func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) e
 			return err
 		}
 		s.rpcClient = c
-	}
-
-	if s.rpcStream != nil {
-		s.rpcStream.Close(true)
-		s.rpcStream = nil
 	}
 
 	stream, err := s.rpcClient.NewStream(serviceAddr, true)
