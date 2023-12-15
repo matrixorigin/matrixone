@@ -263,11 +263,9 @@ func logLockTableClosed(
 	bind pb.LockTable,
 	remote bool) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock table closed",
-			zap.Bool("remote", remote),
-			zap.String("bind", bind.DebugString()))
-	}
+	logger.Info("lock table closed",
+		zap.Bool("remote", remote),
+		zap.String("bind", bind.DebugString()))
 }
 
 func logDeadLockFound(
