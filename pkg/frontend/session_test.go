@@ -522,7 +522,7 @@ func TestVariables(t *testing.T) {
 		vars := ses.CopyAllSessionVars()
 		convey.So(len(vars), convey.ShouldNotBeZeroValue)
 
-		err := ses.SetUserDefinedVar("abc", 1)
+		err := ses.SetUserDefinedVar("abc", 1, "")
 		convey.So(err, convey.ShouldBeNil)
 
 		_, _, err = ses.GetUserDefinedVar("abc")
