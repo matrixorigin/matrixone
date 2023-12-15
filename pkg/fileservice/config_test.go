@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mergerecursive
+package fileservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/BurntSushi/toml"
+	"github.com/stretchr/testify/assert"
 )
 
-type container struct {
-	colexec.ReceiverOperator
-	bats []*batch.Batch
-	last bool
-}
-
-type Argument struct {
-	ctr *container
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		for _, b := range arg.ctr.bats {
-			b.Clean(proc.Mp())
-			arg.ctr.bats = nil
-		}
-	}
+func TestConfig(t *testing.T) {
+	const text = `
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+cert-files = ['/etc/ssl/cert.pem']
+  `
+	var config Config
+	_, err := toml.Decode(text, &config.S3)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(config.S3.CertFiles))
 }

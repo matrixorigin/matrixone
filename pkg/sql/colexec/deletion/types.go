@@ -106,11 +106,13 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 		}
 		arg.SegmentMap = nil
-		arg.ctr.blockId_bitmap = nil
-		arg.ctr.partitionId_blockId_rowIdBatch = nil
-		arg.ctr.partitionId_blockId_deltaLoc = nil
-		arg.ctr.blockId_type = nil
-		arg.ctr.pool = nil
+		if arg.ctr != nil {
+			arg.ctr.blockId_bitmap = nil
+			arg.ctr.partitionId_blockId_rowIdBatch = nil
+			arg.ctr.partitionId_blockId_deltaLoc = nil
+			arg.ctr.blockId_type = nil
+			arg.ctr.pool = nil
+		}
 	}
 }
 

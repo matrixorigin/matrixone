@@ -2590,7 +2590,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
+	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
+	defer ses.SetQueryEnd(time.Now())
+	defer ses.SetQueryInProgress(false)
 	ses.SetQueryInExecute(true)
 
 	// per statement profiler
@@ -4119,7 +4122,6 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Success: false,
 		Uuid:    util.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)

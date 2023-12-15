@@ -67,11 +67,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if err := ctr.build(ap, proc, analyze); err != nil {
 				return process.ExecNext, err
 			}
-			if ctr.mp == nil {
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
@@ -159,6 +155,11 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+	}
+
+	if ctr.matched == nil {
+		rbat.Clean(proc.Mp())
+		return false, nil
 	}
 
 	count := ctr.bat.RowCount() - ctr.matched.Count()

@@ -68,7 +68,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
@@ -165,7 +167,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
@@ -283,7 +287,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
+					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				}
 			}
 			ctx := proc.Ctx
 

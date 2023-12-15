@@ -3493,7 +3493,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3643,7 +3643,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	optionBits := uint8(0)
@@ -3735,7 +3735,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
