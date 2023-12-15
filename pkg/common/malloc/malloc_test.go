@@ -12,37 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package malloc
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/stretchr/testify/assert"
-)
-
-func TestRCPool(t *testing.T) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 1024)
-		},
-	)
-
-	i := pool.Get()
-	assert.Equal(t, 1024, len(i.Value))
-
-	i.Retain()
-	i.Release()
-	i.Release()
+func TestAllocFree(t *testing.T) {
+	// Test that Alloc and Free work.
+	for i := 0; i < 100; i++ {
+		b := Alloc(1024)
+		if len(b) != 1024 {
+			t.Errorf("Alloc returned slice of length %d, want 1024", len(b))
+		}
+		Free(b)
+	}
 }
 
-func BenchmarkRCPool(b *testing.B) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 128)
-		},
-	)
-	for i := 0; i < b.N; i++ {
-		s := pool.Get()
-		s.Release()
+func TestAllocZero(t *testing.T) {
+	// Test that Alloc(0) returns a non-nil slice.
+	b := Alloc(0)
+	if b == nil {
+		t.Errorf("Alloc(0) returned nil slice")
 	}
+	Free(b)
 }
