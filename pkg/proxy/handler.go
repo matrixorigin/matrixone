@@ -78,7 +78,10 @@ func newProxyHandler(
 		return nil, err
 	}
 
-	ru := newRouter(mc, re, false)
+	ru := newRouter(mc, re, false,
+		withConnectTimeout(cfg.ConnectTimeout.Duration),
+		withAuthTimeout(cfg.AuthTimeout.Duration),
+	)
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
 		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
