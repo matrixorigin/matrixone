@@ -319,6 +319,7 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 		if v.Capacity() < shuffleBatchSize {
 			err := v.PreExtend(shuffleBatchSize, proc.Mp())
 			if err != nil {
+				v.Free(proc.Mp())
 				return err
 			}
 		}

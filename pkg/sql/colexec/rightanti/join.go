@@ -73,7 +73,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(ap, proc, analyze); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil {
+			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+			// shuffle join can't stop early for this moment
+			if ctr.mp == nil && !arg.IsShuffle {
 				ctr.state = End
 			} else {
 				ctr.state = Probe
