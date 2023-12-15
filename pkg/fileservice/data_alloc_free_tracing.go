@@ -12,29 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// use race flag to enable data alloc/free tracing
+
+//go:build race
+// +build race
+
 package fileservice
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"runtime"
 	"sync/atomic"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
-
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
+func newData(n int, size *atomic.Int64) *Data {
+	if n == 0 {
+		return nil
 	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+	size.Add(int64(n))
+	b := malloc.Alloc(n)
+	d := &Data{buf: b}
+	d.ref.init(1)
+	runtime.SetFinalizer(d, func(d *Data) {
+		if d.buf != nil {
+			logutil.Fatal(fmt.Sprintf("data %p is not freed: refs:%d\n%s",
+				d, d.refs(), d.ref.dump()))
+		}
+	})
+	return d
+}
+
+func (d *Data) free(size *atomic.Int64) {
+	size.Add(-int64(cap(d.buf)))
+	malloc.Free(d.buf)
+	d.buf = nil
 }

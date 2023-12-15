@@ -16,25 +16,39 @@ package fileservice
 
 import (
 	"sync/atomic"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
+// Data is a reference counted byte buffer
+type Data struct {
+	buf []byte
+	// reference counta for the Data, the Data is free
+	// when the reference count is 0
+	ref refcnt
+}
 
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
+// Buf returns the underlying buffer of the Data
+func (d *Data) Buf() []byte {
+	if d == nil {
+		return nil
 	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+	return d.buf
+}
+
+func (d *Data) Truncate(n int) *Data {
+	d.buf = d.buf[:n]
+	return d
+}
+
+func (d *Data) refs() int32 {
+	return d.ref.refs()
+}
+
+func (d *Data) acquire() {
+	d.ref.acquire()
+}
+
+func (d *Data) release(size *atomic.Int64) {
+	if d != nil && d.ref.release() {
+		d.free(size)
+	}
 }
