@@ -15,14 +15,16 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 func init() {
+	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
@@ -32,25 +34,24 @@ func init() {
 			}
 		},
 		func(c *Compile) { c.reset() },
-		reuse.DefaultOptions[Compile]().
-			WithEnableChecker(),
+		reuse.DefaultOptions[Compile](),
 	)
 
+	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Scope](
 		func() *Scope {
 			return &Scope{}
 		},
 		func(s *Scope) { *s = Scope{} },
-		reuse.DefaultOptions[Scope]().
-			WithEnableChecker(),
+		reuse.DefaultOptions[Scope](),
 	)
 
+	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[anaylze](
 		func() *anaylze {
 			return &anaylze{}
 		},
 		func(a *anaylze) { *a = anaylze{} },
-		reuse.DefaultOptions[anaylze]().
-			WithEnableChecker(),
+		reuse.DefaultOptions[anaylze](),
 	)
 }
