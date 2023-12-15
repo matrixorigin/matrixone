@@ -549,8 +549,9 @@ func (s *StatementInfo) MarkResponseAt() {
 // 56: empty mysql tcp package size
 // 13: avg payload prefix of err msg
 const ErrorPkgConst = 69
+const TcpIpv4HeaderBytes = 66
 
-var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes int64) {
+func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -569,7 +570,8 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes
 		if err != nil {
 			outBytes += ErrorPkgConst + int64(len(err.Error()))
 		}
-		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes))
+		outBytes += TcpIpv4HeaderBytes * outPacket
+		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

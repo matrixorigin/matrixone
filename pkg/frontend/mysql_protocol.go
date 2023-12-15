@@ -195,7 +195,8 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	CalculateOutTrafficBytes() int64
+	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
+	CalculateOutTrafficBytes() (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
@@ -239,7 +240,32 @@ func (ds *debugStats) String() string {
 }
 
 func (ds *debugStats) AddFlushBytes(b uint64) {
+	ds.writeCount += 1
 	ds.writeBytes += b
+}
+
+type packetCounter struct {
+	// packetCounter cooperate with lastPacketNum to calculate how many packet communicated with client.
+	packetCounter atomic.Int64
+	// lastPacketNum
+	lastPacketNum int64
+}
+
+func (pc *packetCounter) IncPacketCount() {
+	pc.packetCounter.Add(1)
+}
+
+const packetCounterResetInterval = 1 << 60
+
+func (pc *packetCounter) Reset() {
+	if val := pc.packetCounter.Load(); val > packetCounterResetInterval {
+		pc.packetCounter.Store(0)
+	}
+	pc.lastPacketNum = pc.packetCounter.Load()
+}
+
+func (pc *packetCounter) Calculate() int64 {
+	return pc.packetCounter.Load() - pc.lastPacketNum
 }
 
 /*
@@ -344,6 +370,8 @@ type MysqlProtocolImpl struct {
 
 	rowHandler
 
+	packetCounter
+
 	SV *config.FrontendParameters
 
 	ses *Session
@@ -361,7 +389,13 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.packetCounter.IncPacketCount()
+	mp.sequenceId.Store(uint32(value))
+}
+
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.packetCounter.IncPacketCount()
 	mp.sequenceId.Add(uint32(a))
 }
 
@@ -395,12 +429,13 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() (int64, int64) {
 	// Case 1: send data as ResultSet
 	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
-		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
+			// Case 2: send data as CSV
+			mp.GetSession().writeCsvBytes.Load(),
+		mp.packetCounter.Calculate()
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {

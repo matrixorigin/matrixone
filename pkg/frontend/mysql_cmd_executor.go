@@ -329,11 +329,11 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 				sqlType = sqlTypes[i]
 			}
 			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
-			motrace.EndStatement(ctx, retErr, 0, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
-		motrace.EndStatement(ctx, retErr, 0, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
