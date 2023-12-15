@@ -78,6 +78,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select collation from t",
+		output: "select collation from t",
+	}, {
 		input:  "create stream s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create stream s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {
