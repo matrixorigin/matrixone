@@ -53,6 +53,7 @@ func New[K comparable, V BytesLike](
 	pool := newPool[K, V](func() *lruItem[K, V] {
 		return &lruItem[K, V]{}
 	})
+	l.capacity = capacity
 	l.hasher = maphash.NewHasher[K]()
 	l.shards = make([]shard[K, V], m)
 	for i := range l.shards {
@@ -66,8 +67,7 @@ func New[K comparable, V BytesLike](
 		if l.shards[i].capacity < 1 {
 			l.shards[i].capacity = 1
 		}
-		l.shards[i].kv = hashmap.New[K, lruItem[K, V]](int(l.capacity))
-		l.capacity += l.shards[i].capacity
+		l.shards[i].kv = hashmap.New[K, lruItem[K, V]](0)
 	}
 	return &l
 }
