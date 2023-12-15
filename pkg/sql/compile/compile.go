@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -62,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -490,7 +490,7 @@ func (c *Compile) ifNeedRerun(err error) bool {
 	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
 		c.proc.TxnOperator.Txn().IsRCIsolation() {
-		return true
+		return !c.disableRetry
 	}
 	return false
 }

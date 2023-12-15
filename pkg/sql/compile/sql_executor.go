@@ -238,6 +238,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	}
 
 	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
 			exec.s.getCompileContext(exec.ctx, proc, exec.opts),
