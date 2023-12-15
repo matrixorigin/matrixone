@@ -17,6 +17,7 @@ package lrucache
 import (
 	"context"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/dolthub/maphash"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
@@ -55,6 +56,7 @@ func New[K comparable, V BytesLike](
 	l.hasher = maphash.NewHasher[K]()
 	l.shards = make([]shard[K, V], m)
 	for i := range l.shards {
+		l.shards[i].totalSize = &l.size
 		l.shards[i].pool = pool
 		l.shards[i].postSet = postSet
 		l.shards[i].postGet = postGet
@@ -92,30 +94,15 @@ func (l *LRU[K, V]) Flush() {
 }
 
 func (l *LRU[K, V]) Capacity() int64 {
-	var capacity int64
-
-	for i := range l.shards {
-		capacity += l.shards[i].Capacity()
-	}
-	return capacity
+	return l.capacity
 }
 
 func (l *LRU[K, V]) Used() int64 {
-	var used int64
-
-	for i := range l.shards {
-		used += l.shards[i].Used()
-	}
-	return used
+	return atomic.LoadInt64(&l.size)
 }
 
 func (l *LRU[K, V]) Available() int64 {
-	var available int64
-
-	for i := range l.shards {
-		available += l.shards[i].Available()
-	}
-	return available
+	return l.capacity - atomic.LoadInt64(&l.size)
 }
 
 func (l *LRU[K, V]) hash(k K) uint64 {

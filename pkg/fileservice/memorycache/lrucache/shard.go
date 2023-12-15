@@ -35,6 +35,7 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 		return
 	}
 	s.size += size
+	atomic.AddInt64(s.totalSize, size)
 	s.evicts.PushFront(item)
 	if s.postSet != nil {
 		s.postSet(key, value)
@@ -70,6 +71,7 @@ func (s *shard[K, V]) evict(ctx context.Context) {
 			}
 			s.kv.Delete(elem.h, elem.Key)
 			s.size -= elem.Size
+			atomic.AddInt64(s.totalSize, -elem.Size)
 			s.evicts.Remove(elem)
 			if s.postEvict != nil {
 				s.postEvict(elem.Key, elem.Value)
@@ -104,22 +106,6 @@ func (s *shard[K, V]) Flush() {
 	s.size = 0
 	s.evicts = newList[K, V]()
 	s.kv = hashmap.New[K, lruItem[K, V]](int(s.capacity))
-}
-
-func (s *shard[K, V]) Capacity() int64 {
-	return s.capacity
-}
-
-func (s *shard[K, V]) Used() int64 {
-	s.RLock()
-	defer s.RUnlock()
-	return s.size
-}
-
-func (s *shard[K, V]) Available() int64 {
-	s.RLock()
-	defer s.RUnlock()
-	return s.capacity - s.size
 }
 
 func (s *shard[K, V]) allocItem() *lruItem[K, V] {
