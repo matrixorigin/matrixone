@@ -346,7 +346,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroids.version as __mo_index_centroid_version_fk,
 		centroids.id as __mo_index_centroid_id_fk,
 		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.centroid, normalize_l2(tbl.embedding)) ) as `__mo_index_rn`
+		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.centroid, tbl.embedding) ) as `__mo_index_rn`
 		FROM
 		tbl CROSS JOIN centroids
 		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
@@ -361,7 +361,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
 		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
 		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
+		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, %s.%s)) as `__mo_index_rn` "+
 		"FROM "+
 		" %s CROSS JOIN %s "+
 		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
