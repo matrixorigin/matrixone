@@ -136,7 +136,6 @@ type CacheData interface {
 	Bytes() []byte
 	Slice(length int) CacheData
 	Release()
-	Retain()
 }
 
 type CacheDataAllocator interface {

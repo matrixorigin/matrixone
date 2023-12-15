@@ -12,29 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+//go:build !cgo
+// +build !cgo
 
-import (
-	"sync/atomic"
-	"testing"
+package malloc
 
-	"github.com/stretchr/testify/require"
-)
+func Alloc(n int) []byte {
+	return make([]byte, n)
+}
 
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
-
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
-	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+func Free(b []byte) {
 }

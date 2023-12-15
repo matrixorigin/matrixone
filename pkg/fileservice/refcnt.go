@@ -12,29 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !race
+// +build !race
+
 package fileservice
 
 import (
+	"fmt"
 	"sync/atomic"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytes(t *testing.T) {
-	var size atomic.Int64
+// refcnt is an atomic reference counter
+type refcnt struct {
+	val atomic.Int32
+}
 
-	r := RCBytes{
-		d:    newData(1, &size),
-		size: &size,
+func (r *refcnt) init(val int32) {
+	r.val.Store(val)
+}
+
+func (r *refcnt) refs() int32 {
+	return r.val.Load()
+}
+
+func (r *refcnt) acquire() {
+	switch v := r.val.Add(1); {
+	case v <= 1:
+		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
 	}
-	// test Bytes
-	r.Bytes()[0] = 1
-	require.Equal(t, r.Bytes()[0], byte(1))
-	// test Slice
-	r = r.Slice(0)
-	require.Equal(t, 0, len(r.Bytes()))
-	// test release
-	r.Release()
-	require.Equal(t, int64(0), size.Load())
+}
+
+func (r *refcnt) release() bool {
+	switch v := r.val.Add(-1); {
+	case v < 0:
+		panic(fmt.Sprintf("inconsistent refcnt count: %d", v))
+	case v == 0:
+		return true
+	default:
+		return false
+	}
 }
