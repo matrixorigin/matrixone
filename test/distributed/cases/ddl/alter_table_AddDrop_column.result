@@ -361,6 +361,15 @@ alter table transaction03 drop column d;
 no such table .transaction03
 show create table transaction03;
 not connect to a database
+show create table transaction03;
+Table    Create Table
+transaction03    CREATE TABLE `transaction03` (\n`c` INT NOT NULL,\n`d` INT DEFAULT NULL,\nPRIMARY KEY (`c`)\n)
+select * from transaction03;
+c    d
+1    1
+2    2
+3    1
+4    2
 drop table transaction03;
 drop table if exists transaction05;
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
@@ -676,4 +685,30 @@ newrename    CREATE TABLE `newrename` (\n`col1` INT DEFAULT NULL\n)
 drop table newRename;
 drop role role_r1;
 drop user role_u1;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 char);
+insert into table01 values(1,'a');
+alter table table01 add column col3 int;
+commit;
+select * from table01;
+col1    col2    col3
+1    a    null
+select col1 from table01;
+col1
+1
+drop table table01;
+drop table if exists table02;
+begin;
+create table table02(col1 int, col2 char);
+insert into table02 values(1,'a');
+alter table table02 drop column col2;
+commit;
+select * from table02;
+col1
+1
+select col1 from table02;
+col1
+1
+drop table table02;
 drop database test;
