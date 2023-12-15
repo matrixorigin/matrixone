@@ -74,6 +74,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		// copy value
 		stmt.StatementID = s.StatementID
 		stmt.SessionID = s.SessionID
+		stmt.TransactionID = s.TransactionID
 		stmt.Account = s.Account
 		stmt.User = s.User
 		stmt.Host = s.Host
@@ -94,8 +95,8 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		stmt.ResponseAt = s.ResponseAt
 		stmt.end = s.end
 
-		// remove the TransactionID
-		stmt.TransactionID = NilTxnID
+		// stmt.TransactionID = NilTxnID /* try hard to keep the txn-id. more in StatementInfoUpdate() */
+
 		// modified value
 		stmt.StatementTag = ""
 		stmt.StatementFingerprint = ""
@@ -117,6 +118,10 @@ func StatementInfoUpdate(existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
+	// nil aggregated stmt record's txn-id, if including diff transactions.
+	if e.TransactionID != n.TransactionID {
+		e.TransactionID = NilTxnID
+	}
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
@@ -229,6 +234,11 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+
+	// skipTxnOnce, readonly, for flow control
+	// see more on NeedSkipTxn() and SkipTxnId()
+	skipTxnOnce bool
+	skipTxnID   []byte
 }
 
 type Key struct {
@@ -310,24 +320,42 @@ func (s *StatementInfo) freeNoLocked() {
 }
 
 func (s *StatementInfo) free() {
+	s.StatementID = NilStmtID
+	s.TransactionID = NilTxnID
+	s.SessionID = NilSesID
+	s.Account = ""
+	s.User = ""
+	s.Host = ""
 	s.RoleId = 0
+	s.Database = ""
 	s.Statement = ""
+	s.StmtBuilder.Reset()
 	s.StatementFingerprint = ""
 	s.StatementTag = ""
-	s.FreeExecPlan()
+	s.SqlSourceType = ""
 	s.RequestAt = time.Time{}
-	s.ResponseAt = time.Time{}
+	s.StatementType = ""
+	s.QueryType = ""
 	s.Status = StatementStatusRunning
 	s.Error = nil
+	s.ResponseAt = time.Time{}
+	s.Duration = 0
+	s.FreeExecPlan() // handle s.ExecPlan
 	s.RowsRead = 0
 	s.BytesScan = 0
+	s.AggrCount = 0
+	// s.AggrMemoryTime // skip
 	s.ResultCount = 0
+	s.ConnType = 0
 	s.end = false
 	s.reported = false
 	s.exported = false
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	// clean skipTxn ctrl
+	s.skipTxnOnce = false
+	s.skipTxnID = nil
 	stmtPool.Put(s)
 }
 
@@ -459,6 +487,25 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
 	}
+}
+
+// SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
+// usage:
+// Step1: SetSkipTxn(true)
+// Step2:
+//
+//	if NeedSkipTxn() {
+//		SetSkipTxn(false)
+//		SetSkipTxnId(target_txn_id)
+//	} else SkipTxnId(current_txn_id) {
+//		// record current txn id
+//	}
+func (s *StatementInfo) SetSkipTxn(skip bool)   { s.skipTxnOnce = skip }
+func (s *StatementInfo) SetSkipTxnId(id []byte) { s.skipTxnID = id }
+func (s *StatementInfo) NeedSkipTxn() bool      { return s.skipTxnOnce }
+func (s *StatementInfo) SkipTxnId(id []byte) bool {
+	// s.skipTxnID == nil, means NO skipTxnId
+	return s.skipTxnID != nil && bytes.Equal(s.skipTxnID, id)
 }
 
 func GetLongQueryTime() time.Duration {
