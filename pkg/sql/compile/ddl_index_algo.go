@@ -343,12 +343,13 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM
 		(
 		SELECT
-		centroids.version as __mo_index_centroid_version_fk,
-		centroids.id as __mo_index_centroid_id_fk,
+		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
+		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
 		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.centroid, tbl.embedding) ) as `__mo_index_rn`
-		FROM
-		tbl CROSS JOIN centroids
+		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, tbl.embedding) ) as `__mo_index_rn`
+		FROM tbl
+		CROSS JOIN
+		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
 		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
 	*/
 	// 5. final SQL
