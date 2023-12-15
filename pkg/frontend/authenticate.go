@@ -8685,7 +8685,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var dbName string
 	var err error
 	variableName := "version_compatibility"
-	variableValue := "0.7"
+	variableValue := getVariableValue(ses.GetSysVar("version"))
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
