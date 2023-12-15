@@ -136,6 +136,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
 
+	if ctr.matched == nil {
+		return true, nil
+	}
+
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
@@ -163,11 +167,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
-	}
-
-	if ctr.matched == nil {
-		rbat.Clean(proc.Mp())
-		return false, nil
 	}
 
 	count := ctr.matched.Count()
