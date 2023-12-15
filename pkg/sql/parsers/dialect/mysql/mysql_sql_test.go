@@ -564,6 +564,9 @@ var (
 		input:  "select stream from t1;",
 		output: "select stream from t1",
 	}, {
+		input:  "select enable from t1;",
+		output: "select enable from t1",
+	}, {
 		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
 		output: "select date_add(2017-06-15, interval(-10, month))",
 	}, {
