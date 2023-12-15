@@ -305,7 +305,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 
 				var isUk = indexdef.Unique
-				var isSK = !isUk
+				var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
 
 				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				if uniqueTableDef == nil {
