@@ -255,14 +255,6 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 
 			if bat == nil {
 				// fmt.Println("probe cnt = ", arg.probeCnt)
-				// this will happen in such case:create unique index from a table that unique col have no data
-				if arg.rbat == nil || arg.collisionCnt == 0 {
-					result.Status = vm.ExecStop
-					return result, nil
-				}
-
-				// send collisionKeys to output operator to run background SQL
-				arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
 				result.Batch = arg.rbat
 				result.Status = vm.ExecStop
 				arg.state = End
