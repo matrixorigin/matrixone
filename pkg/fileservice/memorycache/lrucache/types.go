@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 )
 
 type LRU[K comparable, V BytesLike] struct {
