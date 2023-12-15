@@ -106,10 +106,19 @@ func GetUpdateStorageUsageInterval() time.Duration {
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
+	ctx, cancel := context.WithCancel(ctx)
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
 	defer func() {
 		logger.Info("finished", zap.Error(err))
+		// clean metric data for next cron task.
+		metric.StorageUsageFactory.Reset()
+		// quit CheckNewAccountSize goroutine
+		select {
+		case <-ctx.Done():
+		default:
+			cancel()
+		}
 	}()
 
 	// start background task to check new account
@@ -122,8 +131,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Debug("receive context signal", zap.Error(ctx.Err()))
-			metric.StorageUsageFactory.Reset() // clean CN data for next cron task.
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
@@ -213,7 +221,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Debug("receive context signal", zap.Error(ctx.Err()))
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			return
 		case now = <-next.C:
 			logger.Debug("start check new account")
