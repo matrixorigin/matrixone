@@ -246,6 +246,8 @@ func (c *infoArg) Run() error {
 		b.WriteRune('\n')
 		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
 		b.WriteString(fmt.Sprintf("delchain: %v\n", c.blk.GetBlockData().DeletesInfo()))
+		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
+		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q", r, reason))
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil

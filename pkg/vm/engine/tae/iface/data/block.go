@@ -71,6 +71,7 @@ type Block interface {
 	GetID() *common.ID
 	IsAppendable() bool
 	PrepareCompact() bool
+	PrepareCompactInfo() (bool, string)
 
 	Rows() int
 	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*containers.ColumnView, error)
