@@ -247,7 +247,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		getNewAccounts := func(ctx context.Context, sql string, lastCheck, now time.Time) ie.InternalExecResult {
 			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getNewAccounts")
 			defer spanQ.End()
-			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheckTime))
+			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheck))
 			spanQ.AddExtraFields(zap.Time("now", now))
 			logger.Debug("query new account", zap.String("sql", sql))
 			return executor.Query(ctx, sql, opts)
