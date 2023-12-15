@@ -18,8 +18,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )

@@ -19,7 +19,7 @@ import (
 	"runtime"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 )
 
 func New[K comparable, V BytesLike](
