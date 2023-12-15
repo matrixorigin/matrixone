@@ -83,24 +83,35 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx
 	}
 
 	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
+	var err error
 	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[rowIdIdx]) {
 		if !bat.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 			partition := vector.MustFixedCol[int32](bat.Vecs[partitionIdx])[i]
 			if partition == -1 {
-				for _, vecElem := range vecList {
-					vecElem.Free(proc.Mp())
-				}
-				//panic("partiton number is -1, the partition number is incorrect")
-				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				err = moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				break
 			} else {
-				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
-				err := fun(pkList[partition], bat.Vecs[pkIdx], int64(i))
+				err = vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
 				if err != nil {
-					return nil, err
+					break
+				}
+				err = fun(pkList[partition], bat.Vecs[pkIdx], int64(i))
+				if err != nil {
+					break
 				}
 			}
 		}
 	}
+	if err != nil {
+		for _, vecElem := range vecList {
+			vecElem.Free(proc.Mp())
+		}
+		for _, vecElem := range pkList {
+			vecElem.Free(proc.Mp())
+		}
+		return nil, err
+	}
+
 	// create a batch array equal to the number of partitions
 	batches := make([]*batch.Batch, partitionNum)
 	for i := range vecList {
@@ -133,22 +144,32 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 	}
 
 	// fill the data into the corresponding batch based on the different partitions to which the current row data belongs
+	var err error
 	for i, partition := range vector.MustFixedCol[int32](bat.Vecs[pIdx]) {
 		if !bat.Vecs[pIdx].GetNulls().Contains(uint64(i)) {
 			if partition == -1 {
-				for _, batchElem := range batches {
-					proc.PutBatch(batchElem)
-				}
-				//panic("partiton number is -1, the partition number is incorrect")
-				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				err = moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+				break
 			} else {
 				//  `i` corresponds to the row number of the batch data,
 				//  `j` corresponds to the column number of the batch data
 				for j := range attrs {
-					batches[partition].GetVector(int32(j)).UnionOne(bat.Vecs[j], int64(i), proc.Mp())
+					err = batches[partition].GetVector(int32(j)).UnionOne(bat.Vecs[j], int64(i), proc.Mp())
+					if err != nil {
+						break
+					}
+				}
+				if err != nil {
+					break
 				}
 			}
 		}
+	}
+	if err != nil {
+		for _, batchElem := range batches {
+			proc.PutBatch(batchElem)
+		}
+		return nil, err
 	}
 
 	for partIdx := range batches {
