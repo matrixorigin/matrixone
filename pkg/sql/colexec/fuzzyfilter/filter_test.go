@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,41 +53,47 @@ func init() {
 
 	tcs = []fuzzyTestCase{
 		{
-			arg:  new(Argument),
+			arg:  newArgument(types.T_int32.ToType()),
 			proc: newProcess(),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg:  newArgument(types.T_date.ToType()),
 			proc: newProcess(),
 			types: []types.Type{
 				types.T_date.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg:  newArgument(types.T_float32.ToType()),
 			proc: newProcess(),
 			types: []types.Type{
 				types.T_float32.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg:  newArgument(types.T_varchar.ToType()),
 			proc: newProcess(),
 			types: []types.Type{
 				types.T_varchar.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg:  newArgument(types.T_binary.ToType()),
 			proc: newProcess(),
 			types: []types.Type{
 				types.T_binary.ToType(),
 			},
 		},
 	}
+}
+
+func newArgument(typ types.Type) *Argument {
+	arg := new(Argument)
+	arg.PkTyp = plan.MakePlan2Type(&typ)
+	return arg
 }
 
 func newProcess() *process.Process {
