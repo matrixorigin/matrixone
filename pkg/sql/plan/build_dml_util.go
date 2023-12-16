@@ -2298,6 +2298,20 @@ func appendPreInsertSkVectorPlan(
 
 	var joinID int32
 	{
+		/*
+			SQL: SELECT * FROM tbl CROSS JOIN centroids;
+
+			+---------------------------------------------------------------------------------------+
+			| QUERY PLAN                                                                            |
+			+---------------------------------------------------------------------------------------+
+			| Project                                                                               |
+			|   ->  Join                                                                            |
+			|         Join Type: INNER                                                              |
+			|         ->  Table Scan on a.tbl                                                       |
+			|         ->  Table Scan on a.__mo_index_secondary_34102690-9c4b-11ee-b970-723e89f7b974 |
+			+---------------------------------------------------------------------------------------+
+
+		*/
 		joinID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			JoinType: plan.Node_INNER,
