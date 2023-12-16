@@ -2253,6 +2253,8 @@ func appendPreInsertSkVectorPlan(
 
 	var posOriginPk, posVecColumn int
 	var typeOriginPk, typeVecColumn *Type
+	cpKeyType := types.T_varchar.ToType()
+	bigIntType := types.T_int64.ToType()
 	{
 		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
 			if i, ok := colsMap[part]; ok {
@@ -2266,32 +2268,81 @@ func appendPreInsertSkVectorPlan(
 	}
 	fmt.Println(posVecColumn)
 	fmt.Println(typeVecColumn)
+	fmt.Println(posOriginPk)
+	fmt.Println(typeOriginPk)
+	fmt.Println(bigIntType)
 
-	cpKeyType := types.T_varchar.ToType()
-	var preInsertIndexNode = &Node{
-		NodeType: plan.Node_PROJECT,
-		Children: []int32{lastNodeId},
-		Stats:    &plan.Stats{},
-		ProjectList: []*Expr{
-			makePlan2Int64ConstExprWithType(1),
-			makePlan2Int64ConstExprWithType(1),
-			{
-				Typ: typeOriginPk,
+	var leftChildId = lastNodeId
+	var rightChildId int32
+	{
+		scanNodeProject := make([]*Expr, len(indexTableDefs[1].Cols))
+		for colIdx, column := range indexTableDefs[1].Cols {
+			scanNodeProject[colIdx] = &plan.Expr{
+				Typ: column.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						ColPos: int32(posOriginPk),
-						Name:   tableDef.Cols[posOriginPk].Name,
+						ColPos: int32(colIdx),
+						Name:   column.Name,
 					},
 				},
-			},
-			{
-				Typ:  makePlan2Type(&cpKeyType),
-				Expr: makePlan2StringConstExpr("12"),
-			},
-		},
+			}
+		}
+		rightChildId = builder.appendNode(&Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       &plan.Stats{},
+			ObjRef:      idxRefs[1],
+			TableDef:    indexTableDefs[1],
+			ProjectList: scanNodeProject,
+		}, bindCtx)
 	}
 
-	lastNodeId = builder.appendNode(preInsertIndexNode, bindCtx)
+	var joinID int32
+	{
+		joinID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_INNER,
+			Children: []int32{leftChildId, rightChildId},
+			ProjectList: []*Expr{
+				{
+					Typ: makePlan2Type(&bigIntType),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: 0,
+							Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+						},
+					},
+				},
+				{
+					Typ: makePlan2Type(&bigIntType),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: 1,
+							Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+						},
+					},
+				},
+				{
+					Typ: typeOriginPk,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(posOriginPk),
+							Name:   tableDef.Cols[posOriginPk].Name,
+						},
+					},
+				},
+				{
+					Typ:  makePlan2Type(&cpKeyType),
+					Expr: makePlan2StringConstExpr("13"),
+				},
+			},
+			Limit: makePlan2Int64ConstExprWithType(1),
+		}, bindCtx)
+	}
+
+	lastNodeId = joinID
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
