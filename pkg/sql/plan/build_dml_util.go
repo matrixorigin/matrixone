@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1115,7 +1116,11 @@ func makeInsertPlan(
 						colTypes = colTypes + "0"
 					}
 				}
-				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
+					eqCheckExpr,
+					varcharExpr,
+					makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name),
+					makePlan2StringConstExprWithType(colTypes)})
 				if err != nil {
 					return err
 				}
@@ -2226,6 +2231,83 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	return lastNodeId
+}
+
+func appendPreInsertSkVectorPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	multiTableIndex *MultiTableIndex,
+	isUpdate bool,
+	idxRefs []*ObjectRef,
+	indexTableDefs []*TableDef) (int32, error) {
+
+	//1. get vec & pk column
+	colsMap := make(map[string]int)
+	colTypes := make([]*Type, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		colsMap[col.Name] = i
+		colTypes[i] = tableDef.Cols[i].Typ
+	}
+
+	var posOriginPk, posVecColumn int
+	var typeOriginPk, typeVecColumn *Type
+	{
+		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
+			if i, ok := colsMap[part]; ok {
+				posVecColumn = i
+				typeVecColumn = tableDef.Cols[i].Typ
+				break
+			}
+		}
+
+		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
+	}
+	fmt.Println(posVecColumn)
+	fmt.Println(typeVecColumn)
+
+	var preInsertIndexNode = &Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{lastNodeId},
+		Stats:    &plan.Stats{},
+		ProjectList: []*Expr{
+			{
+				Typ: typeOriginPk,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(posOriginPk),
+						Name:   catalog.IndexTablePrimaryColName,
+					},
+				},
+			},
+			makePlan2Int64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(1),
+		},
+	}
+
+	lastNodeId = builder.appendNode(preInsertIndexNode, bindCtx)
+
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		indexTableDefs[2],
+		false,
+		false,
+		-1,
+		nil,
+		isUpdate,
+	); ok {
+		lastNodeId = lockNodeId
+	}
+
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
+
+	return sourceStep, nil
 }
 
 // appendPreInsertUkPlan  build preinsert plan.
