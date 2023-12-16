@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"go/constant"
 	"math"
@@ -691,10 +692,23 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		}
 		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
-	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64, tree.P_hexnum:
+	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
 		s := numVal.OrigString()
 		var val []byte
 		val, err = checkStrLen(s)
+		if err != nil {
+			return
+		}
+		err = vector.AppendBytes(vec, val, false, proc.Mp())
+
+	case tree.P_hexnum:
+		s := numVal.OrigString()
+		s = s[2:]
+		if len(s) == 0 {
+			return
+		}
+		var val []byte
+		val, err = hex.DecodeString(s)
 		if err != nil {
 			return
 		}

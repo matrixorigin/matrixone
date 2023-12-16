@@ -16,11 +16,12 @@ package plan
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 // ModifyColumn Can change a column definition but not its name.
@@ -246,8 +247,8 @@ func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, ha
 
 func DefaultValueIsNull(Default *plan.Default) bool {
 	if Default != nil {
-		if constExpr, ok := Default.GetExpr().Expr.(*plan.Expr_C); ok {
-			return constExpr.C.Isnull
+		if constExpr, ok := Default.GetExpr().Expr.(*plan.Expr_Lit); ok {
+			return constExpr.Lit.Isnull
 		}
 		return false
 	}
