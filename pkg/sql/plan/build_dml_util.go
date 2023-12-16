@@ -970,10 +970,40 @@ func makeInsertPlan(
 		}
 	}
 
-	for indexName, multiTableIndex := range multiTableIndexes {
+	for _, multiTableIndex := range multiTableIndexes {
+
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = makePreInsertVecIdx(ctx, builder, bindCtx, objRef, tableDef, multiTableIndex, indexName, lastNodeId, sourceStep)
+			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+
+			var idxRefs = make([]*ObjectRef, 3)
+			var idxTableDefs = make([]*TableDef, 3)
+			idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+			idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+			idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+			// remove row_id
+			for i := range idxTableDefs {
+				for j, column := range idxTableDefs[i].Cols {
+					if column.Name == catalog.Row_ID {
+						idxTableDefs[i].Cols = append(idxTableDefs[i].Cols[:j], idxTableDefs[i].Cols[j+1:]...)
+						break
+					}
+				}
+			}
+
+			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef, lastNodeId, multiTableIndex, false, idxRefs, idxTableDefs)
+			if err != nil {
+				return err
+			}
+
+			colTypes := make([]*plan.Type, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				colTypes[i] = tableDef.Cols[i].Typ
+			}
+			err = makeInsertPlan(ctx, builder, bindCtx, idxRefs[2], idxTableDefs[2], 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes)
+			if err != nil {
+				return err
+			}
 		default:
 			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
 		}
@@ -1549,13 +1579,6 @@ func makeInsertPlan(
 			}
 		}
 	}
-
-	return nil
-}
-
-func makePreInsertVecIdx(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, multiTableIndex *MultiTableIndex, indexName string,
-	lastNodeId int32, sourceStep int32) error {
 
 	return nil
 }
