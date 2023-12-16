@@ -746,9 +746,35 @@ func (c *Compile) removeUnavailableCN() {
 	c.cnList = c.cnList[:i]
 }
 
+// getCNList gets the CN list from engine.Nodes() method. It will
+// ensure the current CN is included in the result.
+func (c *Compile) getCNList() (engine.Nodes, error) {
+	cnList, err := c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	// We should always make sure the current CN is contained in the cn list.
+	if c.proc == nil || c.proc.QueryService == nil {
+		return cnList, nil
+	}
+	cnID := c.proc.QueryService.ServiceID()
+	for _, node := range cnList {
+		if node.Id == cnID {
+			return cnList, nil
+		}
+	}
+	cnList = append(cnList, engine.Node{
+		Id:   cnID,
+		Addr: c.addr,
+		Mcpu: runtime.NumCPU(),
+	})
+	return cnList, nil
+}
+
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
+	c.cnList, err = c.getCNList()
 	if err != nil {
 		return nil, err
 	}
