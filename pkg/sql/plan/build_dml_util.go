@@ -926,9 +926,11 @@ func makeInsertPlan(
 		builder.appendStep(lastNodeId)
 	}
 
-	// append plan for the hidden tables of unique keys
+	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
+
+			// append plan for the hidden tables of unique/secondary keys
 			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
@@ -954,7 +956,29 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
+			} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+
+				// IVF indexDefs are aggregated and handled later
+				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
+					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
+						IndexDefs: make(map[string]*IndexDef),
+					}
+				}
+				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 			}
+		}
+	}
+
+	for indexName, multiTableIndex := range multiTableIndexes {
+		switch multiTableIndex.IndexAlgo {
+		case catalog.MoIndexIvfFlatAlgo.ToString():
+			err = makePreInsertVecIdx(ctx, builder, bindCtx, objRef, tableDef, multiTableIndex, indexName, lastNodeId, sourceStep)
+		default:
+			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
+		}
+		if err != nil {
+			return err
 		}
 	}
 
@@ -1525,6 +1549,13 @@ func makeInsertPlan(
 			}
 		}
 	}
+
+	return nil
+}
+
+func makePreInsertVecIdx(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
+	objRef *ObjectRef, tableDef *TableDef, multiTableIndex *MultiTableIndex, indexName string,
+	lastNodeId int32, sourceStep int32) error {
 
 	return nil
 }
