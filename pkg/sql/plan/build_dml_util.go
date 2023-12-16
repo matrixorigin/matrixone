@@ -2267,24 +2267,27 @@ func appendPreInsertSkVectorPlan(
 	fmt.Println(posVecColumn)
 	fmt.Println(typeVecColumn)
 
+	cpKeyType := types.T_varchar.ToType()
 	var preInsertIndexNode = &Node{
 		NodeType: plan.Node_PROJECT,
 		Children: []int32{lastNodeId},
 		Stats:    &plan.Stats{},
 		ProjectList: []*Expr{
+			makePlan2Int64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(1),
 			{
 				Typ: typeOriginPk,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: -1,
 						ColPos: int32(posOriginPk),
-						Name:   catalog.IndexTablePrimaryColName,
+						Name:   tableDef.Cols[posOriginPk].Name,
 					},
 				},
 			},
-			makePlan2Int64ConstExprWithType(1),
-			makePlan2Int64ConstExprWithType(1),
-			makePlan2Int64ConstExprWithType(1),
+			{
+				Typ:  makePlan2Type(&cpKeyType),
+				Expr: makePlan2StringConstExpr("12"),
+			},
 		},
 	}
 
