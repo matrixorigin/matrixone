@@ -1854,6 +1854,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if tableDef.TableType == catalog.SystemSourceRel {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
+		}
+
 		if len(tableDef.RefChildTbls) > 0 {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
 		}
