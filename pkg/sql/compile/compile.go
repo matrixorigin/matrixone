@@ -125,6 +125,7 @@ func New(
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
 	c.metaTables = make(map[string]struct{})
+	c.disableRetry = false
 	return c
 }
 
@@ -435,7 +436,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	v2.TxnStatementTotalCounter.Inc()
 	runC = c
 	for {
-		if err := runC.runOnce(); err == nil {
+		if err = runC.runOnce(); err == nil {
 			break
 		}
 
@@ -454,17 +455,10 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		}
 	}
 
-	err = c.proc.TxnOperator.GetWorkspace().Adjust()
-	if err != nil {
-		return nil, err
-	}
-	// set affectedRows to old compile to return
-	c.setAffectedRows(runC.getAffectedRows())
-
 	if c.shouldReturnCtxErr() {
 		return nil, c.proc.Ctx.Err()
 	}
-	result.AffectRows = c.getAffectedRows()
+	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
@@ -504,14 +498,16 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	return runC, nil
 }
 
-// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-func (c *Compile) canRetry(err error) bool {
-	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
+// he statement
+func (c *Compile) isRetryErr(err error) bool {
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.TxnOperator.Txn().IsRCIsolation() {
-		return !c.disableRetry
-	}
-	return false
+		c.proc.TxnOperator.Txn().IsRCIsolation()
+}
+
+func (c *Compile) canRetry(err error) bool {
+	return !c.disableRetry && c.isRetryErr(err)
 }
 
 // run once
@@ -550,7 +546,7 @@ func (c *Compile) runOnce() error {
 	for e := range errC {
 		if e != nil {
 			errList = append(errList, e)
-			if c.canRetry(e) {
+			if c.isRetryErr(e) {
 				return e
 			}
 		}
