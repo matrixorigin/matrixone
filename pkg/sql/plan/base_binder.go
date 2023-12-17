@@ -1198,6 +1198,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// deal with some special function
 	switch name {
+	case "l2_distance":
+		if len(args) != 2 {
+			return nil, moerr.NewInvalidArg(ctx, "l2_distance function need two args", len(args))
+		}
+		returnType := types.T_float64.ToType()
+		return &Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: getFunctionObjRef(function.L2DistanceFunctionEncodedID, name),
+					Args: args,
+				},
+			},
+			Typ: makePlan2Type(&returnType),
+		}, nil
+
 	case "date":
 		// rewrite date function to cast function, and retrun directly
 		if len(args) == 0 {
