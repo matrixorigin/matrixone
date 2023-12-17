@@ -678,6 +678,19 @@ func NewCheckpointData(mp *mpool.MPool) *CheckpointData {
 	return data
 }
 
+// for test
+func NewCheckpointDataWithVersion(ver uint32, mp *mpool.MPool) *CheckpointData {
+	data := &CheckpointData{
+		meta:      make(map[uint64]*CheckpointMeta),
+		allocator: mp,
+	}
+
+	for idx, item := range checkpointDataReferVersions[ver] {
+		data.bats[idx] = makeRespBatchFromSchema(item.schema, mp)
+	}
+	return data
+}
+
 type BaseCollector struct {
 	*catalog.LoopProcessor
 	start, end types.TS

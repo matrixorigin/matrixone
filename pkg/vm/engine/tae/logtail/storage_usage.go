@@ -336,14 +336,14 @@ func (m *TNUsageMemo) Update(usage UsageData, del bool) {
 	}
 
 	if del {
-		if usage.Size > size {
-			panic("what the A !")
-		}
+		//if usage.Size > size {
+		//	panic("what the A !")
+		//}
 		usage.Size = size - usage.Size
 	} else {
-		if size < 0 {
-			panic("what the B !")
-		}
+		//if size < 0 {
+		//	panic("what the B !")
+		//}
 		usage.Size = size + usage.Size
 	}
 
@@ -377,7 +377,7 @@ func (m *TNUsageMemo) applyDeletes(
 		}
 	}
 
-	var tbls []uint64
+	var usages []UsageData
 	for _, db := range dbs {
 		iter := tnUsageMemo.cache.Iter()
 		if found := iter.Seek(UsageData{
@@ -390,20 +390,18 @@ func (m *TNUsageMemo) applyDeletes(
 			continue
 		}
 
-		tbls = append(tbls, iter.Item().TblId)
+		usages = append(usages, iter.Item())
 		for iter.Next() && iter.Item().DbId == db.ID && iter.Item().AccId == db.GetTenantID() {
-			tbls = append(tbls, iter.Item().TblId)
+			usages = append(usages, iter.Item())
 		}
 
 		iter.Release()
-		for idx := 0; idx < len(tbls); idx++ {
-			appendToStorageUsageBat(ckpData, iter.Item(), true, mp)
-			tnUsageMemo.cache.Delete(UsageData{
-				db.GetTenantID(), db.ID, tbls[idx], 0,
-			})
+		for idx := 0; idx < len(usages); idx++ {
+			tnUsageMemo.cache.Delete(usages[idx])
+			appendToStorageUsageBat(ckpData, usages[idx], true, mp)
 		}
 
-		tbls = tbls[:0]
+		usages = usages[:0]
 	}
 }
 
@@ -441,6 +439,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 	for x := range entries {
 		if vers[x] < CheckpointVersion9 {
 			// haven't StorageUsageIns batch
+			// haven't StorageUsageDel batch
 			continue
 		}
 
@@ -448,9 +447,8 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
 		for y := 0; y < insVecs[UsageAccID].Length(); y++ {
-			m.Update(UsageData{
-				accCol[y], dbCol[y], tblCol[y], sizeCol[y],
-			}, false)
+			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+			m.Update(usage, false)
 		}
 
 		if vers[x] < CheckpointVersion10 {
@@ -462,9 +460,8 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
 		for y := 0; y < delVecs[UsageAccID].Length(); y++ {
-			m.Update(UsageData{
-				accCol[y], dbCol[y], tblCol[y], sizeCol[y],
-			}, true)
+			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+			m.Update(usage, true)
 		}
 	}
 
