@@ -1159,19 +1159,18 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
-			return []*Scope{{
-				Magic: TruncateTable,
-				Plan: &plan.Plan{
-					Plan: &plan.Plan_Ddl{
-						Ddl: &plan.DataDefinition{
-							DdlType: plan.DataDefinition_TRUNCATE_TABLE,
-							Definition: &plan.DataDefinition_TruncateTable{
-								TruncateTable: n.DeleteCtx.TruncateTable,
-							},
+			s := newScope(TruncateTable)
+			s.Plan = &plan.Plan{
+				Plan: &plan.Plan_Ddl{
+					Ddl: &plan.DataDefinition{
+						DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+						Definition: &plan.DataDefinition_TruncateTable{
+							TruncateTable: n.DeleteCtx.TruncateTable,
 						},
 					},
 				},
-			}}, nil
+			}
+			return []*Scope{s}, nil
 		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr

@@ -72,6 +72,11 @@ func (s *Scope) withPlan(pn *plan.Plan) *Scope {
 }
 
 func (s *Scope) release() {
+	if s.PreScopes != nil {
+		for i := range s.PreScopes {
+			s.PreScopes[i].release()
+		}
+	}
 	reuse.Free[Scope](s, nil)
 }
 
