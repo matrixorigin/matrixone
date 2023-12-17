@@ -24,7 +24,6 @@ import (
 )
 
 func init() {
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
@@ -37,7 +36,6 @@ func init() {
 		reuse.DefaultOptions[Compile](),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Scope](
 		func() *Scope {
 			return &Scope{}
@@ -46,7 +44,6 @@ func init() {
 		reuse.DefaultOptions[Scope](),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[anaylze](
 		func() *anaylze {
 			return &anaylze{}
