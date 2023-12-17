@@ -3867,7 +3867,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logutil.Warnf("read table %v ,workload among %v nodes not balanced, max %v, min %v, cnlist : %v", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad, c.cnList)
+		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring = logstring + " cnlist: "
+		for i := range c.cnList {
+			logstring = logstring + c.cnList[i].Addr + " "
+		}
+		logutil.Warnf(logstring)
 	}
 	return newNodes, nil
 }
