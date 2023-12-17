@@ -33,7 +33,8 @@ func init() {
 			}
 		},
 		func(c *Compile) { c.reset() },
-		reuse.DefaultOptions[Compile](),
+		reuse.DefaultOptions[Compile]().
+			WithEnableChecker(),
 	)
 
 	reuse.CreatePool[Scope](
