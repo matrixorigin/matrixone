@@ -2251,23 +2251,23 @@ func appendPreInsertSkVectorPlan(
 		colTypes[i] = tableDef.Cols[i].Typ
 	}
 
-	var posOriginPk, posVecColumn int
-	var typeOriginPk, typeVecColumn *Type
+	var posOriginPk, posOriginVecColumn int
+	var typeOriginPk, typeOriginVecColumn *Type
 	cpKeyType := types.T_varchar.ToType()
 	bigIntType := types.T_int64.ToType()
 	{
 		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
 			if i, ok := colsMap[part]; ok {
-				posVecColumn = i
-				typeVecColumn = tableDef.Cols[i].Typ
+				posOriginVecColumn = i
+				typeOriginVecColumn = tableDef.Cols[i].Typ
 				break
 			}
 		}
 
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
-	fmt.Println(posVecColumn)
-	fmt.Println(typeVecColumn)
+	fmt.Println(posOriginVecColumn)
+	fmt.Println(typeOriginVecColumn)
 	fmt.Println(posOriginPk)
 	fmt.Println(typeOriginPk)
 	fmt.Println(bigIntType)
@@ -2356,7 +2356,29 @@ func appendPreInsertSkVectorPlan(
 		}, bindCtx)
 	}
 
-	lastNodeId = joinID
+	var projectId int32
+	{
+		joinProjections := getProjectionByLastNode(builder, joinID)
+		joinProjections = append(joinProjections, &Expr{
+			Typ: makePlan2Type(&cpKeyType),
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.SerialFunctionEncodeID,
+						ObjName: function.SerialFunctionName,
+					},
+					Args: []*plan.Expr{joinProjections[0], joinProjections[2]},
+				},
+			},
+		})
+		projectId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{joinID},
+			ProjectList: joinProjections,
+		}, bindCtx)
+	}
+
+	lastNodeId = projectId
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
