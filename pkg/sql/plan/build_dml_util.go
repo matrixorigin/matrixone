@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2253,7 +2254,7 @@ func appendPreInsertSkVectorPlan(
 
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn *Type
-	cpKeyType := types.T_varchar.ToType()
+	varcharType := types.T_varchar.ToType()
 	bigIntType := types.T_int64.ToType()
 	{
 		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
@@ -2298,20 +2299,37 @@ func appendPreInsertSkVectorPlan(
 
 	var joinID int32
 	{
-		/*
-			SQL: SELECT * FROM tbl CROSS JOIN centroids;
 
-			+---------------------------------------------------------------------------------------+
-			| QUERY PLAN                                                                            |
-			+---------------------------------------------------------------------------------------+
-			| Project                                                                               |
-			|   ->  Join                                                                            |
-			|         Join Type: INNER                                                              |
-			|         ->  Table Scan on a.tbl                                                       |
-			|         ->  Table Scan on a.__mo_index_secondary_34102690-9c4b-11ee-b970-723e89f7b974 |
-			+---------------------------------------------------------------------------------------+
+		centroidsCentroid := &plan.Expr{
+			Typ: typeOriginVecColumn,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 2,
+					Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+				},
+			},
+		}
+		inputEmbedding := &plan.Expr{
+			Typ: typeOriginVecColumn,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(posOriginVecColumn),
+					Name:   tableDef.Cols[posOriginVecColumn].Name,
+				},
+			},
+		}
 
-		*/
+		l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*Expr{inputEmbedding, centroidsCentroid})
+		if err != nil {
+			return -1, err
+		}
+
+		fmt.Println(centroidsCentroid)
+		fmt.Println(inputEmbedding)
+		fmt.Println(l2Distance)
+
 		joinID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			JoinType: plan.Node_INNER,
@@ -2347,12 +2365,14 @@ func appendPreInsertSkVectorPlan(
 						},
 					},
 				},
-				{
-					Typ:  makePlan2Type(&cpKeyType),
-					Expr: makePlan2StringConstExpr("13"),
-				},
 			},
 			Limit: makePlan2Int64ConstExprWithType(1),
+			//OrderBy: []*plan.OrderBySpec{
+			//	{
+			//		Flag: plan.OrderBySpec_ASC,
+			//		Expr: l2Distance,
+			//	},
+			//},
 		}, bindCtx)
 	}
 
@@ -2360,7 +2380,7 @@ func appendPreInsertSkVectorPlan(
 	{
 		joinProjections := getProjectionByLastNode(builder, joinID)
 		joinProjections = append(joinProjections, &Expr{
-			Typ: makePlan2Type(&cpKeyType),
+			Typ: makePlan2Type(&varcharType),
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
 					Func: &plan.ObjectRef{
