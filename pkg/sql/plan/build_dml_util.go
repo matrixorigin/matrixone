@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2272,6 +2271,7 @@ func appendPreInsertSkVectorPlan(
 	fmt.Println(posOriginPk)
 	fmt.Println(typeOriginPk)
 	fmt.Println(bigIntType)
+	fmt.Println(varcharType)
 
 	var leftChildId = lastNodeId
 	var rightChildId int32
@@ -2297,45 +2297,16 @@ func appendPreInsertSkVectorPlan(
 		}, bindCtx)
 	}
 
-	var joinID int32
+	var crossJoinID int32
 	{
 
-		centroidsCentroid := &plan.Expr{
-			Typ: typeOriginVecColumn,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: 2,
-					Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-				},
-			},
-		}
-		inputEmbedding := &plan.Expr{
-			Typ: typeOriginVecColumn,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(posOriginVecColumn),
-					Name:   tableDef.Cols[posOriginVecColumn].Name,
-				},
-			},
-		}
-
-		l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*Expr{inputEmbedding, centroidsCentroid})
-		if err != nil {
-			return -1, err
-		}
-
-		fmt.Println(centroidsCentroid)
-		fmt.Println(inputEmbedding)
-		fmt.Println(l2Distance)
-
-		joinID = builder.appendNode(&plan.Node{
+		crossJoinID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			JoinType: plan.Node_INNER,
 			Children: []int32{leftChildId, rightChildId},
 			ProjectList: []*Expr{
 				{
+					// centroids.version
 					Typ: makePlan2Type(&bigIntType),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -2345,7 +2316,7 @@ func appendPreInsertSkVectorPlan(
 						},
 					},
 				},
-				{
+				{ // centroids.centroid_id
 					Typ: makePlan2Type(&bigIntType),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -2355,7 +2326,7 @@ func appendPreInsertSkVectorPlan(
 						},
 					},
 				},
-				{
+				{ // tbl.pk
 					Typ: typeOriginPk,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -2365,36 +2336,61 @@ func appendPreInsertSkVectorPlan(
 						},
 					},
 				},
+				{ // centroids.centroid
+					Typ: typeOriginVecColumn,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: 2,
+							Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+						},
+					},
+				},
+				{ // tbl.embedding
+					Typ: typeOriginVecColumn,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(posOriginVecColumn),
+							Name:   tableDef.Cols[posOriginVecColumn].Name,
+						},
+					},
+				},
 			},
-			Limit: makePlan2Int64ConstExprWithType(1),
-			//OrderBy: []*plan.OrderBySpec{
-			//	{
-			//		Flag: plan.OrderBySpec_ASC,
-			//		Expr: l2Distance,
-			//	},
-			//},
 		}, bindCtx)
 	}
 
 	var projectId int32
 	{
-		joinProjections := getProjectionByLastNode(builder, joinID)
-		joinProjections = append(joinProjections, &Expr{
-			Typ: makePlan2Type(&varcharType),
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						Obj:     function.SerialFunctionEncodeID,
-						ObjName: function.SerialFunctionName,
-					},
-					Args: []*plan.Expr{joinProjections[0], joinProjections[2]},
+
+		// 0: centroids.version,
+		// 1: centroids.centroid_id,
+		// 2: tbl.pk,
+		// 3: centroids.centroid,
+		// 4: tbl.embedding
+		var joinProjections = getProjectionByLastNode(builder, crossJoinID)
+		cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{joinProjections[0], joinProjections[2]})
+		if err != nil {
+			return -1, err
+		}
+
+		l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*Expr{joinProjections[3], joinProjections[4]})
+		if err != nil {
+			return -1, err
+		}
+
+		projectId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT,
+			Children: []int32{crossJoinID},
+			// version, centroid_id, pk, serial(version,pk)
+			ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
+			OrderBy: []*plan.OrderBySpec{
+				{
+					Flag: plan.OrderBySpec_ASC,
+					Expr: l2Distance,
 				},
 			},
-		})
-		projectId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{joinID},
-			ProjectList: joinProjections,
+			Limit: makePlan2Int64ConstExprWithType(1),
 		}, bindCtx)
 	}
 
