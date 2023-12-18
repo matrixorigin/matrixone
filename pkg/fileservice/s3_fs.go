@@ -24,7 +24,6 @@ import (
 	pathpkg "path"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -815,7 +814,6 @@ func resetTracePoint(tp *tracePoint) {
 	tp.dnsStart = time.Time{}
 	tp.connectStart = time.Time{}
 	tp.tlsHandshakeStart = time.Time{}
-	tracePointPool.Put(tp)
 }
 
 func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
@@ -855,22 +853,3 @@ func (tp *tracePoint) tlsHandshakeStartPoint() {
 func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
 	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
 }
-
-var (
-	tracePointPool = sync.Pool{
-		New: func() any {
-			tp := &tracePoint{
-				ct: &httptrace.ClientTrace{},
-			}
-			tp.ct.GetConn = tp.getConnPoint
-			tp.ct.GotConn = tp.gotConnPoint
-			tp.ct.DNSStart = tp.dnsStartPoint
-			tp.ct.DNSDone = tp.dnsDonePoint
-			tp.ct.ConnectStart = tp.connectStartPoint
-			tp.ct.ConnectDone = tp.connectDonePoint
-			tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
-			tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
-			return tp
-		},
-	}
-)
