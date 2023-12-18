@@ -148,6 +148,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	// go shuffle for loadif parallel
+	if stmt.Param.Parallel {
+		for i := range builder.qry.Nodes {
+			node := builder.qry.Nodes[i]
+			if node.NodeType == plan.Node_INSERT {
+				if node.Stats.HashmapStats == nil {
+					node.Stats.HashmapStats = &plan.HashMapStats{}
+				}
+				node.Stats.HashmapStats.Shuffle = true
+			}
+		}
+	}
+
 	query := builder.qry
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
