@@ -59,12 +59,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if err := ctr.build(proc, anal); err != nil {
 				return process.ExecNext, err
 			}
-			if ctr.mp == nil {
-				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
