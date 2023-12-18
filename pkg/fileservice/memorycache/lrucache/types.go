@@ -16,24 +16,23 @@ package lrucache
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"github.com/dolthub/maphash"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache/internal/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache/internal/hashmap"
 )
 
 type LRU[K comparable, V BytesLike] struct {
+	size     int64
 	capacity int64
 	shards   []shard[K, V]
 	hasher   maphash.Hasher[K]
 }
 
 type shard[K comparable, V BytesLike] struct {
-	checkMu sync.Mutex
-	// only allow one goroutine to evicting at a time
-	evicting  atomic.Bool
+	sync.RWMutex
 	capacity  int64
 	size      int64
+	totalSize *int64
 	evicts    *list[K, V]
 	pool      *pool[K, V]
 	kv        *hashmap.Map[K, lruItem[K, V]]

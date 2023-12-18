@@ -1399,145 +1399,447 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	nameCount := make(map[string]int)
+func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (err error) {
 
 	if len(pkeyName) == 0 {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
 	}
 
 	for _, indexInfo := range indexInfos {
-		indexDef := &plan.IndexDef{}
-		indexDef.Unique = false
+		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
+		if err != nil {
+			return err
+		}
 
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		var indexDef []*plan.IndexDef
+		var tableDef []*TableDef
+		switch indexInfo.KeyType {
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		case tree.INDEX_TYPE_IVFFLAT:
+			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		}
 
 		if err != nil {
 			return err
 		}
-		tableDef := &TableDef{
-			Name: indexTableName,
-		}
-		indexParts := make([]string, 0)
+		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
-		isPkAlreadyPresentInIndexParts := false
-		for _, keyPart := range indexInfo.KeyParts {
-			name := keyPart.ColName.Parts[0]
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
-			}
-			if colMap[name].Typ.Id == int32(types.T_blob) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
-			}
-			if colMap[name].Typ.Id == int32(types.T_text) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
-			}
-			if colMap[name].Typ.Id == int32(types.T_json) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
-			}
-			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
-			}
-
-			if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
-				isPkAlreadyPresentInIndexParts = true
-			}
-			indexParts = append(indexParts, name)
-		}
-
-		if !isPkAlreadyPresentInIndexParts {
-			indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
-		}
-
-		var keyName string
-		if len(indexParts) == 1 {
-			// This means indexParts only contains the primary key column
-			keyName = catalog.IndexTableIndexColName
-			colDef := &ColDef{
-				Name: keyName,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
-			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Pkey = &PrimaryKeyDef{
-				Names:       []string{keyName},
-				PkeyColName: keyName,
-			}
-		} else {
-			keyName = catalog.IndexTableIndexColName
-			colDef := &ColDef{
-				Name: keyName,
-				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
-			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Pkey = &PrimaryKeyDef{
-				Names:       []string{keyName},
-				PkeyColName: keyName,
-			}
-		}
-		if pkeyName != "" {
-			colDef := &ColDef{
-				Name: catalog.IndexTablePrimaryColName,
-				Alg:  plan.CompressType_Lz4,
-				Typ:  colMap[pkeyName].Typ,
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
-			tableDef.Cols = append(tableDef.Cols, colDef)
-		}
-
-		if indexInfo.Name == "" {
-			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
-			nameCount[firstPart]++
-			count := nameCount[firstPart]
-			indexName := firstPart
-			if count > 1 {
-				indexName = firstPart + "_" + strconv.Itoa(count)
-			}
-			indexDef.IndexName = indexName
-		} else {
-			indexDef.IndexName = indexInfo.Name
-		}
-
-		indexDef.IndexTableName = indexTableName
-		indexDef.Parts = indexParts
-		indexDef.TableExist = true
-		indexDef.IndexAlgo = indexInfo.KeyType.ToString()
-		indexDef.IndexAlgoTableType = ""
-
-		if indexInfo.IndexOption != nil {
-			indexDef.Comment = indexInfo.IndexOption.Comment
-
-			params, err := indexParamsToJsonString(indexInfo)
-			if err != nil {
-				return err
-			}
-			indexDef.IndexAlgoParams = params
-		} else {
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		}
-		createTable.IndexTables = append(createTable.IndexTables, tableDef)
-		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
+}
+
+func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	// 1. indexDef init
+	indexDef := &plan.IndexDef{}
+	indexDef.Unique = false
+
+	// 2. tableDef init
+	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	tableDef := &TableDef{
+		Name: indexTableName,
+	}
+
+	nameCount := make(map[string]int)
+	indexParts := make([]string, 0)
+
+	isPkAlreadyPresentInIndexParts := false
+	for _, keyPart := range indexInfo.KeyParts {
+		name := keyPart.ColName.Parts[0]
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+		}
+		if colMap[name].Typ.Id == int32(types.T_blob) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
+		}
+		if colMap[name].Typ.Id == int32(types.T_text) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
+		}
+		if colMap[name].Typ.Id == int32(types.T_json) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
+		}
+		if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
+		}
+
+		if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
+			isPkAlreadyPresentInIndexParts = true
+		}
+		indexParts = append(indexParts, name)
+	}
+
+	if !isPkAlreadyPresentInIndexParts {
+		indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
+	}
+
+	var keyName string
+	if len(indexParts) == 1 {
+		// This means indexParts only contains the primary key column
+		keyName = catalog.IndexTableIndexColName
+		colDef := &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+		tableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{keyName},
+			PkeyColName: keyName,
+		}
+	} else {
+		keyName = catalog.IndexTableIndexColName
+		colDef := &ColDef{
+			Name: keyName,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+		tableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{keyName},
+			PkeyColName: keyName,
+		}
+	}
+	if pkeyName != "" {
+		colDef := &ColDef{
+			Name: catalog.IndexTablePrimaryColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ:  colMap[pkeyName].Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+	}
+
+	if indexInfo.Name == "" {
+		firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+		nameCount[firstPart]++
+		count := nameCount[firstPart]
+		indexName := firstPart
+		if count > 1 {
+			indexName = firstPart + "_" + strconv.Itoa(count)
+		}
+		indexDef.IndexName = indexName
+	} else {
+		indexDef.IndexName = indexInfo.Name
+	}
+
+	indexDef.IndexTableName = indexTableName
+	indexDef.Parts = indexParts
+	indexDef.TableExist = true
+	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+	indexDef.IndexAlgoTableType = ""
+
+	if indexInfo.IndexOption != nil {
+		indexDef.Comment = indexInfo.IndexOption.Comment
+
+		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexDef.IndexAlgoParams = params
+	} else {
+		indexDef.Comment = ""
+		indexDef.IndexAlgoParams = ""
+	}
+	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
+}
+
+func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	indexParts := make([]string, 1)
+
+	// 0. Validate: We only support 1 column of either VECF32 or VECF64 type
+	{
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  IVF vector index")
+		}
+
+		name := indexInfo.KeyParts[0].ColName.Parts[0]
+		indexParts[0] = name
+
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+		}
+		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IVFFLAT only supports VECFXX column types")
+		}
+
+	}
+
+	indexDefs := make([]*plan.IndexDef, 3)
+	tableDefs := make([]*TableDef, 3)
+
+	// 1. create ivf-flat `metadata` table
+	{
+		// 1.a tableDef1 init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+			Cols:      make([]*ColDef, 2),
+		}
+
+		// 1.b indexDef1 init
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key (PK), val
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d PK def
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
+		}
+	}
+
+	// 2. create ivf-flat `centroids` table
+	{
+		// 2.a tableDefs[1] init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+			Cols:      make([]*ColDef, 3),
+		}
+
+		// 2.b indexDefs[1] init
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 2.c columns: version, id, centroid, PRIMARY KEY (version,id)
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &Type{
+				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 2.d PK def
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id},
+		}
+	}
+
+	// 3. create ivf-flat `entries` table
+	{
+		// 3.a tableDefs[2] init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[2] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+			Cols:      make([]*ColDef, 3),
+		}
+
+		// 3.b indexDefs[2] init
+		indexDefs[2], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 3.c columns: version, id, origin_pk, PRIMARY KEY (version,origin_pk)
+		tableDefs[2].Cols[0] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[2].Cols[1] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[2].Cols[2] = &ColDef{
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			Alg:  plan.CompressType_Lz4,
+			Typ:  colMap[pkeyName].Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 3.d PK def
+		tableDefs[2].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
+		}
+	}
+
+	return indexDefs, tableDefs, nil
+}
+
+func CreateIndexDef(indexInfo *tree.Index,
+	indexTableName, indexAlgoTableType string,
+	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
+
+	//TODO: later use this function for RegularSecondaryIndex and UniqueIndex.
+
+	indexDef := &plan.IndexDef{}
+
+	indexDef.IndexTableName = indexTableName
+	indexDef.Parts = indexParts
+
+	indexDef.Unique = isUnique
+	indexDef.TableExist = true
+
+	// Algorithm related fields
+	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+	indexDef.IndexAlgoTableType = indexAlgoTableType
+	if indexInfo.IndexOption != nil {
+		// Copy Comment as it is
+		indexDef.Comment = indexInfo.IndexOption.Comment
+
+		// Create params JSON string and set it
+		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		if err != nil {
+			return nil, err
+		}
+		indexDef.IndexAlgoParams = params
+	} else {
+		// default indexInfo.IndexOption values
+		switch indexInfo.KeyType {
+		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
+		case catalog.MoIndexIvfFlatAlgo:
+			var err error
+			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
+			if err != nil {
+				return nil, err
+			}
+		}
+
+	}
+
+	nameCount := make(map[string]int)
+	if indexInfo.Name == "" {
+		firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+		nameCount[firstPart]++
+		count := nameCount[firstPart]
+		indexName := firstPart
+		if count > 1 {
+			indexName = firstPart + "_" + strconv.Itoa(count)
+		}
+		indexDef.IndexName = indexName
+	} else {
+		indexDef.IndexName = indexInfo.Name
+	}
+
+	return indexDef, nil
 }
 
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
@@ -1552,6 +1854,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if tableDef.TableType == catalog.SystemSourceRel {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
+		}
+
 		if len(tableDef.RefChildTbls) > 0 {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
 		}
@@ -1583,7 +1889,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				if indexdef.TableExist {
+				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
+				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
@@ -2241,11 +2548,43 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't ALTER '%s'; check that column/key exists", constraintName)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterIndex{
 					AlterIndex: alterTableIndex,
+				},
+			}
+
+		case *tree.AlterOptionAlterReIndex:
+			alterTableReIndex := new(plan.AlterTableAlterReIndex)
+			constraintName := string(opt.Name)
+			alterTableReIndex.IndexName = constraintName
+
+			switch opt.KeyType {
+			case tree.INDEX_TYPE_IVFFLAT:
+				if opt.AlgoParamList <= 0 {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
+				}
+				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+			default:
+				return nil, moerr.NewInternalError(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't REINDEX '%s'; check that column/key exists", constraintName)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterReindex{
+					AlterReindex: alterTableReIndex,
 				},
 			}
 

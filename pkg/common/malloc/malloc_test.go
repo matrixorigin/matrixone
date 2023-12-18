@@ -12,25 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap
+package malloc
 
-import "sync"
+import "testing"
 
-// Map is a  robinhashmap implementation
-type Map[K comparable, V any] struct {
-	sync.RWMutex
-	count int32
-	size  uint32
-	// https://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/
-	shift   uint32
-	maxDist uint32
-	buckets []bucket[K, V]
+func TestAllocFree(t *testing.T) {
+	// Test that Alloc and Free work.
+	for i := 0; i < 100; i++ {
+		b := Alloc(1024)
+		if len(b) != 1024 {
+			t.Errorf("Alloc returned slice of length %d, want 1024", len(b))
+		}
+		Free(b)
+	}
 }
 
-type bucket[K comparable, V any] struct {
-	key K
-	h   uint64
-	// The distance the entry is from its desired position.
-	dist uint32
-	val  *V
+func TestAllocZero(t *testing.T) {
+	// Test that Alloc(0) returns a non-nil slice.
+	b := Alloc(0)
+	if b == nil {
+		t.Errorf("Alloc(0) returned nil slice")
+	}
+	Free(b)
 }

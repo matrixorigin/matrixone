@@ -31,8 +31,6 @@ func New[K comparable, V any](cap int) *Map[K, V] {
 func (m *Map[K, V]) Get(h uint64, k K) (*V, bool) {
 	var dist uint32
 
-	m.RLock()
-	defer m.RUnlock()
 	for i := uint32(h >> m.shift); ; i++ {
 		b := &m.buckets[i]
 		if b.h == h && b.key == k {
@@ -48,16 +46,12 @@ func (m *Map[K, V]) Get(h uint64, k K) (*V, bool) {
 // Set sets the value for the given key.
 // return true if the key already exists.
 func (m *Map[K, V]) Set(h uint64, k K, v *V) bool {
-	m.Lock()
-	defer m.Unlock()
 	return m.set(h, k, v)
 }
 
 func (m *Map[K, V]) Delete(h uint64, k K) {
 	var dist uint32
 
-	m.Lock()
-	defer m.Unlock()
 	for i := uint32(h >> m.shift); ; i++ {
 		b := &m.buckets[i]
 		// found, shift the following buckets backwards

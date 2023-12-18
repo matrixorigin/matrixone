@@ -66,6 +66,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // the bool return value means whether it completed its work or not
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	if arg.RemoteDelete {
 		return arg.remote_delete(proc)
 	}

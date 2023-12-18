@@ -12,37 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !race
+// +build !race
+
 package fileservice
 
 import (
-	"testing"
+	"sync/atomic"
+	"unsafe"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-func TestRCPool(t *testing.T) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 1024)
-		},
-	)
+const dataSize = int(unsafe.Sizeof(Data{}))
 
-	i := pool.Get()
-	assert.Equal(t, 1024, len(i.Value))
-
-	i.Retain()
-	i.Release()
-	i.Release()
+func newData(n int, size *atomic.Int64) *Data {
+	if n == 0 {
+		return nil
+	}
+	size.Add(int64(n + dataSize))
+	b := malloc.Alloc(n + dataSize)
+	d := (*Data)(unsafe.Pointer(&b[0]))
+	d.buf = b[dataSize:]
+	d.ref.init(1)
+	return d
 }
 
-func BenchmarkRCPool(b *testing.B) {
-	pool := NewRCPool(
-		func() []byte {
-			return make([]byte, 128)
-		},
-	)
-	for i := 0; i < b.N; i++ {
-		s := pool.Get()
-		s.Release()
-	}
+func (d *Data) free(size *atomic.Int64) {
+	n := cap(d.buf) + dataSize
+	size.Add(-int64(n))
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(d)), n)
+	d.buf = nil
+	malloc.Free(buf)
 }

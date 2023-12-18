@@ -352,6 +352,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.rollbackCreateTableLocked()
+
 		txn.statementID--
 		end := txn.statements[txn.statementID]
 		for i := end; i < len(txn.writes); i++ {
@@ -519,6 +521,8 @@ type txnTable struct {
 	// process for statement
 	//proc *process.Process
 	proc atomic.Pointer[process.Process]
+
+	createByStatementID int
 }
 
 type column struct {
