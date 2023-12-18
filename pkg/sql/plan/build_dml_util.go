@@ -2338,13 +2338,48 @@ func appendPreInsertSkVectorPlan(
 				},
 			}
 		}
-		rightChildId = builder.appendNode(&Node{
+		centroidsScanId := builder.appendNode(&Node{
 			NodeType:    plan.Node_TABLE_SCAN,
 			Stats:       &plan.Stats{},
 			ObjRef:      idxRefs[1],
 			TableDef:    indexTableDefs[1],
 			ProjectList: scanNodeProject,
 		}, bindCtx)
+
+		joinProjections := getProjectionByLastNode(builder, centroidsScanId)[:3]
+		joinProjections = append(joinProjections, &plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+					//Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				},
+			},
+		})
+		joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_INNER,
+			Children:    []int32{centroidsScanId, metaTableScanId},
+			ProjectList: joinProjections,
+		}, bindCtx)
+
+		prevProjection := getProjectionByLastNode(builder, joinMetaAndCentroidsId)
+		conditionExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			prevProjection[0],
+			prevProjection[3],
+		})
+		if err != nil {
+			return -1, err
+		}
+		filterId := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_FILTER,
+			Children:    []int32{joinMetaAndCentroidsId},
+			FilterList:  []*Expr{conditionExpr},
+			ProjectList: prevProjection[:3],
+		}, bindCtx)
+
+		rightChildId = filterId
 	}
 
 	var crossJoinID int32
