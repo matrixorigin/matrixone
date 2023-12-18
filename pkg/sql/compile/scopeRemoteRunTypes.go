@@ -17,9 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -376,7 +376,11 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
-	c := reuse.Alloc[Compile](nil)
+	c := &Compile{
+		affectRows: &atomic.Uint64{},
+		lock:       &sync.RWMutex{},
+		counterSet: &perfcounter.CounterSet{},
+	}
 	c.proc = proc
 	c.e = cnInfo.storeEngine
 	c.anal = newAnaylze()
