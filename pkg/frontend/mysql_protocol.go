@@ -22,15 +22,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
-	"unicode"
-
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,6 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -1804,7 +1803,7 @@ func setColFlag(column *MysqlColumn) {
 func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
-	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_VAR_STRING:
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
 		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
@@ -2013,11 +2012,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				case float64:
 					data = mp.appendUint32(data, math.Float32bits(float32(v)))
 				case string:
-					val, err := strconv.ParseFloat(v, 32)
-					if err != nil {
-						return nil, err
-					}
-					data = mp.appendUint32(data, math.Float32bits(float32(val)))
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2031,11 +2026,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				case float64:
 					data = mp.appendUint64(data, math.Float64bits(v))
 				case string:
-					val, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						return nil, err
-					}
-					data = mp.appendUint64(data, math.Float64bits(val))
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
