@@ -829,7 +829,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 				totalTime += a.AnalyzeInfo.TimeConsumedArrayMajor[i]
 			}
 			fmt.Fprintf(buf,
-				"total=%vms,min=%vms,max=%vms,dop=%v",
+				"total=%vms,min=%vms,max=%vms,dop=%v]",
 				totalTime/MILLION,
 				a.AnalyzeInfo.TimeConsumedArrayMajor[0]/MILLION,
 				a.AnalyzeInfo.TimeConsumedArrayMajor[len(a.AnalyzeInfo.TimeConsumedArrayMajor)-1]/MILLION,
@@ -846,6 +846,15 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 
 		minordop := len(a.AnalyzeInfo.TimeConsumedArrayMinor)
 		if minordop > 0 {
+			if minorStr == "mergegroup" || minorStr == "mergesort" {
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					if i != 0 {
+						a.AnalyzeInfo.TimeConsumedArrayMinor[0] += a.AnalyzeInfo.TimeConsumedArrayMinor[i]
+					}
+				}
+				a.AnalyzeInfo.TimeConsumedArrayMinor = a.AnalyzeInfo.TimeConsumedArrayMinor[:1]
+			}
+
 			fmt.Fprintf(buf, " %v_time=[", minorStr)
 			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
 				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
@@ -856,13 +865,12 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 					totalTime += a.AnalyzeInfo.TimeConsumedArrayMinor[i]
 				}
 				fmt.Fprintf(buf,
-					"total=%vms,min=%vms,max=%vms,dop=%v",
+					"total=%vms,min=%vms,max=%vms,dop=%v]",
 					totalTime/MILLION,
 					a.AnalyzeInfo.TimeConsumedArrayMinor[0]/MILLION,
 					a.AnalyzeInfo.TimeConsumedArrayMinor[len(a.AnalyzeInfo.TimeConsumedArrayMinor)-1]/MILLION,
 					majordop)
 			} else {
-
 				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
 					if i != 0 {
 						fmt.Fprintf(buf, ",")
