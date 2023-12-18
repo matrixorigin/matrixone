@@ -17,11 +17,13 @@ package txnbase
 import (
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -531,21 +533,17 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
 
-	var t1 time.Time
-	var debugT1, debugT2, debugT3 int64
-
 	for _, item := range items {
-		t0 := time.Now()
 		op := item.(*OpTxn)
+		var t1, t2, t3, t4, t5 time.Time
+		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-			t1 = time.Now()
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
 
-			dur := time.Since(t1)
-			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(dur.Seconds())
-			debugT1 = dur.Milliseconds()
+			t2 = time.Now()
+			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(t2.Sub(t1).Seconds())
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
@@ -555,36 +553,30 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				}
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
-			prepareWALDuration := time.Since(t0)
-			_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
-				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
-			}
 
-			t1 = time.Now()
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+			t3 = time.Now()
 
-			dur = time.Since(t1)
-			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(dur.Seconds())
-			debugT2 = dur.Milliseconds()
+			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t3.Sub(t2).Seconds())
 		}
 
-		t1 = time.Now()
+		t4 = time.Now()
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
+		t5 = time.Now()
+		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t5.Sub(t4).Seconds())
 
-		dur := time.Since(t1)
-		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(dur.Seconds())
-		debugT3 = dur.Milliseconds()
-
-		if total := debugT1 + debugT2 + debugT3; total > time.Second.Milliseconds() {
-			logutil.Info(fmt.Sprintf(
-				"[onPrepareWAL durations]: total = %d ms; prepare wal = %d; end prepare wal = %d; enqueue flush = %d",
-				total, debugT1, debugT2, debugT3))
+		if t5.Sub(t1) > time.Second {
+			logutil.Warn(
+				"SLOW-LOG",
+				zap.String("txn", op.Txn.String()),
+				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
+				zap.Duration("end-prepare-duration", t3.Sub(t2)),
+				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
+			)
 		}
-
-		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(time.Since(t0).Seconds())
+		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t5.Sub(t1).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
