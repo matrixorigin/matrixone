@@ -79,6 +79,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
 		return arg.children[0].Call(proc)
