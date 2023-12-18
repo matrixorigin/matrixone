@@ -42,7 +42,8 @@ func init() {
 			return &Scope{}
 		},
 		func(s *Scope) { *s = Scope{} },
-		reuse.DefaultOptions[Scope](),
+		reuse.DefaultOptions[Scope]().
+			WithEnableChecker(),
 	)
 
 	reuse.CreatePool[anaylze](
@@ -50,6 +51,7 @@ func init() {
 			return &anaylze{}
 		},
 		func(a *anaylze) { *a = anaylze{} },
-		reuse.DefaultOptions[anaylze](),
+		reuse.DefaultOptions[anaylze]().
+			WithEnableChecker(),
 	)
 }

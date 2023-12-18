@@ -66,6 +66,12 @@ func newScope(magic magicType) *Scope {
 	return s
 }
 
+func ReleaseScopes(ss []*Scope) {
+	for i := range ss {
+		ss[i].release()
+	}
+}
+
 func (s *Scope) withPlan(pn *plan.Plan) *Scope {
 	s.Plan = pn
 	return s
@@ -503,6 +509,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope, err := newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
@@ -539,6 +546,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	var err error
 	s, err = newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 
@@ -606,6 +614,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	}
 	newScope, err := newParallelScope(s, ss)
 	if err != nil {
+		ReleaseScopes(ss)
 		return err
 	}
 
