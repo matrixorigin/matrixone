@@ -2244,6 +2244,29 @@ func appendPreInsertSkVectorPlan(
 	idxRefs []*ObjectRef,
 	indexTableDefs []*TableDef) (int32, error) {
 
+	/* 	The overall plan
+	----------------------------------------------------------------------------------------------------------------------------
+	| Insert on db.entries												                                                        |
+	|   ->  Lock                                                                                                                |
+	|         ->  Sort                                                                                                          |
+	|               Sort Key: l2_distance(__mo_index_centroid, embedding) ASC                                                   |
+	|               Limit: 1                                                                                                    |
+	|               ->  Join                                                                                                    |
+	|                     Join Type: INNER                                                                                      |
+	|                     ->  Sink Scan                                                                                         |
+	|                           DataSource: Plan 0                                                                              |
+	|                     ->  Filter                                                                                            |
+	|                           Filter Cond: (centroids.__mo_index_centroid_version = cast(meta.'__mo_index_value' as bigint))  |
+	|                           ->  Join                                                                                        |
+	|                                 Join Type: SINGLE                                                                         |
+	|                                 ->  Table Scan on db.centroids											                |
+	|                                 ->  Project                                                                               |
+	|                                       ->  Filter                                                                          |
+	|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
+	|                                             ->  Table Scan on db.meta													    |
+	-----------------------------------------------------------------------------------------------------------------------------
+	*/
+
 	//1. get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn *Type
@@ -2266,13 +2289,13 @@ func appendPreInsertSkVectorPlan(
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
 
-	// 2. scan meta table to find the current version number
+	// 2. scan meta table to find the `current version` number
 	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
 	if err != nil {
 		return -1, err
 	}
 
-	// 3. create a scan node for centroids table with version = current version
+	// 3. create a scan node for centroids table with version = `current version`
 	currVersionCentroidsTblScanId, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
 		indexTableDefs, idxRefs, metaTblScanId)
 	if err != nil {

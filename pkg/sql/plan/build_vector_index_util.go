@@ -27,9 +27,9 @@ var (
 func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef) (int32, error) {
 	var metaTableScanId int32
 
-	scanNodeProject := make([]*Expr, len(indexTableDefs[0].Cols))
+	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
 	for colIdx, column := range indexTableDefs[0].Cols {
-		scanNodeProject[colIdx] = &plan.Expr{
+		scanNodeProjections[colIdx] = &plan.Expr{
 			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -44,11 +44,11 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 		Stats:       &plan.Stats{},
 		ObjRef:      idxRefs[0],
 		TableDef:    indexTableDefs[0],
-		ProjectList: scanNodeProject,
+		ProjectList: scanNodeProjections,
 	}, bindCtx)
 
 	prevProjection := getProjectionByLastNode(builder, metaTableScanId)
-	conditionExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		prevProjection[0],
 		MakePlan2StringConstExprWithType("version"),
 	})
@@ -58,11 +58,11 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 	metaTableScanId = builder.appendNode(&Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{metaTableScanId},
-		FilterList: []*Expr{conditionExpr},
+		FilterList: []*Expr{whereKeyEqVersion},
 	}, bindCtx)
 
 	prevProjection = getProjectionByLastNode(builder, metaTableScanId)
-	castValueCol, err := makePlan2CastExpr(builder.GetContext(), prevProjection[1], makePlan2Type(&bigIntType))
+	castValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), prevProjection[1], makePlan2Type(&bigIntType))
 	if err != nil {
 		return -1, err
 	}
@@ -70,16 +70,16 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 		NodeType:    plan.Node_PROJECT,
 		Stats:       &plan.Stats{},
 		Children:    []int32{metaTableScanId},
-		ProjectList: []*Expr{castValueCol},
+		ProjectList: []*Expr{castValueColToBigInt},
 	}, bindCtx)
 
 	return metaTableScanId, nil
 }
 
 func makeCentroidsTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef) int32 {
-	scanNodeProject := make([]*Expr, len(indexTableDefs[1].Cols))
+	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
 	for colIdx, column := range indexTableDefs[1].Cols {
-		scanNodeProject[colIdx] = &plan.Expr{
+		scanNodeProjections[colIdx] = &plan.Expr{
 			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -94,7 +94,7 @@ func makeCentroidsTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTabl
 		Stats:       &plan.Stats{},
 		ObjRef:      idxRefs[1],
 		TableDef:    indexTableDefs[1],
-		ProjectList: scanNodeProject,
+		ProjectList: scanNodeProjections,
 	}, bindCtx)
 	return centroidsScanId
 }
@@ -102,6 +102,10 @@ func makeCentroidsTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTabl
 func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef, metaTableScanId int32) (int32, error) {
 	centroidsScanId := makeCentroidsTblScan(builder, bindCtx, indexTableDefs, idxRefs)
 
+	// 0: centroids.version
+	// 1: centroids.centroid_id
+	// 2: centroids.centroid
+	// 3: meta.value i.e, current version
 	joinProjections := getProjectionByLastNode(builder, centroidsScanId)[:3]
 	joinProjections = append(joinProjections, &plan.Expr{
 		Typ: makePlan2Type(&bigIntType),
@@ -112,6 +116,7 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 			},
 		},
 	})
+
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_SINGLE,
@@ -119,21 +124,21 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		ProjectList: joinProjections,
 	}, bindCtx)
 
-	prevProjection := getProjectionByLastNode(builder, joinMetaAndCentroidsId)
-	conditionExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		prevProjection[0],
-		prevProjection[3],
+	prevProjections := getProjectionByLastNode(builder, joinMetaAndCentroidsId)
+	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		prevProjections[0],
+		prevProjections[3],
 	})
 	if err != nil {
 		return -1, err
 	}
-	filterId := builder.appendNode(&plan.Node{
+	filterCentroidsForCurrVersionId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_FILTER,
 		Children:    []int32{joinMetaAndCentroidsId},
-		FilterList:  []*Expr{conditionExpr},
-		ProjectList: prevProjection[:3],
+		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
+		ProjectList: prevProjections[:3],
 	}, bindCtx)
-	return filterId, nil
+	return filterCentroidsForCurrVersionId, nil
 }
 
 func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
@@ -141,7 +146,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	typeOriginPk *Type, posOriginPk int,
 	typeOriginVecColumn *Type, posOriginVecColumn int) int32 {
 
-	crossJoinID := builder.appendNode(&plan.Node{
+	crossJoinTblAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_INNER,
 		Children: []int32{leftChildTblId, rightChildCentroidsId},
@@ -200,7 +205,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 		},
 	}, bindCtx)
 
-	return crossJoinID
+	return crossJoinTblAndCentroidsId
 }
 
 func makeSortByL2DistAndLimit1AndProject4(builder *QueryBuilder, bindCtx *BindContext,
@@ -222,7 +227,7 @@ func makeSortByL2DistAndLimit1AndProject4(builder *QueryBuilder, bindCtx *BindCo
 		return -1, err
 	}
 
-	sortId := builder.appendNode(&plan.Node{
+	sortByL2DistId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{crossJoinTblAndCentroidsID},
 		// version, centroid_id, pk, serial(version,pk)
@@ -236,5 +241,5 @@ func makeSortByL2DistAndLimit1AndProject4(builder *QueryBuilder, bindCtx *BindCo
 		Limit: makePlan2Int64ConstExprWithType(1),
 	}, bindCtx)
 
-	return sortId, nil
+	return sortByL2DistId, nil
 }
