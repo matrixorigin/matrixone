@@ -996,6 +996,8 @@ func makeInsertPlan(
 				return err
 			}
 
+			//TODO: verify with zengyan1 if colType should read from original table.
+			// It is mainly used for retaining decimal datatype precision in error messages.
 			colTypes := make([]*plan.Type, len(tableDef.Cols))
 			for i := range tableDef.Cols {
 				colTypes[i] = tableDef.Cols[i].Typ
