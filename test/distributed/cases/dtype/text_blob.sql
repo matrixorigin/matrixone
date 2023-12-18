@@ -155,3 +155,25 @@ prepare stmt2 from 'select length(b) from blob_05';
 execute stmt2 ;
 deallocate prepare stmt1;
 deallocate prepare stmt2;
+-- add blob cases
+create table testblob(c1 blob);
+--insert xml data
+INSERT into testblob VALUES ('<?xml version="1.0" encoding="ISO-8859-1"?><book category="COOKING"><title lang="en">everyday</titile><author>laurentis</author><year>2005</year><price>20.34</price></book>');
+select upper(hex(c1)) from testblob;
+--insert 0x data
+insert into testblob values(0xC20766572736);
+select upper(hex(c1)) from testblob;
+insert into testblob values(0x2635AB72632402);
+select upper(hex(c1)) from testblob;
+--insert character data
+insert into testblob values('yyyyybbbbbbbb');
+select upper(hex(c1)) from testblob;
+--insert int data
+insert into testblob values(65536);
+select upper(hex(c1)) from testblob;
+--insert chinese character data
+insert into testblob values("中国");
+select upper(hex(c1)) from testblob;
+--insert mix character data
+insert into testblob values('12735ksuhWEDf&*()-=+{}[]\:?/,.~!@#$%^|');
+select upper(hex(c1)) from testblob;
