@@ -178,9 +178,6 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		defer func() {
-			s.release()
-		}()
 		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
@@ -337,11 +334,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	}
 	ctx.root = ctx
 	s, err := generateScope(proc, p, ctx, nil, isRemote)
-	defer func() {
-		if err != nil {
-			s.release()
-		}
-	}()
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +387,7 @@ func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 }
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
-	rs := c.newMergeScope([]*Scope{s})
+	rs := c.newMergeScope([]*Scope{s}, false)
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
@@ -558,17 +550,13 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
 	var s *Scope
-	defer func() {
-		if err != nil {
-			s.release()
-		}
-	}()
 
 	if p.Qry != nil {
 		ctx.plan = p.Qry
 	}
 
-	s = newScope(magicType(p.GetPipelineType()))
+	s = new(Scope)
+	s.Magic = magicType(p.GetPipelineType())
 	s.IsEnd = p.IsEnd
 	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad

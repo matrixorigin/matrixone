@@ -948,7 +948,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 	case plan.Query_UPDATE:
 		return ss[0], nil
 	default:
-		rs = c.newMergeScope(ss)
+		rs = c.newMergeScope(ss, true)
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -1266,7 +1266,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = []*Scope{rs}
 			return ss, nil
 		}
-		rs := c.newMergeScope(ss)
+		rs := c.newMergeScope(ss, true)
 		// updateScopesLastFlag([]*Scope{rs})
 		rs.Magic = Merge
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
@@ -1287,7 +1287,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		rs := c.newMergeScope(ss)
+		rs := c.newMergeScope(ss, true)
 		rs.Instructions[0] = vm.Instruction{
 			Op:  vm.OnDuplicateKey,
 			Idx: c.anal.curr,
@@ -1387,7 +1387,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				})
 				ss = []*Scope{rs}
 			} else {
-				dataScope := c.newMergeScope(ss)
+				dataScope := c.newMergeScope(ss, true)
 				dataScope.IsEnd = true
 				if c.anal.qry.LoadTag {
 					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
@@ -1443,7 +1443,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					return nil, err
 				}
 				insertArg.ToWriteS3 = true
-				rs := c.newMergeScope(scopes)
+				rs := c.newMergeScope(scopes, true)
 				rs.PreScopes = append(rs.PreScopes, dataScope)
 				rs.Magic = MergeInsert
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -1484,7 +1484,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if c.proc.TxnOperator.Txn().IsPessimistic() {
 			block = n.LockTargets[0].Block
 			if block {
-				ss = []*Scope{c.newMergeScope(ss)}
+				ss = []*Scope{c.newMergeScope(ss, true)}
 			}
 		}
 		currentFirstFlag := c.anal.isFirst
@@ -1589,7 +1589,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		rs := c.newMergeScope(ss)
+		rs := c.newMergeScope(ss, true)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
@@ -2116,7 +2116,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 			idx = i
 		}
 	}
-	mergeChildren := c.newMergeScope(ss)
+	mergeChildren := c.newMergeScope(ss, true)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
@@ -2157,7 +2157,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 }
 
 func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
-	rs := c.newMergeScope(append(ss, children...))
+	rs := c.newMergeScope(append(ss, children...), true)
 	rs.Instructions[0].Idx = c.anal.curr
 	return []*Scope{rs}
 }
@@ -2456,7 +2456,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Order,
@@ -2467,7 +2467,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Partition,
 		Idx: c.anal.curr,
@@ -2544,7 +2544,7 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Top,
@@ -2555,7 +2555,7 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
@@ -2569,7 +2569,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Order,
@@ -2580,7 +2580,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
@@ -2590,7 +2590,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Window,
 		Idx: c.anal.curr,
@@ -2600,7 +2600,7 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
@@ -2610,7 +2610,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Fill,
 		Idx: c.anal.curr,
@@ -2624,11 +2624,11 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			c.anal.isFirst = currentFirstFlag
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 	}
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
@@ -2642,7 +2642,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Limit,
@@ -2653,7 +2653,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
@@ -2665,7 +2665,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Sample,
@@ -2676,7 +2676,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	if len(ss) == 1 {
 		return []*Scope{rs}
 	}
@@ -2700,7 +2700,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 		}
 		arg := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
 		if partialresults != nil {
@@ -2716,7 +2716,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	}
 	c.anal.isFirst = false
 
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeGroup,
 		Idx: c.anal.curr,
@@ -2731,7 +2731,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
-			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+			ss[i] = c.newMergeScope([]*Scope{ss[i]}, true)
 			ss[i].IsEnd = isEnd
 		}
 		if !ss[i].IsEnd {
@@ -2807,7 +2807,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 			})
 		}
 
-		mergeScopes := c.newMergeScope(ss)
+		mergeScopes := c.newMergeScope(ss, true)
 		mergeScopes.appendInstruction(vm.Instruction{
 			Op:      vm.Dispatch,
 			Idx:     c.anal.curr,
@@ -2916,11 +2916,17 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 			rs[i].Instructions,
 			dupInstruction(delete, nil, 0))
 	}
-	return c.newMergeScope(rs)
+	return c.newMergeScope(rs, true)
 }
 
-func (c *Compile) newMergeScope(ss []*Scope) *Scope {
-	rs := newScope(Merge)
+func (c *Compile) newMergeScope(ss []*Scope, reusable bool) *Scope {
+	var rs *Scope
+	if reusable {
+		rs = newScope(Merge)
+	} else {
+		rs = new(Scope)
+		rs.Magic = Merge
+	}
 	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
 	rs.PreScopes = ss
 	cnt := 0
@@ -2958,7 +2964,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 }
 
 func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope {
-	rs := c.newMergeScope(ss)
+	rs := c.newMergeScope(ss, true)
 	// reset rs's info to remote
 	rs.Magic = Remote
 	rs.NodeInfo.Addr = nodeinfo.Addr
@@ -3050,7 +3056,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	// construct left
-	leftMerge := c.newMergeScope(ss)
+	leftMerge := c.newMergeScope(ss, true)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(0, rs, c.addr, n, false),
@@ -3059,7 +3065,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 
 	// construct right
 	c.anal.isFirst = currentFirstFlag
-	rightMerge := c.newMergeScope(children)
+	rightMerge := c.newMergeScope(children, true)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n, false),
@@ -3106,7 +3112,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
 	c.anal.isFirst = false
-	mergeChildren := c.newMergeScope(children)
+	mergeChildren := c.newMergeScope(children, true)
 
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -4193,7 +4199,7 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 	for i := range ss2 {
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
-	return c.newMergeScope(ss2)
+	return c.newMergeScope(ss2, true)
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
