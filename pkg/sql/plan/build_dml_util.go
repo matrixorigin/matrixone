@@ -2360,7 +2360,7 @@ func appendPreInsertSkVectorPlan(
 		}, bindCtx)
 	}
 
-	var projectId int32
+	var sortId int32
 	{
 
 		// 0: centroids.version,
@@ -2379,8 +2379,8 @@ func appendPreInsertSkVectorPlan(
 			return -1, err
 		}
 
-		projectId = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PROJECT,
+		sortId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
 			Children: []int32{crossJoinID},
 			// version, centroid_id, pk, serial(version,pk)
 			ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
@@ -2394,7 +2394,7 @@ func appendPreInsertSkVectorPlan(
 		}, bindCtx)
 	}
 
-	lastNodeId = projectId
+	lastNodeId = sortId
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
