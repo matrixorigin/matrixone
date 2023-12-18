@@ -44,6 +44,8 @@ var (
 	defaultConnectTimeout = time.Second * 3
 	// The default value of handshake auth timeout.
 	defaultAuthTimeout = time.Second * 10
+	// The default value of TSL connect timeout.
+	defaultTLSConnectTimeout = time.Second * 10
 )
 
 // Config is the configuration of proxy server.
@@ -66,6 +68,8 @@ type Config struct {
 	// CN servers. If proxy handshakes with cn timeout, it will return a retryable
 	// error and try to connect to other cn servers.
 	AuthTimeout toml.Duration `toml:"auth-timeout" user_setting:"advanced"`
+	// TLSConnectTimeout is the timeout duration when TLS connect to server.
+	TLSConnectTimeout toml.Duration `toml:"tls-connect-timeout" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
@@ -169,6 +173,9 @@ func (c *Config) FillDefault() {
 	}
 	if c.AuthTimeout.Duration == 0 {
 		c.AuthTimeout.Duration = defaultAuthTimeout
+	}
+	if c.TLSConnectTimeout.Duration == 0 {
+		c.TLSConnectTimeout.Duration = defaultTLSConnectTimeout
 	}
 	if c.RebalanceInterval.Duration == 0 {
 		c.RebalanceInterval.Duration = defaultRebalanceInterval
