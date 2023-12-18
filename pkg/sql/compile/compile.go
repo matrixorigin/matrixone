@@ -422,7 +422,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
 		putCompile(c)
-		putCompile(runC)
+		releaseRunC()
 
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
