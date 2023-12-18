@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2253,7 +2252,6 @@ func appendPreInsertSkVectorPlan(
 
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn *Type
-	varcharType := types.T_varchar.ToType()
 	bigIntType := types.T_int64.ToType()
 	{
 		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
@@ -2266,12 +2264,6 @@ func appendPreInsertSkVectorPlan(
 
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
-	fmt.Println(posOriginVecColumn)
-	fmt.Println(typeOriginVecColumn)
-	fmt.Println(posOriginPk)
-	fmt.Println(typeOriginPk)
-	fmt.Println(bigIntType)
-	fmt.Println(varcharType)
 
 	// scan meta table
 	var metaTableScanId int32
