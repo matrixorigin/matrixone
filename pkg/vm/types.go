@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -136,6 +137,26 @@ type Operator interface {
 
 	//AppendChild append child to operator
 	AppendChild(child Operator)
+}
+
+var CancelResult = CallResult{
+	Status: ExecStop,
+}
+
+func CancelCheck(proc *process.Process) (error, bool) {
+	select {
+	case <-proc.Ctx.Done():
+		return proc.Ctx.Err(), true
+	default:
+		return nil, false
+	}
+}
+
+func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+	beforeChildrenCall := time.Now()
+	result, err := o.Call(proc)
+	anal.ChildrenCallStop(beforeChildrenCall)
+	return result, err
 }
 
 type ExecStatus int

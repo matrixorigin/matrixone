@@ -53,8 +53,18 @@ func findBatchToSend(ap *Argument, threshHold int) int {
 // next time, set this bucket rowcount to 0 and reuse it
 // for now, we shuffle null to the first bucket
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
 	var index int
+
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
 
 	// clean last sent batch
 	if ap.ctr.lastSentIdx != -1 {
@@ -78,7 +88,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	for index == -1 {
 		// do input
-		result, err := arg.children[0].Call(proc)
+
+		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 		if err != nil {
 			return result, err
 		}
@@ -307,6 +319,7 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 		if v.Capacity() < shuffleBatchSize {
 			err := v.PreExtend(shuffleBatchSize, proc.Mp())
 			if err != nil {
+				v.Free(proc.Mp())
 				return err
 			}
 		}
