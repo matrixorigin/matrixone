@@ -24,10 +24,12 @@ import (
 	pathpkg "path"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -302,7 +304,9 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	metric.FSWriteS3Counter.Add(float64(len(vector.Entries)))
 
-	ctx = addGetConnMetric(ctx)
+	tp := reuse.Alloc[tracePoint](nil)
+	defer reuse.Free(tp, nil)
+	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	var bytesWritten int
 	start := time.Now()
@@ -393,7 +397,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	ctx = addGetConnMetric(ctx)
+	tp := reuse.Alloc[tracePoint](nil)
+	defer reuse.Free(tp, nil)
+	ctx = httptrace.WithClientTrace(ctx, tp.getClientTrace())
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -777,44 +783,94 @@ func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
 }
 
-func addGetConnMetric(ctx context.Context) context.Context {
-	var start time.Time
-	var dnsStart time.Time
-	var connectStart time.Time
-	var tlsHandshakeStart time.Time
-	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		GetConn: func(hostPort string) {
-			start = time.Now()
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
-		},
-
-		DNSStart: func(di httptrace.DNSStartInfo) {
-			metric.S3DNSResolveCounter.Inc()
-			dnsStart = time.Now()
-		},
-
-		DNSDone: func(di httptrace.DNSDoneInfo) {
-			metric.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
-		},
-
-		ConnectStart: func(network, addr string) {
-			metric.S3ConnectCounter.Inc()
-			connectStart = time.Now()
-		},
-
-		ConnectDone: func(network, addr string, err error) {
-			metric.S3ConnectDurationHistogram.Observe(time.Since(connectStart).Seconds())
-		},
-
-		TLSHandshakeStart: func() {
-			tlsHandshakeStart = time.Now()
-		},
-
-		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tlsHandshakeStart).Seconds())
-		},
-	})
+type tracePoint struct {
+	start             time.Time
+	dnsStart          time.Time
+	connectStart      time.Time
+	tlsHandshakeStart time.Time
+	ct                *httptrace.ClientTrace
 }
+
+func newTracePoint() *tracePoint {
+	tp := &tracePoint{
+		ct: &httptrace.ClientTrace{},
+	}
+	tp.ct.GetConn = tp.getConnPoint
+	tp.ct.GotConn = tp.gotConnPoint
+	tp.ct.DNSStart = tp.dnsStartPoint
+	tp.ct.DNSDone = tp.dnsDonePoint
+	tp.ct.ConnectStart = tp.connectStartPoint
+	tp.ct.ConnectDone = tp.connectDonePoint
+	tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
+	tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
+	return tp
+}
+
+func (tp tracePoint) Name() string {
+	return "fileservice.tracePoint"
+}
+
+func resetTracePoint(tp *tracePoint) {
+	tp.start = time.Time{}
+	tp.dnsStart = time.Time{}
+	tp.connectStart = time.Time{}
+	tp.tlsHandshakeStart = time.Time{}
+	tracePointPool.Put(tp)
+}
+
+func (tp *tracePoint) getClientTrace() *httptrace.ClientTrace {
+	return tp.ct
+}
+
+func (tp *tracePoint) getConnPoint(hostPort string) {
+	tp.start = time.Now()
+}
+
+func (tp *tracePoint) gotConnPoint(info httptrace.GotConnInfo) {
+	metric.S3GetConnDurationHistogram.Observe(time.Since(tp.start).Seconds())
+}
+
+func (tp *tracePoint) dnsStartPoint(di httptrace.DNSStartInfo) {
+	metric.S3DNSResolveCounter.Inc()
+	tp.dnsStart = time.Now()
+}
+
+func (tp *tracePoint) dnsDonePoint(di httptrace.DNSDoneInfo) {
+	metric.S3DNSResolveDurationHistogram.Observe(time.Since(tp.dnsStart).Seconds())
+}
+
+func (tp *tracePoint) connectStartPoint(network, addr string) {
+	metric.S3ConnectCounter.Inc()
+	tp.connectStart = time.Now()
+}
+
+func (tp *tracePoint) connectDonePoint(network, addr string, err error) {
+	metric.S3ConnectDurationHistogram.Observe(time.Since(tp.connectStart).Seconds())
+}
+
+func (tp *tracePoint) tlsHandshakeStartPoint() {
+	tp.tlsHandshakeStart = time.Now()
+}
+
+func (tp *tracePoint) tlsHandshakeDonePoint(cs tls.ConnectionState, err error) {
+	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tp.tlsHandshakeStart).Seconds())
+}
+
+var (
+	tracePointPool = sync.Pool{
+		New: func() any {
+			tp := &tracePoint{
+				ct: &httptrace.ClientTrace{},
+			}
+			tp.ct.GetConn = tp.getConnPoint
+			tp.ct.GotConn = tp.gotConnPoint
+			tp.ct.DNSStart = tp.dnsStartPoint
+			tp.ct.DNSDone = tp.dnsDonePoint
+			tp.ct.ConnectStart = tp.connectStartPoint
+			tp.ct.ConnectDone = tp.connectDonePoint
+			tp.ct.TLSHandshakeStart = tp.tlsHandshakeStartPoint
+			tp.ct.TLSHandshakeDone = tp.tlsHandshakeDonePoint
+			return tp
+		},
+	}
+)
