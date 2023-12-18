@@ -16214,7 +16214,7 @@ yydefault:
 		var yyLOCAL *tree.SubscriptionOption
 //line mysql_sql.y:6262
 		{
-			yyLOCAL = &tree.SubscriptionOption{From: tree.Identifier(yyDollar[2].str), Publication: tree.Identifier(yyDollar[4].cstrUnion().Compare())}
+			yyLOCAL = &tree.SubscriptionOption{From: tree.AccountIdentifier(yyDollar[2].str), Publication: tree.Identifier(yyDollar[4].cstrUnion().Compare())}
 		}
 		yyVAL.union = yyLOCAL
 	case 1010:

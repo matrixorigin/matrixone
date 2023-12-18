@@ -90,7 +90,7 @@ func NewCreateOptionEncryption(e string) *CreateOptionEncryption {
 
 type SubscriptionOption struct {
 	statementImpl
-	From        Identifier
+	From        AccountIdentifier
 	Publication Identifier
 }
 

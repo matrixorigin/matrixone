@@ -6260,7 +6260,7 @@ subcription_opt:
     }
 |   FROM account_name PUBLICATION ident
     {
-   	$$ = &tree.SubscriptionOption{From: tree.Identifier($2), Publication: tree.Identifier($4.Compare())}
+   	$$ = &tree.SubscriptionOption{From: tree.AccountIdentifier($2), Publication: tree.Identifier($4.Compare())}
     }
 
 

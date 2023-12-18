@@ -25,11 +25,20 @@ type IdentifierName interface {
 	Expr
 }
 
-// sql indentifier
+// sql identifier
 type Identifier string
 
 func (node *Identifier) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(*node))
+}
+
+// account identifier
+type AccountIdentifier string
+
+func (node *AccountIdentifier) Format(ctx *FmtCtx) {
+	ctx.WriteString("`")
+	ctx.WriteString(string(*node))
+	ctx.WriteString("`")
 }
 
 type UnrestrictedIdentifier string
