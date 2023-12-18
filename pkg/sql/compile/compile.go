@@ -1391,7 +1391,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -1879,6 +1879,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
+	useShuffle := param.Parallel
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
@@ -1904,10 +1905,12 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	//arg.FuncId = dispatch.SendToAnyLocalFunc
-	//use shuffle instead of SendToAnyLocalFunc
-	arg.FuncId = dispatch.ShuffleToAllFunc
-	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+	if useShuffle {
+		arg.FuncId = dispatch.ShuffleToAllFunc
+		arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+	} else {
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+	}
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
