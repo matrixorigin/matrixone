@@ -16,12 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -267,6 +267,7 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	disableRetry bool
 }
 
 type runtimeFilterReceiver struct {

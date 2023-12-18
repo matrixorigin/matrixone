@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap
+package fileservice
 
-// Map is a  robinhashmap implementation
-type Map[K comparable, V any] struct {
-	count int32
-	size  uint32
-	// https://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/
-	shift   uint32
-	maxDist uint32
-	buckets []bucket[K, V]
-}
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
-type bucket[K comparable, V any] struct {
-	key K
-	h   uint64
-	// The distance the entry is from its desired position.
-	dist uint32
-	val  *V
+func init() {
+	reuse.CreatePool[tracePoint](
+		newTracePoint,
+		resetTracePoint,
+		reuse.DefaultOptions[tracePoint]().
+			WithEnableChecker())
 }
