@@ -461,3 +461,8 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 
 	}
 }
+
+func Test_X(t *testing.T) {
+	fmt.Println(123456789.0 / 10e6)
+	fmt.Println(123456789.0 / 1e6)
+}

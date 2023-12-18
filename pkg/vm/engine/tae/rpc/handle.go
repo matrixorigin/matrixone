@@ -1237,6 +1237,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	for accId, size := range usages {
 		resp.AccIds = append(resp.AccIds, int32(accId))
 		resp.Sizes = append(resp.Sizes, size)
+		memo.AddReqTrace(accId, size)
 	}
 
 	resp.Succeed = true

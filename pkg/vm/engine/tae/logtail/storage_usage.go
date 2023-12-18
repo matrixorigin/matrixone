@@ -275,8 +275,13 @@ func (c *StorageUsageCache) Delete(usage UsageData) {
 
 type TNUsageMemo struct {
 	sync.Mutex
-	cache   *StorageUsageCache
-	pending bool
+	cache    *StorageUsageCache
+	pending  bool
+	reqTrace []struct {
+		timeStamp time.Time
+		accountId uint32
+		totalSize int64
+	}
 }
 
 func NewTNUsageMemo() *TNUsageMemo {
@@ -289,6 +294,31 @@ var tnUsageMemo = NewTNUsageMemo()
 
 func GetTNUsageMemo() *TNUsageMemo {
 	return tnUsageMemo
+}
+
+func (m *TNUsageMemo) AddReqTrace(accountId uint32, tSize int64) {
+	m.reqTrace = append(m.reqTrace,
+		struct {
+			timeStamp time.Time
+			accountId uint32
+			totalSize int64
+		}{
+			timeStamp: time.Now(),
+			accountId: accountId,
+			totalSize: tSize,
+		})
+}
+
+func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.Time, sizes []int64) {
+	m.EnterProcessing()
+	defer m.LeaveProcessing()
+
+	for idx := range m.reqTrace {
+		timestamps = append(timestamps, m.reqTrace[idx].timeStamp)
+		accountIds = append(accountIds, m.reqTrace[idx].accountId)
+		sizes = append(sizes, m.reqTrace[idx].totalSize)
+	}
+	return
 }
 
 func (m *TNUsageMemo) GetCache() *StorageUsageCache {
@@ -304,7 +334,9 @@ func (m *TNUsageMemo) CacheLen() int {
 }
 
 func (m *TNUsageMemo) MemoryUsed() float64 {
-	return m.cache.MemUsed()
+	cacheUsed := m.cache.MemUsed()
+	memoUsed := int(unsafe.Sizeof(TNUsageMemo{})) + len(m.reqTrace)*(12+int(unsafe.Sizeof(time.Time{})))
+	return cacheUsed + (float64(memoUsed)/1048576.0*1e6)/1e6
 }
 
 func (m *TNUsageMemo) EnterProcessing() {
