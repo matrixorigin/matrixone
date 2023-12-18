@@ -175,14 +175,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		c := receiver.newCompile()
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
-		defer func() {
-			if err != nil {
-				s.release()
-			}
-		}()
 		if err != nil {
 			return err
 		}
+		defer func() {
+			s.release()
+		}()
 		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
