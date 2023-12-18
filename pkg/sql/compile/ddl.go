@@ -1182,7 +1182,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
 
 		for _, createTableSql := range tables {
-			_, err := c.runSqlWithResult(createTableSql)
+			err := c.runSql(createTableSql)
 			if err != nil {
 				return err
 			}
