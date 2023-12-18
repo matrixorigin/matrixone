@@ -2273,6 +2273,56 @@ func appendPreInsertSkVectorPlan(
 	fmt.Println(bigIntType)
 	fmt.Println(varcharType)
 
+	// scan meta table
+	var metaTableScanId int32
+	{
+		scanNodeProject := make([]*Expr, len(indexTableDefs[0].Cols))
+		for colIdx, column := range indexTableDefs[0].Cols {
+			scanNodeProject[colIdx] = &plan.Expr{
+				Typ: column.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(colIdx),
+						Name:   column.Name,
+					},
+				},
+			}
+		}
+		metaTableScanId = builder.appendNode(&Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       &plan.Stats{},
+			ObjRef:      idxRefs[0],
+			TableDef:    indexTableDefs[0],
+			ProjectList: scanNodeProject,
+		}, bindCtx)
+
+		prevProjection := getProjectionByLastNode(builder, metaTableScanId)
+		conditionExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			prevProjection[0],
+			MakePlan2StringConstExprWithType("version"),
+		})
+		if err != nil {
+			return -1, err
+		}
+		metaTableScanId = builder.appendNode(&Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{metaTableScanId},
+			FilterList: []*Expr{conditionExpr},
+		}, bindCtx)
+
+		prevProjection = getProjectionByLastNode(builder, metaTableScanId)
+		castValueCol, err := makePlan2CastExpr(builder.GetContext(), prevProjection[1], makePlan2Type(&bigIntType))
+		if err != nil {
+			return -1, err
+		}
+		metaTableScanId = builder.appendNode(&Node{
+			NodeType:    plan.Node_PROJECT,
+			Stats:       &plan.Stats{},
+			Children:    []int32{metaTableScanId},
+			ProjectList: []*Expr{castValueCol},
+		}, bindCtx)
+	}
+
 	var leftChildId = lastNodeId
 	var rightChildId int32
 	{
