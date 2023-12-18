@@ -119,11 +119,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		logger.Info("finished", zap.Error(err))
 		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
 		// quit CheckNewAccountSize goroutine
-		select {
-		case <-ctx.Done():
-		default:
-			cancel()
-		}
+		cancel()
 	}()
 
 	// start background task to check new account
