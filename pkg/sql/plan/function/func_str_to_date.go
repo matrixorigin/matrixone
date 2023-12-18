@@ -19,15 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"unicode"
 )
 
 func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	if !parameters[1].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
-	}
-
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -44,9 +41,7 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 		} else {
 			time.ResetTime()
 
-			timestr := string(v1)
-			format := string(v2)
-			success := coreStrToDate(proc.Ctx, time, timestr, format)
+			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if success {
 				if types.ValidDate(int32(time.year), time.month, time.day) {
 					value := types.DateFromCalendar(int32(time.year), time.month, time.day)
@@ -66,10 +61,6 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	if !parameters[1].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
-	}
-
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -86,9 +77,7 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 		} else {
 			time.ResetTime()
 
-			timestr := string(v1)
-			format := string(v2)
-			success := coreStrToDate(proc.Ctx, time, timestr, format)
+			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if success {
 				if types.ValidDatetime(int32(time.year), time.month, time.day) && types.ValidTimeInDay(time.hour, time.minute, time.second) {
 					value := types.DatetimeFromClock(int32(time.year), time.month, time.day, time.hour, time.minute, time.second, time.microsecond)
@@ -108,10 +97,6 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 }
 
 func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	if !parameters[1].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
-	}
-
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -128,9 +113,7 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 		} else {
 			time.ResetTime()
 
-			timestr := string(v1)
-			format := string(v2)
-			success := coreStrToDate(proc.Ctx, time, timestr, format)
+			success := coreStrToDate(proc.Ctx, time, functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
 			if success {
 				if types.ValidTime(uint64(time.hour), uint64(time.minute), uint64(time.second)) {
 					value := types.TimeFromClock(false, uint64(time.hour), time.minute, time.second, time.microsecond)

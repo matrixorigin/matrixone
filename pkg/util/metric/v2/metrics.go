@@ -15,6 +15,8 @@
 package v2
 
 import (
+	"math"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -44,6 +46,7 @@ func init() {
 	initRPCMetrics()
 	initMemMetrics()
 	initTraceMetrics()
+	initProxyMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -119,13 +122,15 @@ func initTxnMetrics() {
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
-	registry.MustRegister(TxnTableRangeSizeHistogram)
+	registry.MustRegister(txnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
 	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
+
+	registry.MustRegister(txnRangesSelectivityHistogram)
 }
 
 func initRPCMetrics() {
@@ -149,4 +154,19 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+}
+
+func initProxyMetrics() {
+	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(proxyDisconnectCounter)
+	registry.MustRegister(proxyTransferCounter)
+	registry.MustRegister(ProxyTransferDurationHistogram)
+	registry.MustRegister(ProxyDrainCounter)
+	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
+	registry.MustRegister(ProxyTransferQueueSizeGauge)
+	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
+}
+
+func getDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
 }

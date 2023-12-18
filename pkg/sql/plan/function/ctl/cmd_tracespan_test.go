@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -73,6 +74,7 @@ func initRuntime(uuids []string, queryAddress []string) {
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(cns, nil))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {

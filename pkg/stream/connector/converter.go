@@ -17,6 +17,7 @@ package moconnector
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -50,7 +51,14 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 		if err != nil {
 			return "", err // Handle the error appropriately
 		}
-		fields += name
+
+		if strings.Contains(name, ".") {
+			parts := strings.SplitN(name, ".", 2)
+			fields += "`" + parts[0] + "`.`" + parts[1] + "`"
+		} else {
+			fields += "`" + name + "`"
+		}
+
 		if i < columnCount-1 {
 			fields += ", "
 		}
@@ -58,18 +66,22 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 	}
 	for i := 0; i < rowCount; i++ {
 		var rowValues string
+		var err error
 		for j := 0; j < columnCount; j++ {
-			val, err := obj.StringValueByName(ctx, uint64(i), colNames[j])
-			if err != nil {
-				return "", err // Handle the error appropriately
-			}
+			var val string
+			val, err = obj.StringValueByName(ctx, uint64(i), colNames[j])
 			// Enclose the value in single quotes if it is a string
-			rowValues += "'" + val + "'"
+			if err != nil {
+				rowValues += "NULL"
+			} else {
+				rowValues += "'" + val + "'"
+			}
 			if j < columnCount-1 {
 				rowValues += ", "
 			}
 		}
-		if i > 0 {
+
+		if i > 0 && len(values) > 0 {
 			values += ", "
 		}
 		values += fmt.Sprintf("(%s)", rowValues)

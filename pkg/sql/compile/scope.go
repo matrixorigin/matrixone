@@ -17,11 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
+	goruntime "runtime"
 	"runtime/debug"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -48,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -59,6 +59,21 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
+
+func newScope(magic magicType) *Scope {
+	s := reuse.Alloc[Scope](nil)
+	s.Magic = magic
+	return s
+}
+
+func (s *Scope) withPlan(pn *plan.Plan) *Scope {
+	s.Plan = pn
+	return s
+}
+
+func (s *Scope) release() {
+	reuse.Free[Scope](s, nil)
+}
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
@@ -135,8 +150,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.RemoteRun(c)
 			case Parallel:
 				errChan <- scope.ParallelRun(c, scope.IsRemote)
-			case Pushdown:
-				errChan <- scope.PushdownRun()
 			}
 		})
 	}
@@ -193,14 +206,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 }
 
 // RemoteRun send the scope to a remote node for execution.
-// if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
-	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
-		return s.ParallelRun(c, s.IsRemote)
-	}
-
-	if !cnclient.IsCNClientReady() {
+	if !s.canRemote(c, true) || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -209,16 +216,30 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
+	p := pipeline.New(nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
-		// if context has done, it means other pipeline stop the query normally.
-		// so there is no need to return the error again.
+		// this clean-up action shouldn't be called before context check.
+		// because the clean-up action will cancel the context, and error will be suppressed.
+		p.Cleanup(s.Proc, err != nil, err)
 		return nil
 
 	default:
+		p.Cleanup(s.Proc, err != nil, err)
 		return err
 	}
+}
+
+func DeterminRuntimeDOP(cpunum, blocks int) int {
+	if cpunum <= 0 || blocks <= 16 {
+		return 1
+	}
+	ret := blocks/16 + 1
+	if ret < cpunum {
+		return ret
+	}
+	return cpunum
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -236,7 +257,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.MergeRun(c)
 	}
 
-	mcpu := s.NodeInfo.Mcpu
 	var err error
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
@@ -286,8 +306,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 											Typ: &plan.Type{
 												Id: int32(types.T_tuple),
 											},
-											Expr: &plan.Expr_Bin{
-												Bin: &plan.BinaryData{
+											Expr: &plan.Expr_Vec{
+												Vec: &plan.LiteralVec{
+													Len:  filter.Card,
 													Data: filter.Data,
 												},
 											},
@@ -336,6 +357,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 		}
 	}
+
+	mcpu := DeterminRuntimeDOP(goruntime.NumCPU(), len(s.NodeInfo.Data))
 
 	switch {
 	case remote:
@@ -462,16 +485,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic: Normal,
-			DataSource: &Source{
-				R:            rds[i],
-				SchemaName:   s.DataSource.SchemaName,
-				RelationName: s.DataSource.RelationName,
-				Attributes:   s.DataSource.Attributes,
-				AccountId:    s.DataSource.AccountId,
-			},
-			NodeInfo: s.NodeInfo,
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = s.NodeInfo
+		ss[i].DataSource = &Source{
+			R:            rds[i],
+			SchemaName:   s.DataSource.SchemaName,
+			RelationName: s.DataSource.RelationName,
+			Attributes:   s.DataSource.Attributes,
+			AccountId:    s.DataSource.AccountId,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -481,29 +502,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
-}
-
-func (s *Scope) PushdownRun() error {
-	var end bool // exist flag
-	var err error
-
-	reg := colexec.Srv.GetConnector(s.DataSource.PushdownId)
-	for {
-		bat := <-reg.Ch
-		if bat == nil {
-			s.Proc.SetInputBatch(bat)
-			_, err = vm.Run(s.Instructions, s.Proc)
-			s.Proc.Cancel()
-			return err
-		}
-		if bat.RowCount() == 0 {
-			continue
-		}
-		s.Proc.SetInputBatch(bat)
-		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
-			return err
-		}
-	}
 }
 
 func (s *Scope) JoinRun(c *Compile) error {
@@ -527,10 +525,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		ss[i] = &Scope{
-			Magic:    Merge,
-			NodeInfo: s.NodeInfo,
-		}
+		ss[i] = newScope(Merge)
+		ss[i].NodeInfo = s.NodeInfo
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
@@ -596,12 +592,10 @@ func (s *Scope) LoadRun(c *Compile) error {
 		{
 			bat.SetRowCount(1)
 		}
-		ss[i] = &Scope{
-			Magic: Normal,
-			DataSource: &Source{
-				Bat: bat,
-			},
-			NodeInfo: s.NodeInfo,
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = s.NodeInfo
+		ss[i].DataSource = &Source{
+			Bat: bat,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -712,23 +706,38 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				})
 			}
 		case vm.Sample:
-			flg = true
 			arg := in.Arg.(*sample.Argument)
-			s.Instructions = s.Instructions[i:]
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.Merge,
-				Idx: s.Instructions[0].Idx,
-				Arg: &merge.Argument{},
+			if !arg.IsMergeSampleByRow() {
+				flg = true
+
+				// if by percent, there is no need to do merge sample.
+				if arg.IsByPercent() {
+					s.Instructions = s.Instructions[i:]
+				} else {
+					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
+					s.Instructions[1] = vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: false,
+						Arg:     sample.NewMergeSample(arg),
+					}
+				}
+				s.Instructions[0] = vm.Instruction{
+					Op:  vm.Merge,
+					Idx: s.Instructions[0].Idx,
+					Arg: &merge.Argument{},
+				}
+
+				for j := range ss {
+					ss[j].appendInstruction(vm.Instruction{
+						Op:      vm.Sample,
+						Idx:     in.Idx,
+						IsFirst: in.IsFirst,
+						Arg:     arg.SimpleDup(),
+					})
+				}
 			}
 
-			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Sample,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg:     arg.SimpleDup(),
-				})
-			}
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
@@ -950,4 +959,8 @@ func (s *Scope) replace(c *Compile) error {
 	}
 	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
+}
+
+func (s Scope) Name() string {
+	return "compile.Scope"
 }

@@ -31,6 +31,8 @@ type ExtraInfo struct {
 	// network or external network. false means that it is external, otherwise,
 	// it is internal.
 	InternalConn bool
+	// ConnectionID sent from proxy, cn side should update its connection ID.
+	ConnectionID uint32
 	// Label is the requested label from client.
 	Label RequestLabel
 }
@@ -46,7 +48,7 @@ func (e *ExtraInfo) Encode() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	size := uint16(len(labelData)) + 20 + 1
+	size := uint16(len(labelData)) + 20 + 1 + 4
 	buf := new(bytes.Buffer)
 	if err = binary.Write(buf, binary.LittleEndian, size); err != nil {
 		return nil, err
@@ -57,6 +59,9 @@ func (e *ExtraInfo) Encode() ([]byte, error) {
 	}
 	err = binary.Write(buf, binary.LittleEndian, e.InternalConn)
 	if err != nil {
+		return nil, err
+	}
+	if err = binary.Write(buf, binary.LittleEndian, e.ConnectionID); err != nil {
 		return nil, err
 	}
 	if len(labelData) > 0 {
@@ -80,7 +85,7 @@ func (e *ExtraInfo) Decode(reader *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	if size < 21 {
+	if size < 25 {
 		return moerr.NewInternalErrorNoCtx("invalid data length %d", size)
 	}
 	data := make([]byte, int(size)+2)
@@ -107,8 +112,11 @@ func (e *ExtraInfo) Decode(reader *bufio.Reader) error {
 	if err = binary.Read(buf, binary.LittleEndian, &e.InternalConn); err != nil {
 		return err
 	}
-	if size > 21 {
-		labelData := make([]byte, size-21)
+	if err = binary.Read(buf, binary.LittleEndian, &e.ConnectionID); err != nil {
+		return err
+	}
+	if size > 25 {
+		labelData := make([]byte, size-25)
 		if err = binary.Read(buf, binary.LittleEndian, labelData); err != nil {
 			return err
 		}

@@ -16,11 +16,14 @@ package fileservice
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	stdhttp "net/http"
+	"os"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -75,18 +78,45 @@ func NewAwsSDKv1(
 	dialer := &net.Dialer{
 		KeepAlive: 5 * time.Second,
 	}
+	transport := &stdhttp.Transport{
+		Proxy:                 stdhttp.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       180 * time.Second,
+		MaxIdleConnsPerHost:   100,
+		MaxConnsPerHost:       1000,
+		TLSHandshakeTimeout:   3 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+	if len(args.CertFiles) > 0 {
+		// custom certs
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			panic(err)
+		}
+		for _, path := range args.CertFiles {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				logutil.Info("load cert file error",
+					zap.Any("err", err),
+				)
+				// ignore
+				continue
+			}
+			logutil.Info("file service: load cert file",
+				zap.Any("path", path),
+			)
+			pool.AppendCertsFromPEM(content)
+		}
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			RootCAs:            pool,
+		}
+		transport.TLSClientConfig = tlsConfig
+	}
 	httpClient := &stdhttp.Client{
-		Transport: &stdhttp.Transport{
-			Proxy:                 stdhttp.ProxyFromEnvironment,
-			DialContext:           dialer.DialContext,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       180 * time.Second,
-			MaxIdleConnsPerHost:   100,
-			MaxConnsPerHost:       1000,
-			TLSHandshakeTimeout:   3 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ForceAttemptHTTP2:     true,
-		},
+		Transport: transport,
 	}
 	config.HTTPClient = httpClient
 
@@ -106,6 +136,11 @@ func NewAwsSDKv1(
 
 	client := s3.New(sess, config)
 
+	logutil.Info("new object storage",
+		zap.Any("sdk", "aws v1"),
+		zap.Any("arguments", args),
+	)
+
 	// head bucket to validate
 	_, err = client.HeadBucket(&s3.HeadBucketInput{
 		Bucket: ptrTo(args.Bucket),
@@ -113,12 +148,6 @@ func NewAwsSDKv1(
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
-
-	logutil.Info("new object storage",
-		zap.Any("sdk", "aws v1"),
-		zap.Any("endpoint", args.Endpoint),
-		zap.Any("bucket", args.Bucket),
-	)
 
 	return &AwsSDKv1{
 		name:            args.Name,

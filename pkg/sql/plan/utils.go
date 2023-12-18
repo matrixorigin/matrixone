@@ -575,8 +575,8 @@ func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const
 				return false, nil, nil, childFuncName
 			}
 			switch child1 := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				constExpr = child1.C
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
 				b = true
 				return
 			default:
@@ -605,8 +605,8 @@ func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, 
 				return false, nil, nil, funcName
 			}
 			switch child1 := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				constExpr = child1.C
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
 				b = true
 				return
 			default:
@@ -626,9 +626,9 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "startswith":
+		case "=", ">", "<", ">=", "<=", "prefix_eq":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
 				return CheckFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -773,12 +773,12 @@ func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 		return false
 	}
 
-	if f, ok := filter.Expr.(*plan.Expr_C); ok {
-		if f.C.Isnull {
+	if f, ok := filter.Expr.(*plan.Expr_Lit); ok {
+		if f.Lit.Isnull {
 			return true
 		}
 
-		if fbool, ok := f.C.Value.(*plan.Const_Bval); ok {
+		if fbool, ok := f.Lit.Value.(*plan.Literal_Bval); ok {
 			return !fbool.Bval
 		}
 	}
@@ -791,8 +791,8 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	case *plan.Expr_Col:
 		expr = &plan.Expr{
 			Typ: expr.Typ,
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: true,
 				},
 			},
@@ -972,8 +972,8 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 			return false, err
 		}
 
-		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
-			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
+		if cExpr, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if bVal, bOk := cExpr.Lit.Value.(*plan.Literal_Bval); bOk {
 				return bVal.Bval, nil
 			}
 		}
@@ -1027,7 +1027,7 @@ func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 	return vectors
 }
 
-func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+func CheckExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -1036,12 +1036,12 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
 			switch arg.Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
 				continue
 			}
 			isConst = false
-			isMonotonic := CheckExprIsMonotonic(ctx, arg)
-			if !isMonotonic {
+			isZonemappable := CheckExprIsZonemappable(ctx, arg)
+			if !isZonemappable {
 				return false
 			}
 		}
@@ -1049,8 +1049,8 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 			return true
 		}
 
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
-		if !isMonotonic {
+		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
+		if !isZonemappable {
 			return false
 		}
 
@@ -1109,8 +1109,9 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 
 		return &plan.Expr{
 			Typ: e.Typ,
-			Expr: &plan.Expr_Bin{
-				Bin: &plan.BinaryData{
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
 					Data: data,
 				},
 			},
@@ -1146,12 +1147,30 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
+
+	if !vec.IsConst() && vec.Length() > 1 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return e, nil
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
+					Data: data,
+				},
+			},
+		}, nil
+	}
+
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}
-	ec := &plan.Expr_C{
-		C: c,
+	ec := &plan.Expr_Lit{
+		Lit: c,
 	}
 	e.Expr = ec
 	return e, nil
@@ -1197,7 +1216,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool {
 	//TODO: Check if T_array is required here?
 	if constT.Eq(columnT) {
 		return true
@@ -1232,7 +1251,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
+		val, valOk := constExpr.Lit.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1269,7 +1288,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+		val_u, valOk := constExpr.Lit.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1696,8 +1715,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		out.WriteString(fmt.Sprintf("%sExpr_Col(%s)", prefix, t.Col.Name))
-	case *plan.Expr_C:
-		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.C.String()))
+	case *plan.Expr_Lit:
+		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.Lit.String()))
 	case *plan.Expr_F:
 		out.WriteString(fmt.Sprintf("%sExpr_F(\n%s\tFunc[\"%s\"](nargs=%d)", prefix, prefix, t.F.Func.ObjName, len(t.F.Args)))
 		for _, arg := range t.F.Args {
@@ -1776,4 +1795,53 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
+	// dcl tcl is not support
+	var schemas []*plan.ObjectRef
+	var paramTypes []int32
+
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			getParamRule := NewGetParamRule()
+			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+			err := VisitQuery.Visit(ctx.GetContext())
+			if err != nil {
+				return nil, nil, err
+			}
+			// TODO : need confirm
+			if len(getParamRule.params) > 0 {
+				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
+			}
+		}
+
+	case *plan.Plan_Query:
+		// collect args
+		getParamRule := NewGetParamRule()
+		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+		err := VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// sort arg
+		getParamRule.SetParamOrder()
+		args := getParamRule.params
+		schemas = getParamRule.schemas
+		paramTypes = getParamRule.paramTypes
+
+		// reset arg order
+		resetParamRule := NewResetParamOrderRule(args)
+		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
+		err = VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return schemas, paramTypes, nil
 }

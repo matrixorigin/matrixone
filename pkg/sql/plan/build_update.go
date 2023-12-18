@@ -16,14 +16,20 @@ package plan
 
 import (
 	"go/constant"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
+	}()
 	tblInfo, err := getUpdateTableInfo(ctx, stmt)
 	if err != nil {
 		return nil, err
@@ -86,8 +92,8 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 }
 
 func isDefaultValExpr(e *Expr) bool {
-	if ce, ok := e.Expr.(*plan.Expr_C); ok {
-		_, isDefVal := ce.C.Value.(*plan.Const_Defaultval)
+	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
+		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
 		return isDefVal
 	}
 	return false

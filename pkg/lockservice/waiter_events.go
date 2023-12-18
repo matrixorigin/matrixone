@@ -17,20 +17,22 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
-	lockContextPool = sync.Pool{New: func() any {
-		return &lockContext{}
-	}}
-
-	defaultLazyCheckDuration = time.Second * 5
+	defaultLazyCheckDuration atomic.Value
 )
+
+func init() {
+	defaultLazyCheckDuration.Store(time.Second * 5)
+}
 
 type lockContext struct {
 	ctx      context.Context
@@ -55,7 +57,7 @@ func (l *localLockTable) newLockContext(
 	opts LockOptions,
 	cb func(pb.Result, error),
 	bind pb.LockTable) *lockContext {
-	c := lockContextPool.Get().(*lockContext)
+	c := reuse.Alloc[lockContext](nil)
 	c.ctx = ctx
 	c.txn = txn
 	c.rows = rows
@@ -73,8 +75,7 @@ func (c *lockContext) done(err error) {
 }
 
 func (c *lockContext) release() {
-	*c = lockContext{}
-	lockContextPool.Put(c)
+	reuse.Free(c, nil)
 }
 
 func (c *lockContext) doLock() {
@@ -131,6 +132,11 @@ func (mw *waiterEvents) start() {
 func (mw *waiterEvents) close() {
 	mw.stopper.Stop()
 	close(mw.eventC)
+	mw.mu.Lock()
+	for _, w := range mw.mu.blockedWaiters {
+		w.close()
+	}
+	mw.mu.Unlock()
 }
 
 func (mw *waiterEvents) add(c *lockContext) {
@@ -152,7 +158,8 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 }
 
 func (mw *waiterEvents) handle(ctx context.Context) {
-	timer := time.NewTimer(defaultLazyCheckDuration)
+	timeout := defaultLazyCheckDuration.Load().(time.Duration)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	for {
@@ -165,13 +172,13 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			c.doLock()
 			txn.Unlock()
 		case <-timer.C:
-			mw.check()
-			timer.Reset(defaultLazyCheckDuration)
+			mw.check(timeout)
+			timer.Reset(timeout)
 		}
 	}
 }
 
-func (mw *waiterEvents) check() {
+func (mw *waiterEvents) check(timeout time.Duration) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	if len(mw.mu.blockedWaiters) == 0 {
@@ -181,7 +188,7 @@ func (mw *waiterEvents) check() {
 	stopAt := -1
 	now := time.Now()
 	for i, w := range mw.mu.blockedWaiters {
-		if now.Sub(w.waitAt) < defaultLazyCheckDuration {
+		if now.Sub(w.waitAt.Load().(time.Time)) < timeout {
 			stopAt = i
 			break
 		}
@@ -215,4 +222,8 @@ func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
 		}
 	}
 	return nil
+}
+
+func (c lockContext) Name() string {
+	return "lockservice.lockContext"
 }

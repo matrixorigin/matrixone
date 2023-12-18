@@ -344,7 +344,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
 // Alter
@@ -2973,6 +2973,14 @@ alter_table_alter:
             Name: tree.Identifier($2.Compare()),
         }
     }
+| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+      {
+          $$ = &tree.AlterOptionAlterReIndex{
+	      KeyType : tree.INDEX_TYPE_IVFFLAT,
+              AlgoParamList: int64($6.(int64)),
+              Name: tree.Identifier($2.Compare()),
+          }
+      }
 |   CHECK ident enforce
     {
         $$ = &tree.AlterOptionAlterCheck{
@@ -6151,8 +6159,8 @@ index_option_list:
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
 	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
-	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
 	    }
             $$ = opt1
         }
@@ -6167,9 +6175,9 @@ index_option:
     {
 	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
     }
-|   SIMILARITY_FUNCTION STRING
+|   OP_TYPE STRING
     {
-	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
+	$$ = &tree.IndexOption{AlgoParamVectorOpType: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -6442,7 +6450,7 @@ create_table_stmt:
             IfNotExists: $4,
             Table: *$5,
             AsSource: $7,
-            Options: $8,
+            DTOptions: $8,
         }
     }
 load_param_opt_2:
@@ -7359,6 +7367,8 @@ index_def:
             switch t {
  	    case "btree":
             	keyTyp = tree.INDEX_TYPE_BTREE
+	    case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7368,7 +7378,7 @@ index_def:
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid the type of index")
                 return 1
             }
         }
@@ -7388,6 +7398,8 @@ index_def:
             switch t {
              case "btree":
 		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7397,7 +7409,7 @@ index_def:
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid type of index")
                 return 1
             }
         }
@@ -8432,7 +8444,7 @@ separator_opt:
 
 spherical_kmeans_opt:
     {
-        $$ = "1,vector_cosine_ops"
+        $$ = "1,vector_l2_ops,random"
     }
 |   SPHERICAL_KMEANS STRING
     {
@@ -10544,7 +10556,9 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CONNECTOR
 |   CONNECTORS
+|	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
+|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -10568,6 +10582,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
@@ -10587,7 +10602,7 @@ non_reserved_keyword:
 |   VECF64
 |   KEY_BLOCK_SIZE
 |   LISTS
-|   SIMILARITY_FUNCTION
+|   OP_TYPE
 |   KEYS
 |   LANGUAGE
 |   LESS

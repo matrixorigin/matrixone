@@ -16,12 +16,16 @@ package ctl
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,10 +36,12 @@ func handleGetProtocolVersion(proc *process.Process,
 	qs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
+	var nodeIds []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),
 		func(c metadata.CNService) bool {
 			addrs = append(addrs, c.QueryAddress)
+			nodeIds = append(nodeIds, c.ServiceID)
 			return true
 		})
 	mc.GetTNService(
@@ -43,81 +49,158 @@ func handleGetProtocolVersion(proc *process.Process,
 		func(d metadata.TNService) bool {
 			if d.QueryAddress != "" {
 				addrs = append(addrs, d.QueryAddress)
+				nodeIds = append(nodeIds, d.ServiceID)
 			}
 			return true
 		})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	versions := make(map[string]string, len(addrs))
-	for _, addr := range addrs {
+	versions := make([]string, 0, len(addrs))
+	for i, addr := range addrs {
 		req := qs.NewRequest(querypb.CmdMethod_GetProtocolVersion)
 		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
 		resp, err := qs.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
-		versions[addr] = resp.GetProtocolVersion.Version
+		versions = append(versions, fmt.Sprintf("%s:%d", nodeIds[i], resp.GetProtocolVersion.Version))
 		qs.Release(resp)
-	}
-
-	bytes, err := json.Marshal(versions)
-	if err != nil {
-		return Result{}, err
 	}
 
 	return Result{
 		Method: GetProtocolVersionMethod,
-		Data:   string(bytes),
+		Data:   strings.Join(versions, ", "),
 	}, nil
 }
 
+// handleSetProtocolVersion sets the version of mo components' protocol versions
+//
+// the cmd format for CN service:
+//
+//	mo_ctl("cn", "SetProtocolVersion" "uuids of cn:protocol version")
+//
+// examples as below:
+//
+//	mo_ctl("cn", "SetProtocolVersion", "cn_uuid1:1")
+//	mo_ctl("cn", "SetProtocolVersion", "cn_uuid1,cn_uuid2,...:2")
+//
+// the cmd format for TN service:
+//
+//	mo_ctl("dn", "SetProtocolVersion", "protocol version")
+//
+// (because there only exist one dn service, so we don't need to specify the uuid,
+//
+//	but, the uuid will be ignored and will not check its validation even though it is specified.)
+//
+// examples as below:
+// mo_ctl("dn", "SetProtocolVersion", "1")
 func handleSetProtocolVersion(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
 	qs := proc.QueryService
-	mc := clusterservice.GetMOCluster()
-	var addrs []string
-	mc.GetCNService(
-		clusterservice.NewSelector(),
-		func(c metadata.CNService) bool {
-			addrs = append(addrs, c.QueryAddress)
-			return true
-		})
-	mc.GetTNService(
-		clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			if d.QueryAddress != "" {
-				addrs = append(addrs, d.QueryAddress)
-			}
-			return true
-		})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	versions := make(map[string]string, len(addrs))
-	for _, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
-		req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
-			Version: parameter,
-		}
-
-		resp, err := qs.SendMessage(ctx, addr, req)
-		if err != nil {
-			return Result{}, err
-		}
-		versions[addr] = resp.SetProtocolVersion.Version
-		qs.Release(resp)
-	}
-
-	bytes, err := json.Marshal(versions)
+	targets, version, err := checkProtocolParameter(parameter)
 	if err != nil {
 		return Result{}, err
 	}
+	if service == tn && targets == nil {
+		// set protocol version for tn node
+		// there only exist one tn node, so we don't need to specify the uuid
+		return transferToTN(qs, version)
+	}
 
+	if service == cn && targets != nil {
+		versions := make([]string, 0, len(targets))
+		for _, target := range targets {
+			resp, err := transferToCN(qs, target, version)
+			if err != nil {
+				return Result{}, err
+			}
+			if resp == nil {
+				return Result{}, moerr.NewInternalErrorNoCtx("no such cn service")
+			}
+			versions = append(versions, fmt.Sprintf("%s:%d", target, resp.SetProtocolVersion.Version))
+		}
+
+		return Result{
+			Method: SetProtocolVersionMethod,
+			Data:   strings.Join(versions, ", "),
+		}, nil
+	}
+
+	return Result{}, moerr.NewInternalError(proc.Ctx, "unsupported cmd")
+}
+
+func checkProtocolParameter(param string) ([]string, int64, error) {
+	param = strings.ToLower(param)
+	// [uuids]:version
+	args := strings.Split(param, ":")
+	if len(args) > 2 {
+		return nil, 0, moerr.NewInternalErrorNoCtx("cmd invalid, too many ':'")
+	}
+	version, err := strconv.ParseInt(args[len(args)-1], 10, 64)
+	if err != nil {
+		return nil, 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected version number")
+	}
+
+	if len(args) == 2 {
+		arg := args[0]
+		targets := strings.Split(arg, ",")
+		return targets, version, nil
+	}
+
+	return nil, version, nil
+}
+
+func transferToTN(qs queryservice.QueryService, version int64) (Result, error) {
+	var addr string
+	var resp *querypb.Response
+	var err error
+	clusterservice.GetMOCluster().GetTNService(
+		clusterservice.NewSelector(),
+		func(t metadata.TNService) bool {
+			if t.QueryAddress == "" {
+				return true
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
+				Version: version,
+			}
+			resp, err = qs.SendMessage(ctx, addr, req)
+			return true
+		})
+	if err != nil {
+		return Result{}, err
+	}
+	if resp == nil {
+		return Result{}, moerr.NewInternalErrorNoCtx("no such tn service")
+	}
+	defer qs.Release(resp)
 	return Result{
 		Method: SetProtocolVersionMethod,
-		Data:   string(bytes),
+		Data:   strconv.FormatInt(resp.SetProtocolVersion.Version, 10),
 	}, nil
+}
+
+func transferToCN(qs queryservice.QueryService, target string, version int64) (resp *querypb.Response, err error) {
+	clusterservice.GetMOCluster().GetCNService(
+		clusterservice.NewServiceIDSelector(target),
+		func(cn metadata.CNService) bool {
+			req := qs.NewRequest(querypb.CmdMethod_SetProtocolVersion)
+			req.SetProtocolVersion = &querypb.SetProtocolVersionRequest{
+				Version: version,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			return true
+		})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }

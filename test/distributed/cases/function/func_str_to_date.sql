@@ -69,6 +69,7 @@ SELECT DATE_ADD(str_to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL
 SELECT str_to_date('09:22', '%H:%i');
 SELECT str_to_date('09:22:23.33', '%H:%i:%s.%f');
 SELECT str_to_date('09:22', '%H:%i');
+SELECT str_to_date('2008-01-01',replace(replace(replace(replace(replace(replace(replace('yyyy-MM-dd','a','%p'),'ss','%s'),'mm','%i'),'HH','%H'),'yyyy','%Y'),'dd','%d'),'MM','%m'));
 
 SELECT TO_DATE('04/31/2004', '%m/%d/%Y');
 SELECT to_date('May 1, 2013','%M %d,%Y');

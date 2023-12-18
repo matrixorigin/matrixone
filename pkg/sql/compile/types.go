@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -47,16 +48,12 @@ const (
 	Normal
 	Remote
 	Parallel
-	Pushdown
 	CreateDatabase
 	CreateTable
 	CreateIndex
 	DropDatabase
 	DropTable
 	DropIndex
-	Deletion
-	Insert
-	InsertValues
 	TruncateTable
 	AlterView
 	AlterTable
@@ -65,7 +62,6 @@ const (
 	CreateSequence
 	DropSequence
 	AlterSequence
-	MagicDelete
 	Replace
 )
 
@@ -135,6 +131,35 @@ type Scope struct {
 	PartialResults []any
 }
 
+// canRemote checks whether the current scope can be executed remotely.
+func (s *Scope) canRemote(c *Compile, checkAddr bool) bool {
+	// check the remote address.
+	// if it was empty or equal to the current address, return false.
+	if checkAddr {
+		if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 {
+			return false
+		}
+		if isSameCN(c.addr, s.NodeInfo.Addr) {
+			return false
+		}
+	}
+
+	// some operators cannot be remote.
+	// todo: it is not a good way to check the operator type here.
+	//  cannot generate this remote pipeline if the operator type is not supported.
+	for _, op := range s.Instructions {
+		if op.CannotRemote() {
+			return false
+		}
+	}
+	for _, pre := range s.PreScopes {
+		if !pre.canRemote(c, false) {
+			return false
+		}
+	}
+	return true
+}
+
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
@@ -168,6 +193,18 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
+func (a anaylze) Name() string {
+	return "compile.anaylze"
+}
+
+func newAnaylze() *anaylze {
+	return reuse.Alloc[anaylze](nil)
+}
+
+func (a *anaylze) release() {
+	reuse.Free[anaylze](a, nil)
+}
+
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope []*Scope
@@ -180,7 +217,7 @@ type Compile struct {
 	//fill will be called when result data is ready.
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
-	affectRows atomic.Uint64
+	affectRows *atomic.Uint64
 	// cn address
 	addr string
 	// db current database name.
@@ -203,14 +240,14 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	counterSet perfcounter.CounterSet
+	counterSet *perfcounter.CounterSet
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
 	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
 
-	lock sync.RWMutex
+	lock *sync.RWMutex
 
 	isInternal bool
 
@@ -222,6 +259,7 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	disableRetry bool
 }
 
 type runtimeFilterReceiver struct {

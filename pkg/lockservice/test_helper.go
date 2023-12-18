@@ -34,7 +34,7 @@ func RunLockServicesForTest(
 	lockTableBindTimeout time.Duration,
 	fn func(LockTableAllocator, []LockService),
 	adjustConfig func(*Config)) {
-	defaultLazyCheckDuration = time.Millisecond * 50
+	defaultLazyCheckDuration.Store(time.Millisecond * 50)
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
 	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})

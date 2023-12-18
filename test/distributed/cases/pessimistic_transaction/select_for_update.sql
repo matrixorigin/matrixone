@@ -416,7 +416,6 @@ drop table su_03;
 commit;
 drop table if exists su_03;
 
--- @bvt:issue#11015
 -- select 0 rows, alter table drop index if wait lock
 create table su_03(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
 insert into su_03 values(1,'results',20);
@@ -430,7 +429,6 @@ show create table su_03;
 -- @session}
 commit;
 drop table if exists su_03;
--- @bvt:issue
 
 create table su_03_1(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
 insert into su_03_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);

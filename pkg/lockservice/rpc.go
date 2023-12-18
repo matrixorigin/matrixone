@@ -16,12 +16,13 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,20 +32,25 @@ import (
 )
 
 var (
-	requestPool = sync.Pool{
-		New: func() any {
-			return &pb.Request{}
-		},
-	}
-	responsePool = &sync.Pool{
-		New: func() any {
-			return &pb.Response{}
-		},
-	}
-
 	defaultRPCTimeout    = time.Second * 10
 	defaultHandleWorkers = 4
 )
+
+func acquireRequest() *pb.Request {
+	return reuse.Alloc[pb.Request](nil)
+}
+
+func releaseRequest(request *pb.Request) {
+	reuse.Free(request, nil)
+}
+
+func acquireResponse() *pb.Response {
+	return reuse.Alloc[pb.Response](nil)
+}
+
+func releaseResponse(v morpc.Message) {
+	reuse.Free(v.(*pb.Response), nil)
+}
 
 type client struct {
 	cfg     *morpc.Config
@@ -61,7 +67,8 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
 	// due to tcp disconnected.
 	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
-		morpc.WithBackendReadTimeout(defaultRPCTimeout))
+		morpc.WithBackendReadTimeout(defaultRPCTimeout),
+		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
 	client, err := c.cfg.NewClient(
 		"lock-client",
@@ -75,6 +82,9 @@ func NewClient(cfg morpc.Config) (Client, error) {
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
+	if err := checkMethodVersion(ctx, request); err != nil {
+		return nil, err
+	}
 	f, err := c.AsyncSend(ctx, request)
 	if err != nil {
 		return nil, err
@@ -97,16 +107,21 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	return resp, nil
 }
 
+func checkMethodVersion(ctx context.Context, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
+}
+
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.client.send")
 	defer span.End()
 
+	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
 		switch request.Method {
 		case pb.Method_ForwardLock:
-			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
+			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -117,7 +132,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
-			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
+			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -125,7 +140,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		case pb.Method_GetWaitingList:
-			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
+			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -148,7 +163,16 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		}
 	}
 	if address == "" {
+		var cns []string
+		c.cluster.GetCNService(
+			clusterservice.NewSelectAll(),
+			func(s metadata.CNService) bool {
+				cns = append(cns, s.ServiceID)
+				return true
+			})
 		getLogger().Error("cannot find lockservice address",
+			zap.String("target", sid),
+			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
 	}
 	return c.client.Send(ctx, address, request)
@@ -280,6 +304,7 @@ func (s *server) onMessage(
 			getResponse(req),
 			err,
 			cs)
+		releaseRequest(req)
 		return nil
 	}
 
@@ -356,24 +381,6 @@ func writeResponse(
 			zap.Error(err),
 			zap.String("response", detail))
 	}
-}
-
-func acquireRequest() *pb.Request {
-	return requestPool.Get().(*pb.Request)
-}
-
-func releaseRequest(request *pb.Request) {
-	request.Reset()
-	requestPool.Put(request)
-}
-
-func acquireResponse() *pb.Response {
-	return responsePool.Get().(*pb.Response)
-}
-
-func releaseResponse(v morpc.Message) {
-	v.(*pb.Response).Reset()
-	responsePool.Put(v)
 }
 
 type requestCtx struct {

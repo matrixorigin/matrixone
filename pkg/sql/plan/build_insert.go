@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -321,9 +328,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
-						Expr: &plan.Expr_C{
-							C: &plan.Const{
-								Value: &plan.Const_Sval{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{
 									Sval: val.ToString(),
 								},
 							},
@@ -340,8 +347,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					}
 					valExprs[i] = &plan.Expr{
 						Typ: colTyp,
-						Expr: &plan.Expr_C{
-							C: constExpr,
+						Expr: &plan.Expr_Lit{
+							Lit: constExpr,
 						},
 					}
 				}
@@ -351,7 +358,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount > useInExprCount {
+		if rowsCount > 1 {
 			// args in list must be constant
 			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,

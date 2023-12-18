@@ -22,16 +22,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -129,7 +128,7 @@ func Test_Prepare(t *testing.T) {
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-			extern.Format = "test"
+			extern.Format = tcs.format
 			json_byte, err = json.Marshal(extern)
 			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
@@ -156,7 +155,7 @@ func Test_Prepare(t *testing.T) {
 				convey.So(param.FileList, convey.ShouldResemble, []string(nil))
 				convey.So(param.Fileparam.FileCnt, convey.ShouldEqual, 0)
 
-				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "test"}
+				extern.Option = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 				json_byte, err = json.Marshal(extern)
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
@@ -719,10 +718,10 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 			Typ: &plan.Type{
 				Id: int32(types.T_date),
 			},
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: false,
-					Value: &plan.Const_Dateval{
+					Value: &plan.Literal_Dateval{
 						Dateval: int32(files[idx].date),
 					},
 				},

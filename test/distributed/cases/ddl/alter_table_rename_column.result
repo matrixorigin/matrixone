@@ -527,4 +527,14 @@ col1    col2
 2147483647    c
 42342    3
 drop table prepare01;
+drop table if exists table03;
+begin;
+create table table03(col1 int, col2 char);
+alter table table03 rename to NewCol1;
+commit;
+select * from NewCol1;
+col1    col2
+select col1 from NewCol1;
+col1
+drop table NewCol1;
 drop database test;

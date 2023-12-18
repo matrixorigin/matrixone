@@ -246,7 +246,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var newFkeys []*plan.ForeignKeyDef
 
 	var addIndex []*plan.IndexDef
-	var dropIndex []*plan.IndexDef
+	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
 
 	var alterKind []api.AlterKind
@@ -272,10 +272,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
-				for i, indexdef := range tableDef.Indexes {
+				var notDroppedIndex []*plan.IndexDef
+				for _, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
-						dropIndex = append(dropIndex, indexdef)
-						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
+						dropIndexMap[indexdef.IndexName] = true
+
 						//1. drop index table
 						if indexdef.TableExist {
 							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName, nil); err != nil {
@@ -291,9 +292,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if err != nil {
 							return err
 						}
-						break
+					} else {
+						notDroppedIndex = append(notDroppedIndex, indexdef)
 					}
 				}
+				// Avoid modifying slice directly during iteration
+				tableDef.Indexes = notDroppedIndex
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
 				alterKind = append(alterKind, api.AlterKind_DropColumn)
 				var idx int
@@ -316,43 +320,59 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
-			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			for i := range addIndex {
-				if indexDef.IndexName == addIndex[i].IndexName {
-					return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+
+			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
+			indexTableDef := act.AddIndex.IndexInfo.TableDef
+
+			// IVF -> meta      -> indexDef
+			//     -> centroids -> indexDef
+			//     -> entries   -> indexDef
+			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			for _, indexDef := range indexTableDef.Indexes {
+
+				for i := range addIndex {
+					if indexDef.IndexName == addIndex[i].IndexName {
+						return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+					}
+				}
+				addIndex = append(addIndex, indexDef)
+
+				if indexDef.Unique {
+					// 1. Unique Index related logic
+					err = s.handleUniqueIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
+					// 2. Regular Secondary index
+					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+					// 3. IVF indexDefs are aggregated and handled later
+					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
+						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					}
+					multiTableIndexes[catalog.ToLower(indexDef.IndexAlgo)][catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+				}
+				if err != nil {
+					return err
 				}
 			}
-			addIndex = append(addIndex, indexDef)
-			if indexDef.Unique {
-				// 0. check original data is not duplicated
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+
+			for indexAlgoType, indexDefs := range multiTableIndexes {
+				switch indexAlgoType { // no need for catalog.ToLower() here
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, indexInfo)
+				}
+
 				if err != nil {
 					return err
 				}
 			}
 
 			//1. build and update constraint def
-			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
-			if err != nil {
-				return err
-			}
-			err = c.runSql(insertSql)
-			if err != nil {
-				return err
-			}
-			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist {
-				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				// 2. create index table from unique index object
-				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-				err = c.runSql(createSQL)
+			for _, indexDef := range indexTableDef.Indexes {
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
 				if err != nil {
 					return err
 				}
-
-				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-				err = c.runSql(insertSQL)
+				err = c.runSql(insertSql)
 				if err != nil {
 					return err
 				}
@@ -379,6 +399,73 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 
 					break
+				}
+			}
+		case *plan.AlterTable_Action_AlterReindex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			tableAlterIndex := act.AlterReindex
+			constraintName := tableAlterIndex.IndexName
+			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+
+			for i, indexDef := range tableDef.Indexes {
+				if indexDef.IndexName == constraintName {
+					alterIndex = indexDef
+
+					// 1. Get old AlgoParams
+					newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+
+					// 2.a update AlgoParams for the index to be re-indexed
+					// NOTE: this will throw error if the algo type is not supported for reindex.
+					// So Step 4. will not be executed if error is thrown here.
+					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
+					switch catalog.ToLower(indexAlgo) {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+					default:
+						return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
+					}
+
+					// 2.b generate new AlgoParams string
+					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+					if err != nil {
+						return err
+					}
+
+					// 3.a Update IndexDef and TableDef
+					alterIndex.IndexAlgoParams = newAlgoParams
+					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+					// 3.b Update mo_catalog.mo_indexes
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, alterIndex.IndexName)
+					err = c.runSql(updateSql)
+					if err != nil {
+						return err
+					}
+
+					// 4. Add to multiTableIndexes
+					if _, ok := multiTableIndexes[indexAlgo]; !ok {
+						multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+					}
+					multiTableIndexes[indexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
+				}
+			}
+
+			if len(multiTableIndexes) == 0 {
+				return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
+			}
+
+			// update the hidden tables
+			for indexAlgoType, indexDefs := range multiTableIndexes {
+				switch catalog.ToLower(indexAlgoType) {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, nil)
+				}
+
+				if err != nil {
+					return err
 				}
 			}
 		case *plan.AlterTable_Action_AlterComment:
@@ -439,14 +526,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			for in := range dropIndex {
-				for i, idx := range t.Indexes {
-					if dropIndex[in].IndexName == idx.IndexName {
-						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
-						break
-					}
+			// NOTE: using map and remainingIndexes slice here to avoid "Modifying a Slice During Iteration".
+			var remainingIndexes []*plan.IndexDef
+			for _, idx := range t.Indexes {
+				if !dropIndexMap[idx.IndexName] {
+					remainingIndexes = append(remainingIndexes, idx)
 				}
 			}
+			t.Indexes = remainingIndexes
+
 			t.Indexes = append(t.Indexes, addIndex...)
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
@@ -969,6 +1057,20 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	{
+		// lockMoTable will lock Table  mo_catalog.mo_tables
+		// for the row with db_name=dbName & table_name = tblName。
+		dbName := c.db
+		if qry.GetDatabase() != "" {
+			dbName = qry.GetDatabase()
+		}
+		tblName := qry.GetTableDef().GetName()
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -981,34 +1083,49 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableId := r.GetTableID(c.ctx)
 
-	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
-	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
+	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
+	indexTableDef := indexInfo.GetTableDef()
 
-	if indexDef.Unique {
-		// 0. check original data is not duplicated
-		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+	// IVF -> meta 		-> indexDef[0]
+	// 	   -> centroids -> indexDef[1]
+	// 	   -> entries 	-> indexDef[2]
+	multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+	for _, indexDef := range indexTableDef.Indexes {
+
+		indexAlgo := indexDef.IndexAlgo
+		if indexDef.Unique {
+			// 1. Unique Index related logic
+			err = s.handleUniqueIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexAlgo) {
+			// 2. Regular Secondary index
+			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
+			// 3. IVF indexDefs are aggregated and handled later
+			if _, ok := multiTableIndexes[indexAlgo]; !ok {
+				multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+			}
+			indexAlgoTableType := catalog.ToLower(indexDef.IndexAlgoTableType)
+			multiTableIndexes[indexAlgo][indexAlgoTableType] = indexDef
+		}
 		if err != nil {
 			return err
 		}
 	}
 
-	// build and create index table for unique/secondary index
-	if qry.TableExist {
-		def := qry.GetIndex().GetIndexTables()[0]
-		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-		err = c.runSql(createSQL)
-		if err != nil {
-			return err
+	for indexAlgoType, indexDefs := range multiTableIndexes {
+		switch catalog.ToLower(indexAlgoType) {
+		case catalog.MoIndexIvfFlatAlgo.ToString():
+			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
 	}
-	// build and update constraint def
-	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
+
+	// build and update constraint def (no need to handle IVF related logic here)
+	defs, err := planDefsToExeDefs(indexTableDef)
 	if err != nil {
 		return err
 	}
@@ -1034,16 +1151,86 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// generate insert into mo_indexes metadata
-	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
-	if err != nil {
-		return err
-	}
-	err = c.runSql(sql)
-	if err != nil {
-		return err
+	// generate inserts into mo_indexes metadata
+	for _, indexDef := range indexTableDef.Indexes {
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		if err != nil {
+			return err
+		}
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	// 1. static check
+	if len(indexDefs) != 3 {
+		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
+	} else if len(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+
+		tables := make([]string, 3)
+		tables[0] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+		tables[1] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase)
+		tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
+
+		for _, createTableSql := range tables {
+			err := c.runSql(createTableSql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. if table does not have data, we stop here.
+	totalCnt, err := s.handleIndexAndPKColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+	if totalCnt == 0 {
+		return nil
+	}
+
+	// 4.a populate meta table
+	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+	if err != nil {
+		return err
+	}
+
+	// 4.b delete old entries in "centroids" and "entries" table for the current version
+	err = s.handleIvfIndexDeleteOldEntries(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.c populate centroids table
+	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
+		totalCnt,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	// 4.d populate entries table
+	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+	if err != nil {
+		return err
+	}
+
+	return nil
+
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
@@ -1250,6 +1437,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
 	oldId := tqry.GetTableId()
+	keepAutoIncrement := false
+	affectedRows := int64(0)
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
@@ -1286,6 +1475,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			}
 			err = e
 		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if tqry.IsDelete {
+		keepAutoIncrement = true
+		affectedRows, err = rel.Rows(c.ctx)
 		if err != nil {
 			return err
 		}
@@ -1374,7 +1571,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		c.ctx,
 		oldId,
 		newId,
-		false,
+		keepAutoIncrement,
 		c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1386,6 +1583,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	c.addAffectedRows(uint64(affectedRows))
 	return nil
 }
 
@@ -1427,7 +1625,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
-
+	var isSource = false
+	if qry.TableDef != nil {
+		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
+	}
 	var dbSource engine.Database
 	var rel engine.Relation
 	var err error
@@ -1462,7 +1663,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
+	if !isTemp && !isView && !isSource && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&

@@ -15,11 +15,14 @@
 package runtime
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -52,6 +55,9 @@ func ProcessLevelRuntime() Runtime {
 // process-level runtime. The process-level runtime must setup in main.
 func SetupProcessLevelRuntime(r Runtime) {
 	processLevel.Store(r)
+	if _, ok := ProcessLevelRuntime().GetGlobalVariables(MOProtocolVersion); !ok {
+		ProcessLevelRuntime().SetGlobalVariables(MOProtocolVersion, defines.MORPCLatestVersion)
+	}
 }
 
 // WithClock setup clock for a runtime, CN and TN must contain an instance of the
@@ -143,4 +149,24 @@ func (r *runtime) initSystemInitLogger() {
 		r.global.logger = log.GetServiceLogger(logutil.Adjust(nil), r.serviceType, r.serviceUUID)
 	}
 	r.global.systemInitLogger = r.Logger().WithProcess(log.SystemInit)
+}
+
+type methodType interface {
+	~int32
+	String() string
+}
+
+func CheckMethodVersion[Req interface{ GetMethod() T }, T methodType](ctx context.Context, versionMap map[T]int64, req Req) error {
+	if version, ok := versionMap[req.GetMethod()]; !ok {
+		return moerr.NewNotSupported(ctx, "%s not support in current version", req.GetMethod().String())
+	} else {
+		v, ok := ProcessLevelRuntime().GetGlobalVariables(MOProtocolVersion)
+		if !ok {
+			return moerr.NewInternalError(ctx, "failed to get protocol version")
+		}
+		if v.(int64) < version {
+			return moerr.NewInternalError(ctx, "unsupported protocol version %d", version)
+		}
+	}
+	return nil
 }

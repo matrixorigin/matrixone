@@ -232,8 +232,19 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+
 		ses.ast = statement
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+
+		execSql := makeExecuteSql(ses, statement)
+		if len(execSql) != 0 {
+			bb := strings.Builder{}
+			bb.WriteString(envStmt)
+			bb.WriteString(" // ")
+			bb.WriteString(execSql)
+			text = SubStringFromBegin(bb.String(), int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+		} else {
+			text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+		}
 	} else {
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
@@ -259,17 +270,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm := motrace.NewStatementInfo()
 	// set TransactionID
 	var txn TxnOperator
-	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		_, txn, err = handler.GetTxn()
-		if err != nil {
-			logError(ses, ses.GetDebugString(),
-				"Failed to record statement",
-				zap.Error(err))
-			copy(stm.TransactionID[:], motrace.NilTxnID[:])
-		} else {
-			copy(stm.TransactionID[:], txn.Txn().ID)
-		}
+		_, txn = handler.GetTxnOperator()
+		copy(stm.TransactionID[:], txn.Txn().ID)
 	}
 	// set SessionID
 	copy(stm.SessionID[:], ses.GetUUID())
@@ -344,21 +347,32 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
 var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
-	var err error
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			_, txn, err = handler.GetTxn()
-			if err != nil {
-				logError(ses, ses.GetDebugString(),
-					"Failed to record statement transaction ID",
-					zap.Error(err))
-			} else {
-				stm.SetTxnID(txn.Txn().ID)
-			}
+			// 简化获取TxnOperator 逻辑, 详见 https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
+			_, txn = handler.GetTxnOperator()
+			stm.SetTxnID(txn.Txn().ID)
 			ses.SetTxnId(txn.Txn().ID)
 		}
 		stm.Report(ctx)
+	}
+
+	// set frontend statement's txn-id
+	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() /* not record txn-id */ {
+		// background session has valid txn
+		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+			_, txn = handler.GetTxnOperator()
+			// set upstream (the frontend session) statement's txn-id
+			// PS: only skip ONE txn
+			if stmt := upSes.tStmt; stmt.NeedSkipTxn() /* normally set by determineUserHasPrivilegeSet */ {
+				// need to skip the whole txn, so it records the skipped txn-id
+				stmt.SetSkipTxn(false)
+				stmt.SetSkipTxnId(txn.Txn().ID)
+			} else if txnId := txn.Txn().ID; !stmt.SkipTxnId(txnId) {
+				upSes.tStmt.SetTxnID(txnId)
+			}
+		}
 	}
 }
 
@@ -555,7 +569,11 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 		if err != nil {
 			return err
 		}
-		row[0] = val
+		if val != nil {
+			row[0] = val.Value
+		} else {
+			row[0] = nil
+		}
 	}
 
 	mrs.AddRow(row)
@@ -672,10 +690,10 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	return err
 }
 
-func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
+func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
-	setVarFunc := func(system, global bool, name string, value interface{}) error {
+	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		if system {
 			if global {
 				err = doCheckRole(ctx, ses)
@@ -708,7 +726,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 				}
 			}
 		} else {
-			err = ses.SetUserDefinedVar(name, value)
+			err = ses.SetUserDefinedVar(name, value, sql)
 			if err != nil {
 				return err
 			}
@@ -738,7 +756,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
 			for _, rb := range replacedBy {
-				err = setVarFunc(assign.System, assign.Global, rb, value)
+				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
 				if err != nil {
 					return err
 				}
@@ -747,7 +765,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			if !ses.GetTenantInfo().IsSysTenant() {
 				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
 			}
-			err = setVarFunc(assign.System, assign.Global, name, value)
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
@@ -766,7 +784,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 						cache.invalidate()
 					}
 				}
-				err = setVarFunc(assign.System, assign.Global, name, value)
+				err = setVarFunc(assign.System, assign.Global, name, value, sql)
 				if err != nil {
 					return err
 				}
@@ -784,24 +802,24 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 					cache.invalidate()
 				}
 			}
-			err = setVarFunc(assign.System, assign.Global, name, value)
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 		} else if name == "runtime_filter_limit_in" {
-			err = setVarFunc(assign.System, assign.Global, name, value)
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_in", value)
 		} else if name == "runtime_filter_limit_bloom_filter" {
-			err = setVarFunc(assign.System, assign.Global, name, value)
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
 		} else {
-			err = setVarFunc(assign.System, assign.Global, name, value)
+			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
@@ -813,9 +831,9 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 /*
 handle setvar
 */
-func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) error {
+func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar, sql string) error {
 	ses := mce.GetSession()
-	err := doSetVar(ctx, mce, ses, sv)
+	err := doSetVar(ctx, mce, ses, sv, sql)
 	if err != nil {
 		return err
 	}
@@ -1136,7 +1154,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	return nil
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*PrepareStmt, error) {
+func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
 	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
@@ -1144,6 +1162,7 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 
 	prepareStmt := &PrepareStmt{
 		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                 sql,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
@@ -1155,8 +1174,8 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 }
 
 // handlePrepareStmt
-func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt) (*PrepareStmt, error) {
-	return doPrepareStmt(ctx, mce.GetSession(), st)
+func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+	return doPrepareStmt(ctx, mce.GetSession(), st, sql)
 }
 
 func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -1175,6 +1194,7 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	}
 	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:         st.Sql,
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
 	}
@@ -1636,12 +1656,17 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 
 	var ret *plan2.Plan
 	var err error
+	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId = defines.GetAccountId(requestCtx)
+		if len(ses.sql) > 8 {
+			prefix := strings.ToLower(ses.sql[:8])
+			isPrepareStmt = prefix == "execute " || prefix == "prepare "
+		}
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, false)
+			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -1663,7 +1688,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, false)
+		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
@@ -1673,9 +1698,10 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, false)
+		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
 	if ret != nil {
+		ret.IsPrepare = isPrepareStmt
 		if ses != nil && ses.GetTenantInfo() != nil {
 			err = authenticateCanExecuteStatementAndPlan(requestCtx, ses, stmt, ret)
 			if err != nil {
@@ -2585,6 +2611,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	pu *config.ParameterUnit,
 	tenant string,
 	userName string,
+	sql string,
 ) (err error) {
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
@@ -2689,6 +2716,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			if st, ok := cw.GetAst().(*tree.DropTable); ok {
+				// handle dynamic table drop, cancel all the running daemon task
+				_ = mce.handleDropDynamicTable(requestCtx, st)
+
 				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 			}
 
@@ -2951,7 +2981,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.PrepareStmt:
 		selfHandle = true
-		prepareStmt, err = mce.handlePrepareStmt(requestCtx, st)
+		prepareStmt, err = mce.handlePrepareStmt(requestCtx, st, sql)
 		if err != nil {
 			return
 		}
@@ -2985,7 +3015,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.CancelDaemonTask:
 		selfHandle = true
-		err = mce.handleCancelDaemonTask(requestCtx, st)
+		err = mce.handleCancelDaemonTask(requestCtx, st.TaskID)
 		if err != nil {
 			return
 		}
@@ -3020,7 +3050,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.SetVar:
 		selfHandle = true
-		err = mce.handleSetVar(requestCtx, st)
+		err = mce.handleSetVar(requestCtx, st, sql)
 		if err != nil {
 			return
 		}
@@ -3267,7 +3297,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	// reset some special stmt for execute statement
 	switch st := stmt.(type) {
 	case *tree.SetVar:
-		err = mce.handleSetVar(requestCtx, st)
+		err = mce.handleSetVar(requestCtx, st, sql)
 		if err != nil {
 			return
 		} else {
@@ -3873,7 +3903,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			ses.proc.UnixTime = proc.UnixTime
 		}
 
-		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
+		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly, sqlRecord[i])
 		if err != nil {
 			return err
 		}
@@ -4296,7 +4326,6 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Success: false,
 		Uuid:    util.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)

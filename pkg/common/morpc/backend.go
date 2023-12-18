@@ -125,6 +125,13 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 	}
 }
 
+// WithBackendFreeOrphansResponse setup free orphans response func
+func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.freeResponse = value
+	}
+}
+
 type remoteBackend struct {
 	remote       string
 	metrics      *metrics
@@ -153,6 +160,7 @@ type remoteBackend struct {
 		streamBufferSize   int
 		filter             func(msg Message, backendAddr string) bool
 		readTimeout        time.Duration
+		freeResponse       func(Message)
 	}
 
 	stateMu struct {
@@ -731,7 +739,12 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.stopWriteC)
 }
 
-func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+func (rb *remoteBackend) requestDone(
+	ctx context.Context,
+	id uint64,
+	msg RPCMessage,
+	err error,
+	cb func()) {
 	start := time.Now()
 	defer func() {
 		rb.metrics.doneDurationHistogram.Observe(time.Since(start).Seconds())
@@ -770,6 +783,12 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 		rb.mu.Unlock()
 		if cb != nil {
 			cb()
+		}
+
+		if !msg.internal &&
+			response != nil &&
+			rb.options.freeResponse != nil {
+			rb.options.freeResponse(response)
 		}
 	}
 }
