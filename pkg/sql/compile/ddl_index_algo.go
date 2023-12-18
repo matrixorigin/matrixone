@@ -283,8 +283,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	algoParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	ops := make(map[string]string)
 	ops[catalog.IndexAlgoParamOpType_l2] = "l2_distance"
-	ops[catalog.IndexAlgoParamOpType_ip] = "inner_product" //TODO: verify this is correct @arjun
-	ops[catalog.IndexAlgoParamOpType_cos] = "cosine_distance"
+	//ops[catalog.IndexAlgoParamOpType_ip] = "inner_product" //TODO: verify this is correct @arjun
+	//ops[catalog.IndexAlgoParamOpType_cos] = "cosine_distance"
 	algoParamsDistFn = ops[algoParamsDistFn]
 
 	// 2. Original table's pkey name and value
