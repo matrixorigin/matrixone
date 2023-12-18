@@ -520,6 +520,18 @@ func (ctr *container) firstWindow(ap *Argument, proc *process.Process) (err erro
 	case types.T_timestamp:
 		ts := vector.MustFixedCol[types.Timestamp](vec)[0]
 
+		itv, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ)
+		if err != nil {
+			return err
+		}
+		sld, err := doTimestampAdd(proc.SessionInfo.TimeZone, ts, m.Val, m.Typ)
+		if err != nil {
+			return err
+		}
+		if sld > itv {
+			return moerr.NewInvalidInput(proc.Ctx, "sliding value should be smaller than the interval value")
+		}
+
 		start, err := roundTimestamp(proc.SessionInfo.TimeZone, ts, ap.Interval.Val, ap.Interval.Typ, proc)
 		if err != nil {
 			return err
