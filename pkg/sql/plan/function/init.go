@@ -18,7 +18,6 @@ var AndFunctionEncodedID = encodeOverloadID(AND, 0)
 var AndFunctionName = "and"
 var EqualFunctionName = "="
 var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
-var SerialFunctionName = "serial"
 var SerialFunctionEncodeID = encodeOverloadID(SERIAL, 0)
 var GroupConcatFunctionID = encodeOverloadID(GROUP_CONCAT, 0)
 var AggSumOverloadID = encodeOverloadID(SUM, 0)
