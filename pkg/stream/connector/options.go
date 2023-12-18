@@ -100,8 +100,8 @@ const (
 	OptConnectorRel       = "relkind"
 	OptConnectorPartition = "partition"
 
-	OptConnectorBufferLimit = "bufferLimit"
-	OptConnectorTimeWindow  = "timeWindow"
+	OptConnectorBufferLimit = "buffer_limit"
+	OptConnectorTimeWindow  = "time_window"
 )
 
 var ConnectorOptConstraint = map[string]OptConstraint{
