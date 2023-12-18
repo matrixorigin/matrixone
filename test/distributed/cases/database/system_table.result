@@ -18,6 +18,9 @@ SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 trigger_catalog    trigger_schema    trigger_name    event_manipulation    event_object_catalog    event_object_schema    event_object_table    action_order    action_condition    action_statement    action_orientation    action_timing    action_reference_old_table    action_reference_new_table    action_reference_old_row    action_reference_new_row    created    sql_mode    definer    character_set_client    collation_connection    database_collation
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
 grantee    table_catalog    privilege_type    is_grantable
+SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, NON_UNIQUE, NULL AS INDEX_QUALIFIER, INDEX_NAME,3 AS TYPE, SEQ_IN_INDEX AS ORDINAL_POSITION, COLUMN_NAME,COLLATION AS ASC_OR_DESC, CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'procs_priv' ORDER BY NON_UNIQUE, INDEX_NAME, SEQ_IN_INDEX limit 1;
+TABLE_CAT    TABLE_SCHEM    table_name    non_unique    INDEX_QUALIFIER    index_name    TYPE    ORDINAL_POSITION    column_name    ASC_OR_DESC    cardinality    PAGES    FILTER_CONDITION
+mysql    null    procs_priv    0    null    PRIMARY    3    1    host    A    0    0    null
 SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
 host    db    user    table_name    column_name    timestamp    column_priv
 SELECT * FROM `mysql`.`db` LIMIT 0,1000;
