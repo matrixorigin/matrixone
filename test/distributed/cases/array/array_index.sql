@@ -179,24 +179,24 @@ insert into tbl values(28, 120, "[131,41,91]"); -- inserted to cluster 2 of vers
 
 
 -- 15. Insert into index table (with No PK so fake_pk is used)
---drop table if exists tbl;
---create table tbl(id int, embedding vecf32(3));
---insert into tbl values(1, "[1,2,3]");
---insert into tbl values(2, "[1,2,4]");
---insert into tbl values(3, "[1,2.4,4]");
---insert into tbl values(4, "[1,2,5]");
---insert into tbl values(5, "[1,3,5]");
---insert into tbl values(6, "[100,44,50]");
---insert into tbl values(7, "[120,50,70]");
---insert into tbl values(8, "[130,40,90]");
---create index idx14 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
---show index from tbl;
---show create table tbl;
---insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
---insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
---alter table tbl alter reindex idx14 ivfflat lists=2;
---insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
---insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx14 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+show create table tbl;
+insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx14 ivfflat lists=2;
+insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
 
 -- post
 drop database vecdb2;
