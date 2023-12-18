@@ -31,6 +31,7 @@ var _ NodeDescribe = &NodeDescribeImpl{}
 
 const MB = 1024 * 1024
 const GB = MB * 1024
+const MILLION = 1000000
 
 type NodeDescribeImpl struct {
 	Node *plan.Node
@@ -807,45 +808,73 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		minorStr = "build"
 	case plan.Node_AGG:
 		majorStr = "group"
-		minorStr = "merge group"
+		minorStr = "mergegroup"
 	case plan.Node_SORT:
 		majorStr = "sort"
-		minorStr = "merge sort"
+		minorStr = "mergesort"
 	case plan.Node_FILTER:
 		majorStr = ""
 		minorStr = "filter"
 	}
 
-	dop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
-	if dop > 0 {
-		fmt.Fprintf(buf, " dop=%v %v_time=[", dop, majorStr)
+	majordop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
+	if majordop > 1 {
+		fmt.Fprintf(buf, " %v_time=[", majorStr)
 		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
 			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
 		})
-		for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
-			if i != 0 {
-				fmt.Fprintf(buf, ",")
+		if majordop > 4 {
+			var totalTime int64
+			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
+				totalTime += a.AnalyzeInfo.TimeConsumedArrayMajor[i]
 			}
-			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMajor[i]/1000000)
-		}
-		fmt.Fprintf(buf, "]")
-	}
-	dop = len(a.AnalyzeInfo.TimeConsumedArrayMinor)
-	if dop > 0 {
-		fmt.Fprintf(buf, " dop=%v %v_time=[", dop, minorStr)
-		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
-			return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
-		})
-		for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
-			if i != 0 {
-				fmt.Fprintf(buf, ",")
+			fmt.Fprintf(buf,
+				"total=%vms,min=%vms,max=%vms,dop=%v",
+				totalTime/MILLION,
+				a.AnalyzeInfo.TimeConsumedArrayMajor[0]/MILLION,
+				a.AnalyzeInfo.TimeConsumedArrayMajor[len(a.AnalyzeInfo.TimeConsumedArrayMajor)-1]/MILLION,
+				majordop)
+		} else {
+			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
+				if i != 0 {
+					fmt.Fprintf(buf, ",")
+				}
+				fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMajor[i]/MILLION)
 			}
-			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMinor[i]/1000000)
+			fmt.Fprintf(buf, "]")
 		}
-		fmt.Fprintf(buf, "]")
+
+		minordop := len(a.AnalyzeInfo.TimeConsumedArrayMinor)
+		if minordop > 0 {
+			fmt.Fprintf(buf, " %v_time=[", minorStr)
+			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
+				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
+			})
+			if minordop > 4 {
+				var totalTime int64
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					totalTime += a.AnalyzeInfo.TimeConsumedArrayMinor[i]
+				}
+				fmt.Fprintf(buf,
+					"total=%vms,min=%vms,max=%vms,dop=%v",
+					totalTime/MILLION,
+					a.AnalyzeInfo.TimeConsumedArrayMinor[0]/MILLION,
+					a.AnalyzeInfo.TimeConsumedArrayMinor[len(a.AnalyzeInfo.TimeConsumedArrayMinor)-1]/MILLION,
+					majordop)
+			} else {
+
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					if i != 0 {
+						fmt.Fprintf(buf, ",")
+					}
+					fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMinor[i]/MILLION)
+				}
+				fmt.Fprintf(buf, "]")
+			}
+		}
 	}
 
-	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
+	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/MILLION)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
 	if a.AnalyzeInfo.InputSize < MB {

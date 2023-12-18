@@ -68,25 +68,37 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			IsLast:  ins[i].IsLast,
 		}
 		switch ins[i].Op {
-		case HashBuild, Restrict:
-			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
-				info.ParallelMajor = false
-				if pidx, ok := idxMapMajor[info.Idx]; ok {
-					info.ParallelIdx = pidx
-				} else {
-					pidx = proc.AnalInfos[info.Idx].AddNewParallel(false)
-					idxMapMajor[info.Idx] = pidx
-					info.ParallelIdx = pidx
+		case HashBuild, Restrict, MergeGroup, MergeOrder:
+			isMinor := true
+			if ins[i].Op == Restrict {
+				if ins[0].Op != TableScan && ins[0].Op != External {
+					isMinor = false // restrict operator is minor only for scan
 				}
 			}
+
+			if isMinor {
+				if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+					info.ParallelMajor = false
+					if pidx, ok := idxMapMinor[info.Idx]; ok {
+						info.ParallelIdx = pidx
+					} else {
+						pidx = proc.AnalInfos[info.Idx].AddNewParallel(false)
+						idxMapMinor[info.Idx] = pidx
+						info.ParallelIdx = pidx
+					}
+				}
+			} else {
+				info.ParallelIdx = -1
+			}
+
 		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product:
 			info.ParallelMajor = true
 			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
-				if pidx, ok := idxMapMinor[info.Idx]; ok {
+				if pidx, ok := idxMapMajor[info.Idx]; ok {
 					info.ParallelIdx = pidx
 				} else {
 					pidx = proc.AnalInfos[info.Idx].AddNewParallel(true)
-					idxMapMinor[info.Idx] = pidx
+					idxMapMajor[info.Idx] = pidx
 					info.ParallelIdx = pidx
 				}
 			}
