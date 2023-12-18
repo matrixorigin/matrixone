@@ -249,6 +249,7 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	disableRetry bool
 }
 
 type runtimeFilterReceiver struct {
