@@ -721,3 +721,21 @@ func (txn *Transaction) delTransaction() {
 	txn.hasS3Op.Store(false)
 	txn.removed = true
 }
+
+func (txn *Transaction) addCreateTable(
+	key tableKey,
+	value *txnTable) {
+	txn.Lock()
+	defer txn.Unlock()
+	value.createByStatementID = txn.statementID
+	txn.createMap.Store(key, value)
+}
+
+func (txn *Transaction) rollbackCreateTableLocked() {
+	txn.createMap.Range(func(key, value any) bool {
+		if value.(*txnTable).createByStatementID == txn.statementID {
+			txn.createMap.Delete(key)
+		}
+		return true
+	})
+}

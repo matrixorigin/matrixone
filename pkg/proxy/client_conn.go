@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -131,6 +132,8 @@ type clientConn struct {
 	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
+	// tlsConnectTimeout is the TLS connect timeout value.
+	tlsConnectTimeout time.Duration
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 	// testHelper is used for testing.
@@ -179,6 +182,8 @@ func newClientConn(
 			originIP: originIP,
 		},
 		ipNetList: ipNetList,
+		// set the connection timeout value.
+		tlsConnectTimeout: cfg.TLSConnectTimeout.Duration,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -369,6 +374,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 
 	if c.router == nil {
+		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, moerr.NewInternalErrorNoCtx("no router available")
 	}
 
@@ -390,6 +396,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		// NB: The selected CNServer must have label hash in it.
 		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
 		if err != nil {
+			v2.ProxyConnectRouteFailCounter.Inc()
 			return nil, err
 		}
 		// We have to set proxy connection ID after cn is returned.
@@ -406,13 +413,20 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
 		if err != nil {
 			if isRetryableErr(err) {
+				v2.ProxyConnectRetryCounter.Inc()
 				badCNServers[cn.uuid] = struct{}{}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
-					zap.Any("bad backend servers", badCNServers))
+					zap.Any("bad backend servers", badCNServers),
+					zap.String("client->proxy",
+						fmt.Sprintf("%s -> %s", c.RawConn().RemoteAddr(),
+							c.RawConn().LocalAddr())),
+					zap.Error(err),
+				)
 				continue
 			} else {
+				v2.ProxyConnectCommonFailCounter.Inc()
 				return nil, err
 			}
 		} else {
@@ -423,10 +437,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	if sendToClient {
 		// r is the packet received from CN server, send r to client.
 		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
+			v2.ProxyConnectCommonFailCounter.Inc()
 			return nil, err
 		}
 	}
 	if !isOKPacket(r) {
+		v2.ProxyConnectCommonFailCounter.Inc()
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
 	}
@@ -434,10 +450,12 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	// Re-execute the statements.
 	for _, stmt := range c.redoStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			v2.ProxyConnectCommonFailCounter.Inc()
 			return nil, err
 		}
 	}
 
+	v2.ProxyConnectSuccessCounter.Inc()
 	return sc, nil
 }
 

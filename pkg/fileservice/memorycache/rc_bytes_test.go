@@ -15,21 +15,26 @@
 package fileservice
 
 import (
+	"sync/atomic"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRCBytesPool(t *testing.T) {
-	bs := RCBytesPool.Get(0)
-	assert.Equal(t, rcBytesPoolMinCap, cap(bs.Value))
-	bs.Release()
+func TestRCBytes(t *testing.T) {
+	var size atomic.Int64
 
-	bs = RCBytesPool.Get(rcBytesPoolMaxCap)
-	assert.Equal(t, rcBytesPoolMaxCap, cap(bs.Value))
-	bs.Release()
-
-	bs = RCBytesPool.Get(rcBytesPoolMaxCap * 2)
-	assert.Equal(t, rcBytesPoolMaxCap*2, len(bs.Value))
-	bs.Release()
+	r := RCBytes{
+		d:    newData(1, &size),
+		size: &size,
+	}
+	// test Bytes
+	r.Bytes()[0] = 1
+	require.Equal(t, r.Bytes()[0], byte(1))
+	// test Slice
+	r = r.Slice(0)
+	require.Equal(t, 0, len(r.Bytes()))
+	// test release
+	r.Release()
+	require.Equal(t, int64(0), size.Load())
 }
