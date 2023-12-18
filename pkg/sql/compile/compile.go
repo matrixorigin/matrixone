@@ -1358,7 +1358,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats.Shuffle {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
