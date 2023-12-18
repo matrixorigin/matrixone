@@ -64,9 +64,12 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
+
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+	}()
 
 	if ap.Limit == 0 {
 		result := vm.NewCallResult()
@@ -76,7 +79,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
 			if err != nil {
 				return result, err
 			}

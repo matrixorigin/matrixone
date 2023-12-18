@@ -812,6 +812,7 @@ func FixProjectionResult(proc *process.Process,
 						for j := range finalVectors {
 							finalVectors[j].Free(proc.Mp())
 						}
+						newVec.Free(proc.Mp())
 						return 0, err
 					}
 				}
@@ -830,6 +831,9 @@ func FixProjectionResult(proc *process.Process,
 				if err != nil {
 					for j := range finalVectors {
 						finalVectors[j].Free(proc.Mp())
+					}
+					if newVec != nil {
+						newVec.Free(proc.Mp())
 					}
 					return 0, err
 				}
