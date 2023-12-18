@@ -173,9 +173,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
-
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
+		defer func() {
+			c.release()
+			s.release()
+		}()
 		if err != nil {
 			return err
 		}
@@ -335,10 +338,15 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	}
 	ctx.root = ctx
 	s, err := generateScope(proc, p, ctx, nil, isRemote)
+	defer func() {
+		if err != nil {
+			s.release()
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
+	if err = fillInstructionsForScope(s, ctx, p, eng); err != nil {
 		return nil, err
 	}
 
@@ -554,7 +562,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	defer func() {
 		if err != nil {
 			s.release()
-			s = nil
 		}
 	}()
 

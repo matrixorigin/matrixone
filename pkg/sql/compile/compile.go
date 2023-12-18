@@ -216,6 +216,9 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
 	start := time.Now()
 	defer func() {
+		if err != nil {
+			c.release()
+		}
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -468,15 +471,22 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
 
+	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	defer func() {
+		if e != nil {
+			runC.release()
+		}
+	}()
 	if defChanged {
-		pn, e := c.buildPlanFunc()
+		var pn *plan2.Plan
+		pn, e = c.buildPlanFunc()
 		if e != nil {
 			return nil, e
 		}
 		c.pn = pn
 	}
-	if e := runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+	if e = runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
 		return nil, e
 	}
 
@@ -877,7 +887,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	defer func() {
 		if err != nil {
 			ReleaseScopes(steps)
-			steps = nil
 		}
 	}()
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
@@ -1018,9 +1027,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ReleaseScopes(ss)
 			ReleaseScopes(left)
 			ReleaseScopes(right)
-			ss = nil
-			left = nil
-			right = nil
 		}
 	}()
 	n := ns[curNodeIdx]
