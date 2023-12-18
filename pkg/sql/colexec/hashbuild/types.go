@@ -76,12 +76,12 @@ type Argument struct {
 	NeedMergedBatch      bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
-	Info     *vm.OperatorInfo
+	info     *vm.OperatorInfo
 	children []vm.Operator
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.Info = info
+	arg.info = info
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {

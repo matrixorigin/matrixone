@@ -59,7 +59,8 @@ func resetAnalyzeInfo(a *AnalyzeInfo) {
 	a.InsertTime = 0
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.TimeConsumedArray = a.TimeConsumedArray[:0]
+	a.TimeConsumedArrayMajor = a.TimeConsumedArrayMajor[:0]
+	a.TimeConsumedArrayMinor = a.TimeConsumedArrayMinor[:0]
 }
 
 func (a *analyze) Start() {
@@ -71,7 +72,7 @@ func (a *analyze) Stop() {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
 		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
 		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
-		a.analInfo.AddSingleParallelTimeConsumed(a.parallelIdx, consumeTime)
+		a.analInfo.AddSingleParallelTimeConsumed(a.parallelMajor, a.parallelIdx, consumeTime)
 	}
 }
 

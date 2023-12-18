@@ -614,7 +614,8 @@ message AnalyzeInfo {
 	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
-	repeated int64 time_consumed_array = 15; 
+	repeated int64 time_consumed_array_major = 15;
+	repeated int64 time_consumed_array_minor = 16;
 }
 
 message PartitionPrune {

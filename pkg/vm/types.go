@@ -187,12 +187,12 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx         int
-	ParallelIdx int
-	IsFirst     bool
-	IsLast      bool
+	Idx           int
+	ParallelIdx   int
+	ParallelMajor bool
+	IsFirst       bool
+	IsLast        bool
 }
-
 type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {

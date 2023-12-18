@@ -209,6 +209,7 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 	buf.WriteString("Analyze: ")
 	if ndesc.Node.AnalyzeInfo != nil {
 		impl := NewAnalyzeInfoDescribeImpl(ndesc.Node.AnalyzeInfo)
+		options.NodeType = ndesc.Node.NodeType
 		err := impl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -796,18 +797,54 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
 	fmt.Fprintf(buf, "timeConsumed=%dms", a.AnalyzeInfo.TimeConsumed/1000000)
 
-	dop := len(a.AnalyzeInfo.TimeConsumedArray)
-	if dop > 1 {
-		fmt.Fprintf(buf, " dop=%v timeConsumedEachParallel=[", dop)
-		sort.Slice(a.AnalyzeInfo.TimeConsumedArray, func(i, j int) bool { return a.AnalyzeInfo.TimeConsumedArray[i] < a.AnalyzeInfo.TimeConsumedArray[j] })
-		for i := range a.AnalyzeInfo.TimeConsumedArray {
+	var majorStr, minorStr string
+	switch options.NodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+		majorStr = "scan"
+		minorStr = "filter"
+	case plan.Node_JOIN:
+		majorStr = "probe"
+		minorStr = "build"
+	case plan.Node_AGG:
+		majorStr = "group"
+		minorStr = "merge group"
+	case plan.Node_SORT:
+		majorStr = "sort"
+		minorStr = "merge sort"
+	case plan.Node_FILTER:
+		majorStr = ""
+		minorStr = "filter"
+	}
+
+	dop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
+	if dop > 0 {
+		fmt.Fprintf(buf, " dop=%v %v_time=[", dop, majorStr)
+		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
+			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
+		})
+		for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
 			if i != 0 {
 				fmt.Fprintf(buf, ",")
 			}
-			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArray[i]/1000000)
+			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMajor[i]/1000000)
 		}
 		fmt.Fprintf(buf, "]")
 	}
+	dop = len(a.AnalyzeInfo.TimeConsumedArrayMinor)
+	if dop > 0 {
+		fmt.Fprintf(buf, " dop=%v %v_time=[", dop, minorStr)
+		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
+			return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
+		})
+		for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+			if i != 0 {
+				fmt.Fprintf(buf, ",")
+			}
+			fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMinor[i]/1000000)
+		}
+		fmt.Fprintf(buf, "]")
+	}
+
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)

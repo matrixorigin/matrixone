@@ -158,8 +158,9 @@ type AnalyzeInfo struct {
 	InsertTime int64
 
 	// time consumed by every single parallel
-	mu                *sync.Mutex
-	TimeConsumedArray []int64
+	mu                     *sync.Mutex
+	TimeConsumedArrayMajor []int64
+	TimeConsumedArrayMinor []int64
 }
 
 type ExecStatus int
@@ -456,6 +457,7 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 }
 
 type analyze struct {
+	parallelMajor        bool
 	parallelIdx          int
 	start                time.Time
 	wait                 time.Duration
@@ -500,30 +502,44 @@ func (si *SessionInfo) GetVersion() string {
 	return si.Version
 }
 
-func (a *AnalyzeInfo) AddNewParallel() int {
+func (a *AnalyzeInfo) AddNewParallel(major bool) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.TimeConsumedArray = append(a.TimeConsumedArray, 0)
-	return len(a.TimeConsumedArray) - 1
+	if major {
+		a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, 0)
+		return len(a.TimeConsumedArrayMajor) - 1
+	} else {
+		a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, 0)
+		return len(a.TimeConsumedArrayMinor) - 1
+	}
 }
 
 func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	pa.TimeConsumedArray = pa.TimeConsumedArray[:0]
-	pa.TimeConsumedArray = append(pa.TimeConsumedArray, a.TimeConsumedArray...)
+	pa.TimeConsumedArrayMajor = pa.TimeConsumedArrayMajor[:0]
+	pa.TimeConsumedArrayMajor = append(pa.TimeConsumedArrayMajor, a.TimeConsumedArrayMajor...)
+	pa.TimeConsumedArrayMinor = pa.TimeConsumedArrayMinor[:0]
+	pa.TimeConsumedArrayMinor = append(pa.TimeConsumedArrayMinor, a.TimeConsumedArrayMinor...)
 }
 
 func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.TimeConsumedArray = append(a.TimeConsumedArray, pa.TimeConsumedArray...)
+	a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, pa.TimeConsumedArrayMajor...)
+	a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, pa.TimeConsumedArrayMinor...)
 }
 
-func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(parallelIdx int, t int64) {
+func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int, t int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArray) {
-		a.TimeConsumedArray[parallelIdx] += t
+	if major {
+		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMajor) {
+			a.TimeConsumedArrayMajor[parallelIdx] += t
+		}
+	} else {
+		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMinor) {
+			a.TimeConsumedArrayMinor[parallelIdx] += t
+		}
 	}
 }

@@ -59,7 +59,8 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 		}
 	}
 
-	idxMap := make(map[int]int, 0)
+	idxMapMajor := make(map[int]int, 0)
+	idxMapMinor := make(map[int]int, 0)
 	for i := 0; i < len(ins); i++ {
 		info := &OperatorInfo{
 			Idx:     ins[i].Idx,
@@ -67,18 +68,30 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			IsLast:  ins[i].IsLast,
 		}
 		switch ins[i].Op {
-		case Shuffle, Projection, Output, Merge, Connector, Dispatch, MergeBlock, MergeGroup, MergeCTE, MergeDelete, MergeLimit, MergeOffset, MergeOrder, MergeRecursive, MergeTop:
-			info.ParallelIdx = -1 // do nothing for parallel analyze info
-		default:
+		case HashBuild, Restrict:
 			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
-				if pidx, ok := idxMap[info.Idx]; ok {
+				info.ParallelMajor = false
+				if pidx, ok := idxMapMajor[info.Idx]; ok {
 					info.ParallelIdx = pidx
 				} else {
-					pidx = proc.AnalInfos[info.Idx].AddNewParallel()
-					idxMap[info.Idx] = pidx
+					pidx = proc.AnalInfos[info.Idx].AddNewParallel(false)
+					idxMapMajor[info.Idx] = pidx
 					info.ParallelIdx = pidx
 				}
 			}
+		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product:
+			info.ParallelMajor = true
+			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+				if pidx, ok := idxMapMinor[info.Idx]; ok {
+					info.ParallelIdx = pidx
+				} else {
+					pidx = proc.AnalInfos[info.Idx].AddNewParallel(true)
+					idxMapMinor[info.Idx] = pidx
+					info.ParallelIdx = pidx
+				}
+			}
+		default:
+			info.ParallelIdx = -1 // do nothing for parallel analyze info
 		}
 		ins[i].Arg.SetInfo(info)
 	}

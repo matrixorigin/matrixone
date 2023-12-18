@@ -89,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.Info.Idx, arg.Info.ParallelIdx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -98,7 +98,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.Info.IsFirst); err != nil {
+			if err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
