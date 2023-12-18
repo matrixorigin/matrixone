@@ -288,18 +288,19 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	algoParamsDistFn = ops[algoParamsDistFn]
 
 	// 2. Original table's pkey name and value
-	var originalTblPkCols string
+	var originalTblPkColsCommaSeperated string
+	var originalTblPkColMaySerial string
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		originalTblPkCols = "serial("
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
-				originalTblPkCols += ","
+				originalTblPkColsCommaSeperated += ","
 			}
-			originalTblPkCols += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
+			originalTblPkColsCommaSeperated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
 		}
-		originalTblPkCols += ")"
+		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeperated)
 	} else {
-		originalTblPkCols = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColsCommaSeperated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
 	}
 
 	// 3. insert into entries table
@@ -328,7 +329,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	// 5. non-null original table rows
 	nonNullOriginalTableRowsSql := fmt.Sprintf("(select %s, %s from `%s`.`%s` where `%s` is not null) `%s`",
-		originalTblPkCols,
+		originalTblPkColsCommaSeperated,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
@@ -373,9 +374,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		// NOTE: no need to add tableName here, because it could be serial()
-		originalTblPkCols,
+		originalTblPkColMaySerial,
 
-		originalTblPkCols,
+		originalTblPkColMaySerial,
 		algoParamsDistFn,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,

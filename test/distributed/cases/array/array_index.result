@@ -125,7 +125,7 @@ not supported: don't support multi column  IVF vector index
 create index idx5 using IVFFLAT on tbl(b) lists = -1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " -1;";
 create index idx6 using IVFFLAT on tbl(b) op_type 'vector_l1_ops';
-internal error: invalid op_type. not of type 'vector_ip_ops', 'vector_l2_ops', 'vector_cosine_ops'
+internal error: invalid op_type. not of type 'vector_l2_ops'
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf32(3));
 insert into tbl values(1, "[1,2,3]","[1,2,3]");
@@ -242,4 +242,28 @@ insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 
 alter table tbl alter reindex idx12 ivfflat lists=2;
 insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
 insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int, age int, embedding vecf32(3), primary key(id, age));
+insert into tbl values(1, 10, "[1,2,3]");
+insert into tbl values(2, 20, "[1,2,4]");
+insert into tbl values(3, 30, "[1,2.4,4]");
+insert into tbl values(4, 40, "[1,2,5]");
+insert into tbl values(5, 50, "[1,3,5]");
+insert into tbl values(6, 60, "[100,44,50]");
+insert into tbl values(7, 70, "[120,50,70]");
+insert into tbl values(8, 80, "[130,40,90]");
+create index idx13 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    0    PRIMARY    2    age    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx13    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`age` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`,`age`),\nKEY `idx13` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+insert into tbl values(15, 90, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, 100, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx13 ivfflat lists=2;
+insert into tbl values(25, 110, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, 120, "[131,41,91]"); -- inserted to cluster 2 of version 1
 drop database vecdb2;
