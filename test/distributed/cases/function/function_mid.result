@@ -238,7 +238,7 @@ SELECT startswith(mid(s, 1, 6), 'ehwq') FROM mid_02 WHERE d2 = NULL;
 startswith(mid(s, 1, 6), ehwq)
 SELECT endswith(mid(s,-1,1),' ') FROM mid_02 WHERE id = 6;
 endswith(mid(s, -1, 1),  )
-1
+true
 SELECT substring(mid(s, 3, 19),3, 10) FROM mid_02 WHERE id + 1 = 4;
 substring(mid(s, 3, 19), 3, 10)
 284o 329&*

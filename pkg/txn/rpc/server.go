@@ -21,15 +21,30 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
+
+var methodVersions = map[txn.TxnMethod]int64{
+	txn.TxnMethod_Read:   defines.MORPCVersion1,
+	txn.TxnMethod_Write:  defines.MORPCVersion1,
+	txn.TxnMethod_Commit: defines.MORPCVersion1,
+
+	txn.TxnMethod_Prepare:         defines.MORPCVersion1,
+	txn.TxnMethod_CommitTNShard:   defines.MORPCVersion1,
+	txn.TxnMethod_RollbackTNShard: defines.MORPCVersion1,
+	txn.TxnMethod_GetStatus:       defines.MORPCVersion1,
+
+	txn.TxnMethod_DEBUG: defines.MORPCVersion1,
+}
 
 // WithServerMaxMessageSize set max rpc message size
 func WithServerMaxMessageSize(maxMessageSize int) ServerOption {
@@ -190,11 +205,14 @@ func (s *server) onMessage(
 		msg.Cancel()
 		return nil
 	}
-
+	if err := checkMethodVersion(ctx, m); err != nil {
+		s.releaseRequest(m)
+		msg.Cancel()
+		return err
+	}
 	handler, ok := s.handlers[m.Method]
 	if !ok {
-		s.rt.Logger().Fatal("missing txn request handler",
-			zap.String("method", m.Method.String()))
+		return moerr.NewNotSupported(ctx, "unknown txn request method: %s", m.Method.String())
 	}
 
 	select {
@@ -282,4 +300,8 @@ func (r executor) exec() ([]byte, error) {
 	txnID := r.req.Txn.ID
 	err := r.cs.Write(r.ctx, resp)
 	return txnID, err
+}
+
+func checkMethodVersion(ctx context.Context, req *txn.TxnRequest) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }

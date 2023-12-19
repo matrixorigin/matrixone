@@ -78,7 +78,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -459,6 +463,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	for i, vec := range originBatch.Vecs {
 		err := bat.Vecs[i].UnionBatch(vec, 0, length, flags, proc.Mp())
 		if err != nil {
+			proc.PutBatch(bat)
 			return nil, err
 		}
 	}

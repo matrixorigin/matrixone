@@ -40,6 +40,12 @@ var (
 	defaultHeartbeatInterval = time.Second * 3
 	// The default value of heartbeat timeout.
 	defaultHeartbeatTimeout = time.Second * 3
+	// The default value of connect timeout.
+	defaultConnectTimeout = time.Second * 3
+	// The default value of handshake auth timeout.
+	defaultAuthTimeout = time.Second * 10
+	// The default value of TSL connect timeout.
+	defaultTLSConnectTimeout = time.Second * 10
 )
 
 // Config is the configuration of proxy server.
@@ -54,6 +60,16 @@ type Config struct {
 	// Connections above the avg*(1+tolerance) will be migrated to
 	// other CN servers. This value should be less than 1.
 	RebalanceToerance float64 `toml:"rebalance-tolerance" user_setting:"advanced"`
+	// ConnectTimeout is the timeout duration when proxy connects to backend
+	// CN servers. If proxy connects to cn timeout, it will return a retryable
+	// error and try to connect to other cn servers.
+	ConnectTimeout toml.Duration `toml:"connect-timeout" user_setting:"advanced"`
+	// AuthTimeout is the timeout duration when proxy handshakes with backend
+	// CN servers. If proxy handshakes with cn timeout, it will return a retryable
+	// error and try to connect to other cn servers.
+	AuthTimeout toml.Duration `toml:"auth-timeout" user_setting:"advanced"`
+	// TLSConnectTimeout is the timeout duration when TLS connect to server.
+	TLSConnectTimeout toml.Duration `toml:"tls-connect-timeout" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
@@ -151,6 +167,15 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 func (c *Config) FillDefault() {
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
+	}
+	if c.ConnectTimeout.Duration == 0 {
+		c.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.AuthTimeout.Duration == 0 {
+		c.AuthTimeout.Duration = defaultAuthTimeout
+	}
+	if c.TLSConnectTimeout.Duration == 0 {
+		c.TLSConnectTimeout.Duration = defaultTLSConnectTimeout
 	}
 	if c.RebalanceInterval.Duration == 0 {
 		c.RebalanceInterval.Duration = defaultRebalanceInterval

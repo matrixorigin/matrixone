@@ -1,0 +1,218 @@
+drop table if exists sample01;
+create table sample01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into sample01 values (1, null, 'database');
+insert into sample01 values (2, 38291.32132, 'database');
+insert into sample01 values (3, null, 'database management system');
+insert into sample01 values (4, 10, null);
+insert into sample01 values (1, -321.321, null);
+insert into sample01 values (2, -1, null);
+select * from sample01;
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
+select sample (col3, 3 rows) from sample01;
+col3
+database
+database
+database management system
+select sample (col3, 4 rows) as newCol3 from sample01;
+newCol3
+database
+database
+database management system
+select sample (col3, 3 rows) as newCol3 from sample01 where col3 is not null;
+newCol3
+database
+database
+database management system
+select sample (col3, 3 rows) from sample01 where col3 is null;
+col3
+null
+select sample (col2, 2 rows) from sample01 where col3 is null group by col1;
+col2
+10
+-321
+-1
+select col1, sample(col2, 20 rows) from sample01 group by col1 order by col1;
+col1    col2
+1    -321
+2    38291
+2    -1
+3    null
+4    10
+select sample (col1 * 3, 10 rows) as newCol1 from sample01 where col2 is not null;
+newCol1
+6
+12
+3
+6
+select col1,sample (col2 * 3, 10 rows) as newCol from sample01 group by col1;
+col1    newCol
+1    -963
+2    114873
+2    -3
+3    null
+4    30
+select sample (reverse(col3), 4 rows) as newcol3 from sample01;
+newcol3
+esabatad
+esabatad
+metsys tnemeganam esabatad
+select col1, sample (startswith(col3, 'database'), 3 rows) from sample01;
+col1    startswith(col3, database)
+1    true
+2    true
+3    true
+select col1, sample (endswith(col3, 'system'), 3 rows) from sample01;
+col1    endswith(col3, system)
+1    false
+2    false
+3    true
+drop table sample01;
+drop table if exists sample02;
+create table sample02 (col1 int, col2 datetime);
+insert into sample02 values (1, '2020-10-13 10:10:10');
+insert into sample02 values (2, null);
+insert into sample02 values (1, '2021-10-10 00:00:00');
+insert into sample02 values (2, '2023-01-01 12:12:12');
+insert into sample02 values (2, null);
+insert into sample02 values (3, null);
+insert into sample02 values (4, '2023-11-27 01:02:03');
+select * from sample02;
+col1    col2
+1    2020-10-13 10:10:10
+2    null
+1    2021-10-10 00:00:00
+2    2023-01-01 12:12:12
+2    null
+3    null
+4    2023-11-27 01:02:03
+select sample (col2, 4 rows) from sample02 order by col2 desc;
+col2
+2023-11-27 01:02:03
+2023-01-01 12:12:12
+2021-10-10 00:00:00
+2020-10-13 10:10:10
+select sample (col2, 5 rows) from sample02 group by col1 order by col2;
+col2
+null
+2020-10-13 10:10:10
+2021-10-10 00:00:00
+2023-01-01 12:12:12
+2023-11-27 01:02:03
+select sample (col2, 100 percent) from sample02 group by col1 order by col2;
+col2
+2020-10-13 10:10:10
+2021-10-10 00:00:00
+2023-01-01 12:12:12
+2023-11-27 01:02:03
+select sample (col2, 0 percent) from sample02 group by col1 order by col2 desc;
+col2
+select col1, sample (col2, 5 rows) as newColumn from sample02 group by col1 order by col2;
+col1    newColumn
+3    null
+1    2020-10-13 10:10:10
+1    2021-10-10 00:00:00
+2    2023-01-01 12:12:12
+4    2023-11-27 01:02:03
+drop table sample02;
+drop table if exists sample03;
+create table sample03 (col1 int, col2 float, col3 decimal, col4 enum('1','2','3','4'));
+insert into sample03 values (1, 12.21, 32324.32131, 1);
+insert into sample03 values (2, null, null, 2);
+insert into sample03 values (2, -12.1, 34738, null);
+insert into sample03 values (1, 90.2314, null, 4);
+insert into sample03 values (1, 43425.4325, -7483.432, 2);
+select * from sample03;
+col1    col2    col3    col4
+1    12.21    32324    1
+2    null    null    2
+2    -12.1    34738    null
+1    90.2314    null    4
+1    43425.434    -7483    2
+select sample(col1, col2, col3, col4, 2 rows) from sample03 where col2 != null and col4 is not null;
+col1    col2    col3    col4
+select sample(col1, col2, col3, col4, 2 rows) from sample03 where col4 is not null;
+col1    col2    col3    col4
+1    12.21    32324    1
+2    null    null    2
+1    90.2314    null    4
+1    43425.434    -7483    2
+select sample(col1, col2, col3, 4 rows) from sample03 where col4 is not null;
+col1    col2    col3
+1    12.21    32324
+2    null    null
+1    90.2314    null
+1    43425.434    -7483
+select sample(col1 + 100, col2 + 100, col3 + 100, 4 rows) from sample03 where col4 is not null;
+col1 + 100    col2 + 100    col3 + 100
+101    112.21000003814697    32424
+102    null    null
+101    190.2313995361328    null
+101    43525.43359375    -7383
+select sample(col1 * 2, col2 * 3, col3, 100 rows) from sample03 where col1 = 2;
+col1 * 2    col2 * 3    col3
+4    null    null
+4    -36.30000114440918    34738
+select sample(col1 * 2, col2 * 3, col3, 100 rows) from sample03 where col1 = 2 limit 1;
+col1 * 2    col2 * 3    col3
+4    null    null
+drop table sample03;
+drop table is exists sample04;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " is exists sample04;";
+create table sample04 (col1 int, col2 binary);
+insert into sample04 values (1, 'a');
+insert into sample04 values (2, 'b');
+insert into sample04 values (3, 'c');
+insert into sample04 values (1, null);
+insert into sample04 values (2, null);
+insert into sample04 values (2, 'c');
+prepare s1 from 'select col1, sample(col2, 4 rows) from sample04 group by col1';
+execute s1;
+col1    col2
+1    a
+2    b
+2    c
+3    c
+prepare s2 from 'select col1, sample(col2, 100 percent) from sample04 group by col1 order by col1 desc';
+execute s2;
+col1    col2
+3    c
+2    b
+2    c
+1    a
+drop table sample04;
+drop table if exists sample05;
+create temporary table sample05 (col1 int, col2 binary);
+insert into sample05 values (1, 'a');
+insert into sample05 values (2, 'b');
+insert into sample05 values (3, 'c');
+insert into sample05 values (1, null);
+insert into sample05 values (2, null);
+insert into sample05 values (2, 'c');
+insert into sample05 (col1, col2) values (2, true);
+select sample (col1, col2, 5 rows) from sample05;
+col1    col2
+1    a
+2    b
+3    c
+1    null
+2    null
+2    c
+2    1
+select sample (col1, col2, 100 percent) from sample05;
+col1    col2
+1    a
+2    b
+3    c
+1    null
+2    null
+2    c
+2    1
+select sample (col1, col2, 0 percent) from sample05;
+col1    col2
+drop table sample05;

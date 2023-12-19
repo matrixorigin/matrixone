@@ -63,25 +63,15 @@ func TestWaitStarted(t *testing.T) {
 	}
 }
 
-func TestHandleLocalCNRequestsWillPanic(t *testing.T) {
-	defer func() {
-		if err := recover(); err != nil {
-			return
-		}
-		assert.Fail(t, "must panic")
-	}()
-
+func TestHandleLocalCNRequestsWillReturnError(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
 	ts := service.NewTestTxnService(t, 1, service.NewTestSender(), service.NewTestClock(1))
-	defer func() {
-		assert.NoError(t, ts.Close(false))
-	}()
-
 	assert.NoError(t, r.start(ts))
 	defer func() {
 		assert.NoError(t, r.close(false))
+		assert.NoError(t, ts.Close(false))
 	}()
 
 	req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
-	assert.NoError(t, r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{}))
+	assert.Error(t, r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{}))
 }

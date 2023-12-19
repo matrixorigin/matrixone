@@ -20,13 +20,26 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
+
+var methodVersions = map[pb.CmdMethod]int64{
+	pb.CmdMethod_ShowProcessList:    defines.MORPCVersion1,
+	pb.CmdMethod_AlterAccount:       defines.MORPCVersion1,
+	pb.CmdMethod_KillConn:           defines.MORPCVersion1,
+	pb.CmdMethod_TraceSpan:          defines.MORPCVersion1,
+	pb.CmdMethod_GetLockInfo:        defines.MORPCVersion1,
+	pb.CmdMethod_GetTxnInfo:         defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheInfo:       defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:         defines.MORPCVersion1,
+	pb.CmdMethod_GetCommit:          defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion: defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion: defines.MORPCMinVersion,
+}
 
 // QueryService is used to send query request to another CN service.
 type QueryService interface {
@@ -50,18 +63,13 @@ type QueryService interface {
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	log       *log.MOLogger
-	cluster   clusterservice.MOCluster
 	client    morpc.RPCClient
 	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
 	pool      morpc.MessagePool[*pb.Request, *pb.Response]
-
-	// sessionMgr manages the sessions, we can get sessions from it.
-	sessionMgr *SessionManager
 }
 
 // NewQueryService creates a new queryService instance.
-func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *SessionManager) (QueryService, error) {
+func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryService, error) {
 	serviceName := "query-service"
 	rt := runtime.ProcessLevelRuntime()
 	if rt == nil {
@@ -86,26 +94,23 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 		return nil, err
 	}
 	qs := &queryService{
-		serviceID:  serviceID,
-		log:        logger,
-		cluster:    clusterservice.GetMOCluster(),
-		client:     client,
-		handler:    h,
-		pool:       pool,
-		sessionMgr: sm,
+		serviceID: serviceID,
+		client:    client,
+		handler:   h,
+		pool:      pool,
 	}
-	qs.registerHandlers()
+	qs.initHandleFunc()
 	return qs, nil
-}
-
-func (s *queryService) registerHandlers() {
-	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_ShowProcessList),
-		s.handleShowProcessList, false)
 }
 
 // AddHandleFunc implements the QueryService interface.
 func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool) {
 	s.handler.RegisterHandleFunc(uint32(method), h, async)
+}
+
+func (s *queryService) initHandleFunc() {
+	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
 }
 
 // SendMessage implements the QueryService interface.
@@ -114,6 +119,9 @@ func (s *queryService) SendMessage(
 ) (*pb.Response, error) {
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
+	}
+	if err := checkMethodVersion(ctx, req); err != nil {
+		return nil, err
 	}
 	f, err := s.client.Send(ctx, address, req)
 	if err != nil {
@@ -242,4 +250,8 @@ func RequestMultipleCn(ctx context.Context,
 		nodesLeft--
 	}
 	return retErr
+}
+
+func checkMethodVersion(ctx context.Context, req *pb.Request) error {
+	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }

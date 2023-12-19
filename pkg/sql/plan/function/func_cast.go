@@ -47,6 +47,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_bool: {

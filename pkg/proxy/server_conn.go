@@ -16,15 +16,14 @@ package proxy
 
 import (
 	"context"
-	"net"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -38,12 +37,12 @@ type ServerConn interface {
 	RawConn() net.Conn
 	// HandleHandshake handles the handshake communication with CN server.
 	// handshakeResp is a auth packet received from client.
-	HandleHandshake(handshakeResp *frontend.Packet) (*frontend.Packet, error)
+	HandleHandshake(handshakeResp *frontend.Packet, timeout time.Duration) (*frontend.Packet, error)
 	// ExecStmt executes a simple statement, it sends a query to backend server.
 	// After it finished, server connection should be closed immediately because
 	// it is a temp connection.
 	// The first return value indicates that if the execution result is OK.
-	ExecStmt(stmt string, resp chan<- []byte) (bool, error)
+	ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error)
 	// Close closes the connection to CN server.
 	Close() error
 }
@@ -70,8 +69,8 @@ type serverConn struct {
 var _ ServerConn = (*serverConn)(nil)
 
 // newServerConn creates a connection to CN server.
-func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer) (ServerConn, error) {
-	c, err := cn.Connect()
+func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
+	c, err := cn.Connect(timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +125,10 @@ func (s *serverConn) RawConn() net.Conn {
 }
 
 // HandleHandshake implements the ServerConn interface.
-func (s *serverConn) HandleHandshake(handshakeResp *frontend.Packet) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+func (s *serverConn) HandleHandshake(
+	handshakeResp *frontend.Packet, timeout time.Duration,
+) (*frontend.Packet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	var r *frontend.Packet
@@ -154,10 +155,10 @@ func (s *serverConn) HandleHandshake(handshakeResp *frontend.Packet) (*frontend.
 }
 
 // ExecStmt implements the ServerConn interface.
-func (s *serverConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
-	req := make([]byte, 1, len(stmt)+1)
-	req[0] = byte(cmdQuery)
-	req = append(req, []byte(stmt)...)
+func (s *serverConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	req := make([]byte, 1, len(stmt.s)+1)
+	req[0] = byte(stmt.cmdType)
+	req = append(req, []byte(stmt.s)...)
 	s.mysqlProto.SetSequenceID(0)
 	if err := s.mysqlProto.WritePacket(req); err != nil {
 		return false, err

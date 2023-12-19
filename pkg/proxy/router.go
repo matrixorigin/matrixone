@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,8 +29,7 @@ import (
 )
 
 const (
-	tenantLabelKey        = "account"
-	defaultConnectTimeout = 3 * time.Second
+	tenantLabelKey = "account"
 )
 
 var (
@@ -83,9 +83,9 @@ type CNServer struct {
 }
 
 // Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect() (goetty.IOSession, error) {
+func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
-	err := c.Connect(s.addr, defaultConnectTimeout)
+	err := c.Connect(s.addr, timeout)
 	if err != nil {
 		return nil, newConnectErr(err)
 	}
@@ -97,6 +97,7 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 		Label: pb.RequestLabel{
 			Labels: s.reqLabel.allLabels(),
 		},
+		ConnectionID: s.proxyConnID,
 		InternalConn: s.internalConn,
 	}
 	data, err := info.Encode()
@@ -118,21 +119,47 @@ type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
 	test       bool
+
+	// timeout configs.
+	connectTimeout time.Duration
+	authTimeout    time.Duration
 }
 
+type routeOption func(*router)
+
 var _ Router = (*router)(nil)
+
+func withConnectTimeout(t time.Duration) routeOption {
+	return func(r *router) {
+		r.connectTimeout = t
+	}
+}
+
+func withAuthTimeout(t time.Duration) routeOption {
+	return func(r *router) {
+		r.authTimeout = t
+	}
+}
 
 // newCNConnector creates a Router.
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
 	test bool,
+	opts ...routeOption,
 ) Router {
-	return &router{
+	rt := &router{
 		rebalancer: r,
 		moCluster:  mc,
 		test:       test,
 	}
+	for _, opt := range opts {
+		opt(rt)
+	}
+	if rt.authTimeout == 0 { // for test
+		rt.authTimeout = defaultAuthTimeout / 3
+	}
+	return rt
 }
 
 // SelectByConnID implements the Router interface.
@@ -189,6 +216,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 	} else {
 		cns = r.selectForCommonTenant(c, filter)
 	}
+	cnCount := len(cns)
+	v2.ProxyAvailableBackendServerNumGauge.
+		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
 
 	// getHash returns same hash for same labels.
 	hash, err := c.labelInfo.getHash()
@@ -196,9 +226,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 		return nil, err
 	}
 
-	if len(cns) == 0 {
+	if cnCount == 0 {
 		return nil, noCNServerErr
-	} else if len(cns) == 1 {
+	} else if cnCount == 1 {
 		cns[0].hash = hash
 		return cns[0], nil
 	}
@@ -217,7 +247,7 @@ func (r *router) Connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (_ ServerConn, _ []byte, e error) {
 	// Creates a server connection.
-	sc, err := newServerConn(cn, t, r.rebalancer)
+	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,7 +266,7 @@ func (r *router) Connect(
 
 	// Use the handshakeResp, which is auth request from client, to communicate
 	// with CN server.
-	resp, err := sc.HandleHandshake(handshakeResp)
+	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
 	if err != nil {
 		r.rebalancer.connManager.disconnect(cn, t)
 		return nil, nil, err

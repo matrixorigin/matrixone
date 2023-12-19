@@ -207,7 +207,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	if tableDef.Indexes != nil {
+
+		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+		// other multi-table indexes.
+		indexNames := make(map[string]bool)
+
 		for _, indexdef := range tableDef.Indexes {
+			if _, ok := indexNames[indexdef.IndexName]; ok {
+				continue
+			} else {
+				indexNames[indexdef.IndexName] = true
+			}
+
 			var indexStr string
 			if indexdef.Unique {
 				indexStr = "UNIQUE KEY "
@@ -216,7 +227,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
 			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
+				indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 			}
 			indexStr += "("
 			i := 0
@@ -235,7 +246,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			indexStr += ")"
 			if indexdef.IndexAlgoParams != "" {
 				var paramList string
-				paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 				if err != nil {
 					return nil, err
 				}
@@ -715,7 +726,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || tableDef.Indexes != nil {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || len(tableDef.Indexes) != 0 {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
@@ -976,6 +987,32 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"where `tcl`.`att_database` = '%s' AND " +
 		"`tcl`.`att_relname` = '%s' AND " +
 		"`idx`.`column_name` NOT LIKE '%s' " +
+		// Below `GROUP BY` is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes scenarios.
+		// NOTE: We need to add all the table column names to the GROUP BY clause
+		//
+		// Without `GROUP BY`, we will printing the same index multiple times for IVFFLAT index.
+		// (there are multiple entries in mo_indexes for the same index, with differing algo_table_type and index_table_name).
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//
+		// With `GROUP BY`, we print
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
+		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
+		"`idx`.`algo_params`, `idx`.`is_visible`" +
 		";"
 	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 

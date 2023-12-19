@@ -16,8 +16,6 @@ package tables
 
 import (
 	"context"
-	"math/rand"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -187,11 +185,6 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		}
 	}
 	return
-}
-
-func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
-	ttl = time.Duration(float64(ttl) * float64(rand.Intn(5)+10) / float64(10))
-	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 
 func (blk *block) GetByFilter(

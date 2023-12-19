@@ -171,7 +171,7 @@ func (d *DiskCache) Read(
 		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
-			logutil.Info("read disk cache error", zap.Any("error", err))
+			logutil.Warn("read disk cache error", zap.Any("error", err))
 			continue
 		}
 
@@ -279,41 +279,47 @@ func (d *DiskCache) writeFile(
 	err = os.MkdirAll(dir, 0755)
 	if err != nil {
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	defer from.Close()
-	n, err := io.Copy(f, from)
+	var buf []byte
+	put := ioBufferPool.Get(&buf)
+	defer put.Put()
+	n, err := io.CopyBuffer(f, from, buf)
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := f.Close(); err != nil {
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
 		numError++
-		logutil.Info("write disk cache error", zap.Any("error", err))
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
+	logutil.Debug("disk cache file written",
+		zap.Any("path", diskPath),
+	)
 
 	numWrite++
 	d.triggerEvict(ctx, int64(n))
@@ -343,7 +349,7 @@ func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
 		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
 			if d.evictState.timer.Stop() {
 				// evict immediately
-				logutil.Debug("disk cache: newly written bytes may excceeds eviction target, start immediately",
+				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
 					zap.Any("newly-written", d.evictState.newlyWritten),
 					zap.Any("newly-written-threshold", newlyWrittenThreshold),
 				)
@@ -394,6 +400,10 @@ func (d *DiskCache) evict(ctx context.Context) {
 			return nil //ignore
 		}
 		if entry.IsDir() {
+			// try remove if empty. for cleaning old structure
+			if path != d.path {
+				os.Remove(path)
+			}
 			return nil
 		}
 		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
@@ -420,8 +430,8 @@ func (d *DiskCache) evict(ctx context.Context) {
 
 	target := int64(float64(d.capacity) * d.evictTarget)
 
-	logutil.Info("disk cache eviction",
-		zap.Any("bytes", sumSize),
+	logutil.Info("disk cache eviction check",
+		zap.Any("used bytes", sumSize),
 		zap.Any("target", target),
 	)
 
@@ -432,9 +442,9 @@ func (d *DiskCache) evict(ctx context.Context) {
 			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 				set.FileService.Cache.Disk.Evict.Add(numDeleted)
 			}, d.perfCounterSets...)
-			logutil.Debug("disk cache: eviction finished",
-				zap.Any("files", numDeleted),
-				zap.Any("bytes", bytesDeleted),
+			logutil.Info("disk cache eviction finished",
+				zap.Any("deleted files", numDeleted),
+				zap.Any("deleted bytes", bytesDeleted),
 			)
 		}
 	}()
@@ -450,6 +460,10 @@ func (d *DiskCache) evict(ctx context.Context) {
 		}
 		if err := os.Remove(path); err != nil {
 			continue // ignore
+		} else {
+			logutil.Debug("disk cache file removed",
+				zap.Any("path", path),
+			)
 		}
 		d.fileExists.Delete(path)
 		sumSize -= size
@@ -471,16 +485,14 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	}
 	return filepath.Join(
 		d.path,
-		toOSPath(path),
-		fmt.Sprintf("%d-%d%s", entry.Offset, entry.Size, cacheFileSuffix),
+		fmt.Sprintf("%d-%d%s%s", entry.Offset, entry.Size, toOSPath(path), cacheFileSuffix),
 	)
 }
 
 func (d *DiskCache) pathForFile(path string) string {
 	return filepath.Join(
 		d.path,
-		toOSPath(path),
-		fmt.Sprintf("full%s", cacheFileSuffix),
+		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
 	)
 }
 
@@ -491,11 +503,12 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, file := filepath.Split(path)
-	if file != fmt.Sprintf("full%s", cacheFileSuffix) {
+	if !strings.HasPrefix(path, "full") {
 		return "", ErrNotCacheFile
 	}
-	return fromOSPath(dir), nil
+	path = strings.TrimPrefix(path, "full")
+	path = strings.TrimSuffix(path, cacheFileSuffix)
+	return fromOSPath(path), nil
 }
 
 func (d *DiskCache) waitUpdateComplete(path string) {

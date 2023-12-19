@@ -34,11 +34,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpPing):
 		return s.handlePing(data), nil
 	case uint32(api.OpCode_OpFlush):
-		_, err := handleRead(
-			ctx, s,
-			txnMeta, data,
-			s.taeHandler.HandleFlushTable,
-		)
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFlushTable)
 		if err != nil {
 			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
@@ -50,9 +46,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		})
 		return resp, err
 	case uint32(api.OpCode_OpCheckpoint):
-		_, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleForceCheckpoint,
-		)
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleForceCheckpoint)
 		if err != nil {
 			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
@@ -65,9 +59,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return resp, err
 
 	case uint32(api.OpCode_OpInspect):
-		resp, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleInspectTN,
-		)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInspectTN)
 		if err != nil {
 			return types.Encode(&db.InspectResp{
 				Message: "Failed",
@@ -75,9 +67,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpAddFaultPoint):
-		_, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleAddFaultPoint,
-		)
+		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleAddFaultPoint)
 		if err != nil {
 			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
@@ -89,9 +79,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		})
 		return resp, err
 	case uint32(api.OpCode_OpBackup):
-		resp, err := handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleBackup,
-		)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleBackup)
 		if err != nil {
 			return types.Encode(&api.SyncLogTailResp{
 				CkpLocation: "Failed",
@@ -99,9 +87,6 @@ func (s *taeStorage) Debug(ctx context.Context,
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpTraceSpan):
-		handleRead(
-			ctx, s, txnMeta, data, s.taeHandler.HandleTraceSpan,
-		)
 		req := db.TraceSpan{}
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
@@ -110,7 +95,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return []byte(ret), nil
 
 	case uint32(api.OpCode_OpStorageUsage):
-		resp, _ := handleRead(ctx, s, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 
 	default:

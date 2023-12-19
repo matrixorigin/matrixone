@@ -18,27 +18,26 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -158,7 +157,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt 
 
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Const, len(pkNames))
+	pkVals := make([]*plan.Literal, len(pkNames))
 	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
@@ -338,10 +337,11 @@ func (r *blockReader) Read(
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -355,12 +355,16 @@ func (r *blockReader) Read(
 	}
 
 	// read the block
+	var policy fileservice.Policy
+	if r.scanType == LARGE || r.scanType == NORMAL {
+		policy = fileservice.SkipMemoryCacheWrites
+	}
 	bat, err := blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
-		r.fs, mp, vp,
+		r.fs, mp, vp, policy,
 	)
 	if err != nil {
 		return nil, err
@@ -412,6 +416,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
+	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
 	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
@@ -422,13 +427,14 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
-			txnTable.getTableDef(),
+			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
 			filterExpr,
 			fs,
 			proc,
 		),
+		encodedPrimaryKey: encodedPrimaryKey,
 	}
 	return r
 }
@@ -487,29 +493,52 @@ func (r *blockMergeReader) prefetchDeletes() error {
 	return nil
 }
 
-func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
+func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error {
 	if len(r.blks) == 0 {
 		return nil
 	}
 	info := r.blks[0]
+
+	r.tryUpdateColumns(cols)
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 	if err != nil {
 		return err
 	}
+
 	// load deletes from partition state for the specified block
-	{
-		state, err := r.table.getPartitionState(ctx)
-		if err != nil {
-			return err
+	filter := r.getReadFilter(r.proc, len(r.blks))
+
+	state, err := r.table.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+	ts := types.TimestampToTS(r.ts)
+
+	if filter != nil && info.Sorted && len(r.encodedPrimaryKey) > 0 {
+		iter := state.NewPrimaryKeyDelIter(
+			ts,
+			logtailreplay.Prefix(r.encodedPrimaryKey),
+			info.BlockID,
+		)
+		for iter.Next() {
+			entry := iter.Entry()
+			if !entry.Deleted {
+				continue
+			}
+			_, offset := entry.RowID.Decode()
+			r.buffer = append(r.buffer, int64(offset))
 		}
-		ts := types.TimestampToTS(r.ts)
+		iter.Close()
+	} else {
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
+		currlen := len(r.buffer)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
 			r.buffer = append(r.buffer, int64(offset))
 		}
+		v2.TaskLoadMemDeletesPerBlockHistogram.Observe(float64(len(r.buffer) - currlen))
 		iter.Close()
 	}
 
@@ -552,7 +581,7 @@ func (r *blockMergeReader) Read(
 		return nil, err
 	}
 	//load deletes for the specified block
-	if err := r.loadDeletes(ctx); err != nil {
+	if err := r.loadDeletes(ctx, cols); err != nil {
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)

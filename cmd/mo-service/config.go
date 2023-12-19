@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -147,6 +148,9 @@ type Config struct {
 	// Under distributed deploy mode, cn,tn are independent os process.
 	// they have their own queryservice.
 	IsStandalone bool
+
+	// Goroutine goroutine config
+	Goroutine goroutine.Config `toml:"goroutine"`
 }
 
 // NewConfig return Config with default values.

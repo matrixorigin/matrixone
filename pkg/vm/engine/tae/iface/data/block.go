@@ -16,7 +16,6 @@ package data
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -36,7 +35,7 @@ import (
 type CheckpointUnit interface {
 	MutationInfo() string
 	RunCalibration() int
-	EstimateScore(time.Duration, bool) int
+	// EstimateScore(time.Duration, bool) int
 	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
 
@@ -127,7 +126,7 @@ type Block interface {
 		mp *mpool.MPool,
 	) error
 	PPString(level common.PPLevel, depth int, prefix string) string
-	EstimateMemSize() int
+	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 
 	Init() error

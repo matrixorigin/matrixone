@@ -17,7 +17,6 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )

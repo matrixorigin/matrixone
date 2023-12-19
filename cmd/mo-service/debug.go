@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 )
 
 var (
@@ -40,6 +41,7 @@ var (
 	heapProfilePathFlag        = flag.String("heap-profile", "", "write heap profile to the specified file")
 	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
 	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
+	statusServer               = status.NewServer()
 )
 
 func startCPUProfile() func() {
@@ -294,6 +296,9 @@ func init() {
 
 	// fgprof
 	http.Handle("/debug/fgprof/", fgprof.Handler())
+
+	// status server
+	http.Handle("/debug/status/", statusServer)
 
 }
 

@@ -125,6 +125,13 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 	}
 }
 
+// WithBackendFreeOrphansResponse setup free orphans response func
+func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.freeResponse = value
+	}
+}
+
 type remoteBackend struct {
 	remote       string
 	metrics      *metrics
@@ -153,6 +160,7 @@ type remoteBackend struct {
 		streamBufferSize   int
 		filter             func(msg Message, backendAddr string) bool
 		readTimeout        time.Duration
+		freeResponse       func(Message)
 	}
 
 	stateMu struct {
@@ -191,7 +199,7 @@ func NewRemoteBackend(
 		readStopper: stopper.NewStopper(fmt.Sprintf("backend-read-%s", remote)),
 		remote:      remote,
 		codec:       codec,
-		resetConnC:  make(chan struct{}),
+		resetConnC:  make(chan struct{}, 1),
 		stopWriteC:  make(chan struct{}),
 	}
 
@@ -444,10 +452,10 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
 		interval := time.Since(lastScheduleTime)
-		if interval > time.Second*5 {
+		if rb.options.readTimeout > 0 && interval > time.Second*5 {
 			getLogger().Warn("system is busy, write loop schedule interval is too large",
 				zap.Duration("interval", interval),
-				zap.Time("last-ping-trigger_time", rb.lastPingTime),
+				zap.Time("last-ping-trigger-time", rb.lastPingTime),
 				zap.Duration("ping-interval", rb.getPingTimeout()))
 		}
 		if len(messages) > 0 {
@@ -591,16 +599,29 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		messages[i] = nil
 	}
 	messages = messages[:0]
-	select {
-	case <-rb.pingTimer.C:
+
+	doHeartbeat := func() {
 		rb.lastPingTime = time.Now()
 		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
 		// no need wait response, close immediately
 		f.Close()
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		messages = append(messages, f)
 		rb.pingTimer.Reset(rb.getPingTimeout())
+	}
+	handleHeartbeat := func() {
+		select {
+		case <-rb.pingTimer.C:
+			doHeartbeat()
+		default:
+		}
+	}
+
+	select {
+	case <-rb.pingTimer.C:
+		doHeartbeat()
 	case f := <-rb.writeC:
-		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		handleHeartbeat()
+		messages = append(messages, f)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
@@ -609,10 +630,15 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.stopWriteC:
 		return rb.fetchN(messages, math.MaxInt), true
 	}
-	return messages, false
+
+	return rb.fetchN(messages, maxFetchCount), false
 }
 
-func (rb *remoteBackend) fetchN(messages []*Future, n int) []*Future {
+func (rb *remoteBackend) fetchN(messages []*Future, max int) []*Future {
+	if len(messages) >= max {
+		return messages
+	}
+	n := max - len(messages)
 	for i := 0; i < n; i++ {
 		select {
 		case f := <-rb.writeC:
@@ -713,7 +739,12 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.stopWriteC)
 }
 
-func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+func (rb *remoteBackend) requestDone(
+	ctx context.Context,
+	id uint64,
+	msg RPCMessage,
+	err error,
+	cb func()) {
 	start := time.Now()
 	defer func() {
 		rb.metrics.doneDurationHistogram.Observe(time.Since(start).Seconds())
@@ -752,6 +783,12 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 		rb.mu.Unlock()
 		if cb != nil {
 			cb()
+		}
+
+		if !msg.internal &&
+			response != nil &&
+			rb.options.freeResponse != nil {
+			rb.options.freeResponse(response)
 		}
 	}
 }
@@ -894,8 +931,7 @@ func (rb *remoteBackend) scheduleResetConn() {
 	select {
 	case rb.resetConnC <- struct{}{}:
 		rb.logger.Debug("schedule reset remote connection")
-	case <-time.After(time.Second * 10):
-		rb.logger.Fatal("BUG: schedule reset remote connection timeout")
+	default:
 	}
 }
 

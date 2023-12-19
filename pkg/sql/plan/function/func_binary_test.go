@@ -298,6 +298,36 @@ func initCoalesceTestCase() []tcTemp {
 				[]string{"hello", "-", "world"},
 				[]bool{false, false, false}),
 		},
+		{
+			info: "test Coalesce vecf32",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {}, {4, 5, 6}},
+					[]bool{false, true, false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {0, 0, 0}, {4, 5, 6}},
+					[]bool{true, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2, 3}, {0, 0, 0}, {4, 5, 6}},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test Coalesce vecf64",
+			typ:  types.T_varchar,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {}, {4, 5, 6}},
+					[]bool{false, true, false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {0, 0, 0}, {4, 5, 6}},
+					[]bool{true, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{1, 2, 3}, {0, 0, 0}, {4, 5, 6}},
+				[]bool{false, false, false}),
+		},
 	}
 }
 
@@ -1906,8 +1936,8 @@ func initStartsWithTestCase() []tcTemp {
 				origVecs[0],
 				origVecs[1],
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
 				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
 		},
 	}
@@ -1971,8 +2001,8 @@ func initEndsWithTestCase() []tcTemp {
 				origVecs[0],
 				origVecs[1],
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+			expect: testutil.NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
 				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
 		},
 	}

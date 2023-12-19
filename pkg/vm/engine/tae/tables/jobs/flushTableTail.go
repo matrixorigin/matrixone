@@ -185,9 +185,6 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 }
 
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
-	task.rt.Throttle.AcquireCompactionQuota()
-	defer task.rt.Throttle.ReleaseCompactionQuota()
-
 	logutil.Info("[Start]", common.OperationField(task.Name()), common.OperandField(task),
 		common.OperandField(len(task.ablksHandles)+len(task.delSrcHandles)))
 
@@ -710,6 +707,9 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 		subtask.blocks[0].GetExtent(),
 		uint32(subtask.delta.Length()),
 		subtask.blocks[0].GetID())
+
+	v2.TaskFlushDeletesCountHistogram.Observe(float64(task.nblksDeletesCnt))
+	v2.TaskFlushDeletesSizeHistogram.Observe(float64(deltaLoc.Extent().End()))
 	logutil.Infof("[FlushTabletail] task %d update %s for approximate %d blks", task.ID(), deltaLoc, len(task.delSrcHandles))
 	for i, hdl := range task.delSrcHandles {
 		if emtpyDelBlkIdx != nil && emtpyDelBlkIdx.Contains(uint64(i)) {

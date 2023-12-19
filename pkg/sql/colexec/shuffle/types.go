@@ -25,15 +25,16 @@ var _ vm.Operator = new(Argument)
 const shuffleBatchSize = 8192 * 3 / 4
 
 type Argument struct {
-	ctr           *container
-	ShuffleColIdx int32
-	ShuffleType   int32
-	ShuffleColMin int64
-	ShuffleColMax int64
-	AliveRegCnt   int32
-
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	ctr                *container
+	ShuffleColIdx      int32
+	ShuffleType        int32
+	AliveRegCnt        int32
+	ShuffleColMin      int64
+	ShuffleColMax      int64
+	info               *vm.OperatorInfo
+	children           []vm.Operator
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -52,11 +53,13 @@ type container struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i := range arg.ctr.shuffledBats {
-		if arg.ctr.shuffledBats[i] != nil {
-			arg.ctr.shuffledBats[i].Clean(proc.Mp())
-			arg.ctr.shuffledBats[i] = nil
+	if arg.ctr != nil {
+		for i := range arg.ctr.shuffledBats {
+			if arg.ctr.shuffledBats[i] != nil {
+				arg.ctr.shuffledBats[i].Clean(proc.Mp())
+				arg.ctr.shuffledBats[i] = nil
+			}
 		}
+		arg.ctr.sels = nil
 	}
-	arg.ctr.sels = nil
 }

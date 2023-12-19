@@ -93,12 +93,8 @@ func (s *StatsArray) InitIfEmpty() *StatsArray {
 }
 
 func (s *StatsArray) Reset() *StatsArray {
-	return s.WithVersion(StatsArrayVersion).
-		// StatsArrayVersion1
-		WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0).
-		// StatsArrayVersion2
-		WithOutTrafficBytes(0)
-	// Next Version
+	*s = *initStatsArray
+	return s
 }
 
 func (s *StatsArray) GetVersion() float64         { return (*s)[StatsArrayIndexVersion] }
@@ -207,61 +203,77 @@ func StatsArrayToJsonString(arr []float64) []byte {
 
 var initStatsArray = NewStatsArray()
 
-var DefaultStatsArray = *initStatsArray.Init()
+var DefaultStatsArray = *initStatsArray
 
-var DefaultStatsArrayJsonString = initStatsArray.Init().ToJsonString()
+var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 
 type statsInfoKey struct{}
 
 // statistic info of sql
 type StatsInfo struct {
-	ParseDuration   time.Duration
-	PlanDuration    time.Duration
-	CompileDuration time.Duration
+	ParseDuration     time.Duration `json:"ParseDuration"`
+	PlanDuration      time.Duration `json:"PlanDuration"`
+	CompileDuration   time.Duration `json:"CompileDuration"`
+	ExecutionDuration time.Duration `json:"ExecutionDuration"`
 
-	PipelineTimeConsumption      time.Duration
-	PipelineBlockTimeConsumption time.Duration
+	//PipelineTimeConsumption      time.Duration
+	//PipelineBlockTimeConsumption time.Duration
 
-	S3AccessTimeConsumption time.Duration
-	S3ReadBytes             uint
-	S3WriteBytes            uint
+	//S3AccessTimeConsumption time.Duration
+	//S3ReadBytes             uint
+	//S3WriteBytes            uint
 
-	//temporary fields which is used to compute data above
-
-	planStart time.Time
-
-	compileStart time.Time
+	ParseStartTime     time.Time `json:"ParseStartTime"`
+	PlanStartTime      time.Time `json:"PlanStartTime"`
+	CompileStartTime   time.Time `json:"CompileStartTime"`
+	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
+	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
 }
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
 		return
 	}
-	if !stats.compileStart.IsZero() {
+	if !stats.CompileStartTime.IsZero() {
 		return
 	}
-	stats.compileStart = time.Now()
+	stats.CompileStartTime = time.Now()
 }
 
 func (stats *StatsInfo) CompileEnd() {
 	if stats == nil {
 		return
 	}
-	stats.CompileDuration = time.Since(stats.compileStart)
+	stats.CompileDuration = time.Since(stats.CompileStartTime)
 }
 
 func (stats *StatsInfo) PlanStart() {
 	if stats == nil {
 		return
 	}
-	stats.planStart = time.Now()
+	stats.PlanStartTime = time.Now()
 }
 
 func (stats *StatsInfo) PlanEnd() {
 	if stats == nil {
 		return
 	}
-	stats.PlanDuration = time.Since(stats.planStart)
+	stats.PlanDuration = time.Since(stats.PlanStartTime)
+}
+
+func (stats *StatsInfo) ExecutionStart() {
+	if stats == nil {
+		return
+	}
+	stats.ExecutionStartTime = time.Now()
+}
+
+func (stats *StatsInfo) ExecutionEnd() {
+	if stats == nil {
+		return
+	}
+	stats.ExecutionEndTime = time.Now()
+	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
 }
 
 // reset StatsInfo into zero state
@@ -273,15 +285,15 @@ func (stats *StatsInfo) Reset() {
 	stats.CompileDuration = 0
 	stats.PlanDuration = 0
 
-	stats.PipelineTimeConsumption = 0
-	stats.PipelineBlockTimeConsumption = 0
+	//stats.PipelineTimeConsumption = 0
+	//stats.PipelineBlockTimeConsumption = 0
 
-	stats.S3AccessTimeConsumption = 0
-	stats.S3ReadBytes = 0
-	stats.S3WriteBytes = 0
+	//stats.S3AccessTimeConsumption = 0
+	//stats.S3ReadBytes = 0
+	//stats.S3WriteBytes = 0
 
-	stats.compileStart = time.Time{}
-	stats.planStart = time.Time{}
+	stats.CompileStartTime = time.Time{}
+	stats.PlanStartTime = time.Time{}
 
 }
 

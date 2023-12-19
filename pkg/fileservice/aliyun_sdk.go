@@ -94,16 +94,15 @@ func NewAliyunSDK(
 		return nil, err
 	}
 
+	logutil.Info("new object storage",
+		zap.Any("sdk", "aliyun"),
+		zap.Any("arguments", args),
+	)
+
 	bucket, err := client.Bucket(args.Bucket)
 	if err != nil {
 		return nil, err
 	}
-
-	logutil.Info("new object storage",
-		zap.Any("sdk", "aliyun"),
-		zap.Any("endpoint", args.Endpoint),
-		zap.Any("bucket", args.Bucket),
-	)
 
 	return &AliyunSDK{
 		name:            args.Name,

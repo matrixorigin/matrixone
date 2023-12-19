@@ -168,7 +168,7 @@ import (
     zeroFillOpt bool
     ifNotExists bool
     defaultOptional bool
-    streamOptional bool
+    sourceOptional bool
     connectorOptional bool
     fullOpt bool
     boolVal bool
@@ -344,7 +344,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
 // Alter
@@ -373,7 +373,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
 
 // MODump
 %token <str> MODUMP
@@ -406,7 +406,7 @@ import (
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
-// Stream
+// Source
 %token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
 
 // Match
@@ -456,6 +456,9 @@ import (
 // python udf
 %token <str> HANDLER
 
+// Sample Related.
+%token <str> PERCENT SAMPLE
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
@@ -464,7 +467,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_stream_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
+%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -494,6 +497,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <str> json_type_opt
 
 // case statement
 %type <statement> case_stmt
@@ -556,7 +560,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
+%type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -571,7 +575,7 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option stream_option
+%type <tableOption> table_option source_option
 %type <connectorOption> connector_option
 %type <connectorOptions> connector_option_list
 %type <from> from_clause from_opt
@@ -587,6 +591,7 @@ import (
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
 %type <funcExpr> function_call_window
+%type <expr> sample_function_expr
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
@@ -619,7 +624,7 @@ import (
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
-%type <streamOptional> replace_opt
+%type <sourceOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
 %type <indexCategory> index_prefix
@@ -2968,6 +2973,14 @@ alter_table_alter:
             Name: tree.Identifier($2.Compare()),
         }
     }
+| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+      {
+          $$ = &tree.AlterOptionAlterReIndex{
+	      KeyType : tree.INDEX_TYPE_IVFFLAT,
+              AlgoParamList: int64($6.(int64)),
+              Name: tree.Identifier($2.Compare()),
+          }
+      }
 |   CHECK ident enforce
     {
         $$ = &tree.AlterOptionAlterCheck{
@@ -3731,7 +3744,7 @@ drop_table_stmt:
     {
         $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
-|   DROP STREAM exists_opt table_name_list
+|   DROP SOURCE exists_opt table_name_list
     {
         $$ = &tree.DropTable{IfExists: $3, Names: $4}
     }
@@ -5238,7 +5251,7 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
-|   create_stream_stmt
+|   create_source_stmt
 |   create_connector_stmt
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
@@ -6146,8 +6159,8 @@ index_option_list:
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
 	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
-	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
 	    }
             $$ = opt1
         }
@@ -6162,9 +6175,9 @@ index_option:
     {
 	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
     }
-|   SIMILARITY_FUNCTION STRING
+|   OP_TYPE STRING
     {
-	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
+	$$ = &tree.IndexOption{AlgoParamVectorOpType: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -6375,37 +6388,15 @@ resume_daemon_task_stmt:
         }
     }
 
-create_stream_stmt:
-    CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+create_source_stmt:
+    CREATE replace_opt SOURCE not_exists_opt table_name '(' table_elem_list_opt ')' source_option_list_opt
     {
-        $$ = &tree.CreateStream {
+        $$ = &tree.CreateSource {
             Replace: $2,
-            Source: false,
             IfNotExists: $4,
-            StreamName: $5,
+            SourceName: $5,
             Defs: $7,
             Options: $9,
-        }
-    }
-|   CREATE replace_opt SOURCE STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
-    {
-        $$ = &tree.CreateStream {
-            Replace: $2,
-            Source: true,
-            IfNotExists: $5,
-            StreamName: $6,
-            Defs: $8,
-            Options: $10,
-        }
-    }
-|	CREATE replace_opt STREAM not_exists_opt table_name stream_option_list_opt AS select_stmt
-    {
-        $$ = &tree.CreateStream {
-            Replace: $2,
-            IfNotExists: $4,
-            StreamName: $5,
-            AsSource: $8,
-            Options: $6,
         }
     }
 
@@ -6452,6 +6443,16 @@ create_table_stmt:
             ClusterByOption: $11,
         }
     }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt source_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            DTOptions: $8,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -6470,13 +6471,16 @@ load_param_opt:
             },
         }
     }
-|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING  json_type_opt
     {
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
                 Format: $4,
                 Data: $8,
+            },
+            ExParam:tree.ExParam{
+                JsonData:$9,
             },
         }
     }
@@ -6504,6 +6508,15 @@ load_param_opt:
                 StageName: tree.Identifier($3.Compare()),
             },
         }
+    }
+
+json_type_opt:
+    {
+        $$ = ""
+    }
+|    ',' JSONTYPE '=' STRING 
+    {
+        $$ = $4
     }
 
 infile_or_s3_params:
@@ -7007,33 +7020,33 @@ connector_option:
              $$ = &tree.ConnectorOption{Key: tree.Identifier($1), Val: $3}
         }
 
-stream_option_list_opt:
+source_option_list_opt:
     {
         $$ = nil
     }
-|	WITH '(' stream_option_list ')'
+|	WITH '(' source_option_list ')'
 	{
 		$$ = $3
 	}
 
-stream_option_list:
-	stream_option
+source_option_list:
+	source_option
 	{
 		$$ = []tree.TableOption{$1}
 	}
-|	stream_option_list ',' stream_option
+|	source_option_list ',' source_option
 	{
 		$$ = append($1, $3)
 	}
 
-stream_option:
+source_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+        $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
     }
 |   STRING equal_opt literal
     {
-         $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1), Val: $3}
+         $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1), Val: $3}
     }
 
 table_option_list_opt:
@@ -7354,6 +7367,8 @@ index_def:
             switch t {
  	    case "btree":
             	keyTyp = tree.INDEX_TYPE_BTREE
+	    case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7363,7 +7378,7 @@ index_def:
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid the type of index")
                 return 1
             }
         }
@@ -7383,6 +7398,8 @@ index_def:
             switch t {
              case "btree":
 		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7392,7 +7409,7 @@ index_def:
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid type of index")
                 return 1
             }
         }
@@ -8031,6 +8048,10 @@ simple_expr:
     {
         $$ = $1
     }
+|   sample_function_expr
+    {
+	$$ = $1
+    }
 
 function_call_window:
 	RANK '(' ')' window_spec
@@ -8056,6 +8077,65 @@ function_call_window:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             WindowSpec: $4,
         }
+    }
+
+sample_function_expr:
+    SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
+    {
+	v := int($5.(int64))
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|   SAMPLE '(' '*' ',' FLOAT PERCENT ')'
+    {
+	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    return 1
+	}
+	$$ = val
+    }
+|
+    SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
+    {
+    	v := int($5.(int64))
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
+    	if err != nil {
+    	    yylex.Error(err.Error())
+    	    return 1
+    	}
+    	$$ = val
+    }
+|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
+    }
+|   SAMPLE '(' expression_list ',' FLOAT PERCENT ')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
     }
 
 else_opt:
@@ -8364,7 +8444,7 @@ separator_opt:
 
 spherical_kmeans_opt:
     {
-        $$ = "1,vector_cosine_ops"
+        $$ = "1,vector_l2_ops,random"
     }
 |   SPHERICAL_KMEANS STRING
     {
@@ -10476,7 +10556,9 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CONNECTOR
 |   CONNECTORS
+|	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
+|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -10500,6 +10582,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
@@ -10519,7 +10602,7 @@ non_reserved_keyword:
 |   VECF64
 |   KEY_BLOCK_SIZE
 |   LISTS
-|   SIMILARITY_FUNCTION
+|   OP_TYPE
 |   KEYS
 |   LANGUAGE
 |   LESS

@@ -27,25 +27,17 @@ import (
 )
 
 const (
-	Row_ID               = "__mo_rowid"
-	PrefixPriColName     = "__mo_cpkey_"
-	PrefixCBColName      = "__mo_cbkey_"
-	PrefixIndexTableName = "__mo_index_"
+	Row_ID           = "__mo_rowid"
+	PrefixPriColName = "__mo_cpkey_"
+	PrefixCBColName  = "__mo_cbkey_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
 	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
 	// is added, which will not be sorted or used for any other purpose, but will only be used to add
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
-	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName        = "__mo_index_idx_col"
-	IndexTablePrimaryColName      = "__mo_index_pri_col"
-	ExternalFilePath              = "__mo_filepath"
-	UniqueIndexSuffix             = "unique_"
-	SecondaryIndexSuffix          = "secondary_"
-	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
-	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
-	IndexTableNamePrefix          = PrefixIndexTableName
+	ExternalFilePath      = "__mo_filepath"
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -195,6 +187,9 @@ const (
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
 	BlockMeta_Partition       = "%!%mo__meta_partition"
+
+	ObjectMeta_ObjectStats = "object_stats"
+
 	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
 	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
 	BlockMetaOffset    = "%!%mo__meta_offset"
@@ -208,7 +203,7 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
-	SystemStreamRel       = "s"
+	SystemSourceRel       = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -216,17 +211,48 @@ const (
 		the partition table contains the data of the partition.
 		the table partitioned has multiple partition tables
 	*/
-	SystemPartitionRel = "partition"
-
-	//// Secondary Index Relations
-	//SystemSecondaryIndex_IvfMetadataRel         = "metadata"
-	//SystemSecondaryIndex_IvfCentroidsRel        = "centroids"
-	//SystemSecondaryIndex_IvfCentroidsMappingRel = "entries"
-
+	SystemPartitionRel    = "partition"
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+)
+
+// Key/Index related constants
+const (
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	PrefixIndexTableName          = "__mo_index_"
+	IndexTableNamePrefix          = PrefixIndexTableName
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+
+	/************ 0. Regular Secondary Index ************/
+
+	// Regualar secondary index table columns
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+
+	/************ 1. IVF_FLAT Secondary Index ************/
+
+	// IVF_FLAT Table Types
+	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
+	SystemSI_IVFFLAT_TblType_Centroids = "centroids"
+	SystemSI_IVFFLAT_TblType_Entries   = "entries"
+
+	// IVF_FLAT MetadataTable - Column names
+	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"
+	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
+
+	// IVF_FLAT Centroids - Column names
+	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
+	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid = "__mo_index_centroid"
+
+	// IVF_FLAT Entries - Column names
+	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
+	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
+	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 )
 
 const (

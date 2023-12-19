@@ -23,10 +23,11 @@ import (
 // provides the merge function, which can merge the PrefetchParams requests of
 // multiple blocks in an object/file
 type PrefetchParams struct {
-	ids    map[uint16]*objectio.ReadBlockOptions
-	fs     fileservice.FileService
-	key    objectio.Location
-	reader *objectio.ObjectReader
+	ids          map[uint16]*objectio.ReadBlockOptions
+	fs           fileservice.FileService
+	key          objectio.Location
+	reader       *objectio.ObjectReader
+	prefetchFile bool
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {

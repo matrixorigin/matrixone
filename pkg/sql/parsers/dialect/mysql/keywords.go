@@ -241,6 +241,7 @@ func init() {
 		"iterate":                    ITERATE,
 		"join":                       JOIN,
 		"json":                       JSON,
+		"jsontype":                   JSONTYPE,
 		"uuid":                       UUID,
 		"key":                        KEY,
 		"keys":                       KEYS,
@@ -257,7 +258,8 @@ func init() {
 		"ilike":                      ILIKE,
 		"list":                       LIST,
 		"lists":                      LISTS,
-		"similarity_function":        SIMILARITY_FUNCTION,
+		"op_type":                    OP_TYPE,
+		"reindex":                    REINDEX,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,
 		"lines":                      LINES,
@@ -436,6 +438,7 @@ func init() {
 		"storage":                    STORAGE,
 		"straight_join":              STRAIGHT_JOIN,
 		"stream":                     STREAM,
+		"source":                     SOURCE,
 		"super":                      SUPER,
 		"table":                      TABLE,
 		"tables":                     TABLES,
@@ -611,5 +614,7 @@ func init() {
 		"backup":                     BACKUP,
 		"filesystem":                 FILESYSTEM,
 		"handler":                    HANDLER,
+		"sample":                     SAMPLE,
+		"percent":                    PERCENT,
 	}
 }

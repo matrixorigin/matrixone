@@ -33,15 +33,21 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
+
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}

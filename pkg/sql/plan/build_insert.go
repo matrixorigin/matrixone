@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -42,7 +49,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if t.TableType == catalog.SystemStreamRel {
+	if t.TableType == catalog.SystemSourceRel {
 		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
@@ -79,8 +86,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	var pkFilterExprs []*Expr
+	var newPartitionExpr *Expr
 	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
+		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
+		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
+		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -122,7 +133,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 						},
 					})
 				} else {
-					aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
+					aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
 						{
 							Typ: dupProjection[i].Typ,
 							Expr: &plan.Expr_Col{
@@ -244,7 +255,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -317,9 +328,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
-						Expr: &plan.Expr_C{
-							C: &plan.Const{
-								Value: &plan.Const_Sval{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{
 									Sval: val.ToString(),
 								},
 							},
@@ -336,8 +347,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					}
 					valExprs[i] = &plan.Expr{
 						Typ: colTyp,
-						Expr: &plan.Expr_C{
-							C: constExpr,
+						Expr: &plan.Expr_Lit{
+							Lit: constExpr,
 						},
 					}
 				}
@@ -347,9 +358,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount > useInExprCount {
+		if rowsCount > 1 {
 			// args in list must be constant
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
@@ -378,7 +389,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		} else {
 			var orExpr *Expr
 			for i := 0; i < rowsCount; i++ {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
@@ -394,7 +405,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				if i == 0 {
 					orExpr = expr
 				} else {
-					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
 					if err != nil {
 						return nil
 					}
@@ -407,7 +418,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		if rowsCount == 1 {
 			filterExprs := make([]*Expr, pkColLength)
 			for insertRowIdx, pkColIdx = range pkPosInValues {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: tableDef.Cols[insertRowIdx].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
@@ -428,7 +439,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			for i := 0; i < rowsCount; i++ {
 				var andExpr *Expr
 				for insertRowIdx, pkColIdx = range pkPosInValues {
-					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 						Typ: tableDef.Cols[insertRowIdx].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
@@ -444,7 +455,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					if andExpr == nil {
 						andExpr = eqExpr
 					} else {
-						andExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
+						andExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
 						if err != nil {
 							return nil
 						}
@@ -454,7 +465,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				if i == 0 {
 					orExpr = andExpr
 				} else {
-					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
+					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
 					if err != nil {
 						return nil
 					}
@@ -463,4 +474,60 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{orExpr}
 		}
 	}
+}
+
+// remapPartitionExpr Remap partition expression column references
+func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) *Expr {
+	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
+		return nil
+	}
+
+	if tableDef.Partition == nil {
+		return nil
+	} else {
+		partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+		if remapPartExprColRef(partitionExpr, pkPosInValues, tableDef) {
+			return partitionExpr
+		}
+		return nil
+	}
+}
+
+// remapPartExprColRef Remap partition expression column references
+func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) bool {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		cPos := ne.Col.ColPos
+		if ids, ok := colMap[int(cPos)]; ok {
+			ne.Col.RelPos = 0
+			ne.Col.ColPos = int32(ids)
+			ne.Col.Name = tableDef.Cols[cPos].Name
+		} else {
+			return false
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
+				return false
+			}
+		}
+
+	case *plan.Expr_W:
+		if res := remapPartExprColRef(ne.W.WindowFunc, colMap, tableDef); !res {
+			return false
+		}
+
+		for _, arg := range ne.W.PartitionBy {
+			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
+				return false
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			if res := remapPartExprColRef(order.Expr, colMap, tableDef); !res {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -200,75 +200,75 @@ ol.Berkly.the.book
 ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
 endswith(c, a)	endswith(vc, a)
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
 null	null
-0	0
+false	false
 select endswith(c,'y'),endswith(vc,'e') from t1;
 endswith(c, y)	endswith(vc, e)
-1	1
-1	1
-0	1
-1	1
-0	0
-0	0
-0	0
-0	0
-0	1
-0	0
+true	true
+true	true
+false	true
+true	true
+false	false
+false	false
+false	false
+false	false
+false	true
+false	false
 null	null
-0	0
-select * from t1 where endswith(c,'y') = 1;
+false	false
+select * from t1 where endswith(c,'y');
 id	c	vc
 1	Daffy	Aducklife
 1	Daffy	Aducklife
 3	Cowboy	Lifeontherange
-select * from t1 where endswith(c,'y') = 1 and endswith(vc,'ge') = 1;
+select * from t1 where endswith(c,'y') and endswith(vc,'ge');
 id	c	vc
 3	Cowboy	Lifeontherange
 select startswith(c,'B'),startswith(vc,'A') from t1;
 startswith(c, B)	startswith(vc, A)
-0	1
-0	1
-1	1
-0	0
-0	0
-1	0
-1	0
-0	0
-0	0
-1	0
+false	true
+false	true
+true	true
+false	false
+false	false
+true	false
+true	false
+false	false
+false	false
+true	false
 null	null
-0	0
+false	false
 select startswith(c,'y'),startswith(vc,'e') from t1;
 startswith(c, y)	startswith(vc, e)
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
+false	false
 null	null
-0	0
-select * from t1 where startswith(c,'B') = 1;
+false	false
+select * from t1 where startswith(c,'B');
 id	c	vc
 2	Bugs	Arabbitlife
 5	BestSeller	OneHeckuvabook
 5	BestSeller	OneHeckuvabook
 8	BerkAuthor	Cool.Berkly.the.book
-select * from t1 where startswith(c,'B') = 1 and startswith(vc,'A') = 1;
+select * from t1 where startswith(c,'B') and startswith(vc,'A');
 id	c	vc
 2	Bugs	Arabbitlife
 select lpad(c,0,'*') from t1;

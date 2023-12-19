@@ -102,7 +102,7 @@ type Session struct {
 	sql           string
 
 	sysVars         map[string]interface{}
-	userDefinedVars map[string]interface{}
+	userDefinedVars map[string]*UserDefinedVar
 	gSysVars        *GlobalSystemVariables
 
 	//the server status
@@ -543,7 +543,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
-		ses.userDefinedVars = make(map[string]interface{})
+		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
@@ -671,6 +671,8 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
+		// Reset background session id as frontend stmt id
+		ses.uuid = stmt.StatementID
 		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
@@ -1168,11 +1170,13 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-	if isInsertValues {
-		prepareStmt.proc = ses.proc
-		prepareStmt.exprList = exprList
+	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
+		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		if isInsertValues {
+			prepareStmt.proc = ses.proc
+			prepareStmt.exprList = exprList
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -1241,10 +1245,14 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	var compCtx *TxnCompilerContext
+	var proc *process.Process
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
-	return ses.txnCompileCtx
+	compCtx = ses.txnCompileCtx
+	proc = ses.proc
+	ses.mu.Unlock()
+	compCtx.SetProcess(proc)
+	return compCtx
 }
 
 func (ses *Session) GetBuffer() *buffer.Buffer {
@@ -1325,15 +1333,15 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session
-func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = value
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
@@ -2105,13 +2113,13 @@ func (ses *Session) getCNLabels() map[string]string {
 }
 
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+func (ses *Session) getGlobalSystemVariableValue(varName string) (val interface{}, err error) {
 	var sql string
-	var err error
+	//var err error
 	var erArray []ExecResult
 	var accountId uint32
 	var variableValue string
-	var val interface{}
+	//var val interface{}
 	ctx := ses.GetRequestContext()
 
 	// check the variable name isValid or not
@@ -2120,7 +2128,6 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		return nil, err
 	}
 
-	tenantInfo := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -2131,7 +2138,9 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	accountId = tenantInfo.GetTenantID()
+	if tenantInfo := ses.GetTenantInfo(); tenantInfo != nil {
+		accountId = tenantInfo.GetTenantID()
+	}
 	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
 	bh.ClearExecResultSet()

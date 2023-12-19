@@ -40,6 +40,9 @@ const (
 	AddFaultPointMethod = "ADDFAULTPOINT"
 	BackupMethod        = "BACKUP"
 	TraceSpanMethod     = "TRACESPAN"
+
+	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
+	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
 )
 
 var (
@@ -65,6 +68,9 @@ var (
 		AddFaultPointMethod: handleAddFaultPoint(),
 		BackupMethod:        handleBackup(),
 		TraceSpanMethod:     handleTraceSpan,
+
+		GetProtocolVersionMethod: handleGetProtocolVersion,
+		SetProtocolVersionMethod: handleSetProtocolVersion,
 	}
 )
 

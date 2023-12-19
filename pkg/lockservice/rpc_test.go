@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -55,6 +56,7 @@ func TestRPCSend(t *testing.T) {
 					Method:    lock.Method_Lock})
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
+			releaseResponse(resp)
 		},
 	)
 }
@@ -154,6 +156,7 @@ func TestLockTableBindChanged(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, resp.NewBind)
 			assert.Equal(t, lock.LockTable{ServiceID: "s1"}, *resp.NewBind)
+			releaseResponse(resp)
 		},
 	)
 }
@@ -162,45 +165,47 @@ func runRPCTests(
 	t *testing.T,
 	fn func(Client, Server),
 	opts ...ServerOption) {
-	defer leaktest.AfterTest(t)()
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-	assert.NoError(t, os.RemoveAll(testSockets[7:]))
+	reuse.RunReuseTests(func() {
+		defer leaktest.AfterTest(t)()
+		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+		assert.NoError(t, os.RemoveAll(testSockets[7:]))
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			[]metadata.CNService{
-				{
-					ServiceID:          "s1",
-					LockServiceAddress: testSockets,
+		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+		cluster := clusterservice.NewMOCluster(
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				[]metadata.CNService{
+					{
+						ServiceID:          "s1",
+						LockServiceAddress: testSockets,
+					},
+					{
+						ServiceID:          "s2",
+						LockServiceAddress: testSockets,
+					},
 				},
-				{
-					ServiceID:          "s2",
-					LockServiceAddress: testSockets,
-				},
-			},
-			[]metadata.TNService{
-				{
-					LockServiceAddress: testSockets,
-				},
-			}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+				[]metadata.TNService{
+					{
+						LockServiceAddress: testSockets,
+					},
+				}))
+		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-	s, err := NewServer(testSockets, morpc.Config{}, opts...)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, s.Close())
-	}()
-	require.NoError(t, s.Start())
+		s, err := NewServer(testSockets, morpc.Config{}, opts...)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, s.Close())
+		}()
+		require.NoError(t, s.Start())
 
-	c, err := NewClient(morpc.Config{})
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, c.Close())
-	}()
+		c, err := NewClient(morpc.Config{})
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
 
-	fn(c, s)
+		fn(c, s)
+	})
 }

@@ -37,8 +37,9 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(Config{EnableCompress: true},
-			newTestRuntime(newTestClock(), s.rt.Logger().RawLogger()))
+		rt := newTestRuntime(newTestClock(), s.rt.Logger().RawLogger())
+		runtime.SetupProcessLevelRuntime(rt)
+		cli, err := NewSender(Config{EnableCompress: true}, rt)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -153,15 +154,9 @@ func TestHandleInvalidMessageWillPanic(t *testing.T) {
 	})
 }
 
-func TestHandleNotRegisterWillPanic(t *testing.T) {
+func TestHandleNotRegisterWillReturnError(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-		assert.NoError(t, s.onMessage(context.Background(), newMessage(&txn.TxnRequest{}), 0, nil))
+		assert.Error(t, s.onMessage(context.Background(), newMessage(&txn.TxnRequest{}), 0, nil))
 	})
 }
 

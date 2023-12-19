@@ -33,6 +33,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	var err error
 	var name string
 	ap := arg
@@ -41,6 +45,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}

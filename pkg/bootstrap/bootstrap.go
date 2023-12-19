@@ -84,7 +84,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_async_task (
-			task_id                     int primary key auto_increment,
+			task_id                     bigint primary key auto_increment,
 			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
@@ -101,7 +101,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_cron_task (
-			cron_task_id				int primary key auto_increment,
+			cron_task_id				bigint primary key auto_increment,
     		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
@@ -114,7 +114,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     int primary key auto_increment,
+			task_id                     bigint primary key auto_increment,
 			task_metadata_id            varchar(50),
 			task_metadata_executor      int,
 			task_metadata_context       blob,

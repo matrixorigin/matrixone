@@ -32,8 +32,9 @@ const (
 	BLOCK        = "block"
 	MUTEX        = "mutex"
 
-	CPU   = "cpu"
-	TRACE = "trace"
+	CPU    = "cpu"
+	TRACE  = "trace"
+	STATUS = "status"
 )
 
 // ProfileGoroutine you can see more infos in https://pkg.go.dev/runtime/pprof#Profile
@@ -105,4 +106,8 @@ func Time2DatetimeString(t time.Time) string {
 // - pprof/cpu_${id}_${yyyyDDMM_hhmmss.ns}.pprof
 func GetProfileName(typ string, id string, t time.Time) string {
 	return fmt.Sprintf("pprof/%s_%s_%s.pprof", typ, id, Time2DatetimeString(t))
+}
+
+func GetSystemStatusFilePath(id string, t time.Time) string {
+	return fmt.Sprintf("status/%s_%s.ss", id, Time2DatetimeString(t))
 }

@@ -85,6 +85,7 @@ type Argument struct {
 	NumCPU   uint64
 
 	HashOnPK           bool
+	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	info     *vm.OperatorInfo

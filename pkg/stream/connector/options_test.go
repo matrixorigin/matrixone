@@ -49,7 +49,6 @@ func TestMakeStmtOpts(t *testing.T) {
 	invalidValueOptList := []map[string]string{
 		{"type": ""},
 		{"type": "my"},
-		{"type": "kafka", "partition": "a"},
 		{"type": "kafka", "bootstrap.servers": "localhost"},
 		{"type": "kafka", "value": "a"},
 	}
@@ -70,8 +69,8 @@ func TestMakeStmtOpts(t *testing.T) {
 		"type":              "kafka",
 		"bootstrap.servers": "localhost:9092",
 		"topic":             "t1",
-		"partition":         "1",
 		"value":             "json",
+		"partition":         "1",
 	}
 	o, err = MakeStmtOpts(context.Background(), okOpts)
 	assert.NoError(t, err)

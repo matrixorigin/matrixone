@@ -185,8 +185,8 @@ func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListI
 func (entry *TableEntry) CreateSegment(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	dataFactory SegmentDataFactory,
-	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
+	opts *objectio.CreateSegOpt,
+) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.Segmentid
@@ -195,7 +195,7 @@ func (entry *TableEntry) CreateSegment(
 	} else {
 		id = objectio.NewSegmentid()
 	}
-	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
+	created = NewSegmentEntry(entry, id, txn, state)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -320,7 +320,7 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
 		}
-		if w.Len() > 8*1024*1024 {
+		if w.Len() > 8*common.Const1MBytes {
 			w.WriteString("\n...(truncated for too long, more than 8 MB)")
 			break
 		}
@@ -585,11 +585,18 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
+		var hints []apipb.MergeHint
+		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+			NextColSeqnum:    newSchema.Extra.NextColSeqnum,
+			MinRowsQuailifed: newSchema.Extra.MinRowsQuailifed,
+			MaxObjOnerun:     newSchema.Extra.MaxObjOnerun,
+			MaxRowsMergedObj: newSchema.Extra.MaxRowsMergedObj,
+			Hints:            hints,
 		}
+
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return

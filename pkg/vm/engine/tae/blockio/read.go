@@ -49,7 +49,7 @@ func ReadByFilter(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (sels []int32, err error) {
-	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp)
+	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -119,6 +119,7 @@ func BlockRead(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
+	policy fileservice.Policy,
 ) (*batch.Batch, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -159,7 +160,7 @@ func BlockRead(
 
 	columnBatch, err := BlockReadInner(
 		ctx, info, inputDeletes, columns, colTypes,
-		types.TimestampToTS(ts), sels, fs, mp, vp,
+		types.TimestampToTS(ts), sels, fs, mp, vp, policy,
 	)
 	if err != nil {
 		return nil, err
@@ -179,7 +180,7 @@ func BlockCompactionRead(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 
-	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp)
+	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +220,7 @@ func BlockReadInner(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
+	policy fileservice.Policy,
 ) (result *batch.Batch, err error) {
 	var (
 		rowidPos    int
@@ -229,7 +231,7 @@ func BlockReadInner(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, err = readBlockData(
-		ctx, columns, colTypes, info, ts, fs, mp, vp,
+		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
 		return
 	}
@@ -439,6 +441,7 @@ func readBlockData(
 	fs fileservice.FileService,
 	m *mpool.MPool,
 	vp engine.VectorPool,
+	policy fileservice.Policy,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
@@ -450,7 +453,7 @@ func readBlockData(
 			return
 		}
 
-		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m); err != nil {
+		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
 
@@ -574,7 +577,7 @@ func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo, prefetchFile bool) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
@@ -592,6 +595,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 				}
 			}
 		}
+		pref.prefetchFile = prefetchFile
 		err = pipeline.Prefetch(pref)
 		if err != nil {
 			return err

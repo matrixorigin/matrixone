@@ -17,7 +17,7 @@ package queryservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -27,8 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,7 +46,7 @@ func testCreateQueryService(t *testing.T) QueryService {
 	address := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	err := os.RemoveAll(address[7:])
 	assert.NoError(t, err)
-	qs, err := NewQueryService("s1", address, morpc.Config{}, nil)
+	qs, err := NewQueryService("s1", address, morpc.Config{})
 	assert.NoError(t, err)
 	return qs
 }
@@ -78,10 +81,7 @@ func TestQueryService(t *testing.T) {
 	}
 
 	t.Run("sys tenant", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
-			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
-			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
-			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
@@ -98,10 +98,7 @@ func TestQueryService(t *testing.T) {
 	})
 
 	t.Run("common tenant", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
-			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
-			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
-			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
@@ -118,7 +115,7 @@ func TestQueryService(t *testing.T) {
 	})
 
 	t.Run("bad request", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
@@ -129,20 +126,20 @@ func TestQueryService(t *testing.T) {
 	})
 
 	t.Run("unsupported cmd", func(t *testing.T) {
-		runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := svc.NewRequest(pb.CmdMethod(10))
+			req := svc.NewRequest(pb.CmdMethod(math.MaxInt32))
 			_, err := svc.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
-			assert.Equal(t, "not supported: 10 not support in current service", err.Error())
+			assert.Equal(t, "not supported: 2147483647 not support in current version", err.Error())
 		})
 	})
 }
 
 func TestQueryServiceKillConn(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 		req := svc.NewRequest(pb.CmdMethod_KillConn)
@@ -158,10 +155,10 @@ func TestQueryServiceKillConn(t *testing.T) {
 	})
 }
 
-func runTestWithQueryService(t *testing.T, cn metadata.CNService,
-	fn func(svc QueryService, addr string, sm *SessionManager)) {
+func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc QueryService, addr string)) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
 		time.Now().Nanosecond(), cn.ServiceID)
 
@@ -179,8 +176,31 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	sm := NewSessionManager()
-	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{}, sm)
+	sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
+	sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
+	sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+
+	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
 	assert.NoError(t, err)
+	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+		if req.ShowProcessListRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		var ss []Session
+		if req.ShowProcessListRequest.SysTenant {
+			ss = sm.GetAllSessions()
+		} else {
+			ss = sm.GetSessionsByTenant(req.ShowProcessListRequest.Tenant)
+		}
+		sessions := make([]*status.Session, 0, len(ss))
+		for _, ses := range ss {
+			sessions = append(sessions, ses.StatusSession())
+		}
+		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
+			Sessions: sessions,
+		}
+		return nil
+	}, false)
 	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response) error {
 		response.KillConnResponse = &pb.KillConnResponse{Success: true}
 		return nil
@@ -237,7 +257,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 	err = qs.Start()
 	assert.NoError(t, err)
 
-	fn(qs, address, sm)
+	fn(qs, address)
 
 	err = qs.Close()
 	assert.NoError(t, err)
@@ -245,7 +265,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 
 func TestQueryServiceAlterAccount(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 		req := svc.NewRequest(pb.CmdMethod_AlterAccount)
@@ -263,7 +283,7 @@ func TestQueryServiceAlterAccount(t *testing.T) {
 
 func TestQueryServiceTraceSpan(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 		req := svc.NewRequest(pb.CmdMethod_TraceSpan)
@@ -290,7 +310,7 @@ func TestRequestMultipleCn(t *testing.T) {
 	}
 
 	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
-	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 

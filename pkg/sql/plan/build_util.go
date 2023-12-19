@@ -322,8 +322,8 @@ func isNullExpr(expr *plan.Expr) bool {
 		return false
 	}
 	switch ef := expr.Expr.(type) {
-	case *plan.Expr_C:
-		return expr.Typ.Id == int32(types.T_any) && ef.C.Isnull
+	case *plan.Expr_Lit:
+		return expr.Typ.Id == int32(types.T_any) && ef.Lit.Isnull
 	default:
 		return false
 	}
@@ -346,13 +346,13 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 			continue
 		}
 		switch ex := arg.Expr.(type) {
-		case *plan.Expr_C:
-			switch value := ex.C.Value.(type) {
-			case *plan.Const_I64Val:
+		case *plan.Expr_Lit:
+			switch value := ex.Lit.Value.(type) {
+			case *plan.Literal_I64Val:
 				if value.I64Val == 0 {
-					ex.C.Value = &plan.Const_Bval{Bval: false}
+					ex.Lit.Value = &plan.Literal_Bval{Bval: false}
 				} else {
-					ex.C.Value = &plan.Const_Bval{Bval: true}
+					ex.Lit.Value = &plan.Literal_Bval{Bval: true}
 				}
 				arg.Typ.Id = int32(types.T_bool)
 			}
@@ -433,8 +433,8 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	}
 	if d.Default.Expr == nil {
 		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
 					Isnull: true,
 				},
 			},
@@ -479,4 +479,16 @@ func checkTableColumnNameValid(name string) bool {
 		return false
 	}
 	return true
+}
+
+// Check the expr has paramExpr
+func checkExprHasParamExpr(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if _, ok := expr.(*tree.ParamExpr); ok {
+			return true
+		} else if e, ok := expr.(*tree.FuncExpr); ok {
+			return checkExprHasParamExpr(e.Exprs)
+		}
+	}
+	return false
 }

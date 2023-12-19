@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -357,10 +356,6 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 func (blk *ablock) RunCalibration() (score int) {
 	score, _ = blk.estimateRawScore()
 	return
-}
-
-func (blk *ablock) EstimateScore(ttl time.Duration, force bool) int {
-	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 
 func (blk *ablock) OnReplayAppend(node txnif.AppendNode) (err error) {

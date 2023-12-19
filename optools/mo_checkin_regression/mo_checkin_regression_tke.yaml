@@ -18,6 +18,13 @@ spec:
       env:
       - name: GOMEMLIMIT
         value: "8000MiB"
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     cacheVolume:
       size: 100Gi
       storageClassName: cbs-hssd
@@ -51,8 +58,8 @@ spec:
         cpu: 7
         memory: 12Gi
       limits:
-        cpu: 8
-        memory: 16Gi
+        cpu: 7
+        memory: 14Gi
   imageRepository: ccr.ccs.tencentyun.com/matrixone-dev/matrixone
   logService:
     exportToPrometheus: true
@@ -65,14 +72,21 @@ spec:
         operator: Exists    
       imagePullSecrets:
       - name: tke-registry
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     replicas: 3
     resources:
       requests:
-        cpu: 1
+        cpu: 1.5
         memory: 2Gi
       limits:
-        cpu: 2
-        memory: 4Gi
+        cpu: 1.5
+        memory: 2Gi
     sharedStorage:
       s3:
         path: s3pathformocheckin
@@ -131,11 +145,18 @@ spec:
       env:
       - name: GOMEMLIMIT
         value: "8000MiB"
+      podAnnotations:
+        profiles.grafana.com/memory.scrape: "true"
+        profiles.grafana.com/memory.port: "6060"
+        profiles.grafana.com/cpu.scrape: "true"
+        profiles.grafana.com/cpu.port: "6060"
+        profiles.grafana.com/goroutine.scrape: "true"
+        profiles.grafana.com/goroutine.port: "6060"
     resources:
       requests:
         cpu: 7
         memory: 12Gi
       limits:
-        cpu: 8
-        memory: 16Gi
+        cpu: 7
+        memory: 14Gi
   version: imagetag

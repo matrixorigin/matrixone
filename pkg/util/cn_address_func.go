@@ -31,6 +31,8 @@ type HAKeeperClient interface {
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 }
 
+const LOGGING_CN_LABEL = "logging_cn"
+
 func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (string, error) {
 	return func(ctx context.Context, random bool) (string, error) {
 		if getClient == nil || getClient() == nil {
@@ -43,20 +45,39 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 			return "", err
 		}
 		cns := make([]pb.CNStore, 0, len(details.CNStores))
+		labeled_cns := make([]pb.CNStore, 0, len(details.CNStores))
 		for _, cn := range details.CNStores {
 			if cn.WorkState == metadata.WorkState_Working {
 				cns = append(cns, cn)
+				if cn.Labels != nil {
+					for _, labelList := range cn.Labels {
+						for _, label := range labelList.Labels {
+							if label == LOGGING_CN_LABEL {
+								labeled_cns = append(labeled_cns, cn)
+							}
+						}
+					}
+				}
 			}
 		}
 		if len(cns) == 0 {
 			return "", moerr.NewInvalidState(ctx, "no CN in the cluster")
 		}
+		var selectedCNs []pb.CNStore // Replace CNType with the actual type of your CNs
+		if len(labeled_cns) > 0 {
+			selectedCNs = labeled_cns
+		} else {
+			selectedCNs = cns
+		}
+
 		var n int
 		if random {
-			n = rand.Intn(len(cns))
+			n = rand.Intn(len(selectedCNs))
 		} else {
-			n = len(cns) - 1
+			n = len(selectedCNs) - 1
 		}
-		return cns[n].SQLAddress, nil
+
+		return selectedCNs[n].SQLAddress, nil
+
 	}
 }

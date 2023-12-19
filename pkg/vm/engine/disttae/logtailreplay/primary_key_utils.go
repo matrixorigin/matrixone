@@ -24,7 +24,7 @@ import (
 func (p *PartitionState) PrimaryKeyMayBeModified(
 	from types.TS,
 	to types.TS,
-	key []byte,
+	keys [][]byte,
 ) bool {
 
 	p.shared.Lock()
@@ -38,56 +38,60 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 	}
 
 	iter := p.primaryIndex.Copy().Iter()
+	pivot := RowEntry{
+		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
+	}
+	idxEntry := &PrimaryIndexEntry{}
 	defer iter.Release()
 
-	for ok := iter.Seek(&PrimaryIndexEntry{
-		Bytes: key,
-	}); ok; ok = iter.Next() {
+	for _, key := range keys {
 
-		entry := iter.Item()
+		idxEntry.Bytes = key
 
-		if !bytes.Equal(entry.Bytes, key) {
-			break
-		}
+		for ok := iter.Seek(idxEntry); ok; ok = iter.Next() {
 
-		if entry.Time.GreaterEq(from) {
-			return true
-		}
+			entry := iter.Item()
 
-		// some legacy deletion entries may not indexed, check all rows for changes
-		pivot := RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    types.BuildTS(math.MaxInt64, math.MaxUint32),
-		}
-		iter := p.rows.Copy().Iter()
-		seek := false
-		for {
-			if !seek {
-				seek = true
-				if !iter.Seek(pivot) {
-					break
-				}
-			} else {
-				if !iter.Next() {
-					break
-				}
-			}
-			row := iter.Item()
-			if row.BlockID.Compare(entry.BlockID) != 0 {
+			if !bytes.Equal(entry.Bytes, key) {
 				break
 			}
-			if !row.RowID.Equal(entry.RowID) {
-				break
-			}
-			if row.Time.GreaterEq(from) {
-				iter.Release()
+
+			if entry.Time.GreaterEq(from) {
 				return true
 			}
+
+			// some legacy deletion entries may not indexed, check all rows for changes
+			pivot.BlockID = entry.BlockID
+			pivot.RowID = entry.RowID
+			rowIter := p.rows.Iter()
+			seek := false
+			for {
+				if !seek {
+					seek = true
+					if !rowIter.Seek(pivot) {
+						break
+					}
+				} else {
+					if !rowIter.Next() {
+						break
+					}
+				}
+				row := rowIter.Item()
+				if row.BlockID.Compare(entry.BlockID) != 0 {
+					break
+				}
+				if !row.RowID.Equal(entry.RowID) {
+					break
+				}
+				if row.Time.GreaterEq(from) {
+					rowIter.Release()
+					return true
+				}
+			}
+			rowIter.Release()
 		}
-		iter.Release()
 
+		iter.First()
 	}
-
 	return false
 }

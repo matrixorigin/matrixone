@@ -161,7 +161,7 @@ startswith(split_part(s1, *., 3), 123)
 null
 null
 null
-0
+false
 null
 null
 null
@@ -177,7 +177,7 @@ null
 null
 null
 null
-1
+true
 SELECT * FROM split_part_01 WHERE find_in_set(split_part(s1,delim,count1),NULL) = NULL;
 id    s1    delim    count1
 SELECT CONCAT_WS(split_part(s1,delim,count1),'hehaha32789','ABCNSLK') FROM split_part_01 WHERE id = 2;
@@ -295,17 +295,17 @@ id    s1    delim    count1    count2
 SELECT startswith(split_part(s1,delim,3),'SUB') FROM split_part_02;
 startswith(split_part(s1, delim, 3), SUB)
 null
-0
+false
 null
 null
 null
 SELECT endswith(split_part(s1,delim,6),'h)') FROM split_part_02;
 endswith(split_part(s1, delim, 6), h))
 null
-0
+false
 null
 null
-0
+false
 SELECT find_in_set(split_part(s1,delim,count1),'SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&') FROM split_part_02;
 find_in_set(split_part(s1, delim, count1), SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&)
 null

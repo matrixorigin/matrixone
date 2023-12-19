@@ -47,8 +47,10 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD = 512
-	PREFETCH_ROUNDS    = 32
+	PREFETCH_THRESHOLD  = 256
+	PREFETCH_ROUNDS     = 24
+	SMALLSCAN_THRESHOLD = 100
+	LARGESCAN_THRESHOLD = 1500
 )
 
 const (
@@ -57,6 +59,12 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+)
+
+const (
+	SMALL = iota
+	NORMAL
+	LARGE
 )
 
 const (
@@ -214,11 +222,17 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) isDeleted(blockID *types.Blockid) bool {
+func (b *deletedBlocks) hasDeletes(blockID *types.Blockid) bool {
 	b.RLock()
 	defer b.RUnlock()
 	_, ok := b.offsets[*blockID]
 	return ok
+}
+
+func (b *deletedBlocks) isEmpty() bool {
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets) == 0
 }
 
 func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
@@ -338,6 +352,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.rollbackCreateTableLocked()
+
 		txn.statementID--
 		end := txn.statements[txn.statementID]
 		for i := end; i < len(txn.writes); i++ {
@@ -505,6 +521,8 @@ type txnTable struct {
 	// process for statement
 	//proc *process.Process
 	proc atomic.Pointer[process.Process]
+
+	createByStatementID int
 }
 
 type column struct {
@@ -574,6 +592,7 @@ type blockReader struct {
 	steps       []int
 	currentStep int
 
+	scanType int
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
@@ -583,6 +602,8 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table *txnTable
+
+	encodedPrimaryKey []byte
 
 	//for perfetch deletes
 	loaded     bool

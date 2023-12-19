@@ -81,7 +81,7 @@ package vm
 // 	LockOp: lockop.String,
 
 // 	Shuffle: shuffle.String,
-// 	Stream:  stream.String,
+// 	Source:  stream.String,
 // }
 
 // var prepareFunc = [...]func(*process.Process, any) error{
@@ -151,7 +151,7 @@ package vm
 // 	LockOp: lockop.Prepare,
 
 // 	Shuffle: shuffle.Prepare,
-// 	Stream:  stream.Prepare,
+// 	Source:  stream.Prepare,
 // }
 
 // var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
@@ -219,5 +219,5 @@ package vm
 // 	LockOp: lockop.Call,
 
 // 	Shuffle: shuffle.Call,
-// 	Stream:  stream.Call,
+// 	Source:  stream.Call,
 // }

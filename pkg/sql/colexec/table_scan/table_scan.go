@@ -16,7 +16,9 @@ package table_scan
 
 import (
 	"bytes"
+	"time"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,17 +32,24 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	t := time.Now()
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+	}()
 
 	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, proc.Ctx.Err()
-	default:
+	//select {
+	//case <-proc.Ctx.Done():
+	//	result.Batch = nil
+	//	result.Status = vm.ExecStop
+	//	return result, proc.Ctx.Err()
+	//default:
+	//}
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
 	}
 
 	for {

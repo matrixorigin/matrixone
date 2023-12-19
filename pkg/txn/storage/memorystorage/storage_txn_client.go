@@ -61,6 +61,10 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) GetState() client.TxnState {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
@@ -119,6 +123,14 @@ func (s *StorageTxnOperator) ResetRetry(retry bool) {
 }
 
 func (s *StorageTxnOperator) IsRetry() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) SetOpenLog(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 

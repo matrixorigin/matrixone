@@ -24,16 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func MustFixedCol[T any](v *Vector) []T {
+func ToFixedCol[T any](v *Vector, ret *[]T) {
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
-		return nil
+		return
 	}
+	ToSlice(v, ret)
 	if v.class == CONSTANT {
-		return v.col.([]T)[:1]
+		*ret = (*ret)[:1]
+	} else {
+		*ret = (*ret)[:v.length]
 	}
-	return v.col.([]T)[:v.length]
+}
+
+func MustFixedCol[T any](v *Vector) (ret []T) {
+	ToFixedCol(v, &ret)
+	return
 }
 
 func MustBytesCol(v *Vector) [][]byte {
@@ -91,7 +98,8 @@ func ExpandFixedCol[T any](v *Vector) []T {
 	if v.IsConst() {
 		vs := make([]T, v.Length())
 		if len(v.data) > 0 {
-			cols := v.col.([]T)
+			var cols []T
+			ToSlice(v, &cols)
 			for i := range vs {
 				vs[i] = cols[0]
 			}
@@ -105,7 +113,8 @@ func ExpandStrCol(v *Vector) []string {
 	if v.IsConst() {
 		vs := make([]string, v.Length())
 		if len(v.data) > 0 {
-			cols := v.col.([]types.Varlena)
+			var cols []types.Varlena
+			ToSlice(v, &cols)
 			ss := cols[0].GetString(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -120,7 +129,8 @@ func ExpandBytesCol(v *Vector) [][]byte {
 	if v.IsConst() {
 		vs := make([][]byte, v.Length())
 		if len(v.data) > 0 {
-			cols := v.col.([]types.Varlena)
+			var cols []types.Varlena
+			ToSlice(v, &cols)
 			ss := cols[0].GetByteSlice(v.area)
 			for i := range vs {
 				vs[i] = ss
@@ -159,55 +169,55 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 
 func (v *Vector) setupColFromData() {
 	if v.GetType().IsVarlen() {
-		v.col = DecodeFixedCol[types.Varlena](v)
+		v.col.setFromVector(v)
 	} else {
 		// The followng switch attach the correct type to v.col
 		// even though v.col is only an interface.
 		switch v.typ.Oid {
 		case types.T_bool:
-			v.col = DecodeFixedCol[bool](v)
+			v.col.setFromVector(v)
 		case types.T_int8:
-			v.col = DecodeFixedCol[int8](v)
+			v.col.setFromVector(v)
 		case types.T_int16:
-			v.col = DecodeFixedCol[int16](v)
+			v.col.setFromVector(v)
 		case types.T_int32:
-			v.col = DecodeFixedCol[int32](v)
+			v.col.setFromVector(v)
 		case types.T_int64:
-			v.col = DecodeFixedCol[int64](v)
+			v.col.setFromVector(v)
 		case types.T_uint8:
-			v.col = DecodeFixedCol[uint8](v)
+			v.col.setFromVector(v)
 		case types.T_uint16:
-			v.col = DecodeFixedCol[uint16](v)
+			v.col.setFromVector(v)
 		case types.T_uint32:
-			v.col = DecodeFixedCol[uint32](v)
+			v.col.setFromVector(v)
 		case types.T_uint64:
-			v.col = DecodeFixedCol[uint64](v)
+			v.col.setFromVector(v)
 		case types.T_float32:
-			v.col = DecodeFixedCol[float32](v)
+			v.col.setFromVector(v)
 		case types.T_float64:
-			v.col = DecodeFixedCol[float64](v)
+			v.col.setFromVector(v)
 		case types.T_decimal64:
-			v.col = DecodeFixedCol[types.Decimal64](v)
+			v.col.setFromVector(v)
 		case types.T_decimal128:
-			v.col = DecodeFixedCol[types.Decimal128](v)
+			v.col.setFromVector(v)
 		case types.T_uuid:
-			v.col = DecodeFixedCol[types.Uuid](v)
+			v.col.setFromVector(v)
 		case types.T_date:
-			v.col = DecodeFixedCol[types.Date](v)
+			v.col.setFromVector(v)
 		case types.T_time:
-			v.col = DecodeFixedCol[types.Time](v)
+			v.col.setFromVector(v)
 		case types.T_datetime:
-			v.col = DecodeFixedCol[types.Datetime](v)
+			v.col.setFromVector(v)
 		case types.T_timestamp:
-			v.col = DecodeFixedCol[types.Timestamp](v)
+			v.col.setFromVector(v)
 		case types.T_TS:
-			v.col = DecodeFixedCol[types.TS](v)
+			v.col.setFromVector(v)
 		case types.T_Rowid:
-			v.col = DecodeFixedCol[types.Rowid](v)
+			v.col.setFromVector(v)
 		case types.T_Blockid:
-			v.col = DecodeFixedCol[types.Blockid](v)
+			v.col.setFromVector(v)
 		case types.T_enum:
-			v.col = DecodeFixedCol[types.Enum](v)
+			v.col.setFromVector(v)
 		default:
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}

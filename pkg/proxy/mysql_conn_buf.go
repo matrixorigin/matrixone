@@ -43,7 +43,10 @@ const (
 type MySQLCmd byte
 
 // cmdQuery is a query cmd.
-const cmdQuery MySQLCmd = 0x03
+const (
+	cmdQuery  MySQLCmd = 0x03
+	cmdInitDB MySQLCmd = 0x02
+)
 
 // MySQLConn contains a buffer to save data which may be only part
 // of a packet.
@@ -144,8 +147,9 @@ func (b *msgBuf) preRecv() (int, error) {
 		return mysqlHeadLen, nil
 	}
 
-	// Max length is 3 bytes.
-	if bodyLen < 1 || bodyLen >= 1<<24-1 {
+	// Max length is 3 bytes. 26MB-1 is the legal max length of a MySQL packet.
+	// Reference To : https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_packets.html
+	if bodyLen < 1 || bodyLen > 1<<24-1 {
 		return 0, moerr.NewInternalErrorNoCtx("mysql protocol error: body length %d", bodyLen)
 	}
 
@@ -212,7 +216,7 @@ func (b *msgBuf) handleOKPacket(msg []byte) {
 
 // handleEOFPacket handles the EOF packet from server to update the txn state.
 func (b *msgBuf) handleEOFPacket(msg []byte) {
-	status := binary.LittleEndian.Uint16(msg[3:])
+	status := binary.LittleEndian.Uint16(msg[7:])
 	b.setTxnStatus(status)
 }
 

@@ -18,12 +18,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -94,7 +93,7 @@ func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	return allSupportedFunctions[fid].isWindowOrder()
 }
 
-func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
+func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
@@ -103,7 +102,7 @@ func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, er
 	if f.Overloads[oIndex].volatile {
 		return false, nil
 	}
-	return f.testFlag(plan.Function_MONOTONIC), nil
+	return f.testFlag(plan.Function_ZONEMAPPABLE), nil
 }
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
@@ -362,7 +361,7 @@ type overload struct {
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
 	// For example,
-	//		args can be `{int64, int64}` of one overload of the `pow` function.
+	//		args can be `{int64, int64}` of one overload for the `pow` function.
 	//		this means the overload can accept {int64, int64} as its input.
 	// but it was not necessarily the type directly required by the overload.
 	// what it is depends on the logic of function's checkFn.

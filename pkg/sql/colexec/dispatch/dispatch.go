@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,6 +61,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ap.prepareLocal()
 		}
+		ap.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
+		ap.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -92,13 +96,28 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func printShuffleResult(arg *Argument) {
+	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
+		logutil.Debugf("shuffle type %v,  dispatch result: batchcnt %v, rowcnt %v", arg.ShuffleType, arg.ctr.batchCnt, arg.ctr.rowCnt)
+	}
+}
+
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
 
 	result, err := arg.Children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
+
+	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	analy.Start()
+	defer analy.Stop()
+
 	bat := result.Batch
 
 	if result.Batch == nil {
@@ -106,10 +125,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat = makeEndBatch(proc)
 			defer func() {
 				if bat != nil {
-					bat.Clean(proc.Mp())
+					proc.PutBatch(bat)
 				}
 			}()
 		} else {
+			printShuffleResult(ap)
 			result.Status = vm.ExecStop
 			return result, nil
 		}

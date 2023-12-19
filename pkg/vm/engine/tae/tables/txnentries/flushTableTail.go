@@ -125,7 +125,6 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			}
 		}
 	}
-	logutil.Infof("[FlushTabletail] task %d has write-write conflict on %d nblk", entry.taskID, nconflictCnt)
 	var aconflictCnt, totalTrans int
 	// transfer deletes in (startts .. committs] for ablocks
 	delTbls := make([]*model.TransDels, len(entry.createdBlkHandles))
@@ -174,7 +173,6 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		found = true
 		entry.nextRoundDirties = append(entry.nextRoundDirties, blk)
 	}
-	logutil.Infof("[FlushTabletail] task %d has write-write conflict on %d ablk, total trans cnt %d ", entry.taskID, aconflictCnt, totalTrans)
 	for i, delTbl := range delTbls {
 		if delTbl != nil {
 			destid := entry.createdBlkHandles[i].ID()
@@ -183,7 +181,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	}
 
 	if found {
-		logutil.Infof("[FlushTabletail] task %d ww (%s .. %s)", entry.taskID, entry.txn.GetStartTS().ToString(), entry.txn.GetPrepareTS().ToString())
+		logutil.Infof(
+			"[FlushTabletail] task %d ww (%s .. %s): on %d ablk, transfer %v rows; on %v nblk, no tranfer, don't worry",
+			entry.taskID, entry.txn.GetStartTS().ToString(), entry.txn.GetPrepareTS().ToString(),
+			aconflictCnt, totalTrans, nconflictCnt)
 	}
 	return nil
 }

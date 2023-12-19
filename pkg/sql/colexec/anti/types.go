@@ -69,6 +69,7 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 	HashOnPK   bool
+	IsShuffle  bool
 
 	info     *vm.OperatorInfo
 	children []vm.Operator

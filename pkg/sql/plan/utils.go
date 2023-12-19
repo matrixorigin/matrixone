@@ -49,17 +49,17 @@ func GetBindings(expr *plan.Expr) []int32 {
 	return bindings
 }
 
-func doGetBindings(expr *plan.Expr) map[int32]any {
-	res := make(map[int32]any)
+func doGetBindings(expr *plan.Expr) map[int32]emptyType {
+	res := make(map[int32]emptyType)
 
 	switch expr := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = nil
+		res[expr.Col.RelPos] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, child := range expr.F.Args {
 			for id := range doGetBindings(child) {
-				res[id] = nil
+				res[id] = emptyStruct
 			}
 		}
 	}
@@ -189,7 +189,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]any, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]emptyType, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -366,9 +366,9 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftExpr, _ := combinePlanConjunction(ctx, leftOnlyConds)
 		rightExpr, _ := combinePlanConjunction(ctx, rightOnlyConds)
 
-		leftExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{leftExpr, rightExpr})
+		leftExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{leftExpr, rightExpr})
 
-		expr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, leftExpr})
+		expr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, leftExpr})
 	}
 
 	return expr
@@ -454,7 +454,7 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			left := walkThroughDNF(ctx, exprImpl.F.Args[0], keywords)
 			right := walkThroughDNF(ctx, exprImpl.F.Args[1], keywords)
 			if left != nil && right != nil {
-				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{left, right})
+				retExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else if exprImpl.F.Func.ObjName == "and" {
@@ -465,7 +465,7 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			} else if right == nil {
 				return left
 			} else {
-				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{left, right})
+				retExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else {
@@ -575,8 +575,8 @@ func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const
 				return false, nil, nil, childFuncName
 			}
 			switch child1 := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				constExpr = child1.C
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
 				b = true
 				return
 			default:
@@ -605,8 +605,8 @@ func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, 
 				return false, nil, nil, funcName
 			}
 			switch child1 := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
-				constExpr = child1.C
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
 				b = true
 				return
 			default:
@@ -626,12 +626,13 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=":
+		case "=", ">", "<", ">=", "<=", "prefix_eq":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
 				return CheckFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
-				if e.F.Func.ObjName == "cast" {
+				switch e.F.Func.ObjName {
+				case "cast", "serial":
 					return CheckFilter(exprImpl.F.Args[0])
 				}
 				return false, nil
@@ -754,7 +755,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	expr = exprs[0]
 
 	for i := 1; i < len(exprs); i++ {
-		expr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, exprs[i]})
+		expr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, exprs[i]})
 
 		if err != nil {
 			break
@@ -772,12 +773,12 @@ func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 		return false
 	}
 
-	if f, ok := filter.Expr.(*plan.Expr_C); ok {
-		if f.C.Isnull {
+	if f, ok := filter.Expr.(*plan.Expr_Lit); ok {
+		if f.Lit.Isnull {
 			return true
 		}
 
-		if fbool, ok := f.C.Value.(*plan.Const_Bval); ok {
+		if fbool, ok := f.Lit.Value.(*plan.Literal_Bval); ok {
 			return !fbool.Bval
 		}
 	}
@@ -790,8 +791,8 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	case *plan.Expr_Col:
 		expr = &plan.Expr{
 			Typ: expr.Typ,
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
 					Isnull: true,
 				},
 			},
@@ -817,19 +818,19 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		}
 	case *plan.Expr_W:
 		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
-		for _, arg := range exprImpl.W.PartitionBy {
-			increaseRefCnt(arg, inc, colRefCnt)
-		}
+		//for _, arg := range exprImpl.W.PartitionBy {
+		//	increaseRefCnt(arg, inc, colRefCnt)
+		//}
 		for _, order := range exprImpl.W.OrderBy {
 			increaseRefCnt(order.Expr, inc, colRefCnt)
 		}
 	}
 }
 
-func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]emptyType) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -971,8 +972,8 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 			return false, err
 		}
 
-		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
-			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
+		if cExpr, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if bVal, bOk := cExpr.Lit.Value.(*plan.Literal_Bval); bOk {
 				return bVal.Bval, nil
 			}
 		}
@@ -1026,7 +1027,7 @@ func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 	return vectors
 }
 
-func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
+func CheckExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -1035,12 +1036,12 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
 			switch arg.Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
 				continue
 			}
 			isConst = false
-			isMonotonic := CheckExprIsMonotonic(ctx, arg)
-			if !isMonotonic {
+			isZonemappable := CheckExprIsZonemappable(ctx, arg)
+			if !isZonemappable {
 				return false
 			}
 		}
@@ -1048,8 +1049,8 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 			return true
 		}
 
-		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
-		if !isMonotonic {
+		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
+		if !isZonemappable {
 			return false
 		}
 
@@ -1089,7 +1090,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
-				return e, nil
+				return nil, err
 			}
 			exprList[i] = foldExpr
 		}
@@ -1108,8 +1109,9 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 
 		return &plan.Expr{
 			Typ: e.Typ,
-			Expr: &plan.Expr_Bin{
-				Bin: &plan.BinaryData{
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
 					Data: data,
 				},
 			},
@@ -1130,9 +1132,11 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
-			return nil, err
+		foldExpr, errFold := ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst)
+		if errFold != nil {
+			return nil, errFold
 		}
+		ef.F.Args[i] = foldExpr
 	}
 	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil
@@ -1143,12 +1147,30 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
+
+	if !vec.IsConst() && vec.Length() > 1 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return e, nil
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
+					Data: data,
+				},
+			},
+		}, nil
+	}
+
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}
-	ec := &plan.Expr_C{
-		C: c,
+	ec := &plan.Expr_Lit{
+		Lit: c,
 	}
 	e.Expr = ec
 	return e, nil
@@ -1156,13 +1178,13 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 
 func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
 	if idx == len(leftExprs)-1 {
-		return bindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
+		return BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
 			leftExprs[idx],
 			rightExprs[idx],
 		})
 	}
 
-	expr, err := bindFuncExprImplByPlanExpr(ctx, nonEqOp, []*plan.Expr{
+	expr, err := BindFuncExprImplByPlanExpr(ctx, nonEqOp, []*plan.Expr{
 		DeepCopyExpr(leftExprs[idx]),
 		DeepCopyExpr(rightExprs[idx]),
 	})
@@ -1170,7 +1192,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 		return nil, err
 	}
 
-	eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
 		leftExprs[idx],
 		rightExprs[idx],
 	})
@@ -1183,18 +1205,18 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 		return nil, err
 	}
 
-	tailExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{eqExpr, tailExpr})
+	tailExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{eqExpr, tailExpr})
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
+	return BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
 }
 
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool {
 	//TODO: Check if T_array is required here?
 	if constT.Eq(columnT) {
 		return true
@@ -1229,7 +1251,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.C.Value.(*plan.Const_I64Val)
+		val, valOk := constExpr.Lit.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1266,7 +1288,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
+		val_u, valOk := constExpr.Lit.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1536,14 +1558,14 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 					},
 				},
 			}
-			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
 			if err != nil {
 				return nil, err
 			}
 			if condIdx == 0 {
 				condExpr = eqExpr
 			} else {
-				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -1554,7 +1576,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		if i == 0 {
 			checkExpr = condExpr
 		} else {
-			checkExpr, err = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
+			checkExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
 			if err != nil {
 				return nil, err
 			}
@@ -1595,14 +1617,14 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 					},
 				},
 			}
-			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
 			if err != nil {
 				return nil, err
 			}
 			if condIdx == 0 {
 				condExpr = eqExpr
 			} else {
-				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -1693,8 +1715,8 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		out.WriteString(fmt.Sprintf("%sExpr_Col(%s)", prefix, t.Col.Name))
-	case *plan.Expr_C:
-		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.C.String()))
+	case *plan.Expr_Lit:
+		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.Lit.String()))
 	case *plan.Expr_F:
 		out.WriteString(fmt.Sprintf("%sExpr_F(\n%s\tFunc[\"%s\"](nargs=%d)", prefix, prefix, t.F.Func.ObjName, len(t.F.Args)))
 		for _, arg := range t.F.Args {
@@ -1773,4 +1795,53 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
+	// dcl tcl is not support
+	var schemas []*plan.ObjectRef
+	var paramTypes []int32
+
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			getParamRule := NewGetParamRule()
+			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+			err := VisitQuery.Visit(ctx.GetContext())
+			if err != nil {
+				return nil, nil, err
+			}
+			// TODO : need confirm
+			if len(getParamRule.params) > 0 {
+				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
+			}
+		}
+
+	case *plan.Plan_Query:
+		// collect args
+		getParamRule := NewGetParamRule()
+		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
+		err := VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// sort arg
+		getParamRule.SetParamOrder()
+		args := getParamRule.params
+		schemas = getParamRule.schemas
+		paramTypes = getParamRule.paramTypes
+
+		// reset arg order
+		resetParamRule := NewResetParamOrderRule(args)
+		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
+		err = VisitQuery.Visit(ctx.GetContext())
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return schemas, paramTypes, nil
 }

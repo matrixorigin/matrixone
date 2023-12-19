@@ -56,10 +56,13 @@ var _ ObjectsIter = new(objectsIter)
 func (b *objectsIter) Next() bool {
 	for {
 
-		if !b.firstCalled {
-			if !b.iter.Seek(ObjectIndexByCreateTSEntry{
+		pivot := ObjectIndexByCreateTSEntry{
+			ObjectInfo{
 				CreateTime: b.ts.Next(),
-			}) {
+			},
+		}
+		if !b.firstCalled {
+			if !b.iter.Seek(pivot) {
 				if !b.iter.Last() {
 					return false
 				}
@@ -84,8 +87,7 @@ func (b *objectsIter) Next() bool {
 
 func (b *objectsIter) Entry() ObjectEntry {
 	return ObjectEntry{
-		ShortObjName: b.iter.Item().ShortObjName,
-		ObjectInfo:   b.iter.Item().ObjectInfo,
+		ObjectInfo: b.iter.Item().ObjectInfo,
 	}
 }
 
@@ -186,9 +188,9 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	iter := p.dataObjects.Copy().Iter()
 	defer iter.Release()
 
-	if ok := iter.Seek(ObjectEntry{
-		ShortObjName: *objectio.ShortName(&blockID),
-	}); ok {
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	if ok := iter.Seek(pivot); ok {
 		return true
 	}
 	return false
@@ -198,9 +200,9 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	iter := p.dataObjects.Copy().Iter()
 	defer iter.Release()
 
-	if ok := iter.Seek(ObjectEntry{
-		ShortObjName: name,
-	}); ok {
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, &name)
+	if ok := iter.Seek(pivot); ok {
 		return iter.Item().ObjectInfo, true
 	}
 	return ObjectInfo{}, false

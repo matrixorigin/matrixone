@@ -112,8 +112,8 @@ SELECT LENGTH(str1) | LENGTH(str2) FROM t1;
 length(str1) | length(str2)
 3
 null
-SELECT STARTSWITH(str1, 'a') | LENGTH(str2) FROM t1;
-startswith(str1, a) | length(str2)
+SELECT cast(STARTSWITH(str1, 'a') as int) | LENGTH(str2) FROM t1;
+cast(startswith(str1, a) as int) | length(str2)
 3
 null
 DELETE FROM t1;

@@ -194,7 +194,7 @@ func Test_ShowAccounts(t *testing.T) {
 
 	dirName := "show_account_test"
 	objFs := mockObjectFileService(ctx, dirName)
-	cnLocation, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
+	cnLocation, _, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 	require.Nil(t, err)
 
 	defer func() {

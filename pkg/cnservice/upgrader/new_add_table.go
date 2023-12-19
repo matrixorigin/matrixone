@@ -378,7 +378,54 @@ var InformationSchemaCOLUMNS = &table.Table{
 		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
 }
 
+var InformationSchemaPARTITIONS = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "PARTITIONS",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.PARTITIONS AS " +
+		"SELECT " +
+		"'def' AS `TABLE_CATALOG`," +
+		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+		"`tbl`.`relname` AS `TABLE_NAME`," +
+		"`part`.`name` AS `PARTITION_NAME`," +
+		"NULL AS `SUBPARTITION_NAME`," +
+		"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
+		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
+		"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
+		"when 'RANGE' then 'RANGE' " +
+		"when 'LIST' then 'LIST' " +
+		"when 'AUTO' then 'AUTO' " +
+		"when 'KEY_51' then 'KEY' " +
+		"when 'KEY_55' then 'KEY' " +
+		"when 'LINEAR_KEY_51' then 'LINEAR KEY' " +
+		"when 'LINEAR_KEY_55' then 'LINEAR KEY' " +
+		"when 'LINEAR_HASH' then 'LINEAR HASH' " +
+		"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
+		"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
+		"NULL AS `SUBPARTITION_METHOD`," +
+		"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+		"NULL AS `SUBPARTITION_EXPRESSION`," +
+		"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
+		"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
+		"0 AS `AVG_ROW_LENGTH`," +
+		"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
+		"0 AS `MAX_DATA_LENGTH`," +
+		"0 AS `INDEX_LENGTH`," +
+		"0 AS `DATA_FREE`," +
+		"`tbl`.`created_time` AS `CREATE_TIME`," +
+		"NULL AS `UPDATE_TIME`," +
+		"NULL AS `CHECK_TIME`," +
+		"NULL AS `CHECKSUM`," +
+		"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`," +
+		"'default' AS `NODEGROUP`," +
+		"NULL AS `TABLESPACE_NAME` " +
+		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
+		"ON `part`.`table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`partitioned` = 1;"),
+}
+
 var needUpgradeExistingView = []*table.Table{
 	InformationSchemaSCHEMATA,
 	InformationSchemaCOLUMNS,
+	InformationSchemaPARTITIONS,
 }

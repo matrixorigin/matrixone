@@ -21,12 +21,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -111,7 +110,7 @@ func (zm ZM) StringForCompose() string {
 	return zm.innerString(func(b []byte) string {
 		s := string(b)
 		if r, _, e := types.DecodeTuple(b); e == nil {
-			s = r.ErrString()
+			s = r.ErrString(nil)
 		}
 		return s
 	})
@@ -546,6 +545,31 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 	return
 }
 
+func PrefixCompare(lhs, rhs []byte) int {
+	if len(lhs) > len(rhs) {
+		lhs = lhs[:len(rhs)]
+	}
+
+	return bytes.Compare(lhs, rhs)
+}
+
+func (zm ZM) PrefixEq(s []byte) bool {
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+
+	return PrefixCompare(zmin, s) <= 0 && PrefixCompare(s, zmax) <= 0
+}
+
+func (zm ZM) PrefixIn(vec *vector.Vector) bool {
+	col, area := vector.MustVarlenaRawData(vec)
+	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
+	lowerBound := sort.Search(len(col), func(i int) bool {
+		return PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
+	})
+
+	return lowerBound < len(col) && PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
+}
+
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	switch vec.GetType().Oid {
 	case types.T_bool:
@@ -744,7 +768,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 			return bytes.Compare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 
-		return lowerBound < len(col) && bytes.Compare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+		return lowerBound < len(col) && PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
 
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)

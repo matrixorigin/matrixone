@@ -110,6 +110,15 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if node.OnUpdateExprs != nil {
+		for i := range node.OnUpdateExprs {
+			node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	typ := types.New(types.T_varchar, 65000, 0)
 	toTyp := makePlan2Type(&typ)
 	targetTyp := &plan.Expr{

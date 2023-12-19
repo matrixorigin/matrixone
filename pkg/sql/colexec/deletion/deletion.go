@@ -66,6 +66,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // the bool return value means whether it completed its work or not
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	if arg.RemoteDelete {
 		return arg.remote_delete(proc)
 	}
@@ -73,9 +77,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				return result, err
 			}
@@ -167,6 +179,11 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer anal.Stop()
+
 	bat := result.Batch
 
 	var affectedRows uint64
@@ -188,7 +205,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 					delBatch.Clean(proc.Mp())
 					return result, err
 				}
-				delBatch.Clean(proc.Mp())
+				proc.PutBatch(delBatch)
 			}
 		}
 	} else {
@@ -205,7 +222,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 				return result, err
 			}
 		}
-		delBatch.Clean(proc.GetMPool())
+		proc.PutBatch(delBatch)
 	}
 	// result.Batch = batch.EmptyBatch
 

@@ -18,18 +18,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -252,7 +250,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemSourceRel {
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
+	} else if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
@@ -445,7 +445,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 		}
 
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
 		if err != nil {
 			return false, nil, false, err
 		}
@@ -612,6 +612,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
+					binder.builder = builder
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
@@ -666,14 +667,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							},
 						},
 					}
-					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
 						return false, nil, false, err
 					}
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
-						condExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
+						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
 							return false, nil, false, err
 						}
@@ -684,7 +685,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				if joinIdx == 0 {
 					joinConds = condExpr
 				} else {
-					joinConds, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
+					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
 					if err != nil {
 						return false, nil, false, err
 					}
@@ -796,8 +797,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
 	isConstantNull := false
-	if ef, ok := expr.Expr.(*plan.Expr_C); ok {
-		isConstantNull = ef.C.Isnull
+	if ef, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		isConstantNull = ef.Lit.Isnull
 	}
 	if !isConstantNull {
 		return nil
@@ -896,6 +897,7 @@ func buildValueScan(
 	slt *tree.ValuesClause,
 	updateColumns []string,
 	colToIdx map[string]int,
+	OnDuplicateUpdate tree.UpdateExprs,
 ) error {
 	var err error
 
@@ -952,6 +954,7 @@ func buildValueScan(
 			}
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			binder.builder = builder
 			for j, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
 					canInsert, err := util.SetInsertValue(proc, nv, vec)
@@ -1039,14 +1042,55 @@ func buildValueScan(
 		projectList[i] = expr
 	}
 
+	onUpdateExprs := make([]*plan.Expr, 0)
+	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
+		for _, expr := range OnDuplicateUpdate {
+			var updateExpr *plan.Expr
+			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
+			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
+				updateExpr = &plan.Expr{
+					Typ: constTextType,
+					Expr: &plan.Expr_P{
+						P: &plan.ParamRef{
+							Pos: int32(nv.Offset),
+						},
+					},
+				}
+			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
+				if checkExprHasParamExpr(nv.Exprs) {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder.builder = builder
+					binder.ctx = bindCtx
+					updateExpr, err = binder.BindExpr(nv, 0, true)
+					if err != nil {
+						return err
+					}
+				}
+			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
+				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder.builder = builder
+					binder.ctx = bindCtx
+					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			if updateExpr != nil {
+				onUpdateExprs = append(onUpdateExprs, updateExpr)
+			}
+		}
+	}
 	bat.SetRowCount(len(slt.Rows))
 	nodeId, _ := uuid.NewUUID()
 	scanNode := &plan.Node{
-		NodeType:    plan.Node_VALUE_SCAN,
-		RowsetData:  rowsetData,
-		TableDef:    valueScanTableDef,
-		BindingTags: []int32{lastTag},
-		Uuid:        nodeId[:],
+		NodeType:      plan.Node_VALUE_SCAN,
+		RowsetData:    rowsetData,
+		TableDef:      valueScanTableDef,
+		BindingTags:   []int32{lastTag},
+		Uuid:          nodeId[:],
+		OnUpdateExprs: onUpdateExprs,
 	}
 	if builder.isPrepareStatement {
 		proc.SetPrepareBatch(bat)

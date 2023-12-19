@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,11 +63,12 @@ const (
 	MergeOffset
 	MergeRecursive
 	MergeCTE
+	Partition
 
 	Deletion
 	Insert
 	External
-	Stream
+	Source
 
 	Minus
 	Intersect
@@ -98,6 +100,8 @@ const (
 	LockOp
 
 	Shuffle
+
+	Sample
 )
 
 // Instruction contains relational algebra
@@ -135,6 +139,26 @@ type Operator interface {
 	AppendChild(child Operator)
 }
 
+var CancelResult = CallResult{
+	Status: ExecStop,
+}
+
+func CancelCheck(proc *process.Process) (error, bool) {
+	select {
+	case <-proc.Ctx.Done():
+		return proc.Ctx.Err(), true
+	default:
+		return nil, false
+	}
+}
+
+func ChildrenCall(o Operator, proc *process.Process, anal process.Analyze) (CallResult, error) {
+	beforeChildrenCall := time.Now()
+	result, err := o.Call(proc)
+	anal.ChildrenCallStop(beforeChildrenCall)
+	return result, err
+}
+
 type ExecStatus int
 
 const (
@@ -163,22 +187,25 @@ func NewCallResult() CallResult {
 }
 
 type OperatorInfo struct {
-	Idx     int
-	IsFirst bool
-	IsLast  bool
+	Idx           int
+	ParallelIdx   int
+	ParallelMajor bool
+	IsFirst       bool
+	IsLast        bool
 }
-
 type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {
 	switch ins.Op {
-	case Order, MergeOrder:
+	case Order, MergeOrder, Partition:
 		return true
 	case Limit, MergeLimit:
 		return true
 	case Offset, MergeOffset:
 		return true
 	case Group, MergeGroup:
+		return true
+	case Sample:
 		return true
 	case Top, MergeTop:
 		return true
@@ -190,6 +217,11 @@ func (ins *Instruction) IsBrokenNode() bool {
 		return true
 	}
 	return false
+}
+
+func (ins *Instruction) CannotRemote() bool {
+	// todo: I think we should add more operators here.
+	return ins.Op == LockOp
 }
 
 type ModificationArgument interface {

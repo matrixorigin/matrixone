@@ -26,7 +26,7 @@ var supportedOperators = []FuncNew{
 	// return true if a = b, return false if a != b, return null if one of a and b is null
 	{
 		functionId: EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -79,7 +79,7 @@ var supportedOperators = []FuncNew{
 	// return a > b, if any one of a and b is null, return null.
 	{
 		functionId: GREAT_THAN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -116,7 +116,7 @@ var supportedOperators = []FuncNew{
 	// return a >= b, if any one of a and b is null, return null.
 	{
 		functionId: GREAT_EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -153,7 +153,7 @@ var supportedOperators = []FuncNew{
 	// return a < b, if any one of a and b is null, return null.
 	{
 		functionId: LESS_THAN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -190,7 +190,7 @@ var supportedOperators = []FuncNew{
 	// return a <= b, if any one of a and b is null, return null.
 	{
 		functionId: LESS_EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -286,7 +286,7 @@ var supportedOperators = []FuncNew{
 	// operator `and`
 	{
 		functionId: AND,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -309,7 +309,7 @@ var supportedOperators = []FuncNew{
 	// operator `or`
 	{
 		functionId: OR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -405,7 +405,7 @@ var supportedOperators = []FuncNew{
 	// operator `in`
 	{
 		functionId: IN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     IN_PREDICATE,
 		checkFn:    fixedDirectlyTypeMatch,
 
@@ -908,7 +908,7 @@ var supportedOperators = []FuncNew{
 	// return a + b, return null if any of a and b is null.
 	{
 		functionId: PLUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -961,7 +961,7 @@ var supportedOperators = []FuncNew{
 	// return a - b, return null if any of a and b is null.
 	{
 		functionId: MINUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1017,7 +1017,7 @@ var supportedOperators = []FuncNew{
 	// return a * b. return null if any of parameters is null.
 	{
 		functionId: MULTI,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1069,7 +1069,7 @@ var supportedOperators = []FuncNew{
 	// return a / b if b was not zero. return null if any of a and b is null.
 	{
 		functionId: DIV,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1118,7 +1118,7 @@ var supportedOperators = []FuncNew{
 	// return null if any of parameters was null.
 	{
 		functionId: INTEGER_DIV,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1197,7 +1197,7 @@ var supportedOperators = []FuncNew{
 	// e.g : select +a;
 	{
 		functionId: UNARY_PLUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -1329,7 +1329,7 @@ var supportedOperators = []FuncNew{
 	// e.g : select -a;
 	{
 		functionId: UNARY_MINUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -1762,6 +1762,26 @@ var supportedOperators = []FuncNew{
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 23,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr

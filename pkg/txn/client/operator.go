@@ -100,6 +100,15 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+// WithTxnOpenLog set txn open log
+func WithTxnOpenLog() TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		tc.mu.openlog = true
+	}
+}
+
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
@@ -175,15 +184,17 @@ type txnOperator struct {
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
 		retry        bool
+		openlog      bool
 
 		lockSeq   uint64
 		waitLocks map[uint64]Lock
 	}
-	workspace       Workspace
-	timestampWaiter TimestampWaiter
-	clock           clock.Clock
-	createAt        time.Time
-	commitAt        time.Time
+	cannotCleanWorkspace bool
+	workspace            Workspace
+	timestampWaiter      TimestampWaiter
+	clock                clock.Clock
+	createAt             time.Time
+	commitAt             time.Time
 }
 
 func newTxnOperator(
@@ -475,7 +486,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	defer task.End()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
-	if tc.workspace != nil {
+	if tc.workspace != nil && !tc.cannotCleanWorkspace {
 		if err := tc.workspace.Rollback(ctx); err != nil {
 			util.GetLogger().Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
@@ -545,6 +556,18 @@ func (tc *txnOperator) IsRetry() bool {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.retry
+}
+
+func (tc *txnOperator) SetOpenLog(openlog bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.openlog = openlog
+}
+
+func (tc *txnOperator) IsOpenLog() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.openlog
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
@@ -852,10 +875,8 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		util.GetLogger().Fatal("invalid response",
-			zap.String("response", resp.DebugString()))
+		return moerr.NewNotSupportedNoCtx("unknown txn response method: %s", resp.DebugString())
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) error {

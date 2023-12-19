@@ -63,7 +63,8 @@ type TxnLogtailRespBuilder struct {
 
 	batches []*containers.Batch
 
-	logtails *[]logtail.TableLogtail
+	logtails       *[]logtail.TableLogtail
+	currentLogtail *logtail.TableLogtail
 
 	batchToClose []*containers.Batch
 	insertBatch  *roaring.Bitmap
@@ -365,11 +366,23 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		DbId: dbid,
 		TbId: tid,
 	}
-	tail := logtail.TableLogtail{
-		Ts:       &ts,
-		Table:    tableID,
-		Commands: []api.Entry{*entry},
+	if b.currentLogtail == nil {
+		b.currentLogtail = &logtail.TableLogtail{
+			Ts:       &ts,
+			Table:    tableID,
+			Commands: make([]api.Entry, 0),
+		}
+	} else {
+		if tid != b.currentLogtail.Table.TbId {
+			*b.logtails = append(*b.logtails, *b.currentLogtail)
+			b.currentLogtail = &logtail.TableLogtail{
+				Ts:       &ts,
+				Table:    tableID,
+				Commands: make([]api.Entry, 0),
+			}
+		}
 	}
+	b.currentLogtail.Commands = append(b.currentLogtail.Commands, *entry)
 	// specail delete batch and delete batch should be in the same TableLogtail
 	if batchIdx == dbDelBatch || batchIdx == tblDelBatch {
 		var bat2 *containers.Batch
@@ -391,9 +404,8 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 			DatabaseName: dbName,
 			Bat:          apiBat2,
 		}
-		tail.Commands = append(tail.Commands, *entry2)
+		b.currentLogtail.Commands = append(b.currentLogtail.Commands, *entry2)
 	}
-	*b.logtails = append(*b.logtails, tail)
 }
 
 func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid uint64) {
@@ -450,5 +462,9 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 			b.batchToClose = append(b.batchToClose, b.batches[i])
 			b.batches[i] = nil
 		}
+	}
+	if b.currentLogtail != nil {
+		*b.logtails = append(*b.logtails, *b.currentLogtail)
+		b.currentLogtail = nil
 	}
 }

@@ -32,10 +32,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -69,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -90,14 +92,8 @@ var (
 	ctxCancelError = context.Canceled.Error()
 )
 
-var pool = sync.Pool{
-	New: func() any {
-		return new(Compile)
-	},
-}
-
-// New is used to new an object of compile
-func New(
+// NewCompile is used to new an object of compile
+func NewCompile(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
 	e engine.Engine,
@@ -106,7 +102,7 @@ func New(
 	isInternal bool,
 	cnLabel map[string]string,
 	startAt time.Time) *Compile {
-	c := pool.Get().(*Compile)
+	c := reuse.Alloc[Compile](nil)
 	c.e = e
 	c.db = db
 	c.ctx = ctx
@@ -122,30 +118,31 @@ func New(
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
+	c.metaTables = make(map[string]struct{})
+	c.disableRetry = false
 	return c
 }
 
-func putCompile(c *Compile) {
+func (c *Compile) release() {
 	if c == nil {
 		return
 	}
-	if c.anal != nil {
-		for i := range c.anal.analInfos {
-			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
-		}
-		c.anal.analInfos = nil
-	}
-	if c.scope != nil {
-		c.scope = nil
-	}
-
-	c.proc.CleanValueScanBatchs()
-	c.clear()
-	pool.Put(c)
+	reuse.Free[Compile](c, nil)
 }
 
-func (c *Compile) clear() {
-	c.scope = c.scope[:0]
+func (c Compile) Name() string {
+	return "compile.Compile"
+}
+
+func (c *Compile) reset() {
+	if c.anal != nil {
+		c.anal.release()
+	}
+	for i := range c.scope {
+		c.scope[i].release()
+	}
+	c.scope = nil
+	c.proc.CleanValueScanBatchs()
 	c.pn = nil
 	c.u = nil
 	c.fill = nil
@@ -162,6 +159,8 @@ func (c *Compile) clear() {
 	c.cnList = nil
 	c.stmt = nil
 	c.startAt = time.Time{}
+	c.metaTables = nil
+	c.needLockMeta = false
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -176,7 +175,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.counterSet = perfcounter.CounterSet{}
+	c.counterSet = &perfcounter.CounterSet{}
 }
 
 // helper function to judge if init temporary engine is needed
@@ -223,8 +222,23 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 		}
 	}()
 
+	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
+			if qry.Query.StmtType == plan.Query_SELECT {
+				for _, n := range qry.Query.Nodes {
+					if n.NodeType == plan.Node_LOCK_OP {
+						c.needLockMeta = true
+						break
+					}
+				}
+			} else {
+				c.needLockMeta = true
+			}
+		}
+	}
+
 	// with values
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = c.proc.Ctx
 
 	// session info and callback function to write back query result.
@@ -276,8 +290,6 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-
-	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -350,22 +362,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Deletion:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Delete(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
-	case Insert:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Insert(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
 	case Replace:
 		return s.replace(c)
 	}
@@ -376,21 +372,32 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
+
+	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
+	stats.ExecutionStart()
+
 	defer func() {
+		stats.ExecutionEnd()
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	var span trace.Span
-	var cc *Compile // compile structure for rerun.
+	var runC *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
 	var err error
+	var retryTimes int
+	releaseRunC := func() {
+		if runC != c {
+			runC.release()
+		}
+	}
 
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		putCompile(c)
-		putCompile(cc)
+		c.release()
+		releaseRunC()
 
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
@@ -402,78 +409,90 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	}
 
 	v2.TxnStatementTotalCounter.Inc()
-	if err = c.runOnce(); err != nil {
-		c.fatalLog(0, err)
+	runC = c
+	for {
+		if err = runC.runOnce(); err == nil {
+			break
+		}
 
-		if !c.ifNeedRerun(err) {
+		c.fatalLog(retryTimes, err)
+		if !c.canRetry(err) {
 			return nil, err
 		}
-		v2.TxnStatementRetryCounter.Inc()
 
-		c.proc.TxnOperator.ResetRetry(true)
-		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
-
-		// clear the workspace of the failed statement
-		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-			return nil, e
-		}
-
-		// increase the statement id
-		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-			return nil, e
-		}
-
-		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-			pn, e := c.buildPlanFunc()
-			if e != nil {
-				return nil, e
-			}
-			c.pn = pn
-		}
-		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
-			c.fatalLog(1, err)
+		retryTimes++
+		releaseRunC()
+		defChanged := moerr.IsMoErrCode(
+			err,
+			moerr.ErrTxnNeedRetryWithDefChanged)
+		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
-		if err = cc.runOnce(); err != nil {
-			c.fatalLog(1, err)
-			return nil, err
-		}
-		err = c.proc.TxnOperator.GetWorkspace().Adjust()
-		if err != nil {
-			c.fatalLog(1, err)
-			return nil, err
-		}
-		// set affectedRows to old compile to return
-		c.setAffectedRows(cc.getAffectedRows())
 	}
 
 	if c.shouldReturnCtxErr() {
 		return nil, c.proc.Ctx.Err()
 	}
-	result.AffectRows = c.getAffectedRows()
+	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
 	return result, nil
 }
 
-// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-func (c *Compile) ifNeedRerun(err error) bool {
-	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.TxnOperator.Txn().IsRCIsolation() {
-		return true
+func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+	v2.TxnStatementRetryCounter.Inc()
+	c.proc.TxnOperator.ResetRetry(true)
+	c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
+
+	// clear the workspace of the failed statement
+	if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+		return nil, e
 	}
-	return false
+
+	// increase the statement id
+	if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+		return nil, e
+	}
+
+	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+	// improved to refresh expression in the future.
+
+	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	if defChanged {
+		pn, e := c.buildPlanFunc()
+		if e != nil {
+			return nil, e
+		}
+		c.pn = pn
+	}
+	if e := runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+		return nil, e
+	}
+
+	return runC, nil
+}
+
+// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
+// he statement
+func (c *Compile) isRetryErr(err error) bool {
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation()
+}
+
+func (c *Compile) canRetry(err error) bool {
+	return !c.disableRetry && c.isRetryErr(err)
 }
 
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
+	err := c.lockMetaTables()
+	if err != nil {
+		return err
+	}
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -502,7 +521,7 @@ func (c *Compile) runOnce() error {
 	for e := range errC {
 		if e != nil {
 			errList = append(errList, e)
-			if c.ifNeedRerun(e) {
+			if c.isRetryErr(e) {
 				return e
 			}
 		}
@@ -525,85 +544,91 @@ func (c *Compile) shouldReturnCtxErr() bool {
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
 		case plan.Query_REPLACE:
-			return []*Scope{{
-				Magic: Replace,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(Replace).
+					withPlan(pn),
+			}, nil
 		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
 		}
 		for _, s := range scopes {
-			s.Plan = pn
+			if s.Plan == nil {
+				s.Plan = pn
+			}
 		}
 		return scopes, nil
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
-			return []*Scope{{
-				Magic: CreateDatabase,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(CreateDatabase).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			return []*Scope{{
-				Magic: DropDatabase,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(DropDatabase).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
-			return []*Scope{{
-				Magic: CreateTable,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(CreateTable).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_ALTER_VIEW:
-			return []*Scope{{
-				Magic: AlterView,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(AlterView).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			return []*Scope{{
-				Magic: AlterTable,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(AlterTable).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			return []*Scope{{
-				Magic: DropTable,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(DropTable).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
-			return []*Scope{{
-				Magic: DropSequence,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(DropSequence).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_ALTER_SEQUENCE:
-			return []*Scope{{
-				Magic: AlterSequence,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(AlterSequence).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
-			return []*Scope{{
-				Magic: TruncateTable,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(TruncateTable).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_SEQUENCE:
-			return []*Scope{{
-				Magic: CreateSequence,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(CreateSequence).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_INDEX:
-			return []*Scope{{
-				Magic: CreateIndex,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(CreateIndex).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			return []*Scope{{
-				Magic: DropIndex,
-				Plan:  pn,
-			}}, nil
+			return []*Scope{
+				newScope(DropIndex).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
 			plan.DataDefinition_SHOW_COLUMNS,
@@ -615,6 +640,50 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		}
 	}
 	return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", pn))
+}
+
+func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if !c.needLockMeta {
+		return
+	}
+
+	if objRes.SchemaName == catalog.MO_CATALOG && (objRes.ObjName == catalog.MO_DATABASE || objRes.ObjName == catalog.MO_TABLES || objRes.ObjName == catalog.MO_COLUMNS) {
+		// do not lock meta table for meta table
+	} else {
+		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
+		c.metaTables[key] = struct{}{}
+	}
+}
+
+func (c *Compile) lockMetaTables() error {
+	lockLen := len(c.metaTables)
+	if lockLen == 0 {
+		return nil
+	}
+
+	tables := make([]string, 0, lockLen)
+	for table := range c.metaTables {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+
+	for _, table := range tables {
+		names := strings.SplitN(table, " ", 2)
+
+		err := lockMoTable(c, names[0], names[1], lock.LockMode_Shared)
+		if err != nil {
+			// if get error in locking mocatalog.mo_tables by it's dbName & tblName
+			// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+				moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+
+			// other errors, just throw  out
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) cnListStrategy() {
@@ -673,9 +742,40 @@ func (c *Compile) removeUnavailableCN() {
 	c.cnList = c.cnList[:i]
 }
 
+// getCNList gets the CN list from engine.Nodes() method. It will
+// ensure the current CN is included in the result.
+func (c *Compile) getCNList() (engine.Nodes, error) {
+	cnList, err := c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	// We should always make sure the current CN is contained in the cn list.
+	if c.proc == nil || c.proc.QueryService == nil {
+		return cnList, nil
+	}
+	cnID := c.proc.QueryService.ServiceID()
+	for _, node := range cnList {
+		if node.Id == cnID {
+			return cnList, nil
+		}
+	}
+	cnList = append(cnList, engine.Node{
+		Id:   cnID,
+		Addr: c.addr,
+		Mcpu: runtime.NumCPU(),
+	})
+	return cnList, nil
+}
+
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
+
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
+	}()
+	c.cnList, err = c.getCNList()
 	if err != nil {
 		return nil, err
 	}
@@ -775,6 +875,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
+
 	return steps, err
 }
 
@@ -887,6 +988,10 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 }
 
 func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
+	}()
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
@@ -894,12 +999,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		ds := &Scope{
-			Magic:      Normal,
-			DataSource: &Source{Bat: bat},
-			NodeInfo:   engine.Node{Addr: c.addr, Mcpu: 1},
-			Proc:       process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
-		}
+		ds := newScope(Normal)
+		ds.DataSource = &Source{Bat: bat}
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_EXTERNAL_SCAN:
 		node := plan2.DeepCopyNode(n)
@@ -909,6 +1012,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		c.appendMetaTables(n.ObjRef)
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
@@ -916,8 +1020,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-	case plan.Node_STREAM_SCAN:
-		ss, err := c.compileStreamScan(ctx, n)
+	case plan.Node_SOURCE_SCAN:
+		ss, err := c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
@@ -948,6 +1052,17 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		}
+	case plan.Node_SAMPLE:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+
+		ss = c.compileSample(n, ss)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_WINDOW:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1001,6 +1116,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
+	case plan.Node_PARTITION:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss))), nil
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1044,6 +1168,22 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		if n.DeleteCtx.CanTruncate {
+			return []*Scope{{
+				Magic: TruncateTable,
+				Plan: &plan.Plan{
+					Plan: &plan.Plan_Ddl{
+						Ddl: &plan.DataDefinition{
+							DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+							Definition: &plan.DataDefinition_TruncateTable{
+								TruncateTable: n.DeleteCtx.TruncateTable,
+							},
+						},
+					},
+				},
+			}}, nil
+		}
+		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
@@ -1161,6 +1301,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_INSERT:
+		c.appendMetaTables(n.ObjRef)
 		curr := c.anal.curr
 		n.NotCacheable = true
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1200,15 +1341,19 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				scopes := make([]*Scope, 0, mcpu)
 				regs := make([]*process.WaitRegister, 0, mcpu)
 				for i := 0; i < mcpu; i++ {
-					scopes = append(scopes, &Scope{
-						Magic:        Merge,
-						Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
-					})
+					s := newScope(Merge)
+					s.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}}
+					scopes = append(scopes, s)
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
+					if c.anal.qry.LoadTag {
+						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
+							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+						}
+					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -1327,12 +1472,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
 			}
 		}
-		rs := &Scope{
-			Magic:        Merge,
-			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
-			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{SinkScan: true}}},
-		}
+		rs := newScope(Merge)
+		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{SinkScan: true}}}
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
 		}
@@ -1346,12 +1489,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
 			}
 		}
-		rs := &Scope{
-			Magic:        Merge,
-			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: 1},
-			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.MergeRecursive, Arg: &mergerecursive.Argument{}}},
-		}
+		rs := newScope(Merge)
+		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
+		rs.Instructions = []vm.Instruction{{Op: vm.MergeRecursive, Arg: &mergerecursive.Argument{}}}
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1366,12 +1507,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
 			}
 		}
-		rs := &Scope{
-			Magic:        Merge,
-			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
-			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.MergeCTE, Arg: &mergecte.Argument{}}},
-		}
+		rs := newScope(Merge)
+		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
+		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: &mergecte.Argument{}}}
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1417,7 +1556,7 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
-	ds := &Scope{Magic: Normal}
+	ds := newScope(Normal)
 	if parallel {
 		ds.Magic = Remote
 	}
@@ -1435,7 +1574,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 }
 
 func (c *Compile) constructLoadMergeScope() *Scope {
-	ds := &Scope{Magic: Merge}
+	ds := newScope(Merge)
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
 	ds.Proc.LoadTag = true
 	ds.appendInstruction(vm.Instruction{
@@ -1447,8 +1586,8 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(ctx, "compileStreamScan")
+func (c *Compile) compileSourceScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
 	for _, def := range n.TableDef.Defs {
@@ -1468,13 +1607,11 @@ func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	ss := make([]*Scope, len(ps))
 	for i := range ss {
-		ss[i] = &Scope{
-			Magic:    Normal,
-			NodeInfo: engine.Node{Addr: c.addr, Mcpu: ncpu},
-			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
-		}
+		ss[i] = newScope(Normal)
+		ss[i].NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+		ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
-			Op:      vm.Stream,
+			Op:      vm.Source,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
 			Arg:     constructStream(n, ps[i]),
@@ -1508,7 +1645,14 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+	start := time.Now()
+	defer func() {
+		if t := time.Since(start); t > time.Second {
+			logutil.Infof("compileExternScan cost %v", t)
+		}
+	}()
 
+	t := time.Now()
 	// lock table's meta
 	if n.ObjRef != nil && n.TableDef != nil {
 		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
@@ -1530,6 +1674,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err != nil {
 			return nil, err
 		}
+	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
 
 	ID2Addr := make(map[int]int, 0)
@@ -1555,6 +1702,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Terminated: n.ExternScan.Terminated,
 			EnclosedBy: n.ExternScan.EnclosedBy[0],
 		}
+		param.JsonData = n.ExternScan.JsonType
 	}
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {
@@ -1581,6 +1729,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	}
 
+	t = time.Now()
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
 	var err error
@@ -1611,13 +1760,14 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("read dir cost %v", time.Since(t))
+	}
 
 	if len(fileList) == 0 {
-		ret := &Scope{
-			Magic:      Normal,
-			DataSource: nil,
-			Proc:       process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
-		}
+		ret := newScope(Normal)
+		ret.DataSource = nil
+		ret.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 		return []*Scope{ret}, nil
 	}
@@ -1625,6 +1775,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return c.compileExternScanParallel(n, param, fileList, fileSize)
 	}
 
+	t = time.Now()
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
 		param.Filepath = fileList[i]
@@ -1635,6 +1786,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				return nil, err
 			}
 		}
+	}
+	if time.Since(t) > time.Second {
+		logutil.Infof("read file offset cost %v", time.Since(t))
+
 	}
 	ss := make([]*Scope, 1)
 	if param.Parallel {
@@ -1693,11 +1848,15 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
+	useShuffle := param.Parallel
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
+		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1715,10 +1874,12 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	//arg.FuncId = dispatch.SendToAnyLocalFunc
-	//use shuffle instead of SendToAnyLocalFunc
-	arg.FuncId = dispatch.ShuffleToAllFunc
-	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+	if useShuffle {
+		arg.FuncId = dispatch.ShuffleToAllFunc
+		arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+	} else {
+		arg.FuncId = dispatch.SendToAnyLocalFunc
+	}
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
@@ -1772,7 +1933,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
-	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1782,7 +1942,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		ts = c.proc.TxnOperator.Txn().SnapshotTS
 	}
 	{
-		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -1806,51 +1965,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 				panic(e)
 			}
 		}
-		// defs has no rowid
-		defs, err := rel.TableDefs(ctx)
-		if err != nil {
-			panic(err)
-		}
-		i := int32(0)
-		name2index := make(map[string]int32)
-		for _, def := range defs {
-			if attr, ok := def.(*engine.AttributeDef); ok {
-				name2index[attr.Attr.Name] = i
-				cols = append(cols, &plan.ColDef{
-					ColId: attr.Attr.ID,
-					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
-						Id:         int32(attr.Attr.Type.Oid),
-						Width:      attr.Attr.Type.Width,
-						Scale:      attr.Attr.Type.Scale,
-						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.EnumVlaues,
-					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
-					Seqnum:    uint32(attr.Attr.Seqnum),
-				})
-				i++
-			} else if c, ok := def.(*engine.ConstraintDef); ok {
-				for _, ct := range c.Cts {
-					switch k := ct.(type) {
-					case *engine.PrimaryKeyDef:
-						pkey = k.Pkey
-					}
-				}
-			}
-		}
-		tblDef = &plan.TableDef{
-			Cols:          cols,
-			Name2ColIndex: name2index,
-			Version:       n.TableDef.Version,
-			Name:          n.TableDef.Name,
-			TableType:     n.TableDef.GetTableType(),
-			Pkey:          pkey,
-		}
+		tblDef = rel.GetTableDef(ctx)
 	}
 
 	// prcoess partitioned table
@@ -1865,20 +1980,18 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		}
 	}
 
-	s = &Scope{
-		Magic:    Remote,
-		NodeInfo: node,
-		DataSource: &Source{
-			Timestamp:              ts,
-			Attributes:             attrs,
-			TableDef:               tblDef,
-			RelationName:           n.TableDef.Name,
-			PartitionRelationNames: partitionRelNames,
-			SchemaName:             n.ObjRef.SchemaName,
-			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   plan2.DeepCopyExpr(filterExpr),
-			RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
-		},
+	s = newScope(Remote)
+	s.NodeInfo = node
+	s.DataSource = &Source{
+		Timestamp:              ts,
+		Attributes:             attrs,
+		TableDef:               tblDef,
+		RelationName:           n.TableDef.Name,
+		PartitionRelationNames: partitionRelNames,
+		SchemaName:             n.ObjRef.SchemaName,
+		AccountId:              n.ObjRef.GetPubInfo(),
+		Expr:                   plan2.DeepCopyExpr(filterExpr),
+		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
@@ -2275,6 +2388,31 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	return rs
 }
 
+func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
+	currentFirstFlag := c.anal.isFirst
+	for i := range ss {
+		c.anal.isFirst = currentFirstFlag
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Order,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructOrder(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Partition,
+		Idx: c.anal.curr,
+		Arg: constructPartition(n),
+	}
+	return []*Scope{rs}
+}
+
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
@@ -2457,6 +2595,37 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
 		Arg: constructMergeLimit(n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructSample(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	if len(ss) == 1 {
+		return []*Scope{rs}
+	}
+
+	// should sample again if sample by rows.
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		rs.appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     sample.NewMergeSample(constructSample(n)),
+		})
 	}
 	return []*Scope{rs}
 }
@@ -2660,7 +2829,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 	rs := make([]*Scope, 0, len(ss2))
 	uuids := make([]uuid.UUID, 0, len(ss2))
 	for i := 0; i < len(ss2); i++ {
-		rs = append(rs, new(Scope))
+		rs = append(rs, newScope(Merge))
 		uuids = append(uuids, uuid.New())
 	}
 
@@ -2688,14 +2857,9 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
-		NodeInfo: engine.Node{
-			Addr: c.addr,
-			Mcpu: ncpu,
-		},
-	}
+	rs := newScope(Merge)
+	rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
+	rs.PreScopes = ss
 	cnt := 0
 	for _, s := range ss {
 		if s.IsEnd {
@@ -2774,7 +2938,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 	ss := make([]*Scope, mcpu)
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		ss[i] = new(Scope)
+		ss[i] = newScope(Remote)
 		ss[i].Magic = Remote
 		ss[i].NodeInfo.Addr = addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
@@ -2812,13 +2976,11 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScop
 	}
 
 	ss := make([]*Scope, 1)
-	ss[0] = &Scope{
-		Magic:    Remote,
-		IsJoin:   true,
-		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
-		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)},
-		BuildIdx: bIdx,
-	}
+	ss[0] = newScope(Remote)
+	ss[0].IsJoin = true
+	ss[0].Proc = process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes())
+	ss[0].NodeInfo = engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)}
+	ss[0].BuildIdx = bIdx
 	return ss
 }
 
@@ -2861,8 +3023,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 			rs[i] = ss[i]
 			continue
 		}
-		rs[i] = new(Scope)
-		rs[i].Magic = Remote
+		rs[i] = newScope(Remote)
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
 		rs[i].BuildIdx = 1
@@ -2908,8 +3069,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
 		ss := make([]*Scope, dop)
 		for i := range ss {
-			ss[i] = new(Scope)
-			ss[i].Magic = Remote
+			ss[i] = newScope(Remote)
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
@@ -2983,9 +3143,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
-	rs := &Scope{
-		Magic: Merge,
-	}
+	rs := newScope(Merge)
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.Merge,
 		Idx:     s.Instructions[0].Idx,
@@ -3022,9 +3180,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 }
 
 func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
-	rs := &Scope{
-		Magic: Merge,
-	}
+	rs := newScope(Merge)
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
 	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, buildLen, c.anal.Nodes())
 	for i := 0; i < buildLen; i++ {
@@ -3096,15 +3252,16 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	if len(qry.Nodes) == 0 {
 		panic("empty plan")
 	}
+
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
+		anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		anals[i].NodeId = int32(i)
 	}
-	c.anal = &anaylze{
-		qry:       qry,
-		analInfos: anals,
-		curr:      int(qry.Steps[0]),
-	}
+	c.anal = newAnaylze()
+	c.anal.qry = qry
+	c.anal.analInfos = anals
+	c.anal.curr = int(qry.Steps[0])
 	for _, node := range c.anal.qry.Nodes {
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = new(plan.AnalyzeInfo)
@@ -3138,6 +3295,7 @@ func (c *Compile) fillAnalyzeInfo() {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
+		anal.DeepCopyArray(c.anal.qry.Nodes[i].AnalyzeInfo)
 	}
 }
 
@@ -3266,15 +3424,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					agg.F.Func.ObjName = "starcount"
-					continue
+					if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+						if agg.F.Func.ObjName == "count" {
+							agg.F.Func.ObjName = "starcount"
+							continue
+						}
+					}
+					partialresults = nil
+					break
 				}
-				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
-				if len(n.TableDef.Cols) > 0 {
-					columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[columnMap[int(col.Col.ColPos)]].Seqnum)
-				}
+				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
 			}
 			for _, buf := range ranges[1:] {
+				if partialresults == nil {
+					break
+				}
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)
@@ -3719,7 +3883,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
+		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring = logstring + " cnlist: "
+		for i := range c.cnList {
+			logstring = logstring + c.cnList[i].Addr + " "
+		}
+		logutil.Warnf(logstring)
 	}
 	return newNodes, nil
 }
@@ -3738,6 +3907,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
+	var shuffleRangeUint64 []uint64
+	var shuffleRangeInt64 []int64
+	var init bool
+	var index uint64
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
@@ -3753,7 +3926,27 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
+		if !init {
+			init = true
+			switch zm.GetType() {
+			case types.T_int64, types.T_int32, types.T_int16:
+				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
+			}
+		}
+		if shuffleRangeUint64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMUnsignedSlice(shuffleRangeUint64, zm)
+		} else if shuffleRangeInt64 != nil {
+			index = plan2.GetRangeShuffleIndexForZMSignedSlice(shuffleRangeInt64, zm)
+		} else {
+			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		}
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil

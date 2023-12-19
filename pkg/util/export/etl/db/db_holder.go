@@ -84,10 +84,22 @@ func SetDBConn(conn *sql.DB) {
 	db.Store(conn)
 }
 
-func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+func CloseDBConn() {
+	dbVal := db.Load()
+	if dbVal == nil {
+		return
+	}
+	dbConn := dbVal.(*sql.DB)
+	if dbConn != nil {
+		dbConn.Close()
+	}
+}
+
+func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	initFunc := func() error {
 		dbMux.Lock()
 		defer dbMux.Unlock()
+		CloseDBConn()
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return errNotReady
@@ -110,6 +122,8 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if err != nil {
 			return err
 		}
+		//45s suggest by xzxiong
+		newDBConn.SetConnMaxLifetime(45 * time.Second)
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)
@@ -135,13 +149,10 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		if dbConn != nil {
-			dbConn.Close()
-		}
-		dbConn, err = InitOrRefreshDBConn(true, true)
+		dbConn, err = GetOrInitDBConn(true, true)
 		DBConnErrCount.Store(0)
 	} else {
-		dbConn, err = InitOrRefreshDBConn(false, false)
+		dbConn, err = GetOrInitDBConn(false, false)
 	}
 	if err != nil {
 		return 0, err

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -53,7 +54,7 @@ func NewTAEStorage(
 	logtailServerCfg *options.LogtailServerCfg,
 	incrementalDedup bool,
 	maxMessageSize uint64,
-) (*taeStorage, error) {
+) (storage.TxnStorage, error) {
 	opt := &options.Options{
 		Clock:            rt.Clock(),
 		Fs:               fs,
@@ -74,14 +75,17 @@ func NewTAEStorage(
 		return nil, err
 	}
 
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLogtailServer(server)
+	}
+
 	return &taeStorage{
 		shard:         shard,
 		taeHandler:    taeHandler,
 		logtailServer: server,
 	}, nil
 }
-
-var _ storage.TxnStorage = new(taeStorage)
 
 // Start starts logtail push service.
 func (s *taeStorage) Start() error {

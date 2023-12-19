@@ -19,11 +19,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -271,19 +272,57 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 	if err != nil {
 		return nil, nil
 	}
-	return disttae.GetTableDef(txnCtx, table, dbName, tableName, nil)
+
+	// convert
+	obj := &plan2.ObjectRef{
+		SchemaName: dbName,
+		ObjName:    tableName,
+		Obj:        int64(tableId),
+	}
+	tableDef := table.GetTableDef(txnCtx)
+	return obj, tableDef
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil, nil
 	}
+
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
 		return nil, nil
 	}
-	return disttae.GetTableDef(ctx, table, dbName, tableName, sub)
+	tableDef := table.GetTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tableName
+	}
+
+	// convert
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
+	obj := &plan2.ObjectRef{
+		SchemaName:       dbName,
+		ObjName:          tableName,
+		Obj:              int64(table.GetTableID(ctx)),
+		SubscriptionName: subscriptionName,
+	}
+	if pubAccountId != -1 {
+		obj.PubInfo = &plan.PubInfo{
+			TenantId: pubAccountId,
+		}
+	}
+	return obj, tableDef
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
@@ -293,6 +332,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	var sql string
 	var erArray []ExecResult
 
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementResolveUdfDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
 
@@ -462,7 +505,10 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		return val, err
+		if val == nil {
+			return nil, err
+		}
+		return val.Value, err
 	}
 }
 
@@ -557,6 +603,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	dbName := obj.GetSchemaName()
 	checkSub := true

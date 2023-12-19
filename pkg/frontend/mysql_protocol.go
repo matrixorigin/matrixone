@@ -22,6 +22,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
+
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,14 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
-	"unicode"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -2011,8 +2012,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendUint32(data, math.Float32bits(v))
 				case float64:
 					data = mp.appendUint32(data, math.Float32bits(float32(v)))
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2025,8 +2024,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendUint64(data, math.Float64bits(float64(v)))
 				case float64:
 					data = mp.appendUint64(data, math.Float64bits(v))
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2177,8 +2174,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfFloat64(data, float64(v), 32)
 				case float64:
 					data = mp.appendStringLenEncOfFloat64(data, v, 32)
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2191,8 +2186,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfFloat64(data, float64(v), 64)
 				case float64:
 					data = mp.appendStringLenEncOfFloat64(data, v, 64)
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2725,6 +2718,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	} else {
 		mp.SetSalt(extraInfo.Salt)
 		mp.GetSession().requestLabel = extraInfo.Label.Labels
+		if extraInfo.ConnectionID > 0 {
+			mp.connectionID = extraInfo.ConnectionID
+		}
 		if extraInfo.InternalConn {
 			mp.GetSession().connType = ConnTypeInternal
 		} else {

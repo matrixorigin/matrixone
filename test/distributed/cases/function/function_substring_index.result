@@ -139,28 +139,28 @@ rpad(substring_index(s1, *., 3), 20, *)
 123abc&*.jjkmm&*.732
 SELECT startswith(substring_index(s1,'*.',3),'123') FROM substring_index_01;
 startswith(substring_index(s1, *., 3), 123)
-0
-0
-0
-1
-0
-0
-0
-0
+false
+false
+false
+true
+false
+false
+false
+false
 null
-0
+false
 SELECT endswith(substring_index(s1,'+',2),'62') FROM substring_index_01;
 endswith(substring_index(s1, +, 2), 62)
-0
-0
-0
-0
-0
-0
-0
-0
+false
+false
+false
+false
+false
+false
+false
+false
 null
-1
+true
 SELECT * FROM substring_index_01 WHERE find_in_set(substring_index(s1,delim,count1),NULL) = NULL;
 id    s1    delim    count1
 SELECT CONCAT_WS(substring_index(s1,delim,count1),'hehaha32789','ABCNSLK') FROM substring_index_01 WHERE id = 2;
@@ -256,18 +256,18 @@ SELECT * FROM substring_index_02 WHERE LPAD(substring_index(LTRIM(s1),'e',3),20,
 id    s1    delim    count1    count2
 SELECT startswith(substring_index(s1,delim,3),'SUB') FROM substring_index_02;
 startswith(substring_index(s1, delim, 3), SUB)
-1
-0
+true
+false
 null
 null
-0
+false
 SELECT endswith(substring_index(s1,delim,-2),'h)') FROM substring_index_02;
 endswith(substring_index(s1, delim, -2), h))
-1
-0
+true
+false
 null
 null
-0
+false
 SELECT find_in_set(substring_index(s1,delim,count1),'SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&') FROM substring_index_02;
 find_in_set(substring_index(s1, delim, count1), SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&)
 0

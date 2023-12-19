@@ -487,10 +487,10 @@ format(d2, 3)
 3,923,404.213
 SELECT startswith(format(d2,1),'47823') from format_02 WHERE id = 1;
 startswith(format(d2, 1), 47823)
-0
+false
 SELECT endswith(format(d2,1),'32.4') from format_02 WHERE id = 1;
 endswith(format(d2, 1), 32.4)
-1
+true
 SELECT substring(format(d1,3),3,5) from format_02;
 substring(format(d1, 3), 3, 5)
 200

@@ -145,7 +145,7 @@ func (node *memoryNode) Foreach(
 	}
 	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[colIdx].SeqNum]
 	if !ok {
-		v := containers.FillConstVector(int(node.data.Length()), readSchema.ColDefs[colIdx].Type, nil, mp)
+		v := containers.NewConstNullVector(readSchema.ColDefs[colIdx].Type, int(node.data.Length()), mp)
 		for _, row := range sels {
 			val := v.Get(int(row))
 			isNull := v.IsNull(int(row))
@@ -194,7 +194,7 @@ func (node *memoryNode) GetColumnDataWindow(
 ) (vec containers.Vector, err error) {
 	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[col].SeqNum]
 	if !ok {
-		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil, mp), nil
+		return containers.NewConstNullVector(readSchema.ColDefs[col].Type, int(to-from), mp), nil
 	}
 	if node.data == nil {
 		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx], mp)
@@ -262,7 +262,7 @@ func (node *memoryNode) GetDataWindow(
 		idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 		var vec containers.Vector
 		if !ok {
-			vec = containers.FillConstVector(int(to-from), colDef.Type, nil, mp)
+			vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
 		} else {
 			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}

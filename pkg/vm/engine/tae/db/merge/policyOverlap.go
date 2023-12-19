@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var _ Policy = (*Overlap)(nil)
@@ -50,21 +51,21 @@ func (o *Overlap) OnObject(obj *catalog.SegmentEntry) {
 			maxv := sortKeyZonemap.GetMaxBuf()
 			mint, _, _ := types.DecodeTuple(minv)
 			maxt, _, _ := types.DecodeTuple(maxv)
-			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(), maxt.ErrString())
+			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(nil), maxt.ErrString(nil))
 		}
 	}
 }
 
-func (o *Overlap) Config(uint64, any)   {}
-func (o *Overlap) GetConfig(uint64) any { return nil }
+func (o *Overlap) SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any) {}
+func (o *Overlap) GetConfig(*catalog.TableEntry) any                         { return nil }
 
 func (o *Overlap) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	o.analyzer.analyze(o.schema.GetSingleSortKeyType().Oid, o.schema.Name)
 	return nil
 }
 
-func (o *Overlap) ResetForTable(id uint64, entry *catalog.TableEntry) {
-	o.id = id
+func (o *Overlap) ResetForTable(entry *catalog.TableEntry) {
+	o.id = entry.ID
 	o.schema = entry.GetLastestSchema()
 	o.analyzer.reset()
 }

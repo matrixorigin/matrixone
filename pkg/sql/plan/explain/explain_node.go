@@ -18,7 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +31,7 @@ var _ NodeDescribe = &NodeDescribeImpl{}
 
 const MB = 1024 * 1024
 const GB = MB * 1024
+const MILLION = 1000000
 
 type NodeDescribeImpl struct {
 	Node *plan.Node
@@ -56,8 +60,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = TableScan
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
-	case plan.Node_STREAM_SCAN:
-		pname = "Stream Scan"
+	case plan.Node_SOURCE_SCAN:
+		pname = "Source Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -86,6 +90,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sample"
 	case plan.Node_SORT:
 		pname = "Sort"
+	case plan.Node_PARTITION:
+		pname = "Partition"
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -142,7 +148,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_STREAM_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
@@ -204,6 +210,7 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 	buf.WriteString("Analyze: ")
 	if ndesc.Node.AnalyzeInfo != nil {
 		impl := NewAnalyzeInfoDescribeImpl(ndesc.Node.AnalyzeInfo)
+		options.NodeType = ndesc.Node.NodeType
 		err := impl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -297,11 +304,17 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 
 	// Get Aggregate function info
 	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
-		aggListInfo, err := ndesc.GetAggregationInfo(ctx, options)
+		var listInfo string
+		var err error
+		if ndesc.Node.NodeType == plan.Node_SAMPLE {
+			listInfo, err = ndesc.GetSampleFuncInfo(ctx, options)
+		} else {
+			listInfo, err = ndesc.GetAggregationInfo(ctx, options)
+		}
 		if err != nil {
 			return nil, err
 		}
-		lines = append(lines, aggListInfo)
+		lines = append(lines, listInfo)
 	}
 
 	// Get Window function info
@@ -634,6 +647,34 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetSampleFuncInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	if ndesc.Node.SampleFunc.Rows == plan2.NotSampleByRows {
+		buf.WriteString(fmt.Sprintf("Sample %.2f Percent by: ", ndesc.Node.SampleFunc.Percent))
+	} else {
+		buf.WriteString(fmt.Sprintf("Sample %d Rows by: ", ndesc.Node.SampleFunc.Rows))
+	}
+
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetAggList() {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetFillColsInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Fill Columns: ")
@@ -756,7 +797,92 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 
 func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
 	fmt.Fprintf(buf, "timeConsumed=%dms", a.AnalyzeInfo.TimeConsumed/1000000)
-	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
+
+	var majorStr, minorStr string
+	switch options.NodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+		majorStr = "scan"
+		minorStr = "filter"
+	case plan.Node_JOIN:
+		majorStr = "probe"
+		minorStr = "build"
+	case plan.Node_AGG:
+		majorStr = "group"
+		minorStr = "mergegroup"
+	case plan.Node_SORT:
+		majorStr = "sort"
+		minorStr = "mergesort"
+	case plan.Node_FILTER:
+		majorStr = ""
+		minorStr = "filter"
+	}
+
+	majordop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
+	if majordop > 1 {
+		fmt.Fprintf(buf, " %v_time=[", majorStr)
+		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
+			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
+		})
+		if majordop > 4 {
+			var totalTime int64
+			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
+				totalTime += a.AnalyzeInfo.TimeConsumedArrayMajor[i]
+			}
+			fmt.Fprintf(buf,
+				"total=%vms,min=%vms,max=%vms,dop=%v]",
+				totalTime/MILLION,
+				a.AnalyzeInfo.TimeConsumedArrayMajor[0]/MILLION,
+				a.AnalyzeInfo.TimeConsumedArrayMajor[len(a.AnalyzeInfo.TimeConsumedArrayMajor)-1]/MILLION,
+				majordop)
+		} else {
+			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
+				if i != 0 {
+					fmt.Fprintf(buf, ",")
+				}
+				fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMajor[i]/MILLION)
+			}
+			fmt.Fprintf(buf, "]")
+		}
+
+		minordop := len(a.AnalyzeInfo.TimeConsumedArrayMinor)
+		if minordop > 0 {
+			if minorStr == "mergegroup" || minorStr == "mergesort" {
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					if i != 0 {
+						a.AnalyzeInfo.TimeConsumedArrayMinor[0] += a.AnalyzeInfo.TimeConsumedArrayMinor[i]
+					}
+				}
+				a.AnalyzeInfo.TimeConsumedArrayMinor = a.AnalyzeInfo.TimeConsumedArrayMinor[:1]
+			}
+
+			fmt.Fprintf(buf, " %v_time=[", minorStr)
+			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
+				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
+			})
+			if minordop > 4 {
+				var totalTime int64
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					totalTime += a.AnalyzeInfo.TimeConsumedArrayMinor[i]
+				}
+				fmt.Fprintf(buf,
+					"total=%vms,min=%vms,max=%vms,dop=%v]",
+					totalTime/MILLION,
+					a.AnalyzeInfo.TimeConsumedArrayMinor[0]/MILLION,
+					a.AnalyzeInfo.TimeConsumedArrayMinor[len(a.AnalyzeInfo.TimeConsumedArrayMinor)-1]/MILLION,
+					majordop)
+			} else {
+				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
+					if i != 0 {
+						fmt.Fprintf(buf, ",")
+					}
+					fmt.Fprintf(buf, "%vms", a.AnalyzeInfo.TimeConsumedArrayMinor[i]/MILLION)
+				}
+				fmt.Fprintf(buf, "]")
+			}
+		}
+	}
+
+	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/MILLION)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
 	if a.AnalyzeInfo.InputSize < MB {

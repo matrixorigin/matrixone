@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -82,38 +85,42 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	}
 }
 
-func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
+func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 	switch typ.Oid {
 	case types.T_int8:
-		return float64(types.DecodeInt8(buf)), true
+		return float64(types.DecodeInt8(buf))
 	case types.T_int16:
-		return float64(types.DecodeInt16(buf)), true
+		return float64(types.DecodeInt16(buf))
 	case types.T_int32:
-		return float64(types.DecodeInt32(buf)), true
+		return float64(types.DecodeInt32(buf))
 	case types.T_int64:
-		return float64(types.DecodeInt64(buf)), true
+		return float64(types.DecodeInt64(buf))
 	case types.T_uint8:
-		return float64(types.DecodeUint8(buf)), true
+		return float64(types.DecodeUint8(buf))
 	case types.T_uint16:
-		return float64(types.DecodeUint16(buf)), true
+		return float64(types.DecodeUint16(buf))
 	case types.T_uint32:
-		return float64(types.DecodeUint32(buf)), true
+		return float64(types.DecodeUint32(buf))
 	case types.T_uint64:
-		return float64(types.DecodeUint64(buf)), true
+		return float64(types.DecodeUint64(buf))
 	case types.T_date:
-		return float64(types.DecodeDate(buf)), true
-	case types.T_char, types.T_varchar, types.T_text:
-		return float64(plan2.ByteSliceToUint64(buf)), true
+		return float64(types.DecodeDate(buf))
+	//case types.T_char, types.T_varchar, types.T_text:
+	//return float64(plan2.ByteSliceToUint64(buf)), true
 	default:
-		return 0, false
+		panic("unsupported type")
 	}
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
 func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
+	}()
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(ctx)
 	var (
 		init    bool
 		err     error
@@ -136,7 +143,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		meta = objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
-		info.BlockNumber += int(obj.BlkCnt)
+		info.BlockNumber += int(obj.BlkCnt())
 		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -147,13 +154,19 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				if info.ColumnNDVs[idx] > 100 {
-					info.ShuffleRanges[idx] = plan2.NewShuffleRange()
-					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-					if !succ {
-						info.ShuffleRanges[idx] = nil
-					} else {
-						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
+					switch info.DataTypes[idx].Oid {
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+						if info.ColumnZMs[idx].IsInited() {
+							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+							info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
+						}
+					case types.T_varchar, types.T_char, types.T_text:
+						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+						if info.ColumnZMs[idx].IsInited() {
+							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
+						}
 					}
 				}
 			}
@@ -169,12 +182,13 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				if info.ShuffleRanges[idx] != nil {
-					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
-					if !succ {
-						info.ShuffleRanges[idx] = nil
-					} else {
-						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
+					switch info.DataTypes[idx].Oid {
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
+						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
+					case types.T_varchar, types.T_char, types.T_text:
+						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
@@ -189,7 +203,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 }
 
 func adjustNDV(info *plan2.InfoFromZoneMap, tbl *txnTable) {
-	tableDef := tbl.getTableDef()
+	tableDef := tbl.GetTableDef(context.TODO())
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 
 	if info.AccurateObjectNumber > 1 {
@@ -215,6 +229,10 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tbl *txnTable) {
 
 // calculate and update the stats for scan node.
 func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap, approxNumObjects int) bool {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 	info.ApproxObjectNumber = approxNumObjects
@@ -223,7 +241,7 @@ func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap, appr
 		return false
 	}
 	adjustNDV(info, tbl)
-	plan2.UpdateStatsInfoMap(info, tbl.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, tbl.GetTableDef(ctx), s)
 	return true
 }
 
@@ -246,6 +264,6 @@ func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, part
 		return false
 	}
 	adjustNDV(info, baseTable)
-	plan2.UpdateStatsInfoMap(info, baseTable.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, baseTable.GetTableDef(ctx), s)
 	return true
 }

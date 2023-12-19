@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -73,6 +74,7 @@ func initRuntime(uuids []string, queryAddress []string) {
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(cns, nil))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 }
 
 func TestCanHandleSelfCmd(t *testing.T) {
@@ -88,7 +90,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
-	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{}, nil)
+	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{})
 	require.Nil(t, err)
 
 	a1.proc = new(process.Process)
@@ -135,9 +137,9 @@ func TestCanTransferQuery(t *testing.T) {
 	initRuntime(uuids, addrs)
 	trace.InitMOCtledSpan()
 
-	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
+	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{})
 	require.Nil(t, err)
-	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{}, nil)
+	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{})
 	require.Nil(t, err)
 
 	qs1.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)

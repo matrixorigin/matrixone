@@ -34,9 +34,9 @@ message Type {
 	string enumvalues = 7;
 };
 
-// Const: if a const value can be reprensented by int64 or
+// Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
-message Const {
+message Literal {
 	bool isnull			= 1;
 	oneof value {
 		int32 i8val		= 2;  // pb have no int8
@@ -182,8 +182,8 @@ message Function {
 		WIN_VALUE				= 256;
 		WIN_ORDER				= 512;
 
-		// Monotonic function can filter by zonemap
-		MONOTONIC = 1024;
+		// Filter which can be applied on zonemaps
+		ZONEMAPPABLE = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -193,19 +193,19 @@ message Function {
 message Expr {
 	Type typ = 1;
 	oneof expr {
-		Const		c		= 2;
+		Literal		lit		= 2;
 		ParamRef	p		= 3;
 		VarRef		v		= 4;
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		WindowSpec w = 8;
+		WindowSpec	w		= 8;
 		SubqueryRef	sub		= 9;
 		CorrColRef	corr	= 10;
-		TargetType  t		= 11;
+		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		BinaryData	bin		= 14;
+		LiteralVec	vec	= 14;
 	}
 
 	int32 aux_id = 15;
@@ -213,8 +213,9 @@ message Expr {
 	double selectivity = 17;
 }
 
-message BinaryData {
-	bytes data = 1;
+message LiteralVec {
+	int32 len	= 1;
+	bytes data	= 2;
 }
 
 enum CompressType {
@@ -442,6 +443,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+	bool is_dynamic = 31;
+
 }
 
 message TableFunction{
@@ -481,6 +484,8 @@ message HashMapStats{
 	int64 shuffleColMin = 7;
 	int64 shuffleColMax = 8;
 	ShuffleMethod shuffleMethod = 9;
+	int64 nullcnt=10;
+	repeated double ranges	= 11;
 }
 
 message Stats {
@@ -536,6 +541,11 @@ message WindowSpec {
 	repeated OrderBySpec order_by = 3;
 	FrameClause frame = 4;
 	string name = 5;
+}
+
+message SampleFuncSpec {
+	int32 Rows = 1;
+	double Percent = 2;
 }
 
 message FrameClause {
@@ -604,6 +614,8 @@ message AnalyzeInfo {
 	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
+	repeated int64 time_consumed_array_major = 15;
+	repeated int64 time_consumed_array_minor = 16;
 }
 
 message PartitionPrune {
@@ -622,7 +634,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
-		STREAM_SCAN = 6;
+		SOURCE_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
@@ -679,6 +691,7 @@ message Node {
 		//
 		TIME_WINDOW = 64;
 		Fill = 65;
+		PARTITION = 66;
 	}
 
 	enum JoinType {
@@ -786,6 +799,12 @@ message Node {
 
 	FillType fill_type = 49;
 	repeated Expr fill_val = 50;
+
+	// sample function related.
+	SampleFuncSpec sample_func = 51;
+
+	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
 }
 
 message ExternScan {
@@ -795,6 +814,7 @@ message ExternScan {
     uint64 ignored_lines = 4;
     bytes  enclosed_by = 5;
     string terminated = 6;
+	string json_type = 7;
 }
 
 message LockTarget {
@@ -855,6 +875,7 @@ message DeleteCtx {
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
+	TruncateTable truncate_table = 10;
 }
 
 message Query {
@@ -1043,6 +1064,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {
@@ -1117,6 +1139,13 @@ message AlterTableAlterIndex {
 	bool visible = 4;
 }
 
+message AlterTableAlterReIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string index_name = 3;
+	int64 index_algo_param_list = 4;
+}
+
 message AlterTableComment {
 	string new_comment = 1;
 }
@@ -1155,6 +1184,7 @@ message AlterTable {
 			AlterTableName alter_name = 6;
 			AlterAddCol add_col = 7;
 			AlterDropCol drop_col = 8;
+			AlterTableAlterReIndex alter_reindex = 9;
 		};
 	}
 	string database			      = 1;
@@ -1236,6 +1266,7 @@ message TruncateTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	bool	is_delete = 8;
 }
 
 message ClusterTable{

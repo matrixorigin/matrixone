@@ -69,6 +69,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
+	if colPos, ok := b.ctx.sampleByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.sampleFunc.columns[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -94,7 +106,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
-		newExpr, _ := bindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
+		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
 		return &plan.Expr{
@@ -130,7 +142,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
-			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
 	}
 	b.insideAgg = false

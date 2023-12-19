@@ -57,7 +57,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyze.Start()
 	defer analyze.Stop()
 	ap := arg
@@ -69,7 +73,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.build(ap, proc, analyze); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil {
+			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+			// shuffle join can't stop early for this moment
+			if ctr.mp == nil && !arg.IsShuffle {
 				ctr.state = End
 			} else {
 				ctr.state = Probe

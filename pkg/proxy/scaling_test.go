@@ -91,6 +91,7 @@ func TestDoScalingIn(t *testing.T) {
 		State: metadata.WorkState_Draining,
 	})
 	require.NoError(t, err)
+	tp.mc.ForceRefresh(true)
 
 	tick := time.NewTicker(time.Millisecond * 200)
 	for {

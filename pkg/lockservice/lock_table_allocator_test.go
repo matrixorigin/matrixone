@@ -24,6 +24,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -170,7 +171,7 @@ func TestValid(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			assert.Empty(t, a.Valid([]pb.LockTable{b}))
 		})
 }
@@ -180,7 +181,7 @@ func TestValidWithServiceInvalid(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			b.ServiceID = "s2"
 			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
 		})
@@ -191,7 +192,7 @@ func TestValidWithVersionChanged(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			b := a.Get("s1", 1)
+			b := a.Get("s1", 4)
 			b.Version++
 			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
 		})
@@ -243,31 +244,33 @@ func runLockTableAllocatorTest(
 	t *testing.T,
 	timeout time.Duration,
 	fn func(*lockTableAllocator)) {
-	defer leaktest.AfterTest(t)()
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-	require.NoError(t, os.RemoveAll(testSockets[7:]))
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	cluster := clusterservice.NewMOCluster(
-		nil,
-		0,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			[]metadata.CNService{
-				{
-					ServiceID:          "s1",
-					LockServiceAddress: testSockets,
+	reuse.RunReuseTests(func() {
+		defer leaktest.AfterTest(t)()
+		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+		require.NoError(t, os.RemoveAll(testSockets[7:]))
+		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+		cluster := clusterservice.NewMOCluster(
+			nil,
+			0,
+			clusterservice.WithDisableRefresh(),
+			clusterservice.WithServices(
+				[]metadata.CNService{
+					{
+						ServiceID:          "s1",
+						LockServiceAddress: testSockets,
+					},
 				},
-			},
-			[]metadata.TNService{
-				{
-					LockServiceAddress: testSockets,
-				},
-			}))
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
+				[]metadata.TNService{
+					{
+						LockServiceAddress: testSockets,
+					},
+				}))
+		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-	a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
-	defer func() {
-		assert.NoError(t, a.Close())
-	}()
-	fn(a.(*lockTableAllocator))
+		a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
+		defer func() {
+			assert.NoError(t, a.Close())
+		}()
+		fn(a.(*lockTableAllocator))
+	})
 }

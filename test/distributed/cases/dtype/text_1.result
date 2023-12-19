@@ -430,14 +430,14 @@ delete from t9 where a is not NULL;
 insert into t9 values ('Ananya Majumdar', 'IX'),('Anushka Samanta', 'X'),('Sharma', 'XI');
 select startswith(a,'An') from t9;
 startswith(a, An)
-1
-1
-0
+true
+true
+false
 select endswith(b,'X') from t9;
 endswith(b, X)
-1
-1
-0
+true
+true
+false
 delete from t9 where a is not NULL;
 insert into t9 values('  sdfad  ','2022-02-02 22:22:22');
 insert into t9 values('sdfad  ','2022-02-02 22:22:22');

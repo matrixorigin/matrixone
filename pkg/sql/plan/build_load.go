@@ -17,14 +17,20 @@ package plan
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
 	}
@@ -87,6 +93,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
 		terminated = stmt.Param.Tail.Fields.Terminated
 	}
+
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
 		Stats:       &plan.Stats{},
@@ -100,6 +107,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
 			EnclosedBy:   enclosedBy,
 			Terminated:   terminated,
+			JsonType:     stmt.Param.JsonData,
 		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
@@ -136,10 +144,23 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
 	checkInsertPkDup := false
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, isInsertWithoutAutoPkCol)
+	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, nil, isInsertWithoutAutoPkCol)
 	if err != nil {
 		return nil, err
 	}
+	// go shuffle for loadif parallel
+	if stmt.Param.Parallel {
+		for i := range builder.qry.Nodes {
+			node := builder.qry.Nodes[i]
+			if node.NodeType == plan.Node_INSERT {
+				if node.Stats.HashmapStats == nil {
+					node.Stats.HashmapStats = &plan.HashMapStats{}
+				}
+				node.Stats.HashmapStats.Shuffle = true
+			}
+		}
+	}
+
 	query := builder.qry
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT

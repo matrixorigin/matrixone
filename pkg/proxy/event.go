@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -34,7 +33,7 @@ func (t eventType) String() string {
 		return "SetVar"
 	case TypePrepare:
 		return "Prepare"
-	case TypeUse:
+	case TypeInitDB:
 		return "Use"
 	}
 	return "Unknown"
@@ -49,8 +48,8 @@ const (
 	TypeSetVar eventType = 2
 	// TypePrepare indicates the prepare statement.
 	TypePrepare eventType = 5
-	// TypeUse indicates the use database statement.
-	TypeUse eventType = 6
+	// TypeInitDB indicates the use database statement.
+	TypeInitDB eventType = 6
 )
 
 // IEvent is the event interface.
@@ -105,11 +104,11 @@ func makeEvent(msg []byte) (IEvent, bool) {
 			return makeSetVarEvent(sql), false
 		case *tree.PrepareString:
 			return makePrepareEvent(sql), false
-		case *tree.Use:
-			return makeUseEvent(sql), false
 		default:
 			return nil, false
 		}
+	} else if isCmdInitDB(msg) {
+		return makeInitDBEvent(getStatement(msg)), false
 	}
 	return nil, false
 }
@@ -183,22 +182,22 @@ func (e *prepareEvent) eventType() eventType {
 	return TypePrepare
 }
 
-// useEvent is the event that execute a use statement.
-type useEvent struct {
+// initDBEvent is the event that execute a use statement.
+type initDBEvent struct {
 	baseEvent
-	stmt string
+	db string
 }
 
 // makeUseEvent creates an event with TypeUse type.
-func makeUseEvent(stmt string) IEvent {
-	e := &useEvent{
-		stmt: stmt,
+func makeInitDBEvent(db string) IEvent {
+	e := &initDBEvent{
+		db: db,
 	}
-	e.typ = TypeUse
+	e.typ = TypeInitDB
 	return e
 }
 
 // eventType implements the IEvent interface.
-func (e *useEvent) eventType() eventType {
-	return TypeUse
+func (e *initDBEvent) eventType() eventType {
+	return TypeInitDB
 }

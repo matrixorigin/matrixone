@@ -52,7 +52,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -93,6 +95,7 @@ func NewService(
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
 		cfg:         cfg,
+		logger:      logutil.GetGlobalLogger().Named("cn-service"),
 		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
@@ -106,10 +109,6 @@ func NewService(
 	}
 	srv.initQueryService()
 
-	for _, opt := range options {
-		opt(srv)
-	}
-	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initCacheServer(); err != nil {
@@ -216,7 +215,6 @@ func NewService(
 	if err != nil {
 		panic(err)
 	}
-
 	return srv, nil
 }
 
@@ -393,7 +391,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm, s)
+	s.createMOServer(cancelMoServerCtx, pu, aicm)
 	return nil
 }
 
@@ -431,11 +429,10 @@ func (s *service) createMOServer(
 	inputCtx context.Context,
 	pu *config.ParameterUnit,
 	aicm *defines.AutoIncrCacheManager,
-	baseService frontend.BaseService,
 ) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, baseService)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, s)
 }
 
 func (s *service) runMoServer() error {
@@ -460,6 +457,11 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		s._hakeeperClient = client
 		s.initClusterService()
 		s.initLockService()
+
+		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+		if ok {
+			ss.(*status.Server).SetHAKeeperClient(client)
+		}
 	})
 	client = s._hakeeperClient
 	return
@@ -532,7 +534,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				panic("should never happen")
+				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
@@ -589,7 +591,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				func(txnID []byte, createAt time.Time, createBy string) {
 					// dump all goroutines to stderr
 					profile.ProfileGoroutine(os.Stderr, 2)
-					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
+					v2.TxnLeakCounter.Inc()
+					runtime.DefaultRuntime().Logger().Error("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
 						zap.String("create-by", createBy))
@@ -603,7 +606,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts, client.WithLockService(s.lockService))
+		opts = append(opts,
+			client.WithLockService(s.lockService),
+			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+		)
 		c = client.NewTxnClient(
 			sender,
 			opts...)
@@ -618,6 +624,11 @@ func (s *service) initLockService() {
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
+
+	ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
+	if ok {
+		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
+	}
 }
 
 // put the waiting-next type msg into client session's cache and return directly

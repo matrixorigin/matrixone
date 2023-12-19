@@ -552,6 +552,13 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
+func logInfof(info string, msg string, fields ...zap.Field) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		fields = append(fields, zap.String("session_info", info))
+		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+	}
+}
+
 func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
 		return
@@ -717,4 +724,63 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 		return true
 	}
 	return false
+}
+
+const (
+	quitStr = "!!!COM_QUIT!!!"
+)
+
+// makeExecuteSql appends the PREPARE sql and its values of parameters for the EXECUTE statement.
+// Format 1: execute ... using ...
+// execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
+// Format 2: COM_STMT_EXECUTE
+// execute.... // prepare stmt1 from .... ; param0 ; param1 ...
+func makeExecuteSql(ses *Session, stmt tree.Statement) string {
+	if ses == nil || stmt == nil {
+		return ""
+	}
+	preSql := ""
+	bb := &strings.Builder{}
+	//fill prepare parameters
+	switch t := stmt.(type) {
+	case *tree.Execute:
+		name := string(t.Name)
+		prepareStmt, err := ses.GetPrepareStmt(name)
+		if err != nil || prepareStmt == nil {
+			break
+		}
+		preSql = strings.TrimSpace(prepareStmt.Sql)
+		bb.WriteString(preSql)
+		bb.WriteString(" ; ")
+		if len(t.Variables) != 0 {
+			//for EXECUTE ... USING statement. append variables if there is.
+			//get SET VAR sql
+			setVarSqls := make([]string, len(t.Variables))
+			for i, v := range t.Variables {
+				_, userVal, err := ses.GetUserDefinedVar(v.Name)
+				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
+					setVarSqls[i] = userVal.Sql
+				}
+			}
+			bb.WriteString(strings.Join(setVarSqls, " ; "))
+		} else if prepareStmt.params != nil {
+			//for COM_STMT_EXECUTE
+			//get value of parameters
+			paramCnt := prepareStmt.params.Length()
+			paramValues := make([]string, paramCnt)
+			vs := vector.MustFixedCol[types.Varlena](prepareStmt.params)
+			for i := 0; i < paramCnt; i++ {
+				isNull := prepareStmt.params.GetNulls().Contains(uint64(i))
+				if isNull {
+					paramValues[i] = "NULL"
+				} else {
+					paramValues[i] = vs[i].GetString(prepareStmt.params.GetArea())
+				}
+			}
+			bb.WriteString(strings.Join(paramValues, " ; "))
+		}
+	default:
+		return ""
+	}
+	return bb.String()
 }

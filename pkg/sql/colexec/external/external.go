@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -91,6 +92,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		}
 		param.Extern.FileService = proc.FileService
 	}
+	if !loadFormatIsValid(param.Extern) {
+		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+
 	if param.Extern.Format == tree.JSONLINE {
 		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
 			param.Fileparam.End = true
@@ -114,20 +119,26 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		Name2ColIndex: name2ColIndex,
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.exprMono = plan2.CheckExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer func() {
 		anal.Stop()
 		anal.AddScanTime(t1)
 		span.End()
+		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 
@@ -685,7 +696,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+	if isMonoExpr := plan2.CheckExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
 		cnt := plan2.AssignAuxIdForExpr(expr, 0)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
@@ -835,6 +846,9 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		if val == nil {
 			res = append(res, NULL_FLAG)
 			continue
+		}
+		if idx > len(cols) {
+			return nil, moerr.NewWrongValueCountOnRow(ctx, 0)
 		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
@@ -1306,4 +1320,12 @@ func readCountStringLimitSize(r *csv.Reader, ctx context.Context, size uint64, r
 		}
 	}
 	return OneBatchMaxRow, false, nil
+}
+
+func loadFormatIsValid(param *tree.ExternParam) bool {
+	switch param.Format {
+	case tree.JSONLINE, tree.CSV:
+		return true
+	}
+	return false
 }

@@ -66,6 +66,21 @@ type TxnClient interface {
 
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+
+	// GetState returns the current state of txn client.
+	GetState() TxnState
+}
+
+type TxnState struct {
+	State int
+	// user active txns
+	Users int
+	// all active txns
+	ActiveTxns []string
+	// FIFO queue for ready to active txn
+	WaitActiveTxns []string
+	// LatestTS is the latest timestamp of the txn client.
+	LatestTS timestamp.Timestamp
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -140,6 +155,9 @@ type TxnOperator interface {
 	ResetRetry(bool)
 	IsRetry() bool
 
+	SetOpenLog(bool)
+	IsOpenLog() bool
+
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
 	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
@@ -190,6 +208,8 @@ type TimestampWaiter interface {
 	CancelC() chan struct{}
 	// Close close the timestamp waiter
 	Close()
+	// LatestTS returns the latest timestamp of the waiter.
+	LatestTS() timestamp.Timestamp
 }
 
 type Workspace interface {

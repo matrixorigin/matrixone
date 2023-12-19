@@ -79,6 +79,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
 		return arg.children[0].Call(proc)
@@ -89,11 +93,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	return callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
-	// if ok {
-	// 	result.Status = vm.ExecStop
-	// 	return result, err
-	// }
-	// return result, err
 }
 
 func callNonBlocking(
@@ -105,6 +104,11 @@ func callNonBlocking(
 	if err != nil {
 		return result, err
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer anal.Stop()
+
 	if result.Batch == nil {
 		return result, arg.rt.retryError
 	}
@@ -127,7 +131,7 @@ func callBlocking(
 	isFirst bool,
 	isLast bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -368,6 +372,16 @@ func doLock(
 	lockService := proc.LockService
 
 	if !txnOp.Txn().IsPessimistic() {
+		return false, false, timestamp.Timestamp{}, nil
+	}
+
+	//in this case:
+	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
+	// insert into t1 values (1,1,null);
+	// update t1 set b = b+1 where a = 1;
+	//    here MO will use 't1 left join hidden_tbl' to fetch the PK in hidden table to lock,
+	//    but the result will be ConstNull vector
+	if vec != nil && vec.IsConstNull() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
 

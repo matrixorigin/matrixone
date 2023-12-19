@@ -76,6 +76,9 @@ type container struct {
 
 	remoteToIdx map[uuid.UUID]int
 	hasData     bool
+
+	batchCnt []int
+	rowCnt   []int
 }
 
 type Argument struct {
@@ -145,8 +148,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			case <-arg.LocalRegs[i].Ctx.Done():
 			case arg.LocalRegs[i].Ch <- nil:
 			}
-		} else {
-			arg.LocalRegs[i].CleanChannel(proc.Mp())
 		}
 		close(arg.LocalRegs[i].Ch)
 	}

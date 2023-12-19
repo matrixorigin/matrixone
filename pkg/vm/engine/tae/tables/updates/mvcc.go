@@ -52,8 +52,7 @@ func init() {
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	deletes atomic.Pointer[DeleteChain]
-	// deletes         *DeleteChain
+	deletes         atomic.Pointer[DeleteChain]
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
@@ -91,21 +90,17 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
-func (n *MVCCHandle) EstimateMemSizeLocked() int {
-	size := n.deletes.Load().EstimateMemSizeLocked()
+func (n *MVCCHandle) EstimateMemSizeLocked() (asize int, dsize int) {
+	dsize += n.deletes.Load().EstimateMemSizeLocked()
 	if n.appends != nil {
-		size += len(n.appends.MVCC) * AppendNodeApproxSize
+		asize += len(n.appends.MVCC) * AppendNodeApproxSize
 	}
-	return size + MVCCHandleApproxSize
+	return asize, dsize + MVCCHandleApproxSize
 }
 
 // ==========================================================
 // *************** All deletes related APIs *****************
 // ==========================================================
-
-func (n *MVCCHandle) GetDeletesPersistedTSInMVCCChain() types.TS {
-	return n.persistedTS
-}
 
 func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.Lock()
