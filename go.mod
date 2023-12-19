@@ -108,7 +108,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.12.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.14.10 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.2.0 // indirect
+	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
