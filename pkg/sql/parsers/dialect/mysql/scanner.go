@@ -730,7 +730,7 @@ func (s *Scanner) scanBitLiteral() (int, string) {
 func (s *Scanner) scanHex() (int, string) {
 	start := s.Pos
 	s.scanMantissa(16)
-	hex := s.buf[start:s.Pos]
+	hex := "0x" + s.buf[start:s.Pos]
 	if s.cur() != '\'' {
 		return LEX_ERROR, hex
 	}
