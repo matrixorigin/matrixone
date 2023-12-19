@@ -29,8 +29,8 @@ type DistanceType uint16
 
 const (
 	L2Distance DistanceType = iota
-	InnerProduct
-	CosineDistance
+	//InnerProduct
+	//CosineDistance
 )
 
 type InitType uint16
