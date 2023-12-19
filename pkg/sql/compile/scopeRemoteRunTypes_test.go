@@ -113,7 +113,8 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 		cli,
 		nil,
 	)
-	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{{}}
+	a := process.NewAnalyzeInfo()
+	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{a}
 
 	_, err = receiver.acquireMessage()
 	require.Nil(t, err)
