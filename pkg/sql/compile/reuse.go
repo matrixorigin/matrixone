@@ -33,11 +33,7 @@ func init() {
 			}
 		},
 		func(c *Compile) {
-			*c = Compile{
-				affectRows: &atomic.Uint64{},
-				lock:       &sync.RWMutex{},
-				counterSet: &perfcounter.CounterSet{},
-			}
+			c.reset()
 		},
 		reuse.DefaultOptions[Compile]().
 			WithEnableChecker(),
