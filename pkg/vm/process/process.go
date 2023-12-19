@@ -222,11 +222,11 @@ func (proc *Process) ResetContextFromParent(parent context.Context) context.Cont
 	return newctx
 }
 
-func (proc *Process) GetAnalyze(idx int) Analyze {
+func (proc *Process) GetAnalyze(idx, parallelIdx int, parallelMajor bool) Analyze {
 	if idx >= len(proc.AnalInfos) || idx < 0 {
-		return &analyze{analInfo: nil}
+		return &analyze{analInfo: nil, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 	}
-	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0}
+	return &analyze{analInfo: proc.AnalInfos[idx], wait: 0, parallelIdx: parallelIdx, parallelMajor: parallelMajor}
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {

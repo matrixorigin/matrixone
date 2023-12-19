@@ -5484,23 +5484,25 @@ func (m *ReplaceCtx) GetPartitionIdx() int32 {
 }
 
 type AnalyzeInfo struct {
-	InputRows            int64    `protobuf:"varint,1,opt,name=input_rows,json=inputRows,proto3" json:"input_rows,omitempty"`
-	OutputRows           int64    `protobuf:"varint,2,opt,name=output_rows,json=outputRows,proto3" json:"output_rows,omitempty"`
-	InputSize            int64    `protobuf:"varint,3,opt,name=input_size,json=inputSize,proto3" json:"input_size,omitempty"`
-	OutputSize           int64    `protobuf:"varint,4,opt,name=output_size,json=outputSize,proto3" json:"output_size,omitempty"`
-	TimeConsumed         int64    `protobuf:"varint,5,opt,name=time_consumed,json=timeConsumed,proto3" json:"time_consumed,omitempty"`
-	MemorySize           int64    `protobuf:"varint,6,opt,name=memory_size,json=memorySize,proto3" json:"memory_size,omitempty"`
-	WaitTimeConsumed     int64    `protobuf:"varint,7,opt,name=wait_time_consumed,json=waitTimeConsumed,proto3" json:"wait_time_consumed,omitempty"`
-	DiskIO               int64    `protobuf:"varint,8,opt,name=diskIO,proto3" json:"diskIO,omitempty"`
-	S3IOByte             int64    `protobuf:"varint,9,opt,name=s3IO_byte,json=s3IOByte,proto3" json:"s3IO_byte,omitempty"`
-	S3IOInputCount       int64    `protobuf:"varint,10,opt,name=s3IO_input_count,json=s3IOInputCount,proto3" json:"s3IO_input_count,omitempty"`
-	S3IOOutputCount      int64    `protobuf:"varint,11,opt,name=s3IO_output_count,json=s3IOOutputCount,proto3" json:"s3IO_output_count,omitempty"`
-	NetworkIO            int64    `protobuf:"varint,12,opt,name=networkIO,proto3" json:"networkIO,omitempty"`
-	ScanTime             int64    `protobuf:"varint,13,opt,name=scanTime,proto3" json:"scanTime,omitempty"`
-	InsertTime           int64    `protobuf:"varint,14,opt,name=insertTime,proto3" json:"insertTime,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	InputRows              int64    `protobuf:"varint,1,opt,name=input_rows,json=inputRows,proto3" json:"input_rows,omitempty"`
+	OutputRows             int64    `protobuf:"varint,2,opt,name=output_rows,json=outputRows,proto3" json:"output_rows,omitempty"`
+	InputSize              int64    `protobuf:"varint,3,opt,name=input_size,json=inputSize,proto3" json:"input_size,omitempty"`
+	OutputSize             int64    `protobuf:"varint,4,opt,name=output_size,json=outputSize,proto3" json:"output_size,omitempty"`
+	TimeConsumed           int64    `protobuf:"varint,5,opt,name=time_consumed,json=timeConsumed,proto3" json:"time_consumed,omitempty"`
+	MemorySize             int64    `protobuf:"varint,6,opt,name=memory_size,json=memorySize,proto3" json:"memory_size,omitempty"`
+	WaitTimeConsumed       int64    `protobuf:"varint,7,opt,name=wait_time_consumed,json=waitTimeConsumed,proto3" json:"wait_time_consumed,omitempty"`
+	DiskIO                 int64    `protobuf:"varint,8,opt,name=diskIO,proto3" json:"diskIO,omitempty"`
+	S3IOByte               int64    `protobuf:"varint,9,opt,name=s3IO_byte,json=s3IOByte,proto3" json:"s3IO_byte,omitempty"`
+	S3IOInputCount         int64    `protobuf:"varint,10,opt,name=s3IO_input_count,json=s3IOInputCount,proto3" json:"s3IO_input_count,omitempty"`
+	S3IOOutputCount        int64    `protobuf:"varint,11,opt,name=s3IO_output_count,json=s3IOOutputCount,proto3" json:"s3IO_output_count,omitempty"`
+	NetworkIO              int64    `protobuf:"varint,12,opt,name=networkIO,proto3" json:"networkIO,omitempty"`
+	ScanTime               int64    `protobuf:"varint,13,opt,name=scanTime,proto3" json:"scanTime,omitempty"`
+	InsertTime             int64    `protobuf:"varint,14,opt,name=insertTime,proto3" json:"insertTime,omitempty"`
+	TimeConsumedArrayMajor []int64  `protobuf:"varint,15,rep,packed,name=time_consumed_array_major,json=timeConsumedArrayMajor,proto3" json:"time_consumed_array_major,omitempty"`
+	TimeConsumedArrayMinor []int64  `protobuf:"varint,16,rep,packed,name=time_consumed_array_minor,json=timeConsumedArrayMinor,proto3" json:"time_consumed_array_minor,omitempty"`
+	XXX_NoUnkeyedLiteral   struct{} `json:"-"`
+	XXX_unrecognized       []byte   `json:"-"`
+	XXX_sizecache          int32    `json:"-"`
 }
 
 func (m *AnalyzeInfo) Reset()         { *m = AnalyzeInfo{} }
@@ -5632,6 +5634,20 @@ func (m *AnalyzeInfo) GetInsertTime() int64 {
 		return m.InsertTime
 	}
 	return 0
+}
+
+func (m *AnalyzeInfo) GetTimeConsumedArrayMajor() []int64 {
+	if m != nil {
+		return m.TimeConsumedArrayMajor
+	}
+	return nil
+}
+
+func (m *AnalyzeInfo) GetTimeConsumedArrayMinor() []int64 {
+	if m != nil {
+		return m.TimeConsumedArrayMinor
+	}
+	return nil
 }
 
 type PartitionPrune struct {
@@ -15191,6 +15207,46 @@ func (m *AnalyzeInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if len(m.TimeConsumedArrayMinor) > 0 {
+		dAtA72 := make([]byte, len(m.TimeConsumedArrayMinor)*10)
+		var j71 int
+		for _, num1 := range m.TimeConsumedArrayMinor {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA72[j71] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j71++
+			}
+			dAtA72[j71] = uint8(num)
+			j71++
+		}
+		i -= j71
+		copy(dAtA[i:], dAtA72[:j71])
+		i = encodeVarintPlan(dAtA, i, uint64(j71))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x82
+	}
+	if len(m.TimeConsumedArrayMajor) > 0 {
+		dAtA74 := make([]byte, len(m.TimeConsumedArrayMajor)*10)
+		var j73 int
+		for _, num1 := range m.TimeConsumedArrayMajor {
+			num := uint64(num1)
+			for num >= 1<<7 {
+				dAtA74[j73] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j73++
+			}
+			dAtA74[j73] = uint8(num)
+			j73++
+		}
+		i -= j73
+		copy(dAtA[i:], dAtA74[:j73])
+		i = encodeVarintPlan(dAtA, i, uint64(j73))
+		i--
+		dAtA[i] = 0x7a
+	}
 	if m.InsertTime != 0 {
 		i = encodeVarintPlan(dAtA, i, uint64(m.InsertTime))
 		i--
@@ -21969,6 +22025,20 @@ func (m *AnalyzeInfo) ProtoSize() (n int) {
 	}
 	if m.InsertTime != 0 {
 		n += 1 + sovPlan(uint64(m.InsertTime))
+	}
+	if len(m.TimeConsumedArrayMajor) > 0 {
+		l = 0
+		for _, e := range m.TimeConsumedArrayMajor {
+			l += sovPlan(uint64(e))
+		}
+		n += 1 + sovPlan(uint64(l)) + l
+	}
+	if len(m.TimeConsumedArrayMinor) > 0 {
+		l = 0
+		for _, e := range m.TimeConsumedArrayMinor {
+			l += sovPlan(uint64(e))
+		}
+		n += 2 + sovPlan(uint64(l)) + l
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -34405,6 +34475,158 @@ func (m *AnalyzeInfo) Unmarshal(dAtA []byte) error {
 				if b < 0x80 {
 					break
 				}
+			}
+		case 15:
+			if wireType == 0 {
+				var v int64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPlan
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.TimeConsumedArrayMajor = append(m.TimeConsumedArrayMajor, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPlan
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthPlan
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return ErrInvalidLengthPlan
+				}
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
+				}
+				elementCount = count
+				if elementCount != 0 && len(m.TimeConsumedArrayMajor) == 0 {
+					m.TimeConsumedArrayMajor = make([]int64, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPlan
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.TimeConsumedArrayMajor = append(m.TimeConsumedArrayMajor, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field TimeConsumedArrayMajor", wireType)
+			}
+		case 16:
+			if wireType == 0 {
+				var v int64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPlan
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= int64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.TimeConsumedArrayMinor = append(m.TimeConsumedArrayMinor, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPlan
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthPlan
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return ErrInvalidLengthPlan
+				}
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
+				}
+				elementCount = count
+				if elementCount != 0 && len(m.TimeConsumedArrayMinor) == 0 {
+					m.TimeConsumedArrayMinor = make([]int64, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v int64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPlan
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= int64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.TimeConsumedArrayMinor = append(m.TimeConsumedArrayMinor, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field TimeConsumedArrayMinor", wireType)
 			}
 		default:
 			iNdEx = preIndex
