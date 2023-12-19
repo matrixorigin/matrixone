@@ -353,7 +353,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 	proc := process.New(
-		receiver.ctx,
+		context.WithValue(receiver.ctx, defines.TenantIDKey{}, pHelper.accountId),
 		mp,
 		pHelper.txnClient,
 		pHelper.txnOperator,
