@@ -39,9 +39,12 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
+    alterPartitionOption  tree.AlterPartitionOption
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
+
+    PartitionNames tree.IdentifierList
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -257,6 +260,7 @@ import (
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
+%nonassoc LOWER_THAN_COMMA
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -570,10 +574,12 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterPartitionOption> alter_partition_option partition_option
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
+%type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
 %type <tableOption> table_option source_option
 %type <connectorOption> connector_option
@@ -2689,6 +2695,13 @@ alter_table_stmt:
             Options: $4,
         }
     }
+|   ALTER TABLE table_name alter_partition_option
+    {
+         $$ = &tree.AlterTable{
+             Table: $3,
+	     PartitionOptions: $4,
+         }
+    }
 
 alter_option_list:
     alter_option
@@ -2699,6 +2712,79 @@ alter_option_list:
     {
         $$ = append($1, $3)
     }
+//----------------------------------------------------------------------------------------------------------
+alter_partition_option:
+     partition_option
+     {
+	  $$ = $1
+     }
+//|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
+//     {
+//     	 $3.Num = uint64($4)
+//     	 $$ = &tree.PartitionOption{
+//	     PartBy: *$3,
+//	     SubPartBy: $5,
+//	     Partitions: $6,
+//         }
+//     }
+
+partition_option:
+      ADD PARTITION partition_list_opt
+      {
+	   opt := &tree.AlterPartitionAddPartitionClause{
+                Typ:        tree.AlterPartitionAddPartition,
+                Partitions: $3,
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+|     DROP PARTITION AllOrPartitionNameList
+      {
+	   opt := &tree.AlterPartitionDropPartitionClause{
+                Typ:            tree.AlterPartitionDropPartition,
+                PartitionNames: $3,
+           }
+           if $3 == nil {
+                opt.OnAllPartitions = true
+           } else {
+                opt.PartitionNames = $3
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+|     TRUNCATE PARTITION AllOrPartitionNameList
+      {
+	   opt := &tree.AlterPartitionTruncatePartitionClause{
+                Typ:            tree.AlterPartitionTruncatePartition,
+                PartitionNames: $3,
+           }
+           if $3 == nil {
+           	opt.OnAllPartitions = true
+           } else {
+           	opt.PartitionNames = $3
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+
+AllOrPartitionNameList:
+	ALL
+	{
+		$$ = nil
+	}
+|	PartitionNameList %prec LOWER_THAN_COMMA
+        {
+                $$ = $1
+        }
+
+PartitionNameList:
+	ident
+	{
+	        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+	}
+|	PartitionNameList ',' ident
+	{
+		$$ = append($1 , tree.Identifier($3.Compare()))
+	}
+
+//----------------------------------------------------------------------------------------------------------
 
 alter_option:
     ADD table_elem_2

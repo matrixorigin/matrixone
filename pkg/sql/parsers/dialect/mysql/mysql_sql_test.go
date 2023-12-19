@@ -27,8 +27,10 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select (col + col) / 2",
-		output: "select (col + col) / 2",
+		//input:  "select (col + col) / 2",
+		//output: "select (col + col) / 2",
+		input:  "ALTER TABLE employees ADD PARTITION (PARTITION p05 VALUES LESS THAN (500001))",
+		output: "ALTER TABLE employees ADD PARTITION (PARTITION p05 VALUES LESS THAN (500001))",
 	}
 )
 
