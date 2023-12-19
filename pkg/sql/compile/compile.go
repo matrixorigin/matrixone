@@ -142,7 +142,9 @@ func (c Compile) Name() string {
 func (c *Compile) reset() {
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
+			if c.proc.SessionInfo.Buf != nil {
+				buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
+			}
 		}
 		c.anal.release()
 	}
@@ -310,7 +312,9 @@ func (c *Compile) run(s *Scope) error {
 	}
 
 	//fmt.Println(DebugShowScopes([]*Scope{s}))
-
+	if s.Proc != nil {
+		fmt.Println("runsql:" + c.sql + "with proc ID" + s.Proc.Id)
+	}
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -4092,17 +4096,18 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return true
-	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
-		return true
-	}
-	return parts1[0] == parts2[0]
+	return addr == currentCNAddr
+	//parts1 := strings.Split(addr, ":")
+	//if len(parts1) != 2 {
+	//	logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+	//	return true
+	//}
+	//parts2 := strings.Split(currentCNAddr, ":")
+	//if len(parts2) != 2 {
+	//	logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+	//	return true
+	//}
+	//return parts1[0] == parts2[0]
 }
 
 func (s *Scope) affectedRows() uint64 {
