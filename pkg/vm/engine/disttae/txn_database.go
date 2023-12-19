@@ -416,7 +416,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableId = tableId
 	tbl.GetTableDef(ctx)
 	key := genTableKey(ctx, name, db.databaseId)
-	db.txn.createMap.Store(key, tbl)
+	db.txn.addCreateTable(key, tbl)
 	//CORNER CASE
 	//begin;
 	//create table t1(a int);

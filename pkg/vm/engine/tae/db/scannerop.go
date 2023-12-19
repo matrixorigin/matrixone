@@ -146,7 +146,7 @@ func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, segs []*cata
 	s.suspend.Store(true)
 	defer s.suspend.Store(false)
 	// waiting the runing merge sched task to finish
-	for s.suspendCnt.Load() < 3 {
+	for s.suspendCnt.Load() < 2 {
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -199,6 +199,11 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	return nil
 }
 func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
+	if s.suspend.Load() {
+		s.suspendCnt.Add(1)
+		return moerr.GetOkStopCurrRecur()
+	}
+	s.suspendCnt.Store(0)
 	if merge.StopMerge.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
@@ -209,11 +214,9 @@ func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
-	if s.suspend.Load() {
-		s.suspendCnt.Add(1)
+	if merge.StopMerge.Load() || s.suspend.Load() {
 		return moerr.GetOkStopCurrRecur()
 	}
-	s.suspendCnt.Store(0)
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}

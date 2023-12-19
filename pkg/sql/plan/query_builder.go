@@ -2401,7 +2401,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		pk := builder.compCtx.GetPrimaryKeyDef(schema, table)
 		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
-			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not only primary key in time window", tree.String(col, dialect.MYSQL))
+			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
 		h.insideAgg = true
 		expr, err := h.BindExpr(col, 0, true)

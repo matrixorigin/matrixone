@@ -16,12 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -202,6 +202,14 @@ func newAnaylze() *anaylze {
 }
 
 func (a *anaylze) release() {
+	// there are 3 situations to release analyzeInfo
+	// 1 is free analyzeInfo of Local CN when release analyze
+	// 2 is free analyzeInfo of remote CN before transfer back
+	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+	// this is situation 1
+	for i := range a.analInfos {
+		reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
+	}
 	reuse.Free[anaylze](a, nil)
 }
 
@@ -259,6 +267,7 @@ type Compile struct {
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
+	disableRetry bool
 }
 
 type runtimeFilterReceiver struct {

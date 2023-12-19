@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -60,9 +59,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		return err
 	}
 
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	c.stmt.Format(fmtCtx)
-	ctx := context.WithValue(c.ctx, defines.SqlKey{}, fmtCtx.String())
+	ctx := context.WithValue(c.ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -1182,7 +1179,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
 
 		for _, createTableSql := range tables {
-			_, err := c.runSqlWithResult(createTableSql)
+			err := c.runSql(createTableSql)
 			if err != nil {
 				return err
 			}

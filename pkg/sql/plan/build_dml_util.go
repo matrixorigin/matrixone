@@ -305,7 +305,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 
 				var isUk = indexdef.Unique
-				var isSK = !isUk
+				var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
 
 				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				if uniqueTableDef == nil {
@@ -926,9 +926,11 @@ func makeInsertPlan(
 		builder.appendStep(lastNodeId)
 	}
 
-	// append plan for the hidden tables of unique keys
+	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
+
+			// append plan for the hidden tables of unique/secondary keys
 			if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
@@ -954,7 +956,61 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
+			} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+
+				// IVF indexDefs are aggregated and handled later
+				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
+					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
+						IndexDefs: make(map[string]*IndexDef),
+					}
+				}
+				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
 			}
+		}
+	}
+
+	for _, multiTableIndex := range multiTableIndexes {
+
+		switch multiTableIndex.IndexAlgo {
+		case catalog.MoIndexIvfFlatAlgo.ToString():
+			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+
+			var idxRefs = make([]*ObjectRef, 3)
+			var idxTableDefs = make([]*TableDef, 3)
+			idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+			idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+			idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+			// remove row_id
+			for i := range idxTableDefs {
+				for j, column := range idxTableDefs[i].Cols {
+					if column.Name == catalog.Row_ID {
+						idxTableDefs[i].Cols = append(idxTableDefs[i].Cols[:j], idxTableDefs[i].Cols[j+1:]...)
+						break
+					}
+				}
+			}
+
+			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef, lastNodeId, multiTableIndex, false, idxRefs, idxTableDefs)
+			if err != nil {
+				return err
+			}
+
+			//TODO: verify with zengyan1 if colType should read from original table.
+			// It is mainly used for retaining decimal datatype precision in error messages.
+			colTypes := make([]*plan.Type, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				colTypes[i] = tableDef.Cols[i].Typ
+			}
+			err = makeInsertPlan(ctx, builder, bindCtx, idxRefs[2], idxTableDefs[2], 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes)
+			if err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInvalidInputNoCtx("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
+		}
+		if err != nil {
+			return err
 		}
 	}
 
@@ -1061,7 +1117,11 @@ func makeInsertPlan(
 						colTypes = colTypes + "0"
 					}
 				}
-				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name), makePlan2StringConstExprWithType(colTypes)})
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
+					eqCheckExpr,
+					varcharExpr,
+					makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name),
+					makePlan2StringConstExprWithType(colTypes)})
 				if err != nil {
 					return err
 				}
@@ -2172,6 +2232,111 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	return lastNodeId
+}
+
+func appendPreInsertSkVectorPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	multiTableIndex *MultiTableIndex,
+	isUpdate bool,
+	idxRefs []*ObjectRef,
+	indexTableDefs []*TableDef) (int32, error) {
+
+	/* 	The overall plan
+	----------------------------------------------------------------------------------------------------------------------------
+	| Insert on db.entries												                                                        |
+	|   ->  Lock                                                                                                                |
+	|         ->  Sort                                                                                                          |
+	|               Sort Key: l2_distance(__mo_index_centroid, embedding) ASC                                                   |
+	|               Limit: 1                                                                                                    |
+	|               ->  Join                                                                                                    |
+	|                     Join Type: INNER                                                                                      |
+	|                     ->  Sink Scan                                                                                         |
+	|                           DataSource: Plan 0                                                                              |
+	|                     ->  Filter                                                                                            |
+	|                           Filter Cond: (centroids.__mo_index_centroid_version = cast(meta.'__mo_index_value' as bigint))  |
+	|                           ->  Join                                                                                        |
+	|                                 Join Type: SINGLE                                                                         |
+	|                                 ->  Table Scan on db.centroids											                |
+	|                                 ->  Project                                                                               |
+	|                                       ->  Filter                                                                          |
+	|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
+	|                                             ->  Table Scan on db.meta													    |
+	-----------------------------------------------------------------------------------------------------------------------------
+	*/
+
+	//1. get vector & pk column details
+	var posOriginPk, posOriginVecColumn int
+	var typeOriginPk, typeOriginVecColumn *Type
+	{
+		colsMap := make(map[string]int)
+		colTypes := make([]*Type, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			colsMap[col.Name] = i
+			colTypes[i] = tableDef.Cols[i].Typ
+		}
+
+		for _, part := range multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].Parts {
+			if i, ok := colsMap[part]; ok {
+				posOriginVecColumn = i
+				typeOriginVecColumn = tableDef.Cols[i].Typ
+				break
+			}
+		}
+
+		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
+	}
+
+	// 2. scan meta table to find the `current version` number
+	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
+	if err != nil {
+		return -1, err
+	}
+
+	// 3. create a scan node for centroids table with version = `current version`
+	currVersionCentroidsTblScanId, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
+		indexTableDefs, idxRefs, metaTblScanId)
+	if err != nil {
+		return -1, err
+	}
+
+	// 4. create a cross join node for tbl and centroids
+	var leftChildTblId = lastNodeId
+	var rightChildCentroidsId = currVersionCentroidsTblScanId
+	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
+		leftChildTblId, rightChildCentroidsId,
+		typeOriginPk, posOriginPk,
+		typeOriginVecColumn, posOriginVecColumn)
+
+	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
+	// project version, centroid_id, pk, serial(version,pk)
+	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID)
+	if err != nil {
+		return -1, err
+	}
+
+	lastNodeId = sortByL2DistanceId
+
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		indexTableDefs[2],
+		false,
+		false,
+		-1,
+		nil,
+		isUpdate,
+	); ok {
+		lastNodeId = lockNodeId
+	}
+
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
+
+	return sourceStep, nil
 }
 
 // appendPreInsertUkPlan  build preinsert plan.
