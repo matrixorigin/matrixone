@@ -209,7 +209,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	var end bool
 	var err error
 
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1, false)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
@@ -334,7 +334,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
 	if err != nil {
 		return nil, err
 	}
@@ -1601,7 +1601,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 }
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
-	return &plan.AnalyzeInfo{
+	a := &plan.AnalyzeInfo{
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,
@@ -1617,6 +1617,8 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		ScanTime:         info.ScanTime,
 		InsertTime:       info.InsertTime,
 	}
+	info.DeepCopyArray(a)
+	return a
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
