@@ -169,7 +169,16 @@ func (c *Compile) reset() {
 	c.startAt = time.Time{}
 	c.metaTables = nil
 	c.needLockMeta = false
+	c.counterSet = &perfcounter.CounterSet{}
+	c.lock = &sync.RWMutex{}
+	c.isInternal = false
+	c.nodeRegs = nil
+	c.stepRegs = nil
+	c.runtimeFilterReceiverMap = nil
+	c.cnLabel = nil
+}
 
+func (c *Compile) clean() {
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -179,11 +188,9 @@ func (c *Compile) reset() {
 	for k := range c.runtimeFilterReceiverMap {
 		delete(c.runtimeFilterReceiverMap, k)
 	}
-	c.isInternal = false
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.counterSet = &perfcounter.CounterSet{}
 }
 
 // helper function to judge if init temporary engine is needed
@@ -401,6 +408,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
+			runC.clean()
 			runC.release()
 		}
 	}
@@ -409,6 +417,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
+		c.clean()
 		c.release()
 		releaseRunC()
 
