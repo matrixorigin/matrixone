@@ -58,6 +58,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	_, span := trace.Start(proc.Ctx, "StreamCall")
 	defer span.End()
 

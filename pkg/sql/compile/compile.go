@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -62,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -125,6 +125,7 @@ func New(
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
 	c.metaTables = make(map[string]struct{})
+	c.disableRetry = false
 	return c
 }
 
@@ -406,16 +407,22 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	}()
 
 	var span trace.Span
-	var cc *Compile // compile structure for rerun.
+	var runC *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
 	var err error
+	var retryTimes int
+	releaseRunC := func() {
+		if runC != c {
+			putCompile(runC)
+		}
+	}
 
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
 		putCompile(c)
-		putCompile(cc)
+		releaseRunC()
 
 		task.End()
 		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
@@ -427,72 +434,80 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	}
 
 	v2.TxnStatementTotalCounter.Inc()
-	if err = c.runOnce(); err != nil {
-		c.fatalLog(0, err)
+	runC = c
+	for {
+		if err = runC.runOnce(); err == nil {
+			break
+		}
 
-		if !c.ifNeedRerun(err) {
+		c.fatalLog(retryTimes, err)
+		if !c.canRetry(err) {
 			return nil, err
 		}
-		v2.TxnStatementRetryCounter.Inc()
 
-		c.proc.TxnOperator.ResetRetry(true)
-		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
-
-		// clear the workspace of the failed statement
-		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-			return nil, e
-		}
-
-		// increase the statement id
-		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-			return nil, e
-		}
-
-		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
-		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-			pn, e := c.buildPlanFunc()
-			if e != nil {
-				return nil, e
-			}
-			c.pn = pn
-		}
-		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
-			c.fatalLog(1, err)
+		retryTimes++
+		releaseRunC()
+		defChanged := moerr.IsMoErrCode(
+			err,
+			moerr.ErrTxnNeedRetryWithDefChanged)
+		if runC, err = c.prepareRetry(defChanged); err != nil {
 			return nil, err
 		}
-		if err = cc.runOnce(); err != nil {
-			c.fatalLog(1, err)
-			return nil, err
-		}
-		err = c.proc.TxnOperator.GetWorkspace().Adjust()
-		if err != nil {
-			c.fatalLog(1, err)
-			return nil, err
-		}
-		// set affectedRows to old compile to return
-		c.setAffectedRows(cc.getAffectedRows())
 	}
 
 	if c.shouldReturnCtxErr() {
 		return nil, c.proc.Ctx.Err()
 	}
-	result.AffectRows = c.getAffectedRows()
+	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
 	return result, nil
 }
 
-// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-func (c *Compile) ifNeedRerun(err error) bool {
-	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.TxnOperator.Txn().IsRCIsolation() {
-		return true
+func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+	v2.TxnStatementRetryCounter.Inc()
+	c.proc.TxnOperator.ResetRetry(true)
+	c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
+
+	// clear the workspace of the failed statement
+	if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+		return nil, e
 	}
-	return false
+
+	// increase the statement id
+	if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+		return nil, e
+	}
+
+	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+	// improved to refresh expression in the future.
+
+	runC := New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	if defChanged {
+		pn, e := c.buildPlanFunc()
+		if e != nil {
+			return nil, e
+		}
+		c.pn = pn
+	}
+	if e := runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+		return nil, e
+	}
+
+	return runC, nil
+}
+
+// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
+// he statement
+func (c *Compile) isRetryErr(err error) bool {
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation()
+}
+
+func (c *Compile) canRetry(err error) bool {
+	return !c.disableRetry && c.isRetryErr(err)
 }
 
 // run once
@@ -531,7 +546,7 @@ func (c *Compile) runOnce() error {
 	for e := range errC {
 		if e != nil {
 			errList = append(errList, e)
-			if c.ifNeedRerun(e) {
+			if c.isRetryErr(e) {
 				return e
 			}
 		}
@@ -3407,8 +3422,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				args := agg.F.Args[0]
 				col, ok := args.Expr.(*plan.Expr_Col)
 				if !ok {
-					agg.F.Func.ObjName = "starcount"
-					continue
+					if _, ok := args.Expr.(*plan.Expr_C); ok {
+						if agg.F.Func.ObjName == "count" {
+							agg.F.Func.ObjName = "starcount"
+							continue
+						}
+					}
+					partialresults = nil
+					break
 				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
 				if len(n.TableDef.Cols) > 0 {
@@ -3416,6 +3437,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 			}
 			for _, buf := range ranges[1:] {
+				if partialresults == nil {
+					break
+				}
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)
@@ -3860,7 +3884,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		}
 	}
 	if minWorkLoad*2 < maxWorkLoad {
-		logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
+		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring = logstring + " cnlist: "
+		for i := range c.cnList {
+			logstring = logstring + c.cnList[i].Addr + " "
+		}
+		logutil.Warnf(logstring)
 	}
 	return newNodes, nil
 }
