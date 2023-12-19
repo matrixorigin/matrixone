@@ -176,7 +176,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		defer func() {
-			c.release()
+			c.Release()
 			s.release()
 		}()
 		if err != nil {

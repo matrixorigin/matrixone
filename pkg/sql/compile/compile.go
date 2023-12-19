@@ -128,7 +128,7 @@ func NewCompile(
 	return c
 }
 
-func (c *Compile) release() {
+func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
@@ -218,9 +218,6 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
 	start := time.Now()
 	defer func() {
-		if err != nil {
-			c.release()
-		}
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -403,7 +400,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
-			runC.release()
+			runC.Release()
 		}
 	}
 
@@ -411,7 +408,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.release()
+		c.Release()
 		releaseRunC()
 
 		task.End()
@@ -477,7 +474,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	defer func() {
 		if e != nil {
-			runC.release()
+			runC.Release()
 		}
 	}()
 	if defChanged {

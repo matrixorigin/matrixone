@@ -265,6 +265,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 			return nil
 		})
 	if err != nil {
+		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
