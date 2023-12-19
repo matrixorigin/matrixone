@@ -230,6 +230,7 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
 		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
 		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		target.analInfos[i].MergeArray(n)
 		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
 		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
 		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
@@ -370,9 +371,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
-		proc.AnalInfos[i] = &process.AnalyzeInfo{
-			NodeId: pHelper.analysisNodeList[i],
-		}
+		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
