@@ -15,7 +15,6 @@
 package process
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,19 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
-func init() {
-	reuse.CreatePool[AnalyzeInfo](
-		newAnalyzeInfo,
-		resetAnalyzeInfo,
-		reuse.DefaultOptions[AnalyzeInfo]().WithEnableChecker(),
-	)
-}
-
-func (a AnalyzeInfo) Name() string {
-	return "compile.anaylzeinfo"
-}
-
-func newAnalyzeInfo() *AnalyzeInfo {
+func NewAnalyzeInfo() *AnalyzeInfo {
 	a := &AnalyzeInfo{}
 	a.mu = &sync.Mutex{}
 	return a

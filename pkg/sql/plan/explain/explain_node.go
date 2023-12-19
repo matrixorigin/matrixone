@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

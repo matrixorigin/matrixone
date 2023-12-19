@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"testing"
 	"time"
 
@@ -114,7 +113,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 		cli,
 		nil,
 	)
-	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	a := process.NewAnalyzeInfo()
 	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{a}
 
 	_, err = receiver.acquireMessage()

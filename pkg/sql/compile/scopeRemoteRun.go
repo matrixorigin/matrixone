@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -194,15 +193,6 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
-		} else {
-			// there are 3 situations to release analyzeInfo
-			// 1 is free analyzeInfo of Local CN when release analyze
-			// 2 is free analyzeInfo of remote CN before transfer back
-			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-			// this is situation 3
-			for i := range c.proc.AnalInfos {
-				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
-			}
 		}
 		c.proc.FreeVectors()
 		c.proc.CleanValueScanBatchs()
@@ -1628,12 +1618,6 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		InsertTime:       info.InsertTime,
 	}
 	info.DeepCopyArray(a)
-	// there are 3 situations to release analyzeInfo
-	// 1 is free analyzeInfo of Local CN when release analyze
-	// 2 is free analyzeInfo of remote CN before transfer back
-	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	// this is situation 2
-	reuse.Free[process.AnalyzeInfo](info, nil)
 	return a
 }
 

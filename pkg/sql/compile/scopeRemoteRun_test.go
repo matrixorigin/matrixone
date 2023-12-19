@@ -278,7 +278,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
 
-	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	a := process.NewAnalyzeInfo()
 	proc := &process.Process{
 		Id:          "1",
 		Lim:         process.Limitation{},
@@ -606,7 +606,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
-    a := reuse.Alloc[process.AnalyzeInfo](nil)
+	a := process.NewAnalyzeInfo()
 	target := &anaylze{
 		analInfos: []*process.AnalyzeInfo{a},
 	}
@@ -653,7 +653,7 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := reuse.Alloc[process.AnalyzeInfo](nil)
+	info := process.NewAnalyzeInfo()
 	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))

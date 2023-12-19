@@ -133,14 +133,6 @@ func putCompile(c *Compile) {
 		return
 	}
 	if c.anal != nil {
-	    // there are 3 situations to release analyzeInfo
-	    // 1 is free analyzeInfo of Local CN when release analyze
-	    // 2 is free analyzeInfo of remote CN before transfer back
-	    // 3 is free analyzeInfo of remote CN when errors happen before transfer back
-	    // this is situation 1
-	    for i := range a.analInfos {
-		    reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
-	    }
 		c.anal.analInfos = nil
 	}
 	if c.scope != nil {
@@ -3257,7 +3249,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	}
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		anals[i] = process.NewAnalyzeInfo()
 		anals[i].NodeId = int32(i)
 	}
 	c.anal = &anaylze{
