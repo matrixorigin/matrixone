@@ -368,3 +368,8 @@ const (
 	maxLengthOfTableComment  int = 2048
 	maxLengthOfColumnComment int = 1024
 )
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
+}

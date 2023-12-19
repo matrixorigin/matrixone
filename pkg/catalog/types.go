@@ -30,13 +30,8 @@ const (
 	Row_ID           = "__mo_rowid"
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
-	// Compound primary key column name, which is a hidden column
-	CPrimaryKeyColName = "__mo_cpkey_col"
-	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
-	// is added, which will not be sorted or used for any other purpose, but will only be used to add
-	// locks to the Lock operator in pessimistic transaction mode.
-	FakePrimaryKeyColName = "__mo_fake_pk_col"
-	ExternalFilePath      = "__mo_filepath"
+
+	ExternalFilePath = "__mo_filepath"
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -232,6 +227,12 @@ const (
 	// Regualar secondary index table columns
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
+
+	CPrimaryKeyColName = "__mo_cpkey_col" // Compound primary key column name, which is a hidden column
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
 
 	/************ 1. IVF_FLAT Secondary Index ************/
 
