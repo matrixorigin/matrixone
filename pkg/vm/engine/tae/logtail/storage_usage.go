@@ -40,7 +40,7 @@ import (
 // 1. show accounts
 //
 //	internal `show accounts`       -------\
-//									    |<=====> cn cache <====> (missed or expired) ===> tn cache
+//									       |<=====> cn cache <====> (missed or expired) ===> tn cache
 //  mysql client `show accounts`   -------/													 ^
 //																			 ________________|
 //         																	|	update       |
@@ -414,6 +414,7 @@ func (m *TNUsageMemo) applyDeletes(
 		iter := tnUsageMemo.cache.Iter()
 		if found := iter.Seek(UsageData{
 			db.GetTenantID(), db.ID, 0, 0}); !found {
+			iter.Release()
 			continue
 		}
 
