@@ -935,6 +935,20 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	{
+		// lockMoTable will lock Table  mo_catalog.mo_tables
+		// for the row with db_name=dbName & table_name = tblName。
+		dbName := c.db
+		if qry.GetDatabase() != "" {
+			dbName = qry.GetDatabase()
+		}
+		tblName := qry.GetTableDef().GetName()
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err

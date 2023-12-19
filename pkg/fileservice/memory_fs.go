@@ -301,6 +301,10 @@ func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, er
 	}, nil
 }
 
+func (m *MemoryFS) PrefetchFile(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (m *MemoryFS) Delete(ctx context.Context, filePaths ...string) error {
 	select {
 	case <-ctx.Done():

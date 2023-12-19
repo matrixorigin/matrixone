@@ -60,7 +60,9 @@ create table tab1(a int, b int);
 create view view_tab1 as select * from tab1;
 insert into tab1 values (2000, 3000);
 rollback;
+-- @bvt:issue#13132
 select * from tab1;
+-- @bvt:issue
 commit;
 
 

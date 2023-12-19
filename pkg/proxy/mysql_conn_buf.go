@@ -144,8 +144,9 @@ func (b *msgBuf) preRecv() (int, error) {
 		return mysqlHeadLen, nil
 	}
 
-	// Max length is 3 bytes.
-	if bodyLen < 1 || bodyLen >= 1<<24-1 {
+	// Max length is 3 bytes. 26MB-1 is the legal max length of a MySQL packet.
+	// Reference To : https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_packets.html
+	if bodyLen < 1 || bodyLen > 1<<24-1 {
 		return 0, moerr.NewInternalErrorNoCtx("mysql protocol error: body length %d", bodyLen)
 	}
 

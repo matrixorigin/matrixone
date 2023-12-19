@@ -61,6 +61,15 @@ func (h *MergeHistory) IsLastBefore(d time.Duration) bool {
 	return h.LastTime.Before(time.Now().Add(-d))
 }
 
+func (h *MergeHistory) String() string {
+	return fmt.Sprintf(
+		"(%v) no%v nb%v osize%v",
+		h.LastTime.Format("2006-01-02_15:04:05"),
+		h.NObj, h.NBlk,
+		HumanReadableBytes(h.OSize),
+	)
+}
+
 type TableCompactStat struct {
 	sync.RWMutex
 
@@ -101,6 +110,12 @@ func (s *TableCompactStat) AddMerge(osize, nobj, nblk int) {
 	s.Lock()
 	defer s.Unlock()
 	s.MergeHist.Add(osize, nobj, nblk)
+}
+
+func (s *TableCompactStat) GetLastFlush() types.TS {
+	s.RLock()
+	defer s.RUnlock()
+	return s.LastFlush
 }
 
 func (s *TableCompactStat) GetLastMerge() *MergeHistory {

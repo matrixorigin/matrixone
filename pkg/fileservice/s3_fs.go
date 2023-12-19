@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -183,6 +183,12 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
 
+	//TODO
+	//start := time.Now()
+	//defer func() {
+	//	metric.S3ListIODurationHistogram.Observe(time.Since(start).Seconds())
+	//}()
+
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
 		return nil, err
@@ -226,6 +232,12 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
 
+	//TODO
+	//start := time.Now()
+	//defer func() {
+	//	metric.S3StatIODurationHistogram.Observe(time.Since(start).Seconds())
+	//}()
+
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return nil, err
@@ -244,19 +256,64 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}, nil
 }
 
+func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return err
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: filePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
+	// load to disk cache
+	if s.diskCache != nil {
+		if err := s.diskCache.SetFile(
+			ctx, path.File,
+			func(ctx context.Context) (io.ReadCloser, error) {
+				return s.newReadCloser(ctx, filePath)
+			},
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	key := s.pathToKey(filePath)
+	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	v2.FSWriteS3Counter.Add(float64(len(vector.Entries)))
+	metric.FSWriteS3Counter.Add(float64(len(vector.Entries)))
 
 	ctx = addGetConnMetric(ctx)
 
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
-		v2.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
-		v2.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
+		metric.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	// check existence
@@ -326,7 +383,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// write to disk cache
 	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, content); err != nil {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}); err != nil {
 			return 0, err
 		}
 	}
@@ -341,13 +400,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	ctx = addGetConnMetric(ctx)
 
-	bytesCounter := new(atomic.Int64)
-	start := time.Now()
-	defer func() {
-		v2.S3ReadIODurationHistogram.Observe(time.Since(start).Seconds())
-		v2.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
-	}()
-
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
@@ -359,6 +411,19 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		defer unlock()
 	} else {
 		wait()
+	}
+
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
 	}
 
 	if s.memCache != nil {
@@ -394,7 +459,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}
 	}
 
-	return s.read(ctx, vector, bytesCounter)
+	return s.read(ctx, vector)
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -415,6 +480,19 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		wait()
 	}
 
+	for _, cache := range vector.Caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			err = cache.Update(ctx, vector, false)
+		}()
+	}
+
 	if s.memCache != nil {
 		if err := s.memCache.Read(ctx, vector); err != nil {
 			return err
@@ -424,7 +502,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.Int64) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -470,6 +548,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
+		t0 := time.Now()
+		bytesCounter := new(atomic.Int64)
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 		key := s.pathToKey(path.File)
@@ -482,7 +562,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 				R: r,
 				C: bytesCounter,
 			},
-			closeFunc: r.Close,
+			closeFunc: func() error {
+				metric.S3ReadIODurationHistogram.Observe(time.Since(t0).Seconds())
+				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+				return r.Close()
+			},
 		}, nil
 	}
 
@@ -517,7 +601,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 
 	numNotDoneEntries := 0
 	defer func() {
-		v2.FSReadS3Counter.Add(float64(numNotDoneEntries))
+		metric.FSReadS3Counter.Add(float64(numNotDoneEntries))
 	}()
 	for i, entry := range vector.Entries {
 		if entry.done {
@@ -656,7 +740,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		len(contentBytes) > 0 &&
 		s.diskCache != nil &&
 		!vector.Policy.Any(SkipDiskCacheWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, contentBytes); err != nil {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(contentBytes)), nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -707,25 +793,25 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		GotConn: func(info httptrace.GotConnInfo) {
-			v2.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
+			metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
 		},
 
 		DNSStart: func(di httptrace.DNSStartInfo) {
-			v2.S3DNSResolveCounter.Inc()
+			metric.S3DNSResolveCounter.Inc()
 			dnsStart = time.Now()
 		},
 
 		DNSDone: func(di httptrace.DNSDoneInfo) {
-			v2.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
+			metric.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
 		},
 
 		ConnectStart: func(network, addr string) {
-			v2.S3ConnectCounter.Inc()
+			metric.S3ConnectCounter.Inc()
 			connectStart = time.Now()
 		},
 
 		ConnectDone: func(network, addr string, err error) {
-			v2.S3ConnectDurationHistogram.Observe(time.Since(connectStart).Seconds())
+			metric.S3ConnectDurationHistogram.Observe(time.Since(connectStart).Seconds())
 		},
 
 		TLSHandshakeStart: func() {
@@ -733,7 +819,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			v2.S3TLSHandshakeDurationHistogram.Observe(time.Since(tlsHandshakeStart).Seconds())
+			metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(tlsHandshakeStart).Seconds())
 		},
 	})
 }

@@ -181,9 +181,16 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
-	// Cancel cancels all waiters in timestamp waiter. They will not wait for the newer
-	// timestamp anymore.
-	Cancel()
+	// Pause pauses the timestamp waiter and cancel all waiters in timestamp waiter.
+	// They will not wait for the newer timestamp anymore.
+	Pause()
+	// Resume resumes the cancel channel in the timestamp waiter after all transactions are
+	// aborted.
+	Resume()
+	// CancelC returns the cancel channel of timestamp waiter. If it is nil, means that
+	// the logtail consumer is reconnecting to logtail server and is aborting all transaction.
+	// At this time, we cannot open new transactions.
+	CancelC() chan struct{}
 	// Close close the timestamp waiter
 	Close()
 }

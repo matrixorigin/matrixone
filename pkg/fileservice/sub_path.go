@@ -126,3 +126,11 @@ func (s *subPathFS) StatFile(ctx context.Context, filePath string) (*DirEntry, e
 	}
 	return s.upstream.StatFile(ctx, p)
 }
+
+func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return err
+	}
+	return s.upstream.PrefetchFile(ctx, p)
+}

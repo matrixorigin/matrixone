@@ -312,7 +312,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -320,25 +319,21 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
-		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
-		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
 	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
-	lastArg.Free(s.Proc, err != nil, err)
 	return err
 }
 

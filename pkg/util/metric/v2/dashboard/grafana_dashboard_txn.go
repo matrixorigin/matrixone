@@ -39,6 +39,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
+			c.initTxnReaderDurationRow(),
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
@@ -82,6 +83,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="internal"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="leak"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="total"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="retry"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="total"`) + `[$interval]))`,
@@ -91,6 +93,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				"user-txn",
 				"internal-txn",
+				"leak",
 				"statement",
 				"statement-retry",
 				"lock",
@@ -187,13 +190,23 @@ func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	return dashboard.Row(
 		"txn on prepare wal duration",
-		c.getHistogram(
-			"txn on prepare wal duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_total"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_prepare_wal"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_end_prepare"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_flush_queue"`),
+			},
+			[]string{
+				"total",
+				"prepare wal",
+				"end prepare",
+				"enqueue flush",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0))...,
 	)
 }
 
@@ -399,5 +412,26 @@ func (c *DashboardCreator) initTxnUnlockTablesRow() dashboard.Option {
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn reader duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-reader"`),
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="merge-reader"`),
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-merge-reader"`),
+			},
+			[]string{
+				"block-reader",
+				"merge-reader",
+				"block-merge-reader",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }

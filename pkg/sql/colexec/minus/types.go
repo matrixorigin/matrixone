@@ -49,10 +49,11 @@ type container struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	mp := proc.Mp()
-	arg.ctr.cleanBatch(mp)
-	arg.ctr.cleanHashMap()
-	arg.ctr.FreeAllReg()
+	if arg.ctr != nil {
+		arg.ctr.cleanBatch(proc.Mp())
+		arg.ctr.cleanHashMap()
+		arg.ctr.FreeAllReg()
+	}
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

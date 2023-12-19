@@ -16,13 +16,27 @@ package v2
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 var (
-	registry = prometheus.DefaultRegisterer
+	registry = prometheus.NewRegistry()
 )
 
+func GetPrometheusRegistry() prometheus.Registerer {
+	return registry
+}
+
+func GetPrometheusGatherer() prometheus.Gatherer {
+	return registry
+}
+
 func init() {
+	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector(
+		collectors.WithGoCollectorRuntimeMetrics(collectors.MetricsAll),
+	))
+
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
@@ -30,6 +44,8 @@ func init() {
 	initRPCMetrics()
 	initPipelineMetrics()
 	initMemMetrics()
+	initProxyMetrics()
+
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
@@ -64,6 +80,7 @@ func initFileServiceMetrics() {
 
 func initLogtailMetrics() {
 	registry.MustRegister(LogtailLoadCheckpointCounter)
+	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
 
@@ -101,6 +118,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
+	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(TxnRangesLoadedObjectHistogram)
@@ -129,4 +147,15 @@ func initRPCMetrics() {
 func initPipelineMetrics() {
 	registry.MustRegister(rowReadHistogram)
 	registry.MustRegister(bytesReadHistogram)
+}
+
+func initProxyMetrics() {
+	registry.MustRegister(proxyConnectCounter)
+	registry.MustRegister(proxyDisconnectCounter)
+	registry.MustRegister(proxyTransferCounter)
+	registry.MustRegister(ProxyTransferDurationHistogram)
+	registry.MustRegister(ProxyDrainCounter)
+	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
+	registry.MustRegister(ProxyTransferQueueSizeGauge)
+	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
 }

@@ -28,6 +28,7 @@ var (
 		}, []string{"type"})
 	TxnUserCounter     = txnCounter.WithLabelValues("user")
 	TxnInternalCounter = txnCounter.WithLabelValues("internal")
+	TxnLeakCounter     = txnCounter.WithLabelValues("leak")
 
 	txnStatementCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -230,7 +231,11 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"step"})
 
-	TxnOnPrepareWALDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal")
+	TxnOnPrepareWALPrepareWALDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_prepare_wal")
+	TxnOnPrepareWALEndPrepareDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_end_prepare")
+	TxnOnPrepareWALFlushQueueDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_flush_queue")
+	TxnOnPrepareWALTotalDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_total")
+
 	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
 	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
 	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
@@ -265,4 +270,16 @@ var (
 			Help:      "Bucketed histogram of show accounts duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
+
+	txnReaderDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_duration_seconds",
+			Help:      "Bucketed histogram of reader read duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+		}, []string{"type"})
+	TxnBlockReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("block-reader")
+	TxnMergeReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("merge-reader")
+	TxnBlockMergeReaderDurationHistogram = txnReaderDurationHistogram.WithLabelValues("block-merge-reader")
 )

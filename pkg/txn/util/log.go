@@ -78,7 +78,7 @@ func LogTxnPushedTimestampUpdated(
 func LogTimestampWaiterCanceled() {
 	logger := getSkipLogger()
 	if logger.Enabled(zap.InfoLevel) {
-		logger.Debug("timestamp waiter canceled")
+		logger.Info("timestamp waiter canceled")
 	}
 }
 

@@ -67,6 +67,10 @@ func (blk *block) PrepareCompact() bool {
 	return blk.meta.PrepareCompact()
 }
 
+func (blk *block) PrepareCompactInfo() (result bool, reason string) {
+	return blk.meta.PrepareCompact(), ""
+}
+
 func (blk *block) FreezeAppend() {}
 
 func (blk *block) Pin() *common.PinnedItem[*block] {

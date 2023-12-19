@@ -62,6 +62,16 @@ type Routine struct {
 	goroutineID uint64
 
 	restricted atomic.Bool
+
+	printInfoOnce bool
+}
+
+func (rt *Routine) needPrintSessionInfo() bool {
+	if rt.printInfoOnce {
+		rt.printInfoOnce = false
+		return true
+	}
+	return false
 }
 
 func (rt *Routine) setResricted(val bool) {
@@ -209,6 +219,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
+
+	if rt.needPrintSessionInfo() {
+		logInfof(ses.GetDebugString(), "mo accept connection")
+	}
+
 	tenant := ses.GetTenantInfo()
 	nodeCtx := cancelRequestCtx
 	if ses.getRoutineManager().baseService != nil {
@@ -375,6 +390,7 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
 		parameters:        parameters,
+		printInfoOnce:     true,
 	}
 
 	return ri

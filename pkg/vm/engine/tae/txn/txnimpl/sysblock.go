@@ -217,9 +217,9 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 	}
 }
 
-func (blk *txnSysBlock) GetDeltaPersistedTS() types.TS {
-	return types.TS{}
-}
+// func (blk *txnSysBlock) GetDeltaPersistedTS() types.TS {
+// 	return types.TS{}.Next()
+// }
 
 func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]

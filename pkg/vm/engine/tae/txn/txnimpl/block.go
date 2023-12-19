@@ -135,7 +135,7 @@ func (it *blockIt) GetBlock() handle.Block {
 }
 
 func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
-	if meta.GetSegment().GetTable().GetDB().IsSystemDB() {
+	if isSysTableId(meta.GetSegment().GetTable().ID) {
 		return newSysBlock(table, meta)
 	}
 	return newBlock(table, meta)
