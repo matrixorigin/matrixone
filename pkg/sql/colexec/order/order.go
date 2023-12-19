@@ -127,12 +127,11 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			ds := make([]bool, len(sels))
 			for i, j := 1, len(ctr.sortVectors); i < j; i++ {
 				vec := ctr.sortVectors[i]
+				ps = partition.Partition(sels, ds, ps, ovec)
+
 				// skip sort for const vector
 				if !vec.IsConst() {
 					desc := ctr.desc[i]
-					if len(ps) == 0 {
-						ps = partition.Partition(sels, ds, ps, ovec)
-					}
 					nullsLast := ctr.nullsLast[i]
 
 					nullCnt := vec.GetNulls().Count()
