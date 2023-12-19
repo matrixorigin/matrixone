@@ -558,6 +558,9 @@ var (
 		input:  "SELECT sum(a) as 'hello' from t1;",
 		output: "select sum(a) as hello from t1",
 	}, {
+		input:  "select stream from t1;",
+		output: "select stream from t1",
+	}, {
 		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
 		output: "select date_add(2017-06-15, interval(-10, month))",
 	}, {
