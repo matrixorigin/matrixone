@@ -191,6 +191,7 @@ func (s *sAggDecimalAvg) FillDecimal64(groupNumber int64, values types.Decimal64
 		}
 		s.x.B0_63 = uint64(count)
 		s.y.B0_63 = uint64(values)
+		s.y.B64_127 = 0
 		if values>>63 != 0 {
 			s.y.B64_127 = ^s.y.B64_127
 		}

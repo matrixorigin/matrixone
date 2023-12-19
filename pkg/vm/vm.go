@@ -16,7 +16,6 @@ package vm
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,6 +49,66 @@ func Prepare(ins Instructions, proc *process.Process) error {
 	return nil
 }
 
+func setAnalyzeInfo(ins Instructions, proc *process.Process) {
+	for i := 0; i < len(ins); i++ {
+		switch ins[i].Op {
+		case Output:
+			ins[i].Idx = -1
+		case TableScan:
+			ins[i].Idx = ins[i+1].Idx
+		}
+	}
+
+	idxMapMajor := make(map[int]int, 0)
+	idxMapMinor := make(map[int]int, 0)
+	for i := 0; i < len(ins); i++ {
+		info := &OperatorInfo{
+			Idx:     ins[i].Idx,
+			IsFirst: ins[i].IsFirst,
+			IsLast:  ins[i].IsLast,
+		}
+		switch ins[i].Op {
+		case HashBuild, Restrict, MergeGroup, MergeOrder:
+			isMinor := true
+			if ins[i].Op == Restrict {
+				if ins[0].Op != TableScan && ins[0].Op != External {
+					isMinor = false // restrict operator is minor only for scan
+				}
+			}
+
+			if isMinor {
+				if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+					info.ParallelMajor = false
+					if pidx, ok := idxMapMinor[info.Idx]; ok {
+						info.ParallelIdx = pidx
+					} else {
+						pidx = proc.AnalInfos[info.Idx].AddNewParallel(false)
+						idxMapMinor[info.Idx] = pidx
+						info.ParallelIdx = pidx
+					}
+				}
+			} else {
+				info.ParallelIdx = -1
+			}
+
+		case TableScan, External, Order, Window, Group, Join, LoopJoin, Left, LoopLeft, Single, LoopSingle, Semi, RightSemi, LoopSemi, Anti, RightAnti, LoopAnti, Mark, LoopMark, Product:
+			info.ParallelMajor = true
+			if info.Idx >= 0 && info.Idx < len(proc.AnalInfos) {
+				if pidx, ok := idxMapMajor[info.Idx]; ok {
+					info.ParallelIdx = pidx
+				} else {
+					pidx = proc.AnalInfos[info.Idx].AddNewParallel(true)
+					idxMapMajor[info.Idx] = pidx
+					info.ParallelIdx = pidx
+				}
+			}
+		default:
+			info.ParallelIdx = -1 // do nothing for parallel analyze info
+		}
+		ins[i].Arg.SetInfo(info)
+	}
+}
+
 func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -58,17 +117,10 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
-	for i := 0; i < len(ins); i++ {
-		info := &OperatorInfo{
-			Idx:     ins[i].Idx,
-			IsFirst: ins[i].IsFirst,
-			IsLast:  ins[i].IsLast,
-		}
-		ins[i].Arg.SetInfo(info)
+	setAnalyzeInfo(ins, proc)
 
-		if i > 0 {
-			ins[i].Arg.AppendChild(ins[i-1].Arg)
-		}
+	for i := 1; i < len(ins); i++ {
+		ins[i].Arg.AppendChild(ins[i-1].Arg)
 	}
 
 	root := ins[len(ins)-1].Arg
@@ -81,32 +133,4 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		end = result.Status == ExecStop || result.Batch == nil
 	}
 	return end, nil
-
-	// return fubarRun(ins, proc, 0)
 }
-
-// func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
-// 	var fubarStack []int
-// 	var result CallResult
-
-// 	for i := start; i < len(ins); i++ {
-// 		if result, err = ins[i].Arg.Call(proc); err != nil {
-// 			return result.Status == ExecStop || end, err
-// 		}
-
-// 		if result.Status == process.ExecStop {
-// 			end = true
-// 		} else if result.Status == process.ExecHasMore {
-// 			fubarStack = append(fubarStack, i)
-// 		}
-// 	}
-
-// 	// run the stack backwards.
-// 	for i := len(fubarStack) - 1; i >= 0; i-- {
-// 		end, err = fubarRun(ins, proc, fubarStack[i])
-// 		if end || err != nil {
-// 			return end, err
-// 		}
-// 	}
-// 	return end, err
-// }

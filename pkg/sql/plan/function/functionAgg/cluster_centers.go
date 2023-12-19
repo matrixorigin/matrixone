@@ -48,13 +48,14 @@ var (
 
 func init() {
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"vector_l2_ops":     kmeans.L2Distance,
-		"vector_ip_ops":     kmeans.InnerProduct,
-		"vector_cosine_ops": kmeans.CosineDistance,
+		"vector_l2_ops": kmeans.L2Distance,
+		//TODO: currently focusing on l2_distance index
+		//"vector_ip_ops":     kmeans.InnerProduct,
+		//"vector_cosine_ops": kmeans.CosineDistance,
 	}
 
 	initTypeStrToEnum = map[string]kmeans.InitType{
-		"random":         kmeans.Random,
+		//"random":         kmeans.Random,
 		"kmeansplusplus": kmeans.KmeansPlusPlus,
 	}
 }
