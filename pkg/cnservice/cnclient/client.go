@@ -76,12 +76,12 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 		return nil, moerr.NewInternalErrorNoCtx("cn client is not ready")
 	}
 
-	//if backend == c.localServiceAddress {
-	//	runtime.ProcessLevelRuntime().Logger().
-	//		Fatal("remote run pipeline in local",
-	//			zap.String("local-address", c.localServiceAddress),
-	//			zap.String("remote-address", backend))
-	//}
+	if backend == c.localServiceAddress {
+		runtime.ProcessLevelRuntime().Logger().
+			Fatal("remote run pipeline in local",
+				zap.String("local-address", c.localServiceAddress),
+				zap.String("remote-address", backend))
+	}
 	return c.client.NewStream(backend, true)
 }
 

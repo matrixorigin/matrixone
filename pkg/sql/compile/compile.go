@@ -4085,18 +4085,18 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	return addr == currentCNAddr
-	//parts1 := strings.Split(addr, ":")
-	//if len(parts1) != 2 {
-	//	logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-	//	return true
-	//}
-	//parts2 := strings.Split(currentCNAddr, ":")
-	//if len(parts2) != 2 {
-	//	logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
-	//	return true
-	//}
-	//return parts1[0] == parts2[0]
+
+	parts1 := strings.Split(addr, ":")
+	if len(parts1) != 2 {
+		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		return true
+	}
+	parts2 := strings.Split(currentCNAddr, ":")
+	if len(parts2) != 2 {
+		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		return true
+	}
+	return parts1[0] == parts2[0]
 }
 
 func (s *Scope) affectedRows() uint64 {
