@@ -1896,6 +1896,7 @@ func (tbl *txnTable) newReader(
 			blockReader:       blockReaders[i],
 			table:             tbl,
 			encodedPrimaryKey: encodedPrimaryKey,
+			deletaLocs:        make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
 	}
