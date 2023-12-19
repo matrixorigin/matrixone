@@ -435,6 +435,7 @@ func newBlockMergeReader(
 			fs,
 			proc,
 		),
+		deletaLocs: make(map[string][]objectio.Location),
 	}
 	return r
 }
