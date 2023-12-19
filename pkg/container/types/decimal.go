@@ -928,19 +928,17 @@ func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 	var err error
 	z := x
-	if x.Sign() == y.Sign() {
-		z.B0_63, z.B64_127 = bits.Add64(x.B0_63, uint64(y), 0)
+	z.B0_63, z.B64_127 = bits.Add64(x.B0_63, uint64(y), 0)
+	if !y.Sign() {
 		z.B64_127, _ = bits.Add64(x.B64_127, 0, z.B64_127)
-		if x.Sign() != z.Sign() {
-			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
-		}
-		return z, err
 	} else {
-		var carryOut uint64
-		x.B0_63, carryOut = bits.Add64(x.B0_63, uint64(y), 0)
-		x.B64_127, _ = bits.Add64(x.B64_127, 0, carryOut)
-		return x, err
+		z.B64_127, _ = bits.Add64(x.B64_127, ^uint64(0), z.B64_127)
 	}
+	if x.Sign() == y.Sign() && x.Sign() != z.Sign() {
+		err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+	}
+	return z, err
+
 }
 
 // for performance sake, must make sure x and y has same scale, then call this function
