@@ -1769,6 +1769,7 @@ func (tbl *txnTable) newReader(
 		bmr := &blockMergeReader{
 			blockReader: blockReaders[i],
 			table:       tbl,
+			deletaLocs:  make(map[string][]objectio.Location),
 		}
 		readers[i+1] = bmr
 	}
