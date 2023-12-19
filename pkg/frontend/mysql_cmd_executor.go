@@ -2965,6 +2965,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
 			return
 		}
+		st.Sql = sql
 	case *tree.DropDatabase:
 		err = inputNameIsInvalid(proc.Ctx, string(st.Name))
 		if err != nil {
