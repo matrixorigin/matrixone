@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/spf13/cobra"
 )
 
@@ -196,14 +197,66 @@ func (c *manualyIgnoreArg) Run() error {
 	return nil
 }
 
-type infoArg struct {
+type manualyIgnorePrepareCompactArg struct {
 	ctx *inspectContext
-	tbl *catalog.TableEntry
-	blk *catalog.BlockEntry
+	bid types.Blockid
+}
+
+func (c *manualyIgnorePrepareCompactArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("blk")
+
+	parts := strings.Split(address, "_")
+	if len(parts) != 3 {
+		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+	}
+	uid, err := types.ParseUuid(parts[0])
+	if err != nil {
+		return err
+	}
+	fn, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+	bn, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return err
+	}
+	c.bid = *objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
+	return nil
+}
+
+func (c *manualyIgnorePrepareCompactArg) String() string {
+	return fmt.Sprintf("ignore blk: %v", c.bid.String())
+}
+
+func (c *manualyIgnorePrepareCompactArg) Run() error {
+	tables.AblkTempF.Add(c.bid)
+	return nil
+}
+
+type infoArg struct {
+	ctx     *inspectContext
+	tbl     *catalog.TableEntry
+	blk     *catalog.BlockEntry
+	verbose common.PPLevel
 }
 
 func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	count, _ := cmd.Flags().GetCount("verbose")
+	var lv common.PPLevel
+	switch count {
+	case 0:
+		lv = common.PPL0
+	case 1:
+		lv = common.PPL1
+	case 2:
+		lv = common.PPL2
+	case 3:
+		lv = common.PPL3
+	}
+	c.verbose = lv
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
@@ -245,7 +298,12 @@ func (c *infoArg) Run() error {
 	if c.blk != nil {
 		b.WriteRune('\n')
 		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
-		b.WriteString(fmt.Sprintf("delchain: %v\n", c.blk.GetBlockData().DeletesInfo()))
+		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
+		rows := c.blk.GetBlockData().Rows()
+		dels := c.blk.GetBlockData().GetTotalChanges()
+		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
+		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -471,6 +529,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&infoArg{}),
 	}
 
+	infoCmd.Flags().CountP("verbose", "v", "verbose level")
 	infoCmd.Flags().StringP("target", "t", "*", "format: table-id")
 	infoCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
 
@@ -484,6 +543,15 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 
 	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
 	rootCmd.AddCommand(miCmd)
+
+	maiCmd := &cobra.Command{
+		Use:    "abkignore",
+		Short:  "manually ignore ablk prepare compact false",
+		Run:    RunFactory(&manualyIgnorePrepareCompactArg{}),
+		Hidden: true,
+	}
+	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	rootCmd.AddCommand(maiCmd)
 
 	return rootCmd
 }
@@ -499,7 +567,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 	}
 	parts := strings.Split(address, "_")
 	if len(parts) != 3 {
-		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
 	}
 	uid, err := types.ParseUuid(parts[0])
 	if err != nil {

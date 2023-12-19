@@ -71,6 +71,7 @@ type Block interface {
 	GetID() *common.ID
 	IsAppendable() bool
 	PrepareCompact() bool
+	PrepareCompactInfo() (bool, string)
 
 	Rows() int
 	GetColumnDataById(
