@@ -6,6 +6,8 @@ SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
+-- keywords:collation
+SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, NON_UNIQUE, NULL AS INDEX_QUALIFIER, INDEX_NAME,3 AS TYPE, SEQ_IN_INDEX AS ORDINAL_POSITION, COLUMN_NAME,COLLATION AS ASC_OR_DESC, CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'procs_priv' ORDER BY NON_UNIQUE, INDEX_NAME, SEQ_IN_INDEX limit 1;
 SELECT * FROM `mysql`.`columns_priv` LIMIT 0,1000;
 SELECT * FROM `mysql`.`db` LIMIT 0,1000;
 SELECT * FROM `mysql`.`procs_priv` LIMIT 0,1000;

@@ -137,5 +137,66 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
 
+-- 13. Insert into index table (with one PK)
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx12 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+show create table tbl;
+insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx12 ivfflat lists=2;
+insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+
+-- 14. Insert into index table (with CP key)
+drop table if exists tbl;
+create table tbl(id int, age int, embedding vecf32(3), primary key(id, age));
+insert into tbl values(1, 10, "[1,2,3]");
+insert into tbl values(2, 20, "[1,2,4]");
+insert into tbl values(3, 30, "[1,2.4,4]");
+insert into tbl values(4, 40, "[1,2,5]");
+insert into tbl values(5, 50, "[1,3,5]");
+insert into tbl values(6, 60, "[100,44,50]");
+insert into tbl values(7, 70, "[120,50,70]");
+insert into tbl values(8, 80, "[130,40,90]");
+create index idx13 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+show create table tbl;
+insert into tbl values(15, 90, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, 100, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx13 ivfflat lists=2;
+insert into tbl values(25, 110, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, 120, "[131,41,91]"); -- inserted to cluster 2 of version 1
+
+
+-- 15. Insert into index table (with No PK so fake_pk is used)
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx14 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+show create table tbl;
+insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx14 ivfflat lists=2;
+insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+
 -- post
 drop database vecdb2;
