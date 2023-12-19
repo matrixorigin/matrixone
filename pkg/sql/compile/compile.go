@@ -32,7 +32,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -137,9 +136,6 @@ func (c Compile) Name() string {
 
 func (c *Compile) reset() {
 	if c.anal != nil {
-		for i := range c.anal.analInfos {
-			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
-		}
 		c.anal.release()
 	}
 	for i := range c.scope {
@@ -294,8 +290,6 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-
-	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -881,6 +875,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
+
 	return steps, err
 }
 
@@ -3257,9 +3252,11 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	if len(qry.Nodes) == 0 {
 		panic("empty plan")
 	}
+
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
+		anals[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		anals[i].NodeId = int32(i)
 	}
 	c.anal = newAnaylze()
 	c.anal.qry = qry
@@ -3298,6 +3295,7 @@ func (c *Compile) fillAnalyzeInfo() {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.NetworkIO, atomic.LoadInt64(&anal.NetworkIO))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.ScanTime, atomic.LoadInt64(&anal.ScanTime))
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InsertTime, atomic.LoadInt64(&anal.InsertTime))
+		anal.DeepCopyArray(c.anal.qry.Nodes[i].AnalyzeInfo)
 	}
 }
 
