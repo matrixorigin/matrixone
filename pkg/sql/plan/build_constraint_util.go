@@ -32,7 +32,7 @@ import (
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 1024
+const defaultmaxRowThenUnusePkFilterExpr = 1024
 
 type dmlSelectInfo struct {
 	typ string
@@ -419,29 +419,55 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		checkInsertPkDup = len(slt.Rows) > 1
-		if CNPrimaryCheck && len(slt.Rows) <= maxRowThenUnusePkFilterExpr {
+		if CNPrimaryCheck {
+			CanUsePkFilter := false
+
 			if len(tableDef.Pkey.Names) == 1 {
-				for idx, name := range insertColumns {
+				for i, name := range insertColumns {
 					if name == tableDef.Pkey.PkeyColName {
-						pkPosInValues[idx] = 0
-						break
-					}
-				}
-			} else {
-				pkNameMap := make(map[string]int)
-				for pkIdx, pkName := range tableDef.Pkey.Names {
-					pkNameMap[pkName] = pkIdx
-				}
-				for idx, name := range insertColumns {
-					if pkIdx, ok := pkNameMap[name]; ok {
-						pkPosInValues[idx] = pkIdx
+						typ := tableDef.Cols[i].Typ
+						switch typ.Id {
+						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						}
 					}
 				}
 			}
-			// one of pk cols is incr col and this col was not in values.
-			// we can not use the values of other cols as filterExpr.
-			if len(tableDef.Pkey.Names) != len(pkPosInValues) {
-				pkPosInValues = make(map[int]int)
+
+			if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
+				CanUsePkFilter = true
+			}
+
+			if CanUsePkFilter {
+				if len(tableDef.Pkey.Names) == 1 {
+					for idx, name := range insertColumns {
+						if name == tableDef.Pkey.PkeyColName {
+							pkPosInValues[idx] = 0
+							break
+						}
+					}
+				} else {
+					pkNameMap := make(map[string]int)
+					for pkIdx, pkName := range tableDef.Pkey.Names {
+						pkNameMap[pkName] = pkIdx
+					}
+					for idx, name := range insertColumns {
+						if pkIdx, ok := pkNameMap[name]; ok {
+							pkPosInValues[idx] = pkIdx
+						}
+					}
+				}
+				// one of pk cols is incr col and this col was not in values.
+				// we can not use the values of other cols as filterExpr.
+				if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+					pkPosInValues = make(map[int]int)
+				}
 			}
 		}
 
