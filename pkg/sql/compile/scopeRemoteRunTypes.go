@@ -376,13 +376,14 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	}
 	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
 
-	c := new(Compile)
-	c.affectRows = &atomic.Uint64{}
-	c.lock = &sync.RWMutex{}
-	c.counterSet = &perfcounter.CounterSet{}
+	c := &Compile{
+		affectRows: &atomic.Uint64{},
+		lock:       &sync.RWMutex{},
+		counterSet: &perfcounter.CounterSet{},
+	}
 	c.proc = proc
 	c.e = cnInfo.storeEngine
-	c.anal = new(anaylze)
+	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
