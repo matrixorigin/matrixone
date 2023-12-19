@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -196,6 +198,15 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
+		} else {
+			// there are 3 situations to release analyzeInfo
+			// 1 is free analyzeInfo of Local CN when release analyze
+			// 2 is free analyzeInfo of remote CN before transfer back
+			// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+			// this is situation 3
+			for i := range c.proc.AnalInfos {
+				reuse.Free[process.AnalyzeInfo](c.proc.AnalInfos[i], nil)
+			}
 		}
 		c.proc.FreeVectors()
 		c.proc.CleanValueScanBatchs()
@@ -212,7 +223,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	var end bool
 	var err error
 
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx, -1, false)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
@@ -337,7 +348,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		regs:   make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil, isRemote)
+	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
 	defer func() {
 		if err != nil {
 			s.release()
@@ -693,6 +704,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
+		}
+	case *fuzzyfilter.Argument:
+		in.FuzzyFilter = &pipeline.FuzzyFilter{
+			N:                      float32(t.N),
+			PkName:                 t.PkName,
+			PkTyp:                  plan2.DeepCopyType(t.PkTyp),
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -1120,6 +1138,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 			IsIgnore:        t.IsIgnore,
+		}
+	case vm.FuzzyFilter:
+		t := opr.GetFuzzyFilter()
+		v.Arg = &fuzzyfilter.Argument{
+			N:                  float64(t.N),
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1617,7 +1643,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 }
 
 func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
-	return &plan.AnalyzeInfo{
+	a := &plan.AnalyzeInfo{
 		InputRows:        info.InputRows,
 		OutputRows:       info.OutputRows,
 		InputSize:        info.InputSize,
@@ -1633,6 +1659,14 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 		ScanTime:         info.ScanTime,
 		InsertTime:       info.InsertTime,
 	}
+	info.DeepCopyArray(a)
+	// there are 3 situations to release analyzeInfo
+	// 1 is free analyzeInfo of Local CN when release analyze
+	// 2 is free analyzeInfo of remote CN before transfer back
+	// 3 is free analyzeInfo of remote CN when errors happen before transfer back
+	// this is situation 2
+	reuse.Free[process.AnalyzeInfo](info, nil)
+	return a
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {

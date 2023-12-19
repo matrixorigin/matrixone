@@ -283,23 +283,24 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	algoParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	ops := make(map[string]string)
 	ops[catalog.IndexAlgoParamOpType_l2] = "l2_distance"
-	ops[catalog.IndexAlgoParamOpType_ip] = "inner_product" //TODO: verify this is correct @arjun
-	ops[catalog.IndexAlgoParamOpType_cos] = "cosine_distance"
+	//ops[catalog.IndexAlgoParamOpType_ip] = "inner_product" //TODO: verify this is correct @arjun
+	//ops[catalog.IndexAlgoParamOpType_cos] = "cosine_distance"
 	algoParamsDistFn = ops[algoParamsDistFn]
 
 	// 2. Original table's pkey name and value
-	var originalTblPkCols string
+	var originalTblPkColsCommaSeperated string
+	var originalTblPkColMaySerial string
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		originalTblPkCols = "serial("
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
-				originalTblPkCols += ","
+				originalTblPkColsCommaSeperated += ","
 			}
-			originalTblPkCols += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
+			originalTblPkColsCommaSeperated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
 		}
-		originalTblPkCols += ")"
+		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeperated)
 	} else {
-		originalTblPkCols = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColsCommaSeperated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
 	}
 
 	// 3. insert into entries table
@@ -328,7 +329,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	// 5. non-null original table rows
 	nonNullOriginalTableRowsSql := fmt.Sprintf("(select %s, %s from `%s`.`%s` where `%s` is not null) `%s`",
-		originalTblPkCols,
+		originalTblPkColsCommaSeperated,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
@@ -343,12 +344,13 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM
 		(
 		SELECT
-		centroids.version as __mo_index_centroid_version_fk,
-		centroids.id as __mo_index_centroid_id_fk,
+		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
+		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
 		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.centroid, normalize_l2(tbl.embedding)) ) as `__mo_index_rn`
-		FROM
-		tbl CROSS JOIN centroids
+		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, tbl.embedding) ) as `__mo_index_rn`
+		FROM tbl
+		CROSS JOIN
+		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
 		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
 	*/
 	// 5. final SQL
@@ -361,7 +363,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
 		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
 		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
+		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, %s.%s)) as `__mo_index_rn` "+
 		"FROM "+
 		" %s CROSS JOIN %s "+
 		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
@@ -372,9 +374,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		// NOTE: no need to add tableName here, because it could be serial()
-		originalTblPkCols,
+		originalTblPkColMaySerial,
 
-		originalTblPkCols,
+		originalTblPkColMaySerial,
 		algoParamsDistFn,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
