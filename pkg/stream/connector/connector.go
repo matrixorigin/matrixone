@@ -340,12 +340,3 @@ func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
 	}
 }
-
-func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
-	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
-	ctx = context.WithValue(ctx, defines.SourceScanResKey{}, msgs)
-	defer cancel()
-	res := k.ie.Query(ctx, sql, opts)
-	return res
-}
