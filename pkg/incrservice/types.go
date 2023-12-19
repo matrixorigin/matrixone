@@ -128,6 +128,10 @@ type valueAllocator interface {
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
+	// Exec new a txn operator, used for debug.
+	NewTxnOperator(ctx context.Context) client.TxnOperator
+	// SelectAll return all auto increment metadata records from catalog.AutoIncrTableName.
+	SelectAll(ctx context.Context, tableID uint64, txnOp client.TxnOperator) string
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.

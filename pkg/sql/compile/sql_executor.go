@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -82,6 +83,17 @@ func NewSQLExecutor(
 		mp:        mp,
 		buf:       buffer.New(),
 	}
+}
+
+func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	txnOp, err := s.txnClient.New(ctx, timestamp.Timestamp{})
+	if err != nil {
+		return nil
+	}
+	if err := s.eng.New(ctx, txnOp); err != nil {
+		return nil
+	}
+	return txnOp
 }
 
 func (s *sqlExecutor) Exec(
