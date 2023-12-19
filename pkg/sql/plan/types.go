@@ -375,3 +375,8 @@ type OriginTableMessageForFuzzy struct {
 	ParentTableName  string
 	ParentUniqueCols []*ColDef
 }
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
+}

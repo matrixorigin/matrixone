@@ -384,16 +384,21 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in", "prefix_eq":
-			// use ndv map,do not need nodeID
+		case "prefix_eq":
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
 				return 10 / ndv
 			}
 			return 0.5
+		case "in":
+			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			ndv := getExprNdv(expr, builder)
+			if ndv > card {
+				return card / ndv
+			}
+			return 1
 		case "prefix_in":
 			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
-			// use ndv map,do not need nodeID
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10*card {
 				return 10 * card / ndv

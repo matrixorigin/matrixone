@@ -46,7 +46,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyze.Start()
 	defer analyze.Stop()
 

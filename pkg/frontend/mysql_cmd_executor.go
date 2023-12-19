@@ -2969,6 +2969,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
 			return
 		}
+		st.Sql = sql
 	case *tree.DropDatabase:
 		err = inputNameIsInvalid(proc.Ctx, string(st.Name))
 		if err != nil {
@@ -4276,7 +4277,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
-		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:

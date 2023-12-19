@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -201,19 +200,9 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_uint64:
 		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
 	case types.T_float32:
-		val := vector.GetFixedAt[float32](vec, rowIndex)
-		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-			row[i] = val
-		} else {
-			row[i] = strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)
-		}
+		row[i] = vector.GetFixedAt[float32](vec, rowIndex)
 	case types.T_float64:
-		val := vector.GetFixedAt[float64](vec, rowIndex)
-		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-			row[i] = val
-		} else {
-			row[i] = strconv.FormatFloat(val, 'f', int(vec.GetType().Scale), 64)
-		}
+		row[i] = vector.GetFixedAt[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	case types.T_array_float32:
