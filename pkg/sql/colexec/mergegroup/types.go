@@ -57,6 +57,8 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+
+	Partialresults []any
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

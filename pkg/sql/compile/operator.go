@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -325,7 +326,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
-			NeedEval: t.NeedEval,
+			NeedEval:       t.NeedEval,
+			Partialresults: t.Partialresults,
 		}
 	case vm.MergeLimit:
 		t := sourceIns.Arg.(*mergelimit.Argument)

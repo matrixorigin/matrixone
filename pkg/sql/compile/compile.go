@@ -2644,25 +2644,22 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
-		arg := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
-		if partialresults != nil {
-			arg.PartialResults = partialresults
-			partialresults = nil
-		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     arg,
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
 		})
 	}
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+	arg := constructMergeGroup(true)
+	arg.Partialresults = partialresults
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeGroup,
 		Idx: c.anal.curr,
-		Arg: constructMergeGroup(true),
+		Arg: arg,
 	}
 	return []*Scope{rs}
 }
