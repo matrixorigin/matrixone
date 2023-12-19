@@ -142,7 +142,9 @@ func (c Compile) Name() string {
 func (c *Compile) reset() {
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
+			if c.proc.SessionInfo.Buf != nil {
+				buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
+			}
 		}
 		c.anal.release()
 	}
