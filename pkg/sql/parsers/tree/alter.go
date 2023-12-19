@@ -176,8 +176,9 @@ func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL
 // see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
 type AlterTable struct {
 	statementImpl
-	Table   *TableName
-	Options AlterTableOptions
+	Table            *TableName
+	Options          AlterTableOptions
+	PartitionOptions AlterPartitionOption
 }
 
 func (node *AlterTable) Format(ctx *FmtCtx) {
@@ -553,4 +554,76 @@ func (node *ColumnPosition) Format(ctx *FmtCtx) {
 		ctx.WriteString(" after ")
 		node.RelativeColumn.Format(ctx)
 	}
+}
+
+// AlterPartitionOptionType is the type for Alter Table Partition Option Type.
+type AlterPartitionOptionType int
+
+// Alter Table Partition types.
+const (
+	AlterPartitionAddPartition AlterTableOptionType = iota
+	AlterPartitionDropPartition
+	AlterPartitionDiscardPartition
+	AlterPartitionImportPartition
+	AlterPartitionTruncatePartition
+	AlterPartitionCoalescePartition
+	AlterPartitionReorganizePartition
+	AlterPartitionExchangePartition
+	AlterPartitionAnalyzePartition
+	AlterPartitionCheckPartition
+	AlterPartitionOptimizePartition
+	AlterPartitionRebuildPartition
+	AlterPartitionRepairPartition
+	AlterPartitionRemovePartitioning
+)
+
+type AlterPartitionOption interface {
+	NodeFormatter
+}
+
+type AlterPartitionOptionImpl struct {
+	AlterPartitionOption
+}
+
+type AlterPartitionAddPartitionClause struct {
+	AlterPartitionOptionImpl
+	Typ        AlterPartitionOptionType
+	Partitions []*Partition
+}
+
+func (node *AlterPartitionAddPartitionClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("add partition ")
+	isFirst := true
+	for _, partition := range node.Partitions {
+		if isFirst {
+			partition.Format(ctx)
+			isFirst = false
+		}
+		ctx.WriteString(", ")
+		partition.Format(ctx)
+	}
+}
+
+type AlterPartitionDropPartitionClause struct {
+	AlterPartitionOptionImpl
+	Typ             AlterPartitionOptionType
+	PartitionNames  IdentifierList
+	OnAllPartitions bool
+}
+
+func (node *AlterPartitionDropPartitionClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop partition ")
+	node.PartitionNames.Format(ctx)
+}
+
+type AlterPartitionTruncatePartitionClause struct {
+	AlterPartitionOptionImpl
+	Typ             AlterPartitionOptionType
+	PartitionNames  IdentifierList
+	OnAllPartitions bool
+}
+
+func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("truncate partition ")
+	node.PartitionNames.Format(ctx)
 }
