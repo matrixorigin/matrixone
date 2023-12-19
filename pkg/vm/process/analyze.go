@@ -15,30 +15,17 @@
 package process
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
-func NewAnalyzeInfo(nodeId int32) *AnalyzeInfo {
-	return &AnalyzeInfo{
-		NodeId:           nodeId,
-		InputRows:        0,
-		OutputRows:       0,
-		TimeConsumed:     0,
-		WaitTimeConsumed: 0,
-		InputSize:        0,
-		OutputSize:       0,
-		MemorySize:       0,
-		DiskIO:           0,
-		S3IOByte:         0,
-		S3IOInputCount:   0,
-		S3IOOutputCount:  0,
-		NetworkIO:        0,
-		ScanTime:         0,
-		InsertTime:       0,
-	}
+func NewAnalyzeInfo() *AnalyzeInfo {
+	a := &AnalyzeInfo{}
+	a.mu = &sync.Mutex{}
+	return a
 }
 
 func (a *analyze) Start() {
@@ -48,7 +35,9 @@ func (a *analyze) Start() {
 func (a *analyze) Stop() {
 	if a.analInfo != nil {
 		atomic.AddInt64(&a.analInfo.WaitTimeConsumed, int64(a.wait/time.Nanosecond))
-		atomic.AddInt64(&a.analInfo.TimeConsumed, int64((time.Since(a.start)-a.wait-a.childrenCallDuration)/time.Nanosecond))
+		consumeTime := int64((time.Since(a.start) - a.wait - a.childrenCallDuration) / time.Nanosecond)
+		atomic.AddInt64(&a.analInfo.TimeConsumed, consumeTime)
+		a.analInfo.AddSingleParallelTimeConsumed(a.parallelMajor, a.parallelIdx, consumeTime)
 	}
 }
 
