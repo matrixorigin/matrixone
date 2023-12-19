@@ -174,13 +174,6 @@ func (c *Compile) reset() {
 	c.counterSet = &perfcounter.CounterSet{}
 	c.lock = &sync.RWMutex{}
 	c.isInternal = false
-	c.nodeRegs = nil
-	c.stepRegs = nil
-	c.runtimeFilterReceiverMap = nil
-	c.cnLabel = nil
-}
-
-func (c *Compile) clean() {
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -410,7 +403,6 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
-			runC.clean()
 			runC.release()
 		}
 	}
@@ -419,7 +411,6 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.clean()
 		c.release()
 		releaseRunC()
 
@@ -4094,17 +4085,18 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return true
-	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
-		return true
-	}
-	return parts1[0] == parts2[0]
+	return addr == currentCNAddr
+	//parts1 := strings.Split(addr, ":")
+	//if len(parts1) != 2 {
+	//	logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+	//	return true
+	//}
+	//parts2 := strings.Split(currentCNAddr, ":")
+	//if len(parts2) != 2 {
+	//	logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+	//	return true
+	//}
+	//return parts1[0] == parts2[0]
 }
 
 func (s *Scope) affectedRows() uint64 {
