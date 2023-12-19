@@ -214,6 +214,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		} else {
 			return "", moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
+	case plan.Node_FUZZY_FILTER:
+		return "fuzzy filter", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
