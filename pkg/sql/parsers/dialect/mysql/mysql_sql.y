@@ -10158,6 +10158,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
