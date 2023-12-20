@@ -325,3 +325,49 @@ func TestComment(t *testing.T) {
 		}
 	}
 }
+
+//func TestBitValueLiteral(t *testing.T) {
+//	testcases := []struct {
+//		in   string
+//		id   int
+//		want string
+//	}{{
+//		in:   "b'00011011'",
+//		id:   BIT_LITERAL,
+//		want: "0b00011011",
+//	}, {
+//		in:   "b'00011011'",
+//		id:   BIT_LITERAL,
+//		want: "0b00011011",
+//	}}
+//
+//	for _, tcase := range testcases {
+//		id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
+//		if tcase.id != id || got != tcase.want {
+//			t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+//		}
+//	}
+//}
+
+func TestHexadecimalLiteral(t *testing.T) {
+	testcases := []struct {
+		in   string
+		id   int
+		want string
+	}{{
+		in:   "x'616263'",
+		id:   HEXNUM,
+		want: "0x616263",
+	}, {
+		in:   "0x616263",
+		id:   HEXNUM,
+		want: "0x616263",
+	}}
+
+	for _, tcase := range testcases {
+		id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
+		if tcase.id != id || got != tcase.want {
+			t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+		}
+	}
+}
