@@ -24,7 +24,6 @@ import (
 )
 
 func init() {
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
@@ -33,25 +32,28 @@ func init() {
 				counterSet: &perfcounter.CounterSet{},
 			}
 		},
-		func(c *Compile) { c.reset() },
-		reuse.DefaultOptions[Compile](),
+		func(c *Compile) {
+			c.reset()
+		},
+		reuse.DefaultOptions[Compile]().
+			WithEnableChecker(),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Scope](
 		func() *Scope {
 			return &Scope{}
 		},
 		func(s *Scope) { *s = Scope{} },
-		reuse.DefaultOptions[Scope](),
+		reuse.DefaultOptions[Scope]().
+			WithEnableChecker(),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[anaylze](
 		func() *anaylze {
 			return &anaylze{}
 		},
 		func(a *anaylze) { *a = anaylze{} },
-		reuse.DefaultOptions[anaylze](),
+		reuse.DefaultOptions[anaylze]().
+			WithEnableChecker(),
 	)
 }

@@ -242,9 +242,10 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_PRE_INSERT_UK:    "Pre Insert Unique",
 	plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
 
-	plan2.Node_TIME_WINDOW: "Time window",
-	plan2.Node_Fill:        "Fill",
-	plan2.Node_PARTITION:   "Partition",
+	plan2.Node_TIME_WINDOW:  "Time window",
+	plan2.Node_Fill:         "Fill",
+	plan2.Node_PARTITION:    "Partition",
+	plan2.Node_FUZZY_FILTER: "Fuzzy filter",
 }
 
 const (
@@ -287,6 +288,7 @@ const (
 	Label_Gather           = "Gather"
 	Label_Assert           = "Assert"
 	Label_On_Duplicate_Key = "On duplicate key"
+	Label_Fuzzy_Filter     = "Fuzzy filter"
 )
 
 const (

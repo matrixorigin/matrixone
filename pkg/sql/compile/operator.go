@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -495,6 +496,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := new(lockop.Argument)
 		*arg = *t
 		res.Arg = arg
+	case vm.FuzzyFilter:
+		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		res.Arg = &fuzzyfilter.Argument{
+			N:                  t.N,
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -557,6 +566,32 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		TableDef:        oldCtx.TableDef,
 		IsIgnore:        oldCtx.IsIgnore,
 	}
+}
+
+func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Argument {
+	pkName := n.TableDef.Pkey.PkeyColName
+	var pkTyp *plan.Type
+	if pkName == catalog.CPrimaryKeyColName {
+		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
+	} else {
+		cols := n.TableDef.Cols
+		for _, c := range cols {
+			if c.Name == pkName {
+				pkTyp = c.Typ
+			}
+		}
+	}
+
+	arg := &fuzzyfilter.Argument{
+		PkName:             pkName,
+		PkTyp:              pkTyp,
+		N:                  right.Stats.Cost,
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+	}
+
+	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
+
+	return arg
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
@@ -1522,12 +1557,12 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func registerRuntimeFilters(arg *hashbuild.Argument, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
+func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
 	if specs == nil {
 		return
 	}
 
-	arg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(specs))
+	RuntimeFilterSenders := make([]*colexec.RuntimeFilterChan, 0, len(specs))
 	for _, rfSpec := range specs {
 		c.lock.Lock()
 		receiver, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
@@ -1543,11 +1578,14 @@ func registerRuntimeFilters(arg *hashbuild.Argument, c *Compile, specs []*plan.R
 		}
 		c.lock.Unlock()
 
-		arg.RuntimeFilterSenders = append(arg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+		RuntimeFilterSenders = append(RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 			Spec: rfSpec,
 			Chan: receiver.ch,
 		})
 	}
+
+	// Set the runtime filters for the concrete type
+	arg.SetRuntimeFilterSenders(RuntimeFilterSenders)
 
 }
 
