@@ -658,6 +658,7 @@ func (p *PartitionState) HandleMetadataInsert(
 
 			{
 				scanCnt := int64(0)
+				blockDeleted := int64(0)
 				trunctPoint := memTruncTSVector[i]
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
@@ -699,13 +700,14 @@ func (p *PartitionState) HandleMetadataInsert(
 								})
 							}
 							numDeleted++
+							blockDeleted++
 						}
 					}
 				}
 				iter.Release()
 
 				// if there are no rows for the block, delete the block from the dirty
-				if scanCnt == numDeleted && p.dirtyBlocks.Len() > 0 {
+				if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 					p.dirtyBlocks.Delete(blockID)
 				}
 			}
