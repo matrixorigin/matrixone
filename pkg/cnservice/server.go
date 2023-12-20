@@ -717,7 +717,7 @@ func (s *service) bootstrap() error {
 		panic("missing internal sql executor")
 	}
 
-	b := bootstrap.NewBootstrapper(
+	b := bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
 		rt.Clock(),
 		s._txnClient,

@@ -35,6 +35,9 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+
+	// MOVersionTable mo upgrade table
+	MOVersionTable = "mo_version"
 )
 
 var InternalColumns = map[string]int8{

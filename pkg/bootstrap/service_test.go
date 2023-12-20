@@ -39,7 +39,7 @@ func TestBootstrap(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
+	b := NewService(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
@@ -68,7 +68,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
+	b := NewService(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
@@ -97,7 +97,7 @@ func TestBootstrapWithWait(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
+	b := NewService(
 		&memLocker{id: 1},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,

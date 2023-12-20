@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	_ Bootstrapper = (*bootstrapper)(nil)
+	_ Service = (*service)(nil)
 )
 
 var (
@@ -77,6 +77,17 @@ var (
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                  int not null,
+			version             varchar(50) not null, 
+			pre_version         varchar(50),
+			upgrade             int,
+			upgrade_tenant      int,
+			upgrade_metadata    text, 
+			upgrade_status      int,
+			primary key(id)
+		);`, catalog.MO_CATALOG, catalog.MOVersionTable),
 	}
 
 	step2InitSQLs = []string{
@@ -148,40 +159,40 @@ var (
 	}
 )
 
-type bootstrapper struct {
+type service struct {
 	lock   Locker
 	clock  clock.Clock
 	client client.TxnClient
 	exec   executor.SQLExecutor
 }
 
-// NewBootstrapper create bootstrapper to bootstrap mo database
-func NewBootstrapper(
+// NewService create service to bootstrap mo database
+func NewService(
 	lock Locker,
 	clock clock.Clock,
 	client client.TxnClient,
-	exec executor.SQLExecutor) Bootstrapper {
-	return &bootstrapper{clock: clock, exec: exec, lock: lock, client: client}
+	exec executor.SQLExecutor) Service {
+	return &service{clock: clock, exec: exec, lock: lock, client: client}
 }
 
-func (b *bootstrapper) Bootstrap(ctx context.Context) error {
+func (s *service) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
 
-	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
+	if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
 		getLogger().Info("mo already boostrapped")
 		return nil
 	} else if err != nil {
 		return err
 	}
 
-	ok, err := b.lock.Get(ctx)
+	ok, err := s.lock.Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
-		return b.execBootstrap(ctx)
+		return s.execBootstrap(ctx)
 	}
 
 	// otherwise, wait bootstrap completed
@@ -191,7 +202,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(time.Second):
 		}
-		if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+		if ok, err := s.checkAlreadyBootstrapped(ctx); ok || err != nil {
 			getLogger().Info("waiting bootstrap completed",
 				zap.Bool("result", ok),
 				zap.Error(err))
@@ -200,8 +211,8 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	}
 }
 
-func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
-	res, err := b.exec.Exec(ctx, "show databases", executor.Options{}.WithMinCommittedTS(b.now()))
+func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, "show databases", executor.Options{}.WithMinCommittedTS(s.now()))
 	if err != nil {
 		return false, err
 	}
@@ -220,33 +231,33 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 	return false, nil
 }
 
-func (b *bootstrapper) execBootstrap(ctx context.Context) error {
-	if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), executor.Options{}); err != nil {
+func (s *service) execBootstrap(ctx context.Context) error {
+	if err := s.exec.ExecTxn(ctx, execFunc(step1InitSQLs), executor.Options{}); err != nil {
 		return err
 	}
 	getLogger().Info("bootstrap mo step 1 completed")
 
 	// make sure txn start at now, and make sure can see the data of step1
-	opts := executor.Options{}.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
-	if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
+	opts := executor.Options{}.WithMinCommittedTS(s.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
+	if err := s.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
 		return err
 	}
 	getLogger().Info("bootstrap mo step 2 completed")
 
-	if b.client != nil {
+	if s.client != nil {
 		getLogger().Info("wait bootstrap logtail applied")
 
 		// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 		// bootstrap data.
-		b.client.SyncLatestCommitTS(b.now())
+		s.client.SyncLatestCommitTS(s.now())
 	}
 
 	getLogger().Info("successfully completed bootstrap")
 	return nil
 }
 
-func (b *bootstrapper) now() timestamp.Timestamp {
-	n, _ := b.clock.Now()
+func (s *service) now() timestamp.Timestamp {
+	n, _ := s.clock.Now()
 	return n
 }
 
