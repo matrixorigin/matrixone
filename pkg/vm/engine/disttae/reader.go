@@ -435,6 +435,7 @@ func newBlockMergeReader(
 			proc,
 		),
 		encodedPrimaryKey: encodedPrimaryKey,
+		deletaLocs:        make(map[string][]objectio.Location),
 	}
 	return r
 }
