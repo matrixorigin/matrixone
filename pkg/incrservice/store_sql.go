@@ -59,7 +59,7 @@ func (s *sqlStore) SelectAll(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) string {
-	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where order by col_index`, incrTableName)
+	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s`, incrTableName)
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
