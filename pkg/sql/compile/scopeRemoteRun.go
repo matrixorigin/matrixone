@@ -175,9 +175,14 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
-
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
+		defer func() {
+			c.proc.AnalInfos = nil
+			c.anal.analInfos = nil
+			c.Release()
+			s.release()
+		}()
 		if err != nil {
 			return err
 		}
@@ -349,7 +354,8 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
+	if err = fillInstructionsForScope(s, ctx, p, eng); err != nil {
+		s.release()
 		return nil, err
 	}
 
@@ -561,19 +567,26 @@ func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
+	var s *Scope
+	defer func() {
+		if err != nil {
+			s.release()
+		}
+	}()
+
 	if p.Qry != nil {
 		ctx.plan = p.Qry
 	}
 
-	s := newScope(magicType(p.GetPipelineType()))
+	s = newScope(magicType(p.GetPipelineType()))
 	s.IsEnd = p.IsEnd
 	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
 	s.BuildIdx = int(p.BuildIdx)
 	s.ShuffleCnt = int(p.ShuffleCnt)
-	if err := convertPipelineUuid(p, s); err != nil {
-		return s, err
+	if err = convertPipelineUuid(p, s); err != nil {
+		return nil, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -590,7 +603,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
-			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
+			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
 				return nil, err
 			}
 			bat.Cnt = 1
