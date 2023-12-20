@@ -304,10 +304,13 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
-		pkVec := e.bat.Vecs[1]
-		if err := checkPKDup(pkVec, e.bat.Attrs[1], 0, e.bat.RowCount()); err != nil {
-			return err
+		if e.typ == DELETE {
+			pkVec := e.bat.Vecs[1]
+			if err := checkPKDup(pkVec, e.bat.Attrs[1], 0, e.bat.RowCount()); err != nil {
+				return err
+			}
 		}
+
 	}
 	return nil
 }
