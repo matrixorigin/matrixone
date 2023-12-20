@@ -833,10 +833,17 @@ func subString(src string, pos1, pos2 int) (string, error) {
 	return string(dst), nil
 }
 
-// storage usage request history
-// storage_usage -t '-time 2023-12-18 14:26:14_2023-12-18 15:26:14 UTC/CST'
-// storage_usage -t '-acc 0 1 2'
-// leave -time or -acc out means all ranges
+// specify the time range
+// select mo_ctl("dn", "inspect", "-t '-time 2023-12-18 14:26:14_2023-12-18 15:26:14'");
+//
+// specify the account id list
+// select mo_ctl("dn", "inspect", "-t '-acc 0 1 2'");
+//
+// specify time range and account list
+// select mo_ctl("dn", "inspect", "-t '-time 2023-12-18 14:26:14_2023-12-18 15:26:14 -acc 0 1 2'");
+//
+// no limit, show all request trace info
+// select mo_ctl("dn", "inspect", "-t ");
 func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 	tStart, tEnd time.Time, accounts map[uint32]struct{}, err error) {
 
@@ -848,7 +855,7 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 			err = moerr.NewInvalidArgNoCtx(expr, "")
 			return
 		}
-		str, err = subString(expr, tIdx+6, dash)
+		str, err = subString(expr, tIdx+len("-time")+len(" "), dash)
 		if err != nil {
 			return
 		}
@@ -858,7 +865,7 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 			return
 		}
 
-		str, err = subString(expr, dash+1, dash+1+19)
+		str, err = subString(expr, dash+len("_"), dash+len("_")+len("2006-01-02 15:04:05"))
 		if err != nil {
 			return
 		}
@@ -866,17 +873,6 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 		if err != nil {
 			return
 		}
-
-		//if strings.Contains(strings.ToLower(expr), "cst") {
-		//	var loc *time.Location
-		//	loc, err = time.LoadLocation("Asia/Shanghai")
-		//	if err != nil {
-		//		return
-		//	}
-		//
-		//	tStart = tStart.Local()
-		//	tEnd = tEnd.In(loc)
-		//}
 	}
 
 	aIdx := strings.Index(expr, "-acc")
@@ -885,7 +881,7 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 		if aIdx < tIdx {
 			stop = tIdx
 		}
-		str, err = subString(expr, aIdx+5, stop)
+		str, err = subString(expr, aIdx+len("-acc")+len(" "), stop)
 		if err != nil {
 			return
 		}
