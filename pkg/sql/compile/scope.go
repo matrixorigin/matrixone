@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -91,6 +92,9 @@ func (s *Scope) release() {
 			arg.Release()
 		}
 		if arg, ok := s.Instructions[i].Arg.(*insert.Argument); ok {
+			arg.Release()
+		}
+		if arg, ok := s.Instructions[i].Arg.(*projection.Argument); ok {
 			arg.Release()
 		}
 	}

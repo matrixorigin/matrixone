@@ -261,9 +261,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
-		res.Arg = &projection.Argument{
-			Es: t.Es,
-		}
+		arg := projection.NewArgument()
+		arg.Es = t.Es
+		res.Arg = arg
 	case vm.Restrict:
 		t := sourceIns.Arg.(*restrict.Argument)
 		res.Arg = &restrict.Argument{
@@ -713,9 +713,9 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 }
 
 func constructProjection(n *plan.Node) *projection.Argument {
-	return &projection.Argument{
-		Es: n.ProjectList,
-	}
+	arg := projection.NewArgument()
+	arg.Es = n.ProjectList
+	return arg
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {

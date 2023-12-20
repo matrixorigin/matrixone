@@ -1347,7 +1347,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			IsShuffle: t.IsShuffle,
 		}
 	case vm.Projection:
-		v.Arg = &projection.Argument{Es: opr.ProjectList}
+		arg := projection.NewArgument()
+		arg.Es = opr.ProjectList
+		v.Arg = arg
 	case vm.Restrict:
 		v.Arg = &restrict.Argument{E: opr.Filter}
 	case vm.Semi:
