@@ -146,9 +146,7 @@ func (c *Compile) reset() {
 		c.scope[i].release()
 	}
 	c.scope = nil
-	if c.proc != nil {
-		c.proc.CleanValueScanBatchs()
-	}
+	c.proc.CleanValueScanBatchs()
 	c.pn = nil
 	c.u = nil
 	c.fill = nil
@@ -477,8 +475,6 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	defer func() {
 		if e != nil {
-			runC.proc = nil
-			runC.cnLabel = nil
 			runC.Release()
 		}
 	}()
