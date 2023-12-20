@@ -280,15 +280,26 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 				if isUpdate {
 					skipDel := true
-					for _, colName := range indexdef.Parts {
-						if colIdx, ok := posMap[colName]; ok {
-							col := delCtx.tableDef.Cols[colIdx]
-							if _, exists := delCtx.updateColPosMap[colName]; exists || col.OnUpdate != nil {
-								skipDel = false
-								break
+
+					pkPos, _ := getPkPos(delCtx.tableDef, false)
+					pkCol := delCtx.tableDef.Cols[pkPos]
+					if _, exists := delCtx.updateColPosMap[pkCol.Name]; exists || pkCol.OnUpdate != nil {
+						// check if PK is being updated
+						skipDel = false
+					} else {
+						// check if SK is being updated
+						for _, colName := range indexdef.Parts {
+							colName = catalog.ResolveAlias(colName)
+							if colIdx, ok := posMap[colName]; ok {
+								col := delCtx.tableDef.Cols[colIdx]
+								if _, exists := delCtx.updateColPosMap[colName]; exists || col.OnUpdate != nil {
+									skipDel = false
+									break
+								}
 							}
 						}
 					}
+
 					if skipDel {
 						continue
 					}
