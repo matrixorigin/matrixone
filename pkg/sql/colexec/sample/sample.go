@@ -99,7 +99,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if lastErr != nil {
 		return result, lastErr
 	}
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
