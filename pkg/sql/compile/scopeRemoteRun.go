@@ -351,15 +351,11 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	}
 	ctx.root = ctx
 	s, err := generateScope(proc, p, ctx, proc.AnalInfos, isRemote)
-	defer func() {
-		if err != nil {
-			s.release()
-		}
-	}()
 	if err != nil {
 		return nil, err
 	}
 	if err = fillInstructionsForScope(s, ctx, p, eng); err != nil {
+		s.release()
 		return nil, err
 	}
 
