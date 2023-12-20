@@ -132,7 +132,7 @@ func (s *service) Reset(
 		return err
 	}
 	if len(cols) == 0 {
-		s.logger.Fatal("no columns found",
+		s.logger.Info("no columns found",
 			zap.Uint64("table-id", oldTableID),
 			zap.String("txn", txnOp.Txn().DebugString()),
 			zap.String("rows", s.store.SelectAll(ctx, oldTableID, txnOp)))
