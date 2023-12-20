@@ -198,6 +198,9 @@ func performLock(
 	arg *Argument) error {
 	needRetry := false
 	for idx, target := range arg.targets {
+		if proc.TxnOperator.LockSkipped(target.tableID, target.mode) {
+			return nil
+		}
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
