@@ -132,7 +132,10 @@ func (s *service) Reset(
 		return err
 	}
 	if len(cols) == 0 {
-		return nil
+		s.logger.Fatal("no columns found",
+			zap.Uint64("table-id", oldTableID),
+			zap.String("txn", txnOp.Txn().DebugString()),
+			zap.String("rows", s.store.SelectAll(ctx, oldTableID, txnOp)))
 	}
 
 	if !keep {
@@ -255,6 +258,7 @@ func (s *service) getCommittedTableCache(
 	if txnOp != nil {
 		defer txnOp.Rollback(ctx)
 	}
+	s.logger.Info("try to get columns", zap.Uint64("tableId", tableID), zap.String("txn", txnOp.Txn().DebugString()))
 
 	cols, err := s.store.GetColumns(ctx, tableID, txnOp)
 	if err != nil {
