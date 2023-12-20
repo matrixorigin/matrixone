@@ -81,10 +81,8 @@ func (s *Scope) release() {
 	if s == nil {
 		return
 	}
-	if s.PreScopes != nil {
-		for i := range s.PreScopes {
-			s.PreScopes[i].release()
-		}
+	for i := range s.PreScopes {
+		s.PreScopes[i].release()
 	}
 	reuse.Free[Scope](s, nil)
 }
