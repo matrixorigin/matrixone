@@ -55,12 +55,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -123,7 +127,7 @@ func NewCompile(
 	return c
 }
 
-func (c *Compile) release() {
+func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
@@ -159,9 +163,12 @@ func (c *Compile) reset() {
 	c.cnList = nil
 	c.stmt = nil
 	c.startAt = time.Time{}
+	c.fuzzy = nil
 	c.metaTables = nil
 	c.needLockMeta = false
-
+	c.counterSet = &perfcounter.CounterSet{}
+	c.lock = &sync.RWMutex{}
+	c.isInternal = false
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -171,11 +178,9 @@ func (c *Compile) reset() {
 	for k := range c.runtimeFilterReceiverMap {
 		delete(c.runtimeFilterReceiverMap, k)
 	}
-	c.isInternal = false
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.counterSet = &perfcounter.CounterSet{}
 }
 
 // helper function to judge if init temporary engine is needed
@@ -369,7 +374,7 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -381,14 +386,15 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	result = &util2.RunResult{}
 	var span trace.Span
 	var runC *Compile // compile structure for rerun.
-	var result = &util2.RunResult{}
-	var err error
+	// var result = &util2.RunResult{}
+	// var err error
 	var retryTimes int
 	releaseRunC := func() {
 		if runC != c {
-			runC.release()
+			runC.Release()
 		}
 	}
 
@@ -396,7 +402,14 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.release()
+		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+		if runC != nil {
+			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
+				err = runC.fuzzy.backgroundSQLCheck(runC)
+			}
+		}
+
+		c.Release()
 		releaseRunC()
 
 		task.End()
@@ -458,15 +471,22 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
 
+	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	defer func() {
+		if e != nil {
+			runC.Release()
+		}
+	}()
 	if defChanged {
-		pn, e := c.buildPlanFunc()
+		var pn *plan2.Plan
+		pn, e = c.buildPlanFunc()
 		if e != nil {
 			return nil, e
 		}
 		c.pn = pn
 	}
-	if e := runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+	if e = runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
 		return nil, e
 	}
 
@@ -864,12 +884,19 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}
 
 	steps := make([]*Scope, 0, len(qry.Steps))
+	defer func() {
+		if err != nil {
+			ReleaseScopes(steps)
+		}
+	}()
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
-		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
+		var scopes []*Scope
+		var scope *Scope
+		scopes, err = c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
 			return nil, err
 		}
-		scope, err := c.compileApQuery(qry, scopes, qry.Steps[i])
+		scope, err = c.compileApQuery(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -992,10 +1019,22 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	defer func() {
 		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
 	}()
+	var ss []*Scope
+	var left []*Scope
+	var right []*Scope
+	var err error
+	defer func() {
+		if err != nil {
+			ReleaseScopes(ss)
+			ReleaseScopes(left)
+			ReleaseScopes(right)
+		}
+	}()
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		bat, err := constructValueScanBatch(ctx, c.proc, n)
+		var bat *batch.Batch
+		bat, err = constructValueScanBatch(ctx, c.proc, n)
 		if err != nil {
 			return nil, err
 		}
@@ -1003,191 +1042,202 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		ds.DataSource = &Source{Bat: bat}
 		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
+		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
+		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
 		node := plan2.DeepCopyNode(n)
-		ss, err := c.compileExternScan(ctx, node)
+		ss, err = c.compileExternScan(ctx, node)
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss)))
+		return ss, nil
 	case plan.Node_TABLE_SCAN:
 		c.appendMetaTables(n.ObjRef)
-		ss, err := c.compileTableScan(n)
+		ss, err = c.compileTableScan(n)
 		if err != nil {
 			return nil, err
 		}
 
 		// RelationName
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		return ss, nil
 	case plan.Node_SOURCE_SCAN:
-		ss, err := c.compileSourceScan(ctx, n)
+		ss, err = c.compileSourceScan(ctx, n)
 		if err != nil {
 			return nil, err
 		}
-
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		return ss, nil
 	case plan.Node_AGG:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
 		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
-			ss = c.compileShuffleGroup(n, ss, ns)
-			return c.compileSort(n, ss), nil
+			ss = c.compileSort(n, c.compileShuffleGroup(n, ss, ns))
+			return ss, nil
 		} else {
-			ss = c.compileMergeGroup(n, ss, ns)
-			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+			ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileMergeGroup(n, ss, ns))))
+			return ss, nil
 		}
 	case plan.Node_SAMPLE:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		ss = c.compileSample(n, ss)
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileSample(n, ss))))
+		return ss, nil
 	case plan.Node_WINDOW:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		ss = c.compileWin(n, ss)
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileWin(n, ss))))
+		return ss, nil
 	case plan.Node_TIME_WINDOW:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		ss = c.compileTimeWin(n, c.compileSort(n, ss))
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
+		return ss, nil
 	case plan.Node_Fill:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		ss = c.compileFill(n, ss)
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		ss = c.compileProjection(n, c.compileRestrict(n, c.compileFill(n, ss)))
+		return ss, nil
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		left, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
+		right, err = c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(right, curr)
-		return c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], left, right)), nil
+		ss = c.compileSort(n, c.compileJoin(ctx, n, ns[n.Children[0]], ns[n.Children[1]], left, right))
+		return ss, nil
 	case plan.Node_SORT:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		return c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss))), nil
+		ss = c.compileProjection(n, c.compileRestrict(n, c.compileSort(n, ss)))
+		return ss, nil
 	case plan.Node_PARTITION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		return c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss))), nil
+		ss = c.compileProjection(n, c.compileRestrict(n, c.compilePartition(n, ss)))
+		return ss, nil
 	case plan.Node_UNION:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		left, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
+		right, err = c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(right, curr)
-		return c.compileSort(n, c.compileUnion(n, left, right)), nil
+		ss = c.compileSort(n, c.compileUnion(n, left, right))
+		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		left, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
+		right, err = c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(right, curr)
-		return c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType)), nil
+		ss = c.compileSort(n, c.compileMinusAndIntersect(n, left, right, n.NodeType))
+		return ss, nil
 	case plan.Node_UNION_ALL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+
+		left, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(left, int(n.Children[1]))
-		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
+		right, err = c.compilePlanScope(ctx, step, n.Children[1], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(right, curr)
-		return c.compileSort(n, c.compileUnionAll(left, right)), nil
+		ss = c.compileSort(n, c.compileUnionAll(left, right))
+		return ss, nil
 	case plan.Node_DELETE:
 		if n.DeleteCtx.CanTruncate {
-			return []*Scope{{
-				Magic: TruncateTable,
-				Plan: &plan.Plan{
-					Plan: &plan.Plan_Ddl{
-						Ddl: &plan.DataDefinition{
-							DdlType: plan.DataDefinition_TRUNCATE_TABLE,
-							Definition: &plan.DataDefinition_TruncateTable{
-								TruncateTable: n.DeleteCtx.TruncateTable,
-							},
+			s := newScope(TruncateTable)
+			s.Plan = &plan.Plan{
+				Plan: &plan.Plan_Ddl{
+					Ddl: &plan.DataDefinition{
+						DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+						Definition: &plan.DataDefinition_TruncateTable{
+							TruncateTable: n.DeleteCtx.TruncateTable,
 						},
 					},
 				},
-			}}, nil
+			}
+			ss = []*Scope{s}
+			return ss, nil
 		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1195,7 +1245,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		n.NotCacheable = true
 		nodeStats := ns[n.Children[0]].Stats
 
-		arg, err := constructDeletion(n, c.e, c.proc)
+		var arg *deletion.Argument
+		arg, err = constructDeletion(n, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -1231,7 +1282,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_ON_DUPLICATE_KEY:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1243,17 +1294,33 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Idx: c.anal.curr,
 			Arg: constructOnduplicateKey(n, c.e),
 		}
-		return []*Scope{rs}, nil
+		ss = []*Scope{rs}
+		return ss, nil
+	case plan.Node_FUZZY_FILTER:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		left, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(left, int(n.Children[1]))
+		right, err := c.compilePlanScope(ctx, step, n.Children[1], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(right, curr)
+		return c.compileFuzzyFilter(n, ns, left, right)
 	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			if n.NodeType == plan.Node_PRE_INSERT_UK {
-				preInsertUkArg, err := constructPreInsertUk(n, c.proc)
+				var preInsertUkArg *preinsertunique.Argument
+				preInsertUkArg, err = constructPreInsertUk(n, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1264,7 +1331,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg:     preInsertUkArg,
 				})
 			} else {
-				preInsertSkArg, err := constructPreInsertSk(n, c.proc)
+				var preInsertSkArg *preinsertsecondaryindex.Argument
+				preInsertSkArg, err = constructPreInsertSk(n, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1281,13 +1349,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return ss, nil
 	case plan.Node_PRE_INSERT:
 		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			preInsertArg, err := constructPreInsert(n, c.e, c.proc)
+			var preInsertArg *preinsert.Argument
+			preInsertArg, err = constructPreInsert(n, c.e, c.proc)
 			if err != nil {
 				return nil, err
 			}
@@ -1304,7 +1373,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.appendMetaTables(n.ObjRef)
 		curr := c.anal.curr
 		n.NotCacheable = true
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1316,7 +1385,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if toWriteS3 {
 			logutil.Debugf("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
-				insertArg, err := constructInsert(n, c.e, c.proc)
+				var insertArg *insert.Argument
+				insertArg, err = constructInsert(n, c.e, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1368,7 +1438,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					})
 				}
 				for i := range scopes {
-					insertArg, err := constructInsert(n, c.e, c.proc)
+					var insertArg *insert.Argument
+					insertArg, err = constructInsert(n, c.e, c.proc)
 					if err != nil {
 						return nil, err
 					}
@@ -1381,7 +1452,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					})
 				}
 
-				insertArg, err := constructInsert(n, c.e, c.proc)
+				var insertArg *insert.Argument
+				insertArg, err = constructInsert(n, c.e, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1400,7 +1472,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 		} else {
 			for i := range ss {
-				insertArg, err := constructInsert(n, c.e, c.proc)
+				var insertArg *insert.Argument
+				insertArg, err = constructInsert(n, c.e, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1416,7 +1489,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		return ss, nil
 	case plan.Node_LOCK_OP:
 		curr := c.anal.curr
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1431,7 +1504,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			lockOpArg, err := constructLockOp(n, ss[i].Proc, c.e)
+			var lockOpArg *lockop.Argument
+			lockOpArg, err = constructLockOp(n, ss[i].Proc, c.e)
 			if err != nil {
 				return nil, err
 			}
@@ -1458,12 +1532,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
+		return ss, nil
 	case plan.Node_SINK_SCAN:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
@@ -1480,7 +1555,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return c.compileProjection(n, []*Scope{rs}), nil
+		ss = c.compileProjection(n, []*Scope{rs})
+		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
@@ -1498,7 +1574,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		ss = []*Scope{rs}
+		return ss, nil
 	case plan.Node_RECURSIVE_CTE:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
@@ -1516,13 +1593,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return c.compileSort(n, []*Scope{rs}), nil
+		ss = c.compileSort(n, []*Scope{rs})
+		return ss, nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1531,8 +1609,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Op:  vm.Dispatch,
 			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
-
-		return []*Scope{rs}, nil
+		ss = []*Scope{rs}
+		return ss, nil
 	default:
 		return nil, moerr.NewNYI(ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -2597,6 +2675,51 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Arg: constructMergeLimit(n, c.proc),
 	}
 	return []*Scope{rs}
+}
+
+func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
+	l := c.newMergeScope(left)
+	r := c.newMergeScope(right)
+	all := []*Scope{l, r}
+	rs := c.newMergeScope(all)
+
+	rs.Instructions[0].Idx = c.anal.curr
+
+	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])
+
+	rs.appendInstruction(vm.Instruction{
+		Op:  vm.FuzzyFilter,
+		Idx: c.anal.curr,
+		Arg: arg,
+	})
+
+	outData, err := newFuzzyCheck(n)
+	if err != nil {
+		return nil, err
+	}
+
+	// wrap the collision key into c.fuzzy, for more information,
+	// please refer fuzzyCheck.go
+	rs.appendInstruction(vm.Instruction{
+		Op: vm.Output,
+		Arg: &output.Argument{
+			Data: outData,
+			Func: func(data any, bat *batch.Batch) error {
+				if bat == nil || bat.IsEmpty() {
+					return nil
+				}
+				c.fuzzy = data.(*fuzzyCheck)
+				// the batch will contain the key that fuzzyCheck
+				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+					return err
+				}
+
+				return nil
+			},
+		},
+	})
+
+	return []*Scope{rs}, nil
 }
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
@@ -4023,6 +4146,7 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
+
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
 		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)

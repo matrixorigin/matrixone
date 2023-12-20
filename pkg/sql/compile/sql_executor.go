@@ -84,6 +84,23 @@ func NewSQLExecutor(
 	}
 }
 
+func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	var opts executor.Options
+
+	ctx, opts, err := s.adjustOptions(ctx, opts)
+	if err != nil {
+		return nil
+	}
+	if !opts.ExistsTxn() {
+		if err := s.eng.New(ctx, opts.Txn()); err != nil {
+			return nil
+		}
+	}
+	opts.Txn().GetWorkspace().StartStatement()
+	opts.Txn().GetWorkspace().IncrStatementID(ctx, false)
+	return opts.Txn()
+}
+
 func (s *sqlExecutor) Exec(
 	ctx context.Context,
 	sql string,
@@ -265,6 +282,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 			return nil
 		})
 	if err != nil {
+		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult

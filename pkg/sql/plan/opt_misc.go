@@ -515,9 +515,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		if node.JoinType == plan.Node_INNER {
-			//only inner join can deduce new predicate
+		switch node.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_RIGHT:
+			//right join can deduce new predicate only from right side to left
+			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_LEFT:
+			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 

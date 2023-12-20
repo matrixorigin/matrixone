@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type memExecutor struct {
@@ -30,6 +31,10 @@ type memExecutor struct {
 // NewMemExecutor used to testing
 func NewMemExecutor(mocker func(sql string) (Result, error)) SQLExecutor {
 	return &memExecutor{mocker: mocker}
+}
+
+func (e *memExecutor) NewTxnOperator(_ context.Context) client.TxnOperator {
+	return nil
 }
 
 func (e *memExecutor) Exec(
