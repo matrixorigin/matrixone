@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
 	"strings"
 	"time"
@@ -93,10 +96,6 @@ func (txn *Transaction) WriteBatch(
 			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
 			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		}
-		// for TestPrimaryKeyCheck
-		if txn.blockId_raw_batch != nil {
-			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
-		}
 		if tableId != catalog.MO_DATABASE_ID &&
 			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
 			txn.workspaceSize += uint64(bat.Size())
@@ -120,6 +119,197 @@ func (txn *Transaction) dumpBatch(offset int) error {
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.dumpBatchLocked(offset)
+}
+
+func checkPKDupGeneric[T comparable](
+	t *types.Type,
+	attr string,
+	vals []T,
+	start, count int) error {
+	mp := make(map[T]bool)
+	for _, v := range vals[start : start+count] {
+		if _, ok := mp[v]; ok {
+			entry := common.TypeStringValue(*t, v, false)
+			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+		}
+		mp[v] = true
+	}
+	return nil
+}
+
+func checkPKDup(
+	pk *vector.Vector,
+	attr string,
+	start, count int) error {
+	mp := make(map[any]bool)
+	colType := pk.GetType()
+	switch colType.Oid {
+	case types.T_bool:
+		vs := vector.MustFixedCol[bool](pk)
+		return checkPKDupGeneric[bool](colType, attr, vs, start, count)
+	case types.T_int8:
+		vs := vector.MustFixedCol[int8](pk)
+		return checkPKDupGeneric[int8](colType, attr, vs, start, count)
+	case types.T_int16:
+		vs := vector.MustFixedCol[int16](pk)
+		return checkPKDupGeneric[int16](colType, attr, vs, start, count)
+	case types.T_int32:
+		vs := vector.MustFixedCol[int32](pk)
+		return checkPKDupGeneric[int32](colType, attr, vs, start, count)
+	case types.T_int64:
+		vs := vector.MustFixedCol[int64](pk)
+		return checkPKDupGeneric[int64](colType, attr, vs, start, count)
+	case types.T_uint8:
+		vs := vector.MustFixedCol[uint8](pk)
+		return checkPKDupGeneric[uint8](colType, attr, vs, start, count)
+	case types.T_uint16:
+		vs := vector.MustFixedCol[uint16](pk)
+		return checkPKDupGeneric[uint16](colType, attr, vs, start, count)
+	case types.T_uint32:
+		vs := vector.MustFixedCol[uint32](pk)
+		return checkPKDupGeneric[uint32](colType, attr, vs, start, count)
+	case types.T_uint64:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](colType, attr, vs, start, count)
+	case types.T_decimal64:
+		vs := vector.MustFixedCol[types.Decimal64](pk)
+		return checkPKDupGeneric[types.Decimal64](colType, attr, vs, start, count)
+	case types.T_decimal128:
+		vs := vector.MustFixedCol[types.Decimal128](pk)
+		return checkPKDupGeneric[types.Decimal128](colType, attr, vs, start, count)
+	case types.T_uuid:
+		vs := vector.MustFixedCol[types.Uuid](pk)
+		return checkPKDupGeneric[types.Uuid](colType, attr, vs, start, count)
+	case types.T_float32:
+		vs := vector.MustFixedCol[float32](pk)
+		return checkPKDupGeneric[float32](colType, attr, vs, start, count)
+	case types.T_float64:
+		vs := vector.MustFixedCol[float64](pk)
+		return checkPKDupGeneric[float64](colType, attr, vs, start, count)
+	case types.T_date:
+		vs := vector.MustFixedCol[types.Date](pk)
+		return checkPKDupGeneric[types.Date](colType, attr, vs, start, count)
+	case types.T_timestamp:
+		vs := vector.MustFixedCol[types.Timestamp](pk)
+		return checkPKDupGeneric[types.Timestamp](colType, attr, vs, start, count)
+	case types.T_time:
+		vs := vector.MustFixedCol[types.Time](pk)
+		return checkPKDupGeneric[types.Time](colType, attr, vs, start, count)
+	case types.T_datetime:
+		vs := vector.MustFixedCol[types.Datetime](pk)
+		return checkPKDupGeneric[types.Datetime](colType, attr, vs, start, count)
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](pk)
+		return checkPKDupGeneric[types.Enum](colType, attr, vs, start, count)
+	case types.T_TS:
+		vs := vector.MustFixedCol[types.TS](pk)
+		return checkPKDupGeneric[types.TS](colType, attr, vs, start, count)
+	case types.T_Rowid:
+		vs := vector.MustFixedCol[types.Rowid](pk)
+		return checkPKDupGeneric[types.Rowid](colType, attr, vs, start, count)
+	case types.T_Blockid:
+		vs := vector.MustFixedCol[types.Blockid](pk)
+		return checkPKDupGeneric[types.Blockid](colType, attr, vs, start, count)
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		for i := start; i < start+count; i++ {
+			v := pk.GetStringAt(i)
+			if _, ok := mp[v]; ok {
+				entry := common.TypeStringValue(*colType, []byte(v), false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+			mp[v] = true
+		}
+	case types.T_array_float32:
+		//vec := col.GetDownstreamVector()
+		for i := start; i < start+count; i++ {
+			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
+			if _, ok := mp[v]; ok {
+				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+			mp[v] = true
+		}
+	case types.T_array_float64:
+		//vec := col.GetDownstreamVector()
+		for i := start; i < start+count; i++ {
+			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
+			if _, ok := mp[v]; ok {
+				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+			mp[v] = true
+		}
+	default:
+		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
+	}
+	return nil
+}
+
+// checkDup check whether the txn.writes has duplicate pk entry
+func (txn *Transaction) checkDup() error {
+	tablesDef := make(map[[2]string]*plan.TableDef)
+	pkIndex := make(map[[2]string]int)
+
+	for _, e := range txn.writes {
+		if e.bat == nil || e.bat.RowCount() == 0 {
+			continue
+		}
+		if e.fileName != "" {
+			continue
+		}
+		if e.typ == INSERT {
+			key := [2]string{e.databaseName, e.tableName}
+			if _, ok := tablesDef[key]; !ok {
+				tbl, err := txn.getTable(key)
+				if err != nil {
+					return err
+				}
+				tablesDef[key] = tbl.GetTableDef(txn.proc.Ctx)
+			}
+			tableDef := tablesDef[key]
+			if _, ok := pkIndex[key]; !ok {
+				for idx, colDef := range tableDef.Cols {
+					//FIXME::tableDef.PKey is nil if table is mo_tables, mo_columns, mo_database?
+					if tableDef.Pkey == nil {
+						if colDef.Primary {
+							pkIndex[key] = idx
+							break
+						}
+					} else {
+						if colDef.Name == tableDef.Pkey.PkeyColName {
+							if colDef.Name == catalog.FakePrimaryKeyColName {
+								pkIndex[key] = -1
+							} else {
+								pkIndex[key] = idx
+							}
+							break
+						}
+					}
+				}
+			}
+			bat := e.bat
+			if index := pkIndex[key]; index != -1 {
+				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
+					newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+					newBat.SetAttributes(bat.Attrs[1:])
+					newBat.Vecs = bat.Vecs[1:]
+					newBat.SetRowCount(bat.Vecs[0].Length())
+					bat = newBat
+				}
+				if err := checkPKDup(bat.Vecs[index], bat.Attrs[index], 0, bat.RowCount()); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
+		pkVec := e.bat.Vecs[1]
+		if err := checkPKDup(pkVec, e.bat.Attrs[1], 0, e.bat.RowCount()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
@@ -464,11 +654,6 @@ func (txn *Transaction) genBlock() {
 	txn.rowId[5] = INIT_ROWID_OFFSET
 }
 
-func (txn *Transaction) getCurrentBlockId() *types.Blockid {
-	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	return rowId.BorrowBlockID()
-}
-
 func (txn *Transaction) genRowId() types.Rowid {
 	if txn.rowId[5] != INIT_ROWID_OFFSET {
 		txn.rowId[5]++
@@ -676,6 +861,9 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
+	if err := txn.checkDup(); err != nil {
+		return nil, err
+	}
 	reqs, err := genWriteReqs(ctx, txn.writes, txn.op.Txn().DebugString())
 	if err != nil {
 		return nil, err
@@ -705,7 +893,6 @@ func (txn *Transaction) delTransaction() {
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch = nil
-	txn.blockId_raw_batch = nil
 	txn.deletedBlocks = nil
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
