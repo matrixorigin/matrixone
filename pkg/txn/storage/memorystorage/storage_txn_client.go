@@ -303,3 +303,7 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
+
+func (s *StorageTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	panic("should not call")
+}
