@@ -481,14 +481,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
-		res.Arg = &deletion.Argument{
-			Ts:           t.Ts,
-			IBucket:      t.IBucket,
-			Nbucket:      t.Nbucket,
-			DeleteCtx:    t.DeleteCtx,
-			RemoteDelete: t.RemoteDelete,
-			SegmentMap:   t.SegmentMap,
-		}
+		arg := deletion.NewArgument()
+		arg.Ts = t.Ts
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.Nbucket
+		arg.DeleteCtx = t.DeleteCtx
+		arg.RemoteDelete = t.RemoteDelete
+		arg.SegmentMap = t.SegmentMap
+		res.Arg = arg
 	case vm.LockOp:
 		t := sourceIns.Arg.(*lockop.Argument)
 		arg := new(lockop.Argument)
@@ -550,9 +550,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		}
 	}
 
-	return &deletion.Argument{
-		DeleteCtx: delCtx,
-	}, nil
+	arg := deletion.NewArgument()
+	arg.DeleteCtx = delCtx
+	return arg, nil
 }
 
 func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Argument {

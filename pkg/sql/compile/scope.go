@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -83,6 +84,11 @@ func (s *Scope) release() {
 	}
 	for i := range s.PreScopes {
 		s.PreScopes[i].release()
+	}
+	for i := range s.Instructions {
+		if arg, ok := s.Instructions[i].Arg.(*deletion.Argument); ok {
+			arg.Release()
+		}
 	}
 	reuse.Free[Scope](s, nil)
 }
