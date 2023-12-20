@@ -38,7 +38,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	if node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_MARK {
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
 		return
 	}
 
