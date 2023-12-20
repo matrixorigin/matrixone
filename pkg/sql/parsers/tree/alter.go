@@ -191,6 +191,11 @@ func (node *AlterTable) Format(ctx *FmtCtx) {
 		t.Format(ctx)
 		prefix = ", "
 	}
+
+	if node.PartitionOptions != nil {
+		node.PartitionOptions.Format(ctx)
+	}
+
 }
 
 func (node *AlterTable) GetStatementType() string { return "Alter Table" }
@@ -575,6 +580,7 @@ const (
 	AlterPartitionRebuildPartition
 	AlterPartitionRepairPartition
 	AlterPartitionRemovePartitioning
+	AlterPartitionRedefinePartition
 )
 
 type AlterPartitionOption interface {
@@ -583,6 +589,16 @@ type AlterPartitionOption interface {
 
 type AlterPartitionOptionImpl struct {
 	AlterPartitionOption
+}
+
+type AlterPartitionRedefinePartitionClause struct {
+	AlterPartitionOptionImpl
+	Typ             AlterPartitionOptionType
+	PartitionOption *PartitionOption
+}
+
+func (node *AlterPartitionRedefinePartitionClause) Format(ctx *FmtCtx) {
+	node.PartitionOption.Format(ctx)
 }
 
 type AlterPartitionAddPartitionClause struct {

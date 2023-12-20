@@ -2718,15 +2718,19 @@ alter_partition_option:
      {
 	  $$ = $1
      }
-//|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
-//     {
-//     	 $3.Num = uint64($4)
-//     	 $$ = &tree.PartitionOption{
-//	     PartBy: *$3,
-//	     SubPartBy: $5,
-//	     Partitions: $6,
-//         }
-//     }
+|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
+     {
+     	  $3.Num = uint64($4)
+     	  partitionDef := &tree.PartitionOption{
+	       PartBy:    *$3,
+	       SubPartBy:  $5,
+	       Partitions: $6,
+          }
+	  opt := &tree.AlterPartitionRedefinePartitionClause{
+	       Partitions: partitionDef,
+	  }
+	  $$ = tree.AlterPartitionOption(opt)
+     }
 
 partition_option:
       ADD PARTITION partition_list_opt
