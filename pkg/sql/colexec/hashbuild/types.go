@@ -80,6 +80,10 @@ type Argument struct {
 	children []vm.Operator
 }
 
+func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
+	arg.RuntimeFilterSenders = rfs
+}
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.Info = info
 }
