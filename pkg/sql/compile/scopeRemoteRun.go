@@ -1084,18 +1084,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		}
 	case vm.Insert:
 		t := opr.GetInsert()
-		v.Arg = &insert.Argument{
-			ToWriteS3: t.ToWriteS3,
-			InsertCtx: &insert.InsertCtx{
-				Ref:                   t.Ref,
-				AddAffectedRows:       t.AddAffectedRows,
-				Attrs:                 t.Attrs,
-				PartitionTableIDs:     t.PartitionTableIds,
-				PartitionTableNames:   t.PartitionTableNames,
-				PartitionIndexInBatch: int(t.PartitionIdx),
-				TableDef:              t.TableDef,
-			},
+		arg := insert.NewArgument()
+		arg.ToWriteS3 = t.ToWriteS3
+		arg.InsertCtx = &insert.InsertCtx{
+			Ref:                   t.Ref,
+			AddAffectedRows:       t.AddAffectedRows,
+			Attrs:                 t.Attrs,
+			PartitionTableIDs:     t.PartitionTableIds,
+			PartitionTableNames:   t.PartitionTableNames,
+			PartitionIndexInBatch: int(t.PartitionIdx),
+			TableDef:              t.TableDef,
 		}
+		v.Arg = arg
 	case vm.PreInsert:
 		t := opr.GetPreInsert()
 		v.Arg = &preinsert.Argument{

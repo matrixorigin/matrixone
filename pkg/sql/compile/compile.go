@@ -1265,6 +1265,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
+			arg.Release()
 			return ss, nil
 		}
 		rs := c.newMergeScope(ss)
@@ -1401,6 +1402,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					},
 				})
 				ss = []*Scope{rs}
+				insertArg.Release()
 			} else {
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
@@ -1469,6 +1471,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					},
 				})
 				ss = []*Scope{rs}
+				insertArg.Release()
 			}
 		} else {
 			for i := range ss {

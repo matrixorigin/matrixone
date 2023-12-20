@@ -466,10 +466,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
-		res.Arg = &insert.Argument{
-			ToWriteS3: t.ToWriteS3,
-			InsertCtx: t.InsertCtx,
-		}
+		arg := insert.NewArgument()
+		arg.InsertCtx = t.InsertCtx
+		arg.ToWriteS3 = t.ToWriteS3
+		res.Arg = arg
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
 		res.Arg = &preinsert.Argument{
@@ -707,9 +707,9 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		}
 	}
 
-	return &insert.Argument{
-		InsertCtx: newCtx,
-	}, nil
+	arg := insert.NewArgument()
+	arg.InsertCtx = newCtx
+	return arg, nil
 }
 
 func constructProjection(n *plan.Node) *projection.Argument {
