@@ -256,6 +256,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	sender := &messageSenderOnClient{
 		ctx:          ctx,
 		streamSender: streamSender,
+		c:            c,
 	}
 	ch2 := make(chan *batch.Batch)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -277,13 +278,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
 
+	a := process.NewAnalyzeInfo()
 	proc := &process.Process{
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
 		Ctx:         context.TODO(),
 		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{{NodeId: 1}},
+		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{
 			Account:        "",
 			User:           "",
@@ -604,10 +606,9 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
+	a := process.NewAnalyzeInfo()
 	target := &anaylze{
-		analInfos: []*process.AnalyzeInfo{
-			{},
-		},
+		analInfos: []*process.AnalyzeInfo{a},
 	}
 	ana := &pipeline.AnalysisList{
 		List: []*plan2.AnalyzeInfo{
@@ -652,7 +653,8 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := &process.AnalyzeInfo{InputRows: 100}
+	info := process.NewAnalyzeInfo()
+	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))
 }
@@ -695,34 +697,4 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 	_, err = decodeBatch(mp, vp, data)
 	require.Nil(t, err)
-}
-
-func TestScopeContext_addSubPipeline(t *testing.T) {
-	proc := process.New(context.TODO(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	proc.Reg = process.Register{
-		MergeReceivers: []*process.WaitRegister{{}},
-	}
-	ctx := &scopeContext{
-		id:   2,
-		plan: &plan.Plan{},
-		scope: &Scope{
-			NodeInfo: engine.Node{},
-			Proc:     proc,
-		},
-		root:   &scopeContext{id: 0},
-		parent: &scopeContext{id: 1},
-		children: []*scopeContext{
-			{id: 3},
-		},
-		pipe: &pipeline.Pipeline{},
-		regs: nil,
-	}
-	_, err := ctx.addSubPipeline(4, 0, 4, engine.Node{})
-	require.Nil(t, err)
-}
-
-func TestScopeContext_isDescendant(t *testing.T) {
-	ctx := &scopeContext{id: 0, children: []*scopeContext{{id: 1}}}
-	dsc := &scopeContext{id: 2}
-	require.Equal(t, ctx.isDescendant(dsc), false)
 }

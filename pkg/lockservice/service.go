@@ -267,28 +267,29 @@ func (s *service) getLockTable(tableID uint64) (lockTable, error) {
 	return s.getLockTableWithCreate(tableID, false)
 }
 
-func (s *service) waitLockTableBind(tableID uint64, locked bool) lockTable {
-	getter := func() chan struct{} {
-		if !locked {
-			s.mu.RLock()
-			defer s.mu.RUnlock()
-		}
-		return s.mu.allocating[tableID]
+func (s *service) getAllocatingC(
+	tableID uint64,
+	locked bool) chan struct{} {
+	if !locked {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 	}
+	return s.mu.allocating[tableID]
+}
 
-	c := getter()
+func (s *service) waitLockTableBind(
+	tableID uint64,
+	locked bool) lockTable {
+	c := s.getAllocatingC(tableID, locked)
 	if c != nil {
 		<-c
 	}
-	if v, ok := s.tables.Load(tableID); ok {
-		return v.(lockTable)
-	}
-	return nil
+	return s.loadLockTable(tableID)
 }
 
 func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable, error) {
-	if v, ok := s.tables.Load(tableID); ok {
-		return v.(lockTable), nil
+	if v := s.loadLockTable(tableID); v != nil {
+		return v, nil
 	}
 	if !create {
 		return s.waitLockTableBind(tableID, false), nil
@@ -297,12 +298,19 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 	var c chan struct{}
 	fn := func() lockTable {
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		v := s.waitLockTableBind(tableID, true)
+		waitC := s.getAllocatingC(tableID, true)
+		if waitC != nil {
+			s.mu.Unlock()
+			<-waitC
+			return s.loadLockTable(tableID)
+		}
+
+		v := s.loadLockTable(tableID)
 		if v == nil {
 			c = make(chan struct{})
 			s.mu.allocating[tableID] = c
 		}
+		s.mu.Unlock()
 		return v
 	}
 	if v := fn(); v != nil {
@@ -310,10 +318,10 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 	}
 
 	defer func() {
-		close(c)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.mu.allocating, tableID)
+		close(c)
 	}()
 	bind, err := getLockTableBind(
 		s.remote.client,
@@ -359,6 +367,13 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.remote.client,
 			s.handleBindChanged)
 	}
+}
+
+func (s *service) loadLockTable(tableID uint64) lockTable {
+	if v, ok := s.tables.Load(tableID); ok {
+		return v.(lockTable)
+	}
+	return nil
 }
 
 type activeTxnHolder interface {

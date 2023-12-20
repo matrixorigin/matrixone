@@ -126,12 +126,14 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			ps := make([]int64, 0, 16)
 			ds := make([]bool, len(sels))
 			for i, j := 1, len(ctr.sortVectors); i < j; i++ {
-				desc := ctr.desc[i]
-				nullsLast := ctr.nullsLast[i]
-				ps = partition.Partition(sels, ds, ps, ovec)
 				vec := ctr.sortVectors[i]
+				ps = partition.Partition(sels, ds, ps, ovec)
+
 				// skip sort for const vector
 				if !vec.IsConst() {
+					desc := ctr.desc[i]
+					nullsLast := ctr.nullsLast[i]
+
 					nullCnt := vec.GetNulls().Count()
 					if nullCnt < vec.Length() {
 						if vec.GetType().IsVarlen() {
@@ -212,10 +214,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ctr := arg.ctr
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err

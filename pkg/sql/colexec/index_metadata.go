@@ -250,13 +250,22 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	vec_index_table := proc.GetVector(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
 	bat.Vecs[14] = vec_index_table
 
+	var indexId uint64
+	var err error
+	defer func() {
+		if err != nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
+
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, index := range def.Indexes {
 				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-				defer cancelFunc()
-				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+
+				indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				cancelFunc()
 				if err != nil {
 					return nil, err
 				}
@@ -353,7 +362,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 		case *engine.PrimaryKeyDef:
 			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
 			defer cancelFunc()
-			indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+			indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			if err != nil {
 				return nil, err
 			}
@@ -428,11 +437,12 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 
 	// processing composite primary key
-	vec_prikey, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
+	var vecPrikey *vector.Vector
+	vecPrikey, err = function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
 	if err != nil {
 		return nil, err
 	}
-	bat.Vecs[12] = vec_prikey
+	bat.Vecs[12] = vecPrikey
 
 	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil

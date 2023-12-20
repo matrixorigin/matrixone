@@ -30,17 +30,20 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, proc.Ctx.Err()
-	default:
+	//select {
+	//case <-proc.Ctx.Done():
+	//	result.Batch = nil
+	//	result.Status = vm.ExecStop
+	//	return result, proc.Ctx.Err()
+	//default:
+	//}
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
 	}
 
 	for {

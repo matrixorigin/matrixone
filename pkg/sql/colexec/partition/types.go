@@ -68,9 +68,9 @@ type container struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
+	if ctr := arg.ctr; ctr != nil {
 		mp := proc.Mp()
-		ctr := arg.ctr
+
 		for i := range ctr.batchList {
 			if ctr.batchList[i] != nil {
 				ctr.batchList[i].Clean(mp)

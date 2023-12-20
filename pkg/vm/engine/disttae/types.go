@@ -47,8 +47,8 @@ import (
 )
 
 const (
-	PREFETCH_THRESHOLD = 512
-	PREFETCH_ROUNDS    = 32
+	PREFETCH_THRESHOLD = 128
+	PREFETCH_ROUNDS    = 16
 )
 
 const (
@@ -344,6 +344,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.rollbackCreateTableLocked()
+
 		txn.statementID--
 		end := txn.statements[txn.statementID]
 		for i := end; i < len(txn.writes); i++ {
@@ -511,6 +513,8 @@ type txnTable struct {
 	// process for statement
 	//proc *process.Process
 	proc atomic.Pointer[process.Process]
+
+	createByStatementID int
 }
 
 type column struct {
@@ -589,6 +593,8 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table *txnTable
+
+	encodedPrimaryKey []byte
 
 	//for perfetch deletes
 	loaded     bool

@@ -407,7 +407,8 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		tbl.Stats.RLock()
-		if tbl.Stats.LastFlush.GreaterEq(to) {
+		lastFlush := tbl.Stats.LastFlush
+		if lastFlush.GreaterEq(to) {
 			tree.Shrink(id)
 			tbl.Stats.RUnlock()
 			continue
@@ -454,7 +455,13 @@ func (d *dirtyCollector) tryCompactTree(
 					continue
 				}
 				if !blk.IsAppendable() {
-					found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(from, to)
+					newFrom := from
+					if lastFlush.Greater(newFrom) {
+						newFrom = lastFlush
+					}
+					// sometimes, delchain is no cleared after flushing table tail.
+					// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
+					found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
 					if !found {
 						dirtySeg.Shrink(bid)
 						continue
