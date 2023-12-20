@@ -614,11 +614,18 @@ message AnalyzeInfo {
 	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
+	repeated int64 time_consumed_array_major = 15;
+	repeated int64 time_consumed_array_minor = 16;
 }
 
 message PartitionPrune {
 	bool isPruned = 1;
 	repeated PartitionItem selected_partitions = 2;
+}
+
+message OriginTableMessageForFuzzy {
+	string ParentTableName = 1;
+	repeated ColDef ParentUniqueCols = 2;
 }
 
 message Node {
@@ -690,6 +697,7 @@ message Node {
 		TIME_WINDOW = 64;
 		Fill = 65;
 		PARTITION = 66;
+		FUZZY_FILTER = 67;
 	}
 
 	enum JoinType {
@@ -803,6 +811,7 @@ message Node {
 
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
+	OriginTableMessageForFuzzy fuzzymessage = 54;
 }
 
 message ExternScan {
@@ -1062,6 +1071,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {

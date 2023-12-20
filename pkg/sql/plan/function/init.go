@@ -24,6 +24,7 @@ var AggSumOverloadID = encodeOverloadID(SUM, 0)
 
 var InFunctionEncodedID = encodeOverloadID(IN, 0)
 var InFunctionName = "in"
+var L2DistanceFunctionEncodedID = encodeOverloadID(L2_DISTANCE, 0)
 
 func init() {
 	// init fixed type cast rule for binary operator like

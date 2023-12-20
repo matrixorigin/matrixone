@@ -62,7 +62,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	defer analyze(proc, arg.info.Idx)()
+	defer analyze(proc, arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)()
 	if arg.ToWriteS3 {
 		return arg.insert_s3(proc)
 	}
@@ -75,7 +75,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -179,7 +179,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -262,9 +262,9 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer, resu
 	return
 }
 
-func analyze(proc *process.Process, idx int) func() {
+func analyze(proc *process.Process, idx int, parallelIdx int, parallelMajor bool) func() {
 	t := time.Now()
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(idx, parallelIdx, parallelMajor)
 	anal.Start()
 	return func() {
 		anal.Stop()

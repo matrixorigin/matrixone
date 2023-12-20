@@ -10646,6 +10646,7 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CONNECTOR
 |   CONNECTORS
+|	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
 |   STREAM
 |   ENGINE_ATTRIBUTE
@@ -10671,6 +10672,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
@@ -10691,7 +10693,6 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
-|   REINDEX
 |   KEYS
 |   LANGUAGE
 |   LESS
