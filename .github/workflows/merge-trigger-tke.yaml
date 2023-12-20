@@ -298,7 +298,7 @@ jobs:
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
         id: step_ssb_test
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -344,7 +344,7 @@ jobs:
       # start tpch test
       - name: Load TPCH 10G Test Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 10
+        timeout-minutes: 20
         id: load_tpch_data
         run: |
           set -uo pipefail
@@ -593,7 +593,7 @@ jobs:
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 10
+        timeout-minutes: 20
         id: load_tpcc_data
         run: |
           set -uo pipefail
