@@ -291,8 +291,15 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	return w.String()
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
-	var w bytes.Buffer
+type TableStat struct {
+	ObjectCnt int
+	Loaded    int
+	Rows      int
+	OSize     int
+	Csize     int
+}
+
+func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeSegmentIt(true)
 	composeSortKey := false
@@ -300,18 +307,17 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
 	}
 
-	var cnt, loadedCnt, rows, osize, avgRow, avgOsize int
-
 	for ; it.Valid(); it.Next() {
 		segment := it.Get().GetPayload()
 		if !segment.IsActive() {
 			continue
 		}
-		cnt++
+		stat.ObjectCnt += 1
 		if segment.Stat.GetLoaded() {
-			loadedCnt++
-			rows += int(segment.Stat.GetRows())
-			osize += int(segment.Stat.GetOriginSize())
+			stat.Loaded += 1
+			stat.Rows += int(segment.Stat.GetRows())
+			stat.OSize += int(segment.Stat.GetOriginSize())
+			stat.Csize += int(segment.Stat.GetCompSize())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
@@ -325,19 +331,28 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			break
 		}
 	}
-	if level > common.PPL0 && cnt > 0 {
+	if level > common.PPL0 && stat.ObjectCnt > 0 {
 		w.WriteByte('\n')
 	}
-	if loadedCnt > 0 {
-		avgRow = rows / cnt
-		avgOsize = osize / cnt
+	return
+}
+
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
+	stat, detail := entry.ObjectStats(level)
+
+	var avgCsize, avgRow, avgOsize int
+	if stat.Loaded > 0 {
+		avgRow = stat.Rows / stat.Loaded
+		avgOsize = stat.OSize / stat.Loaded
+		avgCsize = stat.Csize / stat.Loaded
 	}
+
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s",
-		cnt, cnt-loadedCnt, avgRow, common.HumanReadableBytes(avgOsize),
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
+		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
 	)
-	w.WriteString(summary)
-	return w.String()
+	detail.WriteString(summary)
+	return detail.String()
 }
 
 func (entry *TableEntry) String() string {
