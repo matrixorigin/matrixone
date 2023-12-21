@@ -17,9 +17,10 @@ package function
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"regexp"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -660,10 +661,15 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 // if str[pos:] matched pat.
 // return Nth (N = occurrence here) of match result
 func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64) (match bool, substr string, err error) {
-	if pos < 1 || occurrence < 1 || pos >= int64(len(str)) {
-		return false, "", moerr.NewInvalidInputNoCtx("regexp_substr have invalid input")
+	if pos < 1 {
+		return false, "", moerr.NewInvalidInputNoCtx("regexp_substr have Index out of bounds in regular expression search, search start postion %d", pos)
 	}
-
+	if pos > int64(len(str)) {
+		return false, "", moerr.NewInvalidInputNoCtx("regexp_substr have Index out of bounds in regular expression search, search start postion %d, search string length %d", pos, len(str))
+	}
+	if occurrence < 1 {
+		return false, "", moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, search start occurrence %d", occurrence)
+	}
 	reg, err := rs.getRegularMatcher(pat)
 	if err != nil {
 		return false, "", err
@@ -678,8 +684,14 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 }
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
-	if pos < 1 || occurrence < 0 || pos >= int64(len(str)) {
-		return "", moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
+	if pos < 1 {
+		return "", moerr.NewInvalidInputNoCtx("regexp_replace have Index out of bounds in regular expression search, search start postion %d", pos)
+	}
+	if pos > int64(len(str)) {
+		return "", moerr.NewInvalidInputNoCtx("regexp_replace have Index out of bounds in regular expression search, search start postion %d, search string length %d", pos, len(str))
+	}
+	if occurrence < 1 {
+		return "", moerr.NewInvalidInputNoCtx("regexp_replace have Index out of bounds in regular expression search, search start occurrence %d", occurrence)
 	}
 
 	reg, err := rs.getRegularMatcher(pat)
@@ -726,8 +738,17 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 // it depends on the value of retOption, if 0 then return start, if 1 then return end.
 // return 0 if match failed.
 func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64, retOption int8) (index int64, err error) {
-	if pos < 1 || occurrence < 1 || retOption > 1 || pos >= int64(len(str)) {
-		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have invalid input")
+	if pos < 1 {
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, search start postion %d", pos)
+	}
+	if pos > int64(len(str)) {
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, search start postion %d, search string length %d", pos, len(str))
+	}
+	if occurrence < 1 {
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, search start occurrence %d", occurrence)
+	}
+	if retOption > 1 {
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, search start retOption %d", retOption)
 	}
 
 	reg, err := rs.getRegularMatcher(pat)
