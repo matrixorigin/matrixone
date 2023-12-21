@@ -1023,11 +1023,13 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 	if project.NodeType != plan.Node_PROJECT {
 		return
 	}
+	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+		return
+	}
 
 	node.NodeType = plan.Node_AGG
 	node.GroupBy = project.ProjectList
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewTag())
 	node.Children[0] = project.Children[0]
-	return
 }
