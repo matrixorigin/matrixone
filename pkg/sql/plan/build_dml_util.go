@@ -437,6 +437,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					entriesTblPkTyp = entriesTableDef.Cols[3].Typ                         // 4'th column is the compound primary key <version,id, org_pk, cp_pk, row_id>
 				}
 
+				if err != nil {
+					return err
+				}
+
 				if isUpdate {
 					// do it like simple update
 					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
