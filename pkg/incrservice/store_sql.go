@@ -59,7 +59,7 @@ func (s *sqlStore) SelectAll(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) string {
-	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s`, incrTableName)
+	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
@@ -70,13 +70,12 @@ func (s *sqlStore) SelectAll(
 	}
 	defer res.Close()
 
-	str := fmt.Sprintf("Cannot find tableID %d in table %s", tableID, incrTableName)
+	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
+		ctx.Value(defines.TenantIDKey{}), txnOp.Txn().DebugString())
 	res.ReadRows(func(cols []*vector.Vector) bool {
-		str += fmt.Sprintf("\tcol_name: %s, col_index: %d, offset: %d, step: %d\n",
+		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
 			executor.GetStringRows(cols[0])[0],
-			executor.GetFixedRows[int32](cols[1])[0],
-			executor.GetFixedRows[uint64](cols[2])[0],
-			executor.GetFixedRows[uint64](cols[3])[0])
+			executor.GetFixedRows[uint64](cols[1])[0])
 		return true
 	})
 	return str
