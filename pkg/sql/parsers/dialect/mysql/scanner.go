@@ -660,8 +660,16 @@ func (s *Scanner) scanNumber() (int, string) {
 			goto exit
 		} else if s.cur() == 'b' || s.cur() == 'B' {
 			token = BIT_LITERAL
+			p1 := s.Pos
 			s.inc()
 			s.scanMantissa(2)
+			p2 := s.Pos
+			if p1 == p2 || isDigit(s.cur()) {
+				token = ID
+				s.scanIdentifier(false)
+				return token, strings.ToLower(s.buf[start:s.Pos])
+			}
+
 			goto exit
 		}
 	}
@@ -762,7 +770,7 @@ func (s *Scanner) scanBitLiteral() (int, string) {
 func (s *Scanner) scanHex() (int, string) {
 	start := s.Pos
 	s.scanMantissa(16)
-	hex := s.buf[start:s.Pos]
+	hex := "0x" + s.buf[start:s.Pos]
 	if s.cur() != '\'' {
 		return LEX_ERROR, hex
 	}
