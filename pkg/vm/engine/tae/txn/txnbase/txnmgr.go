@@ -535,7 +535,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 	for _, item := range items {
 		op := item.(*OpTxn)
-		var t1, t2, t3, t4, t5 time.Time
+		var t1, t2, t3, t4, t5, t6 time.Time
 		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
@@ -554,29 +554,33 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
 
-			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 			t3 = time.Now()
+			v2.TxnOnPrepareWALGetPrepareTSHistogram.Observe(t3.Sub(t2).Seconds())
 
-			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t3.Sub(t2).Seconds())
+			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+			t4 = time.Now()
+
+			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t4.Sub(t3).Seconds())
 		}
 
-		t4 = time.Now()
+		t5 = time.Now()
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
-		t5 = time.Now()
-		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t5.Sub(t4).Seconds())
+		t6 = time.Now()
+		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t6.Sub(t5).Seconds())
 
-		if t5.Sub(t1) > time.Second {
+		if t6.Sub(t1) > time.Second {
 			logutil.Warn(
 				"SLOW-LOG",
 				zap.String("txn", op.Txn.String()),
 				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
-				zap.Duration("end-prepare-duration", t3.Sub(t2)),
-				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
+				zap.Duration("get-prepare-ts", t3.Sub(t2)),
+				zap.Duration("end-prepare-duration", t4.Sub(t3)),
+				zap.Duration("enqueue-flush-duration", t6.Sub(t5)),
 			)
 		}
-		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t5.Sub(t1).Seconds())
+		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t6.Sub(t1).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
