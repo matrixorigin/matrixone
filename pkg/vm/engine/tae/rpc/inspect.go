@@ -1071,7 +1071,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	for idx := range accIds {
 		if filter(accIds[idx], stamps[idx]) {
 			size := float64(sizes[idx]) / 1048576
-			b.WriteString(fmt.Sprintf("time: %s; account id: %d; size: %d\n",
+			b.WriteString(fmt.Sprintf("time: %s; account id: %d; size: %f\n",
 				stamps[idx].String(), accIds[idx], size))
 		}
 	}

@@ -395,7 +395,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion9, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 
-		usages := logtail.MockUsageData(1, 1, 1)
+		usages := logtail.MockUsageData(10, 10, 10)
 		usageIns = append(usageIns, usages...)
 
 		for xx := range usages {
@@ -411,13 +411,13 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		delBat := data.GetBatches()[logtail.StorageUsageDelIDX]
 
-		usages := logtail.MockUsageData(1, 1, 1)
+		usages := logtail.MockUsageData(10, 10, 10)
 		usageIns = append(usageIns, usages...)
 		for xx := range usages {
 			append2BatFunc(insBat, usages[xx])
 		}
 
-		usages = logtail.MockUsageData(1, 1, 1)
+		usages = logtail.MockUsageData(10, 10, 10)
 		usageDel = append(usageDel, usages...)
 		for xx := range usages {
 			append2BatFunc(delBat, usages[xx])
@@ -460,9 +460,4 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		}
 
 	}
-}
-
-func Test_X(t *testing.T) {
-	fmt.Println(123456789.0 / 10e6)
-	fmt.Println(123456789.0 / 1e6)
 }
