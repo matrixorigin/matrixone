@@ -1457,6 +1457,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	for i, rootID := range builder.qry.Steps {
+		builder.rewriteDistinctToAGG(rootID)
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 		if err != nil {
@@ -1467,10 +1468,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
 		builder.applySwapRuleByStats(rootID, true)
-
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.pushTopDownToLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		rootID = builder.aggPushDown(rootID)

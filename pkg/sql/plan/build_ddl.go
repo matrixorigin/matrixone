@@ -1892,6 +1892,13 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
 				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+						//TODO: check with @feng on how to handle truncate on IVF index
+						// Right now, we are only clearing the entries. Should we empty the centroids and metadata as well?
+						// Ideally, after truncate the user is expected to run re-index.
+						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+					}
 				}
 			}
 		}
