@@ -34,14 +34,14 @@ const (
 var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error)
 
 // NewAggWithConfig generate the aggregation related struct from the function overload id and deliver a config information.
-var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error)
+var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error)
 
 // IsWinOrderFun check if the function is a window function.
 var IsWinOrderFun func(overloadID int64) bool
 
 func InitAggFramework(
 	newAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error),
-	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error),
+	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error),
 	isWinOrderFun func(overloadID int64) bool) {
 
 	NewAgg = newAgg
@@ -106,6 +106,8 @@ type Agg[T any] interface {
 	// WildAggReAlloc reallocate for agg structure from memory pool.
 	// todo: remove this method.
 	WildAggReAlloc(m *mpool.MPool) error
+
+	SetPartialResult(PartialResult any)
 }
 
 type AggStruct interface {
@@ -137,7 +139,7 @@ type UnaryAgg[T1, T2 any] struct {
 	// inputTypes is input type of agg.
 	inputTypes []types.Type
 
-	partialresult any
+	PartialResult any
 
 	// grows add more n groups into agg.
 	grows func(int)
@@ -183,7 +185,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 	// inputTypes is input type of agg.
 	inputTypes []types.Type
 
-	partialresult any
+	PartialResult any
 
 	// grows add more n groups into agg.
 	grows func(int)
@@ -307,4 +309,12 @@ func (m *EncodeAggDistinct[T]) UnmarshalBinary(data []byte) error {
 	m.IsCount = aggPB.IsCount
 
 	return nil
+}
+
+func (agg *UnaryAgg[T1, T2]) SetPartialResult(PartialResult any) {
+	agg.PartialResult = PartialResult
+}
+
+func (agg *UnaryDistAgg[T1, T2]) SetPartialResult(PartialResult any) {
+	agg.PartialResult = PartialResult
 }
