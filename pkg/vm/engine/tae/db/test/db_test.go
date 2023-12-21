@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -680,9 +682,9 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		assert.NoError(t, err)
 		worker.SendOp(task1)
 		worker.SendOp(task2)
-		err = task1.WaitDone()
+		err = task1.WaitDone(ctx)
 		assert.NoError(t, err)
-		err = task2.WaitDone()
+		err = task2.WaitDone(ctx)
 		assert.NoError(t, err)
 		newBlockFp1 = task1.GetNewBlock().Fingerprint()
 		metaLoc1 = task1.GetNewBlock().GetMetaLoc()
@@ -832,7 +834,7 @@ func TestCompactMemAlter(t *testing.T) {
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime)
 		assert.NoError(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -922,7 +924,7 @@ func TestFlushTableMergeOrder(t *testing.T) {
 	task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
 	require.NoError(t, err)
 	worker.SendOp(task)
-	err = task.WaitDone()
+	err = task.WaitDone(ctx)
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 }
@@ -993,7 +995,7 @@ func TestFlushTableMergeOrderPK(t *testing.T) {
 	task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
 	require.NoError(t, err)
 	worker.SendOp(task)
-	err = task.WaitDone()
+	err = task.WaitDone(ctx)
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 
@@ -1028,7 +1030,7 @@ func TestFlushTableNoPk(t *testing.T) {
 	task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.DB.Runtime, types.MaxTs())
 	require.NoError(t, err)
 	worker.SendOp(task)
-	err = task.WaitDone()
+	err = task.WaitDone(ctx)
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 
@@ -1037,7 +1039,7 @@ func TestFlushTableNoPk(t *testing.T) {
 }
 
 func TestFlushTableErrorHandle(t *testing.T) {
-	ctx := context.WithValue(context.Background(), jobs.TestFlushBailout{}, "bail")
+	ctx := context.WithValue(context.Background(), jobs.TestFlushBailoutPos1{}, "bail")
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.Ctx = ctx
@@ -1075,7 +1077,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
 		require.NoError(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		require.Error(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1084,6 +1086,55 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		flushTable()
 		droptable()
 	}
+}
+
+func TestFlushTableErrorHandle2(t *testing.T) {
+	ctx := context.WithValue(context.Background(), jobs.TestFlushBailoutPos2{}, "bail")
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.Ctx = ctx
+
+	tae := testutil.NewTestEngine(context.Background(), ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(ctx, "xx")
+	worker.Start()
+	defer worker.Stop()
+	goodworker := ops.NewOpWorker(context.Background(), "goodworker")
+	goodworker.Start()
+	defer goodworker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "table"
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	bats := catalog.MockBatch(schema, (int(schema.BlockMaxRows)*2 + int(schema.BlockMaxRows/2))).Split(2)
+	bat1, bat2 := bats[0], bats[1]
+	defer bat1.Close()
+	defer bat2.Close()
+	flushTable := func(worker *ops.OpWorker) {
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		blkMetas := testutil.GetAllBlockMetas(rel)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
+		require.NoError(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone(ctx)
+		if err != nil {
+			t.Logf("flush task outter wait %v", err)
+		}
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+	testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat1, true)
+	flushTable(goodworker)
+
+	{
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		require.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat1.Vecs[2].Get(1))))
+		require.NoError(t, rel.Append(ctx, bat2))
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	flushTable(worker)
+	t.Log(tae.Catalog.SimplePPString(common.PPL0))
 }
 
 func TestFlushTabletail(t *testing.T) {
@@ -1135,7 +1186,7 @@ func TestFlushTabletail(t *testing.T) {
 		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
 		require.NoError(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1260,7 +1311,7 @@ func TestCompactBlock2(t *testing.T) {
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime)
 		assert.NoError(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -1315,7 +1366,7 @@ func TestCompactBlock2(t *testing.T) {
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.Nil(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		assert.Nil(t, txn.Commit(context.Background()))
@@ -1355,7 +1406,7 @@ func TestCompactBlock2(t *testing.T) {
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.Nil(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		{
@@ -1399,7 +1450,7 @@ func TestCompactBlock2(t *testing.T) {
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
 		assert.NoError(t, err)
 		worker.SendOp(task)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 		// newBlockFp = task.GetNewBlock().Fingerprint()
@@ -1521,7 +1572,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 		assert.Nil(t, err)
 		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.Nil(t, err)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -1623,7 +1674,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.NoError(t, err)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1995,7 +2046,7 @@ func TestDelete1(t *testing.T) {
 		assert.NoError(t, err)
 		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.NoError(t, err)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
