@@ -688,7 +688,7 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 		return "", moerr.NewInvalidInputNoCtx("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
 	}
 	// check occurrence
-	if occurrence < 1 {
+	if occurrence < 0 {
 		return "", moerr.NewInvalidInputNoCtx("regexp_replace have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 
