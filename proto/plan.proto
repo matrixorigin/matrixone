@@ -1018,6 +1018,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {

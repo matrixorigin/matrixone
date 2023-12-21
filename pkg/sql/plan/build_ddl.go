@@ -1600,6 +1600,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 			Publication: string(stmt.SubscriptionOption.Publication),
 		}
 	}
+	createDB.Sql = stmt.Sql
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
