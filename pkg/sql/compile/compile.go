@@ -141,6 +141,10 @@ func (c *Compile) reset() {
 	for i := range c.scope {
 		c.scope[i].release()
 	}
+	for i := range c.createdFuzzy {
+		c.createdFuzzy[i].release()
+	}
+	c.createdFuzzy = c.createdFuzzy[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil
@@ -2696,7 +2700,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	if err != nil {
 		return nil, err
 	}
-
+	c.createdFuzzy = append(c.createdFuzzy, outData)
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{

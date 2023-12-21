@@ -61,4 +61,13 @@ func init() {
 		reuse.DefaultOptions[anaylze]().
 			WithEnableChecker(),
 	)
+
+	reuse.CreatePool[fuzzyCheck](
+		func() *fuzzyCheck {
+			return &fuzzyCheck{}
+		},
+		func(f *fuzzyCheck) { f.reset() },
+		reuse.DefaultOptions[fuzzyCheck]().
+			WithEnableChecker(),
+	)
 }
