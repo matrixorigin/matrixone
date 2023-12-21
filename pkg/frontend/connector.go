@@ -83,7 +83,7 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		}
 	}
 
-	options[moconnector.OptConnectorSql] = "use " + mce.ses.GetDatabaseName() + "; " + tree.String(st.AsSource, dialect.MYSQL)
+	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
 	if err := createConnector(
 		ctx,
 		mce.ses.GetTenantInfo().TenantID,

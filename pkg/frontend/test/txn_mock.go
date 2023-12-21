@@ -426,6 +426,20 @@ func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
 }
 
+// LockSkipped mocks base method.
+func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockSkipped", tableID, mode)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// LockSkipped indicates an expected call of LockSkipped.
+func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()

@@ -389,3 +389,7 @@ func (o *testOperator) RemoveWaitLock(key uint64) {
 func (o *testOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
+
+func (o *testOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	panic("should not call")
+}
