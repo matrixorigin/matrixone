@@ -66,11 +66,11 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 		mu:        &sync.RWMutex{},
 		flushWgMu: &sync.RWMutex{},
 	}
-	bs.flushQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onEntries)
-	bs.syncQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onSyncs)
-	bs.commitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onCommits)
-	bs.postCommitQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onPostCommits)
-	bs.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize, DefaultMaxBatchSize, bs.onTruncate)
+	bs.flushQueue = sm.NewSafeQueue(sm.BaseStoreFlushQueue, DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onEntries)
+	bs.syncQueue = sm.NewSafeQueue(sm.BaseStoreSyncQueue, DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onSyncs)
+	bs.commitQueue = sm.NewSafeQueue(sm.BaseStoreCommitQueue, DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onCommits)
+	bs.postCommitQueue = sm.NewSafeQueue(sm.BaseStorePostCommitQueue, DefaultMaxBatchSize*100, DefaultMaxBatchSize, bs.onPostCommits)
+	bs.truncateQueue = sm.NewSafeQueue(sm.BaseStoreTruncateQueue, DefaultMaxBatchSize, DefaultMaxBatchSize, bs.onTruncate)
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}

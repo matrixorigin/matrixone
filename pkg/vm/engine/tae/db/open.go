@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"path"
 	"sync/atomic"
 	"time"
@@ -255,6 +256,9 @@ func TaeMetricsTask(ctx context.Context) {
 	logutil.Info("tae metrics task started")
 	defer logutil.Info("tae metrics task exit")
 
+	sm.SafeQueueMetricChan = make(chan sm.SafeQueueMetric, 10)
+	defer close(sm.SafeQueueMetricChan)
+
 	timer := time.NewTicker(time.Second * 10)
 	for {
 		select {
@@ -262,9 +266,24 @@ func TaeMetricsTask(ctx context.Context) {
 			return
 		case <-timer.C:
 			mpoolAllocatorSubTask()
+			safeQueueSizeUpdateSubTask()
+		case metric := <-sm.SafeQueueMetricChan:
+			safeQueueFullUpdateSubTask(metric)
 		}
 	}
+}
 
+func safeQueueFullUpdateSubTask(metric sm.SafeQueueMetric) {
+	v2.TxnTNSideQueueSizeGauges[metric.Name].Set(float64(metric.Len))
+}
+
+func safeQueueSizeUpdateSubTask() {
+	for idx := 0; idx < int(sm.QueueNameMax); idx++ {
+		if sm.SafeQueueRegister[idx] != nil {
+			v2.TxnTNSideQueueSizeGauges[sm.QueueNameType(idx)].
+				Set(float64(sm.SafeQueueRegister[idx].Len()))
+		}
+	}
 }
 
 func mpoolAllocatorSubTask() {

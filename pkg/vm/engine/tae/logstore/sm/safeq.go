@@ -29,7 +29,63 @@ const (
 	Stopped
 )
 
+type QueueNameType int
+
+const (
+	QueueNameForTest QueueNameType = 0
+
+	GCManagerQueue QueueNameType = 1
+
+	BaseStoreFlushQueue      QueueNameType = 2
+	BaseStoreSyncQueue       QueueNameType = 3
+	BaseStoreCommitQueue     QueueNameType = 4
+	BaseStorePostCommitQueue QueueNameType = 5
+	BaseStoreTruncateQueue   QueueNameType = 6
+
+	TxnMgrPreparingRcvQueue QueueNameType = 7
+	TxnMgrPreparingCkpQueue QueueNameType = 8
+	TxnMgrFlushQueue        QueueNameType = 9
+
+	IOPipelineWaitQueue     QueueNameType = 10
+	IOPipelinePrefetchQueue QueueNameType = 11
+	IOPipelineFetchQueue    QueueNameType = 12
+
+	LogDriverPreAppendQueue QueueNameType = 13
+	LogDriverTruncateQueue  QueueNameType = 14
+
+	StoreImplDriverAppendQueue QueueNameType = 15
+	StoreImplDoneWithErrQueue  QueueNameType = 16
+	StoreImplLogInfoQueue      QueueNameType = 17
+	StoreImplCheckpointQueue   QueueNameType = 18
+	StoreImplTruncatingQueue   QueueNameType = 19
+	StoreImplTruncateQueue     QueueNameType = 20
+
+	LogTailCollectLogTailQueue QueueNameType = 21
+	LogTailWaitCommitQueue     QueueNameType = 22
+
+	CKPDirtyEntryQueue     QueueNameType = 23
+	CKPWaitQueue           QueueNameType = 24
+	CKPIncrementalCKPQueue QueueNameType = 25
+	CKPGlobalCKPQueue      QueueNameType = 26
+	CKPGCCheckpointQueue   QueueNameType = 27
+	CKPPostCheckpointQueue QueueNameType = 28
+
+	DiskCleanerProcessQueue QueueNameType = 29
+
+	QueueNameMax QueueNameType = 30
+)
+
+type SafeQueueMetric struct {
+	Name QueueNameType
+	Len  int
+}
+
+var SafeQueueMetricChan chan SafeQueueMetric
+
+var SafeQueueRegister [int(QueueNameMax)]*safeQueue
+
 type safeQueue struct {
+	name      QueueNameType
 	queue     chan any
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -43,8 +99,9 @@ type safeQueue struct {
 }
 
 // NewSafeQueue is blocking queue by default
-func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
+func NewSafeQueue(name QueueNameType, queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
+		name:      name,
 		queue:     make(chan any, queueSize),
 		batchSize: batchSize,
 		onItemsCB: onItem,
@@ -52,13 +109,19 @@ func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q.blocking = true
 	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
+
+	SafeQueueRegister[name] = q
 	return q
 }
 
-func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQueue {
-	q := NewSafeQueue(queueSize, batchSize, onItem)
+func NewNonBlockingQueue(name QueueNameType, queueSize int, batchSize int, onItem OnItemsCB) *safeQueue {
+	q := NewSafeQueue(name, queueSize, batchSize, onItem)
 	q.blocking = false
 	return q
+}
+
+func (q *safeQueue) Len() int {
+	return len(q.queue)
 }
 
 func (q *safeQueue) Start() {
@@ -129,16 +192,23 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 		return item, ErrClose
 	}
 
-	if q.blocking {
-		q.pending.Add(1)
-		q.queue <- item
+	select {
+	case q.queue <- item:
 		return item, nil
-	} else {
+
+	// if queue is full
+	default:
 		select {
-		case q.queue <- item:
+		// let the metrics chan unblocking
+		case SafeQueueMetricChan <- SafeQueueMetric{q.name, q.Len()}:
+		}
+
+		if q.blocking {
+			q.queue <- item
 			q.pending.Add(1)
 			return item, nil
-		default:
+		} else {
+			// if queue is non blocking
 			return item, ErrFull
 		}
 	}

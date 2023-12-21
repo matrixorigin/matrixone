@@ -91,8 +91,8 @@ func TestNewIOPipeline(t *testing.T) {
 
 	// step 3: recreate queue to make sure pipeline.close() will not try to
 	// close a closed channel
-	p.fetch.queue = sm.NewSafeQueue(0, 0, nil)
-	p.prefetch.queue = sm.NewSafeQueue(0, 0, nil)
+	p.fetch.queue = sm.NewSafeQueue(sm.QueueNameForTest, 0, 0, nil)
+	p.prefetch.queue = sm.NewSafeQueue(sm.QueueNameForTest, 0, 0, nil)
 
 	// step 4: close pipeline
 	p.Stop()
@@ -107,9 +107,10 @@ func TestIoPipeline_Prefetch(t *testing.T) {
 	batchSize := 0
 	p := new(IoPipeline)
 
-	p.prefetch.queue = sm.NewNonBlockingQueue(queueSize, batchSize, func(items ...any) {
-		wait.Wait()
-	})
+	p.prefetch.queue = sm.NewNonBlockingQueue(
+		sm.QueueNameForTest, queueSize, batchSize, func(items ...any) {
+			wait.Wait()
+		})
 
 	p.stats.prefetchDropStats.Reset()
 	p.prefetch.queue.Start()

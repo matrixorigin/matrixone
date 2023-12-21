@@ -277,15 +277,18 @@ func NewIOPipeline(
 	p.fillDefaults()
 
 	p.waitQ = sm.NewSafeQueue(
+		sm.IOPipelineWaitQueue,
 		p.options.queueDepth,
 		100,
 		p.onWait)
 
 	// the prefetch queue is supposed to be an unblocking queue
-	p.prefetch.queue = sm.NewNonBlockingQueue(p.options.queueDepth, 64, p.onPrefetch)
+	p.prefetch.queue = sm.NewNonBlockingQueue(
+		sm.IOPipelinePrefetchQueue, p.options.queueDepth, 64, p.onPrefetch)
 	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 
 	p.fetch.queue = sm.NewSafeQueue(
+		sm.IOPipelineFetchQueue,
 		p.options.queueDepth,
 		64,
 		p.onFetch)

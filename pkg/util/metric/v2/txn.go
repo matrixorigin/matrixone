@@ -102,6 +102,50 @@ var (
 
 	TxnCNCommittedMetaLocationQuantityGauge  = txnCNCommittedLocationQuantityGauge.WithLabelValues("meta_location")
 	TxnCNCommittedDeltaLocationQuantityGauge = txnCNCommittedLocationQuantityGauge.WithLabelValues("delta_location")
+
+	txnTNSideQueueSizeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_side_queue_size",
+			Help:      "Size of txn queues on tn side.",
+		}, []string{"type"})
+
+	TxnTNSideQueueSizeGauges = []prometheus.Gauge{
+		nil,
+		txnTNSideQueueSizeGauge.WithLabelValues("GCManagerQueue"), //1
+		txnTNSideQueueSizeGauge.WithLabelValues("BaseStoreFlushQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("BaseStoreSyncQueue"), //3
+		txnTNSideQueueSizeGauge.WithLabelValues("BaseStoreCommitQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("BaseStorePostCommitQueue"), //5
+		txnTNSideQueueSizeGauge.WithLabelValues("BaseStoreTruncateQueue"),
+
+		txnTNSideQueueSizeGauge.WithLabelValues("TxnMgrPreparingRcvQueue"), //7
+		txnTNSideQueueSizeGauge.WithLabelValues("TxnMgrPreparingCkpQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("TxnMgrFlushQueue"), //9
+		txnTNSideQueueSizeGauge.WithLabelValues("IOPipelineWaitQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("IOPipelinePrefetchQueue"), //11
+		txnTNSideQueueSizeGauge.WithLabelValues("IOPipelineFetchQueue"),
+
+		txnTNSideQueueSizeGauge.WithLabelValues("LogDriverPreAppendQueue"), //13
+		txnTNSideQueueSizeGauge.WithLabelValues("LogDriverTruncateQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplDriverAppendQueue"), //15
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplDoneWithErrQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplLogInfoQueue"), //17
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplCheckpointQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplTruncatingQueue"), //19
+		txnTNSideQueueSizeGauge.WithLabelValues("StoreImplTruncateQueue"),
+
+		txnTNSideQueueSizeGauge.WithLabelValues("LogTailCollectLogTailQueue"), //21
+		txnTNSideQueueSizeGauge.WithLabelValues("LogTailWaitCommitQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPDirtyEntryQueue"), //23
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPWaitQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPIncrementalCKPQueue"), //25
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPGlobalCKPQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPGCCheckpointQueue"), //27
+		txnTNSideQueueSizeGauge.WithLabelValues("CKPPostCheckpointQueue"),
+		txnTNSideQueueSizeGauge.WithLabelValues("DiskCleanerProcessQueue"), //29
+	}
 )
 
 var (

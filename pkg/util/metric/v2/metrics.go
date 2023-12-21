@@ -131,6 +131,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
+	registry.MustRegister(txnTNSideQueueSizeGauge)
 }
 
 func initRPCMetrics() {

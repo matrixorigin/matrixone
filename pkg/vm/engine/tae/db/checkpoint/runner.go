@@ -257,12 +257,12 @@ func NewRunner(
 	r.incrementalPolicy = &timeBasedPolicy{interval: r.options.minIncrementalInterval}
 	r.globalPolicy = &countBasedPolicy{minCount: r.options.globalMinCount}
 	r.stopper = stopper.NewStopper("CheckpointRunner")
-	r.dirtyEntryQueue = sm.NewSafeQueue(r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
-	r.waitQueue = sm.NewSafeQueue(r.options.waitQueueSize, 100, r.onWaitWaitableItems)
-	r.incrementalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
-	r.globalCheckpointQueue = sm.NewSafeQueue(r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
-	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
-	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
+	r.dirtyEntryQueue = sm.NewSafeQueue(sm.CKPDirtyEntryQueue, r.options.dirtyEntryQueueSize, 100, r.onDirtyEntries)
+	r.waitQueue = sm.NewSafeQueue(sm.CKPWaitQueue, r.options.waitQueueSize, 100, r.onWaitWaitableItems)
+	r.incrementalCheckpointQueue = sm.NewSafeQueue(sm.CKPIncrementalCKPQueue, r.options.checkpointQueueSize, 100, r.onIncrementalCheckpointEntries)
+	r.globalCheckpointQueue = sm.NewSafeQueue(sm.CKPGlobalCKPQueue, r.options.checkpointQueueSize, 100, r.onGlobalCheckpointEntries)
+	r.gcCheckpointQueue = sm.NewSafeQueue(sm.CKPGCCheckpointQueue, 100, 100, r.onGCCheckpointEntries)
+	r.postCheckpointQueue = sm.NewSafeQueue(sm.CKPPostCheckpointQueue, 1000, 1, r.onPostCheckpointEntries)
 	return r
 }
 
