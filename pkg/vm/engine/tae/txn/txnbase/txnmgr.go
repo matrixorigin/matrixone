@@ -118,9 +118,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		wg:              sync.WaitGroup{},
 	}
 	mgr.initMaxCommittedTS()
-	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
-	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
+	pqueue := sm.NewSafeQueue(sm.TxnMgrPreparingRcvQueue, 20000, 1000, mgr.dequeuePreparing)
+	prepareWALQueue := sm.NewSafeQueue(sm.TxnMgrPreparingCkpQueue, 20000, 1000, mgr.onPrepareWAL)
+	mgr.FlushQueue = sm.NewSafeQueue(sm.TxnMgrFlushQueue, 20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())

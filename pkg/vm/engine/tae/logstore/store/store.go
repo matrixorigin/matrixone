@@ -65,12 +65,12 @@ func NewStore(driver driver.Driver) *StoreImpl {
 		appendWg:  sync.WaitGroup{},
 		appendMu:  sync.RWMutex{},
 	}
-	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
-	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
-	w.logInfoQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
-	w.checkpointQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
-	w.truncatingQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
-	w.truncateQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
+	w.driverAppendQueue = sm.NewSafeQueue(sm.StoreImplDriverAppendQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
+	w.doneWithErrQueue = sm.NewSafeQueue(sm.StoreImplDoneWithErrQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
+	w.logInfoQueue = sm.NewSafeQueue(sm.StoreImplLogInfoQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogInfoQueue)
+	w.checkpointQueue = sm.NewSafeQueue(sm.StoreImplCheckpointQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onLogCKPInfoQueue)
+	w.truncatingQueue = sm.NewSafeQueue(sm.StoreImplTruncatingQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncatingQueue)
+	w.truncateQueue = sm.NewSafeQueue(sm.StoreImplTruncateQueue, DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onTruncateQueue)
 	w.Start()
 	return w
 }

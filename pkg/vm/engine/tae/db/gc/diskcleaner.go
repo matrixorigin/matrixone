@@ -109,7 +109,7 @@ func NewDiskCleaner(
 		catalog:   catalog,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
-	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
+	cleaner.processQueue = sm.NewSafeQueue(sm.DiskCleanerProcessQueue, 10000, 1000, cleaner.process)
 	cleaner.minMergeCount.count = MinMergeCount
 	return cleaner
 }

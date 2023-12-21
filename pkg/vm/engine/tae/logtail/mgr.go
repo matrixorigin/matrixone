@@ -100,8 +100,8 @@ func NewManager(rt *dbutils.Runtime, blockSize int, nowClock func() types.TS) *M
 		),
 		nowClock: nowClock,
 	}
-	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
-	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
+	mgr.collectLogtailQueue = sm.NewSafeQueue(sm.LogTailCollectLogTailQueue, 10000, 100, mgr.onCollectTxnLogtails)
+	mgr.waitCommitQueue = sm.NewSafeQueue(sm.LogTailWaitCommitQueue, 10000, 100, mgr.onWaitTxnCommit)
 
 	return mgr
 }

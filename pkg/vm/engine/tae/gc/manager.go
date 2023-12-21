@@ -53,7 +53,7 @@ func NewManager(options ...Option) *Manager {
 		opt(mgr)
 	}
 	mgr.loopStopper = stopper.NewStopper("gc-loop")
-	mgr.processQueue = sm.NewSafeQueue(10000, 20, mgr.process)
+	mgr.processQueue = sm.NewSafeQueue(sm.GCManagerQueue, 10000, 20, mgr.process)
 	return mgr
 }
 

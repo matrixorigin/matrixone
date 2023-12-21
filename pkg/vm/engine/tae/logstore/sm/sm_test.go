@@ -48,10 +48,11 @@ func TestNewNonBlockingQueue(t *testing.T) {
 
 	queueSize := 10
 	batchSize := 0
-	queue := NewNonBlockingQueue(queueSize, batchSize, func(items ...any) {
-		// blocking handler
-		wait.Wait()
-	})
+	queue := NewNonBlockingQueue(
+		QueueNameForTest, queueSize, batchSize, func(items ...any) {
+			// blocking handler
+			wait.Wait()
+		})
 
 	queue.Start()
 

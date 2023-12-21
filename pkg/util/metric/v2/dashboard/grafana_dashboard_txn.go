@@ -48,12 +48,100 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnRangesLoadedObjectMetaRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
+			c.initTNQueueSizeRow(),
 		)...)
 	if err != nil {
 		return err
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initTNQueueSizeRow() dashboard.Option {
+	return dashboard.Row(
+		"TN Queue Size Overview",
+		c.withMultiGraph(
+			"Queue Status",
+			12,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="GCManagerQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="BaseStoreFlushQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="BaseStoreSyncQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="BaseStoreCommitQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="BaseStorePostCommitQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="BaseStoreTruncateQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="TxnMgrPreparingRcvQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="TxnMgrPreparingCkpQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="TxnMgrFlushQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="IOPipelineWaitQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="IOPipelinePrefetchQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="IOPipelineFetchQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="LogDriverPreAppendQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="LogDriverTruncateQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplDriverAppendQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplDoneWithErrQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplLogInfoQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplCheckpointQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplTruncatingQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="StoreImplTruncateQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="LogTailCollectLogTailQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="LogTailWaitCommitQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPDirtyEntryQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPWaitQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPIncrementalCKPQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPGlobalCKPQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPGCCheckpointQueue"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="CKPPostCheckpointQueue"`) + `)`,
+
+				`sum(` + c.getMetricWithFilter("mo_txn_tn_side_queue_size", `type="DiskCleanerProcessQueue"`) + `)`,
+			},
+			[]string{
+				"GCManagerQueue",
+
+				"BaseStoreFlushQueue",
+				"BaseStoreSyncQueue",
+				"BaseStoreCommitQueue",
+				"BaseStorePostCommitQueue",
+				"BaseStoreTruncateQueue",
+
+				"TxnMgrPreparingRcvQueue",
+				"TxnMgrPreparingCkpQueue",
+				"TxnMgrFlushQueue",
+
+				"IOPipelineWaitQueue",
+				"IOPipelinePrefetchQueue",
+				"IOPipelineFetchQueue",
+
+				"LogDriverPreAppendQueue",
+				"LogDriverTruncateQueue",
+
+				"StoreImplDriverAppendQueue",
+				"StoreImplDoneWithErrQueue",
+				"StoreImplLogInfoQueue",
+				"StoreImplCheckpointQueue",
+				"StoreImplTruncatingQueue",
+				"StoreImplTruncateQueue",
+
+				"LogTailCollectLogTailQueue",
+				"LogTailWaitCommitQueue",
+
+				"CKPDirtyEntryQueue",
+				"CKPWaitQueue",
+				"CKPIncrementalCKPQueue",
+				"CKPGlobalCKPQueue",
+				"CKPGCCheckpointQueue",
+				"CKPPostCheckpointQueue",
+
+				"DiskCleanerProcessQueue",
+			}),
+	)
 }
 
 func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
