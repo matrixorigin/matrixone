@@ -150,7 +150,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
