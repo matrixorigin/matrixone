@@ -118,7 +118,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		return nil, moerr.NewParseError(ctx, "table %q does not exist, txn %s",
+			name,
+			txn.op.Txn().DebugString())
 	}
 	p := db.txn.proc
 	if proc != nil {
@@ -131,6 +133,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
+	//TODO::After fixing #13702 ,then reomove the follow code
 	var txnTbl *txnTable
 	txn.createMap.Range(func(key, value interface{}) bool {
 		tableKey := key.(tableKey)
@@ -144,7 +147,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if txnTbl != nil {
 		return txnTbl, nil
 	}
-	//TODO::
+	//TODO:: After fixing #13702 ,then open the follow code
 	//if v, ok := db.txn.createMap.Load(key); ok {
 	//	//v.(*txnTable).proc = p
 	//	logutil.Infof("xxxx txn:%s get table %s from createMap success, key is %v",
@@ -209,8 +212,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
-		//proc:          p,
-		lastTS: txn.op.SnapshotTS(),
+		lastTS:        txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
 

@@ -222,7 +222,6 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float32:
-		//vec := col.GetDownstreamVector()
 		for i := start; i < start+count; i++ {
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
@@ -232,7 +231,6 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float64:
-		//vec := col.GetDownstreamVector()
 		for i := start; i < start+count; i++ {
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
@@ -259,14 +257,13 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
-		if e.tableId == catalog.MO_DATABASE_ID ||
-			e.tableId == catalog.MO_TABLES_ID ||
-			e.tableId == catalog.MO_COLUMNS_ID {
-			continue
-		}
 		if (e.typ == DELETE || e.typ == UPDATE) &&
 			e.databaseId == catalog.MO_DATABASE_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
+		tableKey := genTableKey(txn.proc.Ctx, e.tableName, e.databaseId)
+		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
 		if e.typ == INSERT {
@@ -287,15 +284,15 @@ func (txn *Transaction) checkDup() error {
 							pkIndex[key] = idx
 							break
 						}
-					} else {
-						if colDef.Name == tableDef.Pkey.PkeyColName {
-							if colDef.Name == catalog.FakePrimaryKeyColName {
-								pkIndex[key] = -1
-							} else {
-								pkIndex[key] = idx
-							}
-							break
+						continue
+					}
+					if colDef.Name == tableDef.Pkey.PkeyColName {
+						if colDef.Name == catalog.FakePrimaryKeyColName {
+							pkIndex[key] = -1
+						} else {
+							pkIndex[key] = idx
 						}
+						break
 					}
 				}
 			}
