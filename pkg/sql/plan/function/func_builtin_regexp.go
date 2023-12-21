@@ -738,11 +738,11 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64, retOption int8) (index int64, err error) {
 	// check position
 	if pos < 1 || pos > int64(len(str)) {
-		return 0, moerr.NewInvalidInputNoCtx("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
 	}
 	// check occurrence
 	if occurrence < 1 {
-		return 0, moerr.NewInvalidInputNoCtx("regexp_replace have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 	// check retOption
 	if retOption > 1 {
