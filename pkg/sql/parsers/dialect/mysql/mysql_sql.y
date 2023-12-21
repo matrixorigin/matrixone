@@ -2675,7 +2675,6 @@ alter_sequence_stmt:
         }
     }
 
-
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
@@ -2712,7 +2711,7 @@ alter_option_list:
     {
         $$ = append($1, $3)
     }
-//----------------------------------------------------------------------------------------------------------
+
 alter_partition_option:
      partition_option
      {
@@ -2727,7 +2726,7 @@ alter_partition_option:
 	       Partitions: $6,
           }
 	  opt := &tree.AlterPartitionRedefinePartitionClause{
-	       Partitions: partitionDef,
+	       PartitionOption: partitionDef,
 	  }
 	  $$ = tree.AlterPartitionOption(opt)
      }
@@ -2787,8 +2786,6 @@ PartitionNameList:
 	{
 		$$ = append($1 , tree.Identifier($3.Compare()))
 	}
-
-//----------------------------------------------------------------------------------------------------------
 
 alter_option:
     ADD table_elem_2

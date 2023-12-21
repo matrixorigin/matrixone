@@ -566,7 +566,7 @@ type AlterPartitionOptionType int
 
 // Alter Table Partition types.
 const (
-	AlterPartitionAddPartition AlterTableOptionType = iota
+	AlterPartitionAddPartition AlterPartitionOptionType = iota
 	AlterPartitionDropPartition
 	AlterPartitionDiscardPartition
 	AlterPartitionImportPartition
@@ -598,6 +598,7 @@ type AlterPartitionRedefinePartitionClause struct {
 }
 
 func (node *AlterPartitionRedefinePartitionClause) Format(ctx *FmtCtx) {
+	ctx.WriteString(" ")
 	node.PartitionOption.Format(ctx)
 }
 
@@ -608,16 +609,18 @@ type AlterPartitionAddPartitionClause struct {
 }
 
 func (node *AlterPartitionAddPartitionClause) Format(ctx *FmtCtx) {
-	ctx.WriteString("add partition ")
+	ctx.WriteString(" add partition (")
 	isFirst := true
 	for _, partition := range node.Partitions {
 		if isFirst {
 			partition.Format(ctx)
 			isFirst = false
+		} else {
+			ctx.WriteString(", ")
+			partition.Format(ctx)
 		}
-		ctx.WriteString(", ")
-		partition.Format(ctx)
 	}
+	ctx.WriteString(")")
 }
 
 type AlterPartitionDropPartitionClause struct {
@@ -628,7 +631,7 @@ type AlterPartitionDropPartitionClause struct {
 }
 
 func (node *AlterPartitionDropPartitionClause) Format(ctx *FmtCtx) {
-	ctx.WriteString("drop partition ")
+	ctx.WriteString(" drop partition ")
 	node.PartitionNames.Format(ctx)
 }
 
@@ -640,6 +643,10 @@ type AlterPartitionTruncatePartitionClause struct {
 }
 
 func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {
-	ctx.WriteString("truncate partition ")
-	node.PartitionNames.Format(ctx)
+	ctx.WriteString(" truncate partition ")
+	if node.OnAllPartitions {
+		ctx.WriteString("all")
+	} else {
+		node.PartitionNames.Format(ctx)
+	}
 }
