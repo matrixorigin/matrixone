@@ -59,6 +59,7 @@ SELECT REGEXP_INSTR(null, 'C.t') Result;
 result
 NULL
 SELECT REGEXP_INSTR(null,  null) Result;
+result
 null
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
