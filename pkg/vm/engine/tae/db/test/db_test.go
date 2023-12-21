@@ -26,8 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
