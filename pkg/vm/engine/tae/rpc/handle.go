@@ -554,6 +554,15 @@ func (h *Handle) HandleInspectTN(
 	meta txn.TxnMeta,
 	req *db.InspectTN,
 	resp *db.InspectResp) (cb func(), err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(ctx, e)
+			logutil.Error(
+				"panic in inspect dn",
+				zap.String("cmd", req.Operation),
+				zap.String("error", err.Error()))
+		}
+	}()
 	args, _ := shlex.Split(req.Operation)
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("Inspect", zap.Strings("args", args))

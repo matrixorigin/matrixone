@@ -162,8 +162,8 @@ func (s *SegStat) String(composeSortKey bool) string {
 			zonemapStr = s.sortKeyZonemap.String()
 		}
 	}
-	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
+	return fmt.Sprintf("loaded:%t, oSize:%s, cSize %v,  rows:%d, remainingRows:%d, zm: %s",
+		s.loaded, common.HumanReadableBytes(s.originSize), common.HumanReadableBytes(s.compSize), s.rows, s.remainingRows, zonemapStr,
 	)
 }
 
