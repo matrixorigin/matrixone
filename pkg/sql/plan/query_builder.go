@@ -1451,6 +1451,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 		ReCalcNodeStats(rootID, builder, true, false, true)
+		builder.pushTopDownToLeftJoin(rootID)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
