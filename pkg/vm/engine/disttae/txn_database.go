@@ -186,11 +186,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 			name,
 			defines.GetAccountId(ctx),
 			db.databaseId)
-		return nil, moerr.NewParseError(
-			ctx,
-			"table %q does not exist in catalog, txn:%s",
-			name,
-			db.txn.op.Txn().DebugString())
+		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 
 	tbl := &txnTable{
