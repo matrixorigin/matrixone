@@ -3394,7 +3394,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		newranges := make([][]byte, 0, len(ranges))
 		newranges = append(newranges, ranges[0])
 		partialResults = make([]any, 0, len(n.AggList))
-		partialResultTypes = make([]types.T, 0, len(n.AggList))
+		partialResultTypes = make([]types.T, len(n.AggList))
 
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
