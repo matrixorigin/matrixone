@@ -124,21 +124,36 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if proc != nil {
 		p = proc.(*process.Process)
 	}
-	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
-		db.txn.op.SnapshotTS())
+	key := genTableKey(ctx, name, db.databaseId)
+	rel := db.txn.getCachedTable(ctx, key, db.txn.op.SnapshotTS())
 	if rel != nil {
-		//rel.Lock()
-		//defer rel.Unlock()
-		//rel.proc = p
 		rel.proc.Store(p)
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
-	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		//v.(*txnTable).proc = p
-		v.(*txnTable).proc.Store(p)
-		return v.(*txnTable), nil
+	var txnTbl *txnTable
+	txn.createMap.Range(func(key, value interface{}) bool {
+		tableKey := key.(tableKey)
+		if tableKey.name == name &&
+			tableKey.databaseId == db.databaseId {
+			txnTbl = value.(*txnTable)
+			txnTbl.proc.Store(p)
+		}
+		return true
+	})
+	if txnTbl != nil {
+		return txnTbl, nil
 	}
+	//TODO::
+	//if v, ok := db.txn.createMap.Load(key); ok {
+	//	//v.(*txnTable).proc = p
+	//	logutil.Infof("xxxx txn:%s get table %s from createMap success, key is %v",
+	//		db.txn.op.Txn().DebugString(),
+	//		name,
+	//		key)
+	//	v.(*txnTable).proc.Store(p)
+	//	return v.(*txnTable), nil
+	//}
 
 	// special tables
 	if db.databaseName == catalog.MO_CATALOG {
@@ -164,8 +179,15 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
-		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
+			name,
+			defines.GetAccountId(ctx),
+			db.databaseId)
+		return nil, moerr.NewParseError(
+			ctx,
+			"table %q does not exist in catalog, txn:%s",
+			name,
+			db.txn.op.Txn().DebugString())
 	}
 
 	tbl := &txnTable{

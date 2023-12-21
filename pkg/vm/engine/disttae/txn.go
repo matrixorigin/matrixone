@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
@@ -258,6 +259,16 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
+		if e.tableId == catalog.MO_DATABASE_ID ||
+			e.tableId == catalog.MO_TABLES_ID ||
+			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
+		if (e.typ == DELETE || e.typ == UPDATE) &&
+			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
 		if e.typ == INSERT {
 			key := [2]string{e.databaseName, e.tableName}
 			if _, ok := tablesDef[key]; !ok {
@@ -289,7 +300,7 @@ func (txn *Transaction) checkDup() error {
 				}
 			}
 			bat := e.bat
-			if index := pkIndex[key]; index != -1 {
+			if index, ok := pkIndex[key]; ok && index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					newBat := batch.NewWithSize(len(bat.Vecs) - 1)
 					newBat.SetAttributes(bat.Attrs[1:])
@@ -297,7 +308,11 @@ func (txn *Transaction) checkDup() error {
 					newBat.SetRowCount(bat.Vecs[0].Length())
 					bat = newBat
 				}
-				if err := checkPKDup(bat.Vecs[index], bat.Attrs[index], 0, bat.RowCount()); err != nil {
+				if err := checkPKDup(
+					bat.Vecs[index],
+					bat.Attrs[index],
+					0,
+					bat.RowCount()); err != nil {
 					return err
 				}
 			}
@@ -305,12 +320,20 @@ func (txn *Transaction) checkDup() error {
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE {
-			pkVec := e.bat.Vecs[1]
-			if err := checkPKDup(pkVec, e.bat.Attrs[1], 0, e.bat.RowCount()); err != nil {
+			if len(e.bat.Vecs) < 2 {
+				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
+					e.databaseName,
+					e.tableName)
+				continue
+			}
+			if err := checkPKDup(
+				e.bat.Vecs[1],
+				e.bat.Attrs[1],
+				0,
+				e.bat.RowCount()); err != nil {
 				return err
 			}
 		}
-
 	}
 	return nil
 }
