@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"math/rand"
 	"net"
@@ -1256,6 +1257,13 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 }
 
 func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
+	ses := mp.GetSession()
+	ses.timestampMap[TSAuthenticateStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSAuthenticateEnd] = time.Now()
+		v2.AuthenticateDurationHistogram.Observe(float64(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Milliseconds()))
+	}()
+
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
