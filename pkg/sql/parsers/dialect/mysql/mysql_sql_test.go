@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select (col + col) / 2",
-		output: "select (col + col) / 2",
+		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
+		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}
 )
 
@@ -78,6 +78,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
+		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
+	}, {
 		input:  "select enable from t1;",
 		output: "select enable from t1",
 	}, {
