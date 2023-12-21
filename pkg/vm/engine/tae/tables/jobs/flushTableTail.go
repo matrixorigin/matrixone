@@ -616,7 +616,7 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 
 // waitFlushAblkForSnapshot waits all io tasks about flushing ablock for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, subtasks []*flushBlkTask) (err error) {
-	ictx, cancel := context.WithTimeoutCause(ctx, 6*time.Minute, moerr.NewInternalError(ctx, "wait flush ablk timeout"))
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
 	for i, subtask := range subtasks {
 		if subtask == nil {
@@ -695,7 +695,7 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 	if subtask == nil {
 		return
 	}
-	ictx, cancel := context.WithTimeoutCause(ctx, 6*time.Minute, moerr.NewInternalError(ctx, "wait flush del timeout"))
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
 	if err = subtask.WaitDone(ictx); err != nil {
 		return err
@@ -729,10 +729,9 @@ func makeDeletesTempBatch(template *containers.Batch, pool *containers.VectorPoo
 func relaseFlushDelTask(task *flushDeletesTask, err error) {
 	if err != nil && task != nil {
 		logutil.Infof("[FlushTabletail] release flush del task bat because of err %v", err)
-		ictx, cancel := context.WithTimeoutCause(
+		ictx, cancel := context.WithTimeout(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/
-			moerr.NewInternalErrorNoCtx("release flush del timeout"),
 		)
 		defer cancel()
 		task.WaitDone(ictx)
@@ -745,10 +744,9 @@ func relaseFlushDelTask(task *flushDeletesTask, err error) {
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 	if err != nil {
 		logutil.Infof("[FlushTabletail] release flush ablk bat because of err %v", err)
-		ictx, cancel := context.WithTimeoutCause(
+		ictx, cancel := context.WithTimeout(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/
-			moerr.NewInternalErrorNoCtx("release flush blk timeout"),
 		)
 		defer cancel()
 		for _, subtask := range subtasks {
