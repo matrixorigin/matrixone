@@ -78,6 +78,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create account 0xed35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
+		output: "create account 0xed35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
+	}, {
 		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
