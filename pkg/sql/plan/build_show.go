@@ -1137,7 +1137,14 @@ func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 
 func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := "select pub_name as Name,database_name as `Database` from mo_catalog.mo_pubs;"
+	sql := "select pub_name as Name, database_name as `Database` from mo_catalog.mo_pubs"
+	like := stmt.Like
+	if like != nil {
+		if val, ok := like.Right.(*tree.NumVal); ok {
+			sql += fmt.Sprintf(" where pub_name like '%s'", val.Value.String())
+		}
+	}
+	sql += " order by pub_name;"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

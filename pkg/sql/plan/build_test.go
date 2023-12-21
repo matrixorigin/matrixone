@@ -70,8 +70,10 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name"
 	// sql := "update nation set n_name ='a' where n_nationkey > 10"
 	// sql := "update dept set deptno = 11 where deptno = 10"
-	sqls := []string{"prepare stmt1 from update nation set n_name = ? where n_nationkey = ?",
-		"prepare stmt1 from insert into  nation values (?, ?, ?, ?) ON DUPLICATE KEY UPDATE n_name=?"}
+	//sqls := []string{"prepare stmt1 from update nation set n_name = ? where n_nationkey = ?",
+	//	"prepare stmt1 from insert into  nation values (?, ?, ?, ?) ON DUPLICATE KEY UPDATE n_name=?"}
+	sqls := []string{"show publications like '%pxxxu';"}
+	//sqls := []string{"show publications;"}
 	mock := NewMockOptimizer(true)
 
 	for _, sql := range sqls {
