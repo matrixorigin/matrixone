@@ -1008,3 +1008,26 @@ END:
 		}
 	}
 }
+
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteDistinctToAGG(child)
+		}
+	}
+	if node.NodeType != plan.Node_DISTINCT {
+		return
+	}
+	project := builder.qry.Nodes[node.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return
+	}
+
+	node.NodeType = plan.Node_AGG
+	node.GroupBy = project.ProjectList
+	node.BindingTags = project.BindingTags
+	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.Children[0] = project.Children[0]
+	return
+}
