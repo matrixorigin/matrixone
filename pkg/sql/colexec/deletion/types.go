@@ -95,11 +95,25 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			*a = Argument{}
+			a.reset()
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
+}
+
+func (arg *Argument) reset() {
+	arg.Ts = 0
+	arg.DeleteCtx = nil
+	arg.affectedRows = 0
+	arg.SegmentMap = nil
+	arg.RemoteDelete = false
+	arg.IBucket = 0
+	arg.Nbucket = 0
+	arg.ctr = nil
+	arg.info = nil
+	arg.children = arg.children[:0]
+	arg.resBat = nil
 }
 
 func (arg Argument) Name() string {

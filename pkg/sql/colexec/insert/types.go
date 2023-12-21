@@ -54,10 +54,19 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			*a = Argument{}
+			a.reset()
 		},
 		reuse.DefaultOptions[Argument]().WithEnableChecker(),
 	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.affectedRows = 0
+	arg.ToWriteS3 = false
+	arg.InsertCtx = nil
+	arg.info = nil
+	arg.children = arg.children[:0]
 }
 
 func (arg Argument) Name() string {

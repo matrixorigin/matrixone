@@ -15,6 +15,7 @@
 package output
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +31,39 @@ type Argument struct {
 	children []vm.Operator
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Data = nil
+	arg.Func = nil
+	arg.info = nil
+	arg.children = arg.children[:0]
+}
+
+func (arg Argument) Name() string {
+	return "output.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
 }

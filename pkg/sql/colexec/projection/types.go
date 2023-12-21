@@ -41,10 +41,18 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			*a = Argument{}
+			a.reset()
 		},
 		reuse.DefaultOptions[Argument](),
 	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.Es = arg.Es[:0]
+	arg.info = nil
+	arg.children = arg.children[:0]
+	arg.buf = nil
 }
 
 func (arg Argument) Name() string {
