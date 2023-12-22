@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select (col + col) / 2",
-		output: "select (col + col) / 2",
+		input:  "select reference from t1",
+		output: "select reference from t1",
 	}
 )
 
