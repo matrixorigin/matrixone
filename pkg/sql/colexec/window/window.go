@@ -16,8 +16,9 @@ package window
 
 import (
 	"bytes"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -123,7 +124,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 				if err = ctr.bat.Aggs[i].Grows(ctr.bat.RowCount(), proc.Mp()); err != nil {
