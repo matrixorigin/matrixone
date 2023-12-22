@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
 
@@ -24,34 +25,49 @@ import (
 )
 
 func init() {
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Compile](
 		func() *Compile {
 			return &Compile{
-				affectRows: &atomic.Uint64{},
-				lock:       &sync.RWMutex{},
-				counterSet: &perfcounter.CounterSet{},
+				affectRows:               &atomic.Uint64{},
+				lock:                     &sync.RWMutex{},
+				counterSet:               &perfcounter.CounterSet{},
+				nodeRegs:                 make(map[[2]int32]*process.WaitRegister),
+				stepRegs:                 make(map[int32][][2]int32),
+				runtimeFilterReceiverMap: make(map[int32]*runtimeFilterReceiver),
+				metaTables:               make(map[string]struct{}),
 			}
 		},
-		func(c *Compile) { c.reset() },
-		reuse.DefaultOptions[Compile](),
+		func(c *Compile) {
+			c.reset()
+		},
+		reuse.DefaultOptions[Compile]().
+			WithEnableChecker(),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[Scope](
 		func() *Scope {
 			return &Scope{}
 		},
 		func(s *Scope) { *s = Scope{} },
-		reuse.DefaultOptions[Scope](),
+		reuse.DefaultOptions[Scope]().
+			WithEnableChecker(),
 	)
 
-	// TODO: resume checker after issue #13484 is fixed
 	reuse.CreatePool[anaylze](
 		func() *anaylze {
 			return &anaylze{}
 		},
 		func(a *anaylze) { *a = anaylze{} },
-		reuse.DefaultOptions[anaylze](),
+		reuse.DefaultOptions[anaylze]().
+			WithEnableChecker(),
+	)
+
+	reuse.CreatePool[fuzzyCheck](
+		func() *fuzzyCheck {
+			return &fuzzyCheck{}
+		},
+		func(f *fuzzyCheck) { f.reset() },
+		reuse.DefaultOptions[fuzzyCheck]().
+			WithEnableChecker(),
 	)
 }

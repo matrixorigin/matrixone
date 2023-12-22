@@ -368,6 +368,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 		getStatementStartAt(requestCtx),
 	)
+	defer func() {
+		if err != nil {
+			cwft.compile.Release()
+		}
+	}()
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		plan, err := buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 		if err != nil {
@@ -389,7 +394,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
 		// 0. init memory-non-dist storage
-		tnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		var tnStore *metadata.TNService
+		tnStore, err = cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
 			return nil, err
 		}
