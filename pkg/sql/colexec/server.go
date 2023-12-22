@@ -62,16 +62,14 @@ func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Proce
 	return p.proc, true
 }
 
-func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
 		delete(srv.uuidCsChanMap.mp, u)
-		return nil
+	} else {
+		srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
 	}
-
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
-	return nil
 }
 
 func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
