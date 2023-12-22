@@ -258,7 +258,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
 
-	ses.timestampMap = map[TS]time.Time{}
 	ses.timestampMap[TSCreatedStart] = time.Now()
 	defer func() {
 		ses.timestampMap[TSCreatedEnd] = time.Now()

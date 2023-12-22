@@ -574,6 +574,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
+
+		timestampMap: map[TS]time.Time{},
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
