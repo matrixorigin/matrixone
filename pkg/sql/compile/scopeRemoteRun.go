@@ -146,34 +146,46 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
-		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || opProc == nil {
+		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || dispatchProc == nil {
 			return err
 		}
 
-		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-		defer putCancel()
-		doneCh := make(chan struct{})
-		info := process.WrapCs{
-			MsgId:  receiver.messageId,
-			Uid:    receiver.messageUuid,
-			Cs:     receiver.clientSession,
-			DoneCh: doneCh,
+		infoToDispatchOperator := process.WrapCs{
+			MsgId: receiver.messageId,
+			Uid:   receiver.messageUuid,
+			Cs:    receiver.clientSession,
+			Err:   make(chan error, 1),
+		}
+
+		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+
+		succeed := false
+		select {
+		case <-timeLimit.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+
+		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			succeed = true
+		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
+		}
+		cancel()
+
+		if err != nil || !succeed {
+			dispatchProc.Cancel()
+			return err
 		}
 
 		select {
-		case <-putCtx.Done():
-			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
-		case <-opProc.Ctx.Done():
-			//logutil.Errorf("dispatch operator context done")
-		case opProc.DispatchNotifyCh <- info:
-			// TODO: need fix. It may hung here if dispatch operator receive the info but
-			// end without close doneCh
-			<-doneCh
+			dispatchProc.Cancel()
+
+		// there is no need to check the dispatchProc.Ctx.Done() here.
+		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		case err = <-infoToDispatchOperator.Err:
 		}
-		return nil
+		return err
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
@@ -526,7 +538,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId, s.NodeInfo); err != nil {
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
 			return ctxId, err
 		}
 	}
@@ -668,7 +680,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
