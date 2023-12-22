@@ -87,7 +87,7 @@ func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
 
 	if schema.HasSortKey() {
 		col := schema.GetSingleSortKey()
-		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap().Clone()
 	}
 
 	s.loaded = true
@@ -158,8 +158,8 @@ func (s *SegStat) String(composeSortKey bool) string {
 			zonemapStr = s.sortKeyZonemap.String()
 		}
 	}
-	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
+	return fmt.Sprintf("loaded:%t, oSize:%s, cSize %v,  rows:%d, remainingRows:%d, zm: %s",
+		s.loaded, common.HumanReadableBytes(s.originSize), common.HumanReadableBytes(s.compSize), s.rows, s.remainingRows, zonemapStr,
 	)
 }
 

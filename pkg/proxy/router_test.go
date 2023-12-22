@@ -37,7 +37,7 @@ func TestCNServer(t *testing.T) {
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect()
+		c, err := cn.Connect(0)
 		require.Error(t, err)
 		require.Nil(t, c)
 	})
@@ -52,7 +52,7 @@ func TestCNServer(t *testing.T) {
 			require.NoError(t, stopFn())
 		}()
 		cn := testMakeCNServer("", addr, 0, "", labelInfo{})
-		c, err := cn.Connect()
+		c, err := cn.Connect(0)
 		require.NoError(t, err)
 		require.NotNil(t, c)
 	})
@@ -572,7 +572,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"t1"}},
 	})
 	stopFn3 := startTestCNServer(t, ctx, addr3, nil, withBeforeHandle(func() {
-		time.Sleep(time.Second * 3)
+		time.Sleep(defaultAuthTimeout/3 + time.Second)
 	}))
 	defer func() {
 		require.NoError(t, stopFn3())

@@ -517,9 +517,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		if node.JoinType == plan.Node_INNER {
-			//only inner join can deduce new predicate
+		switch node.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_RIGHT:
+			//right join can deduce new predicate only from right side to left
+			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_LEFT:
+			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 
@@ -1179,4 +1186,90 @@ func (builder *QueryBuilder) useIndicesForJoin(nodeID int32, node *plan.Node) in
 	// TODO
 
 	return nodeID
+}
+
+func checkExprInTags(expr *plan.Expr, tags []int32) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			if !checkExprInTags(exprImpl.F.Args[i], tags) {
+				return false
+			}
+		}
+		return true
+
+	case *plan.Expr_Col:
+		for i := range tags {
+			if tags[i] == exprImpl.Col.RelPos {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// order by limit can be pushed down to left join
+func (builder *QueryBuilder) pushTopDownToLeftJoin(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	var joinnode, nodePushDown *plan.Node
+	var tags []int32
+	var newNodeID int32
+
+	if node.NodeType != plan.Node_SORT || node.Limit == nil {
+		goto END
+	}
+	joinnode = builder.qry.Nodes[node.Children[0]]
+	if joinnode.NodeType != plan.Node_JOIN {
+		goto END
+	}
+
+	//before join order, only left join
+	if joinnode.JoinType != plan.Node_LEFT {
+		goto END
+	}
+
+	// check orderby column
+	tags = builder.enumerateTags(builder.qry.Nodes[joinnode.Children[0]].NodeId)
+	for i := range node.OrderBy {
+		if !checkExprInTags(node.OrderBy[i].Expr, tags) {
+			goto END
+		}
+	}
+
+	nodePushDown = DeepCopyNode(node)
+	newNodeID = builder.appendNode(nodePushDown, nil)
+	nodePushDown.Children[0] = joinnode.Children[0]
+	joinnode.Children[0] = newNodeID
+
+END:
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.pushTopDownToLeftJoin(child)
+		}
+	}
+}
+
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteDistinctToAGG(child)
+		}
+	}
+	if node.NodeType != plan.Node_DISTINCT {
+		return
+	}
+	project := builder.qry.Nodes[node.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return
+	}
+	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+		return
+	}
+
+	node.NodeType = plan.Node_AGG
+	node.GroupBy = project.ProjectList
+	node.BindingTags = project.BindingTags
+	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.Children[0] = project.Children[0]
 }

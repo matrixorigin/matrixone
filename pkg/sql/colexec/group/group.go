@@ -147,8 +147,12 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -163,32 +167,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 func (ctr *container) generateAggStructures(arg *Argument) error {
 	var err error
 	i := 0
-	if arg.PartialResults == nil {
-		for i < len(arg.Aggs) {
-			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, nil); err != nil {
-				ctr.bat = nil
-				return err
-			}
-			i++
+	for i < len(arg.Aggs) {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
+			ctr.bat = nil
+			return err
 		}
-	} else {
-		for i < len(arg.Aggs) {
-			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, arg.PartialResults[i]); err != nil {
-				ctr.bat = nil
-				return err
-			}
-			i++
-		}
-		arg.PartialResults = nil
+		i++
 	}
-
 	return nil
 }
 
 func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := ap.children[0].Call(proc)
+			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -265,7 +257,7 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := ap.children[0].Call(proc)
+			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
 			if err != nil {
 				return result, err
 			}

@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/mohae/deepcopy"
 )
 
 // used for testing
@@ -272,8 +273,8 @@ func (s *memTaskStorage) QueryDaemonTask(ctx context.Context, conds ...Condition
 	}
 
 	sortedTasks := make([]task.DaemonTask, 0, len(s.daemonTasks))
-	for _, task := range s.daemonTasks {
-		sortedTasks = append(sortedTasks, task)
+	for _, t := range s.daemonTasks {
+		sortedTasks = append(sortedTasks, deepcopy.Copy(t).(task.DaemonTask))
 	}
 	sort.Slice(sortedTasks, func(i, j int) bool { return sortedTasks[i].ID < sortedTasks[j].ID })
 

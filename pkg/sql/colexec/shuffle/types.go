@@ -52,11 +52,13 @@ type container struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i := range arg.ctr.shuffledBats {
-		if arg.ctr.shuffledBats[i] != nil {
-			arg.ctr.shuffledBats[i].Clean(proc.Mp())
-			arg.ctr.shuffledBats[i] = nil
+	if arg.ctr != nil {
+		for i := range arg.ctr.shuffledBats {
+			if arg.ctr.shuffledBats[i] != nil {
+				arg.ctr.shuffledBats[i].Clean(proc.Mp())
+				arg.ctr.shuffledBats[i] = nil
+			}
 		}
+		arg.ctr.sels = nil
 	}
-	arg.ctr.sels = nil
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -739,7 +740,7 @@ func (store *txnStore) PrepareWAL() (err error) {
 	// Apply the record from the command list.
 	// Split the commands by max message size.
 	for store.cmdMgr.cmd.MoreCmds() {
-		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
+		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
 		if err != nil {
 			return err
 		}
@@ -748,12 +749,20 @@ func (store *txnStore) PrepareWAL() (err error) {
 		}
 	}
 
+	t1 := time.Now()
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {
 			return
 		}
 	}
-	// logutil.Debugf("Txn-%X PrepareWAL Takes %s", store.txn.GetID(), time.Since(now))
+	t2 := time.Now()
+	if t2.Sub(t1) > time.Millisecond*500 {
+		logutil.Warn(
+			"SLOW-LOG",
+			zap.String("txn", store.txn.String()),
+			zap.Duration("apply-1pc-commit-duration", t2.Sub(t1)),
+		)
+	}
 	return
 }
 

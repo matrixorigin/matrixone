@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -60,9 +59,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		return err
 	}
 
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	c.stmt.Format(fmtCtx)
-	ctx := context.WithValue(c.ctx, defines.SqlKey{}, fmtCtx.String())
+	ctx := context.WithValue(c.ctx, defines.SqlKey{}, s.Plan.GetDdl().GetCreateDatabase().GetSql())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -969,6 +966,20 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 
 func (s *Scope) CreateIndex(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	{
+		// lockMoTable will lock Table  mo_catalog.mo_tables
+		// for the row with db_name=dbName & table_name = tblName。
+		dbName := c.db
+		if qry.GetDatabase() != "" {
+			dbName = qry.GetDatabase()
+		}
+		tblName := qry.GetTableDef().GetName()
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
+	}
+
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
 		return err

@@ -36,12 +36,15 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx)
+	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analy.Start()
 	defer analy.Stop()
 
@@ -64,6 +67,7 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		srcVec := bat.Vecs[idx]
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			vec.Free(proc.Mp())
 			return result, err
 		}
 		arg.buf.SetVector(int32(idx), vec)
@@ -95,8 +99,9 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		idx := len(bat.Vecs) - 1
 		arg.buf.Attrs = append(arg.buf.Attrs, catalog.Row_ID)
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
-		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
+			rowIdVec.Free(proc.Mp())
 			return result, err
 		}
 		arg.buf.Vecs = append(arg.buf.Vecs, rowIdVec)

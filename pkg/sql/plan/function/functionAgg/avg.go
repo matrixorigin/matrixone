@@ -60,7 +60,7 @@ var (
 	}
 )
 
-func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
+func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
 		return newGenericAvg[uint8](overloadID, inputTypes[0], outputType, dist)
@@ -85,15 +85,15 @@ func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 	case types.T_decimal64:
 		aggPriv := &sAggDecimalAvg{typ: inputTypes[0]}
 		if dist {
-			return agg.NewUnaryDistAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64, nil), nil
+			return agg.NewUnaryDistAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64), nil
 		}
-		return agg.NewUnaryAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64, nil), nil
+		return agg.NewUnaryAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimalAvg{typ: inputTypes[0]}
 		if dist {
-			return agg.NewUnaryDistAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128, nil), nil
+			return agg.NewUnaryDistAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128), nil
 		}
-		return agg.NewUnaryAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128, nil), nil
+		return agg.NewUnaryAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", inputTypes[0])
 }
@@ -101,9 +101,9 @@ func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 func newGenericAvg[T numeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggAvg[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryDistAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggAvg[T numeric] struct{ cnts []int64 }
@@ -191,6 +191,7 @@ func (s *sAggDecimalAvg) FillDecimal64(groupNumber int64, values types.Decimal64
 		}
 		s.x.B0_63 = uint64(count)
 		s.y.B0_63 = uint64(values)
+		s.y.B64_127 = 0
 		if values>>63 != 0 {
 			s.y.B64_127 = ^s.y.B64_127
 		}
