@@ -16,9 +16,11 @@ package service
 
 import (
 	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"time"
 )
 
 const (
@@ -43,11 +45,45 @@ func NewNotifier(ctx context.Context, buffer int) *Notifier {
 func (n *Notifier) NotifyLogtail(
 	from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
+	// it is hacking here to collect the notifier blocking duration.
+	// first we check the ctx state, and then try to send the
+	// logtail. if the notifier is blocking, we record the start time
+	// and then blocking on this `Notify` function, until ctx done or
+	// notifier got free.
+
 	select {
 	case <-n.ctx.Done():
 		return n.ctx.Err()
-	case n.C <- event{from: from, to: to, closeCB: closeCB, logtails: tails}:
+	default:
+		// no wait
 	}
+
+	e := event{from: from, to: to, closeCB: closeCB, logtails: tails}
+	hasBlocked := false
+	var start time.Time
+
+	defer func() {
+		if hasBlocked {
+			dur := time.Since(start).Seconds()
+			v2.LogTailNotifierBlockingDurationHistogram.Observe(dur)
+			logutil.Infof("logtail notifier blocked %f s\n", dur)
+		}
+	}()
+
+	select {
+	case n.C <- e:
+		return nil
+	default:
+		hasBlocked = true
+		start = time.Now()
+	}
+
+	select {
+	case <-n.ctx.Done():
+		return n.ctx.Err()
+	case n.C <- e:
+	}
+
 	return nil
 }
 
