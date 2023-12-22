@@ -10312,7 +10312,8 @@ non_reserved_keyword:
 |   STAGE
 |   STAGES
 |   BACKUP
-| FILESYSTEM
+|   FILESYSTEM
+|	REFERENCE
 
 func_not_keyword:
     DATE_ADD
