@@ -1273,3 +1273,40 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 	node.BindingTags = append(node.BindingTags, builder.genNewTag())
 	node.Children[0] = project.Children[0]
 }
+
+// reuse removeSimpleProjections to delete this plan node
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteEffectlessAggToProject(child)
+		}
+	}
+	if node.NodeType != plan.Node_AGG {
+		return
+	}
+	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+		return
+	}
+	scan := builder.qry.Nodes[node.Children[0]]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	if scan.TableDef.Pkey == nil {
+		return
+	}
+	groupCol := make([]int32, 0)
+	for _, expr := range node.GroupBy {
+		col, ok := expr.Expr.(*plan.Expr_Col)
+		if ok {
+			groupCol = append(groupCol, col.Col.ColPos)
+		}
+	}
+	if !containsAllPKs(groupCol, scan.TableDef) {
+		return
+	}
+	node.NodeType = plan.Node_PROJECT
+	node.BindingTags = node.BindingTags[:1]
+	node.ProjectList = node.GroupBy
+	node.GroupBy = nil
+}
