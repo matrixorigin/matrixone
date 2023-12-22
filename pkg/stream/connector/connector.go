@@ -16,6 +16,7 @@ package moconnector
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -323,27 +324,19 @@ func (k *KafkaMoConnector) Close() error {
 
 func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
-	defer cancel()
-	res := k.queryResult(k.options["sql"], msgs)
-	if res.RowCount() == 0 || res.ColumnCount() == 0 {
+	ctx := context.Background()
+	sql := k.options["sql"]
+	dbName := k.options[mokafka.DatabaseKey]
+	tableName := k.options[mokafka.TableKey]
+	if sql == "" {
 		return
 	}
-	sql, err := k.converter.Convert(ctx, res)
-	if err != nil {
-		k.logger.Error("failed to get sql", zap.String("SQL", sql), zap.Error(err))
-	}
-	err = k.ie.Exec(ctx, sql, opts)
+	ctx = context.WithValue(ctx, defines.SourceScanResKey{}, msgs)
+
+	sql = fmt.Sprintf("USE %s; INSERT INTO %s.%s %s ",
+		dbName, dbName, tableName, sql)
+	err := k.ie.Exec(ctx, sql, opts)
 	if err != nil {
 		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
 	}
-}
-
-func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
-	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
-	ctx = context.WithValue(ctx, defines.SourceScanResKey{}, msgs)
-	defer cancel()
-	res := k.ie.Query(ctx, sql, opts)
-	return res
 }
