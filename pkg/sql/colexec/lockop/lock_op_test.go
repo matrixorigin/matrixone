@@ -44,6 +44,7 @@ import (
 
 var testFunc = func(
 	proc *process.Process,
+	rel engine.Relation,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
@@ -417,6 +418,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = func(
 				proc *process.Process,
+				rel engine.Relation,
 				tableID uint64,
 				eng engine.Engine,
 				vec *vector.Vector,
