@@ -251,6 +251,8 @@ type BindContext struct {
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
+
+	tmpGroups []*plan.Expr
 }
 
 type NameTuple struct {
