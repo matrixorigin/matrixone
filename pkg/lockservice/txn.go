@@ -38,7 +38,7 @@ type activeTxn struct {
 	txnKey         string
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
-	holdLocks      map[uint64]*cowSlice
+	holdLocks      map[string]map[uint64]*cowSlice
 	remoteService  string
 	deadlockFound  bool
 }
@@ -64,9 +64,11 @@ func (txn activeTxn) Name() string {
 
 func (txn *activeTxn) lockRemoved(
 	serviceID string,
+	group string,
 	table uint64,
 	removedLocks map[string]struct{}) {
-	v, ok := txn.holdLocks[table]
+	m := txn.getHoldLocksLocked(group)
+	v, ok := m[table]
 	if !ok {
 		return
 	}
@@ -80,10 +82,11 @@ func (txn *activeTxn) lockRemoved(
 		return true
 	})
 	v.close()
-	txn.holdLocks[table] = newV
+	m[table] = newV
 }
 
 func (txn *activeTxn) lockAdded(
+	group string,
 	table uint64,
 	locks [][]byte) {
 
@@ -104,19 +107,20 @@ func (txn *activeTxn) lockAdded(
 	//    the lock information. We use mutex to solve it.
 
 	defer logTxnLockAdded(txn, locks)
-	v, ok := txn.holdLocks[table]
+	m := txn.getHoldLocksLocked(group)
+	v, ok := m[table]
 	if ok {
 		v.append(locks)
 		return
 	}
-	txn.holdLocks[table] = newCowSlice(txn.fsp, locks)
+	m[table] = newCowSlice(txn.fsp, locks)
 }
 
 func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	lockTableFunc func(uint64) (lockTable, error)) error {
+	lockTableFunc func(string, uint64) (lockTable, error)) error {
 	logTxnReadyToClose(serviceID, txn)
 
 	// cancel all blocked waiters
@@ -125,43 +129,45 @@ func (txn *activeTxn) close(
 	n := len(txn.holdLocks)
 	var wg sync.WaitGroup
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
-	for table, cs := range txn.holdLocks {
-		l, err := lockTableFunc(table)
-		if err != nil {
-			// if a remote transaction, then the corresponding locktable should be local
-			// and cannot return an error.
-			//
-			// or a local transaction holds a lock on remote lock table, but can not get the remote
-			// LockTable, it is a bug.
-			panic(err)
-		}
-		if l == nil {
-			continue
-		}
+	for group, m := range txn.holdLocks {
+		for table, cs := range m {
+			l, err := lockTableFunc(group, table)
+			if err != nil {
+				// if a remote transaction, then the corresponding locktable should be local
+				// and cannot return an error.
+				//
+				// or a local transaction holds a lock on remote lock table, but can not get the remote
+				// LockTable, it is a bug.
+				panic(err)
+			}
+			if l == nil {
+				continue
+			}
 
-		fn := func(table uint64, cs *cowSlice) func() {
-			return func() {
-				logTxnUnlockTable(
-					serviceID,
-					txn,
-					table)
-				l.unlock(txn, cs, commitTS)
-				logTxnUnlockTableCompleted(
-					serviceID,
-					txn,
-					table,
-					cs)
-				if n > parallelUnlockTables {
-					wg.Done()
+			fn := func(table uint64, cs *cowSlice) func() {
+				return func() {
+					logTxnUnlockTable(
+						serviceID,
+						txn,
+						table)
+					l.unlock(txn, cs, commitTS)
+					logTxnUnlockTableCompleted(
+						serviceID,
+						txn,
+						table,
+						cs)
+					if n > parallelUnlockTables {
+						wg.Done()
+					}
 				}
 			}
-		}
 
-		if n > parallelUnlockTables {
-			wg.Add(1)
-			ants.Submit(fn(table, cs))
-		} else {
-			fn(table, cs)()
+			if n > parallelUnlockTables {
+				wg.Add(1)
+				ants.Submit(fn(table, cs))
+			} else {
+				fn(table, cs)()
+			}
 		}
 	}
 
@@ -174,9 +180,11 @@ func (txn *activeTxn) close(
 }
 
 func (txn *activeTxn) reset() {
-	for table, cs := range txn.holdLocks {
-		cs.close()
-		delete(txn.holdLocks, table)
+	for _, m := range txn.holdLocks {
+		for table, cs := range m {
+			cs.close()
+			delete(m, table)
+		}
 	}
 	txn.txnID = nil
 	txn.txnKey = ""
@@ -253,7 +261,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
 	holder activeTxnHolder,
 	waiters func(pb.WaitTxn) bool,
-	lockTableFunc func(uint64) (lockTable, error)) bool {
+	lockTableFunc func(string, uint64) (lockTable, error)) bool {
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
@@ -266,12 +274,18 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		txn.RUnlock()
 		panic("can not fetch waiting txn on remote txn")
 	}
+
+	groups := make([]string, 0, len(txn.holdLocks))
 	tables := make([]uint64, 0, len(txn.holdLocks))
 	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
-	for table, cs := range txn.holdLocks {
-		tables = append(tables, table)
-		lockKeys = append(lockKeys, cs.slice())
+	for g, m := range txn.holdLocks {
+		for table, cs := range m {
+			tables = append(tables, table)
+			lockKeys = append(lockKeys, cs.slice())
+			groups = append(groups, g)
+		}
 	}
+
 	wt := txn.toWaitTxn(serviceID, true)
 	txn.RUnlock()
 
@@ -282,7 +296,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	}()
 
 	for idx, table := range tables {
-		l, err := lockTableFunc(table)
+		l, err := lockTableFunc(groups[idx], table)
 		if err != nil {
 			// if a remote transaction, then the corresponding locktable should be local
 			// and cannot return an error.
@@ -334,4 +348,14 @@ func (txn *activeTxn) getID() []byte {
 	txn.RLock()
 	defer txn.RUnlock()
 	return txn.txnID
+}
+
+func (txn *activeTxn) getHoldLocksLocked(group string) map[uint64]*cowSlice {
+	m, ok := txn.holdLocks[group]
+	if ok {
+		return m
+	}
+	m = make(map[uint64]*cowSlice)
+	txn.holdLocks[group] = m
+	return m
 }

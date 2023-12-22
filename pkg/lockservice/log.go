@@ -344,8 +344,10 @@ func logTxnReadyToClose(
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		var tables []uint64
-		for t := range txn.holdLocks {
-			tables = append(tables, t)
+		for _, locks := range txn.holdLocks {
+			for t := range locks {
+				tables = append(tables, t)
+			}
 		}
 
 		logger.Debug("ready to unlock txn",

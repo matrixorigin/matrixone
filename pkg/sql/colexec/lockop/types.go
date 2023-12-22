@@ -49,6 +49,7 @@ type FetchLockRowsFunc func(
 type LockOptions struct {
 	maxCountPerLock          int
 	mode                     lock.LockMode
+	sharding                 lock.Sharding
 	lockTable                bool
 	changeDef                bool
 	parker                   *types.Packer

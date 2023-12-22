@@ -62,7 +62,9 @@ func TestKeeper(t *testing.T) {
 					}
 					writeResponse(ctx, cancel, resp, nil, cs)
 				})
+			gm := &sync.Map{}
 			m := &sync.Map{}
+			gm.Store("", m)
 			m.Store(0,
 				newRemoteLockTable(
 					"s1",
@@ -82,7 +84,7 @@ func TestKeeper(t *testing.T) {
 				c,
 				time.Millisecond*10,
 				time.Millisecond*10,
-				m)
+				gm)
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()
@@ -122,7 +124,9 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
+			gm := &sync.Map{}
 			m := &sync.Map{}
+			gm.Store("", m)
 			m.Store(1,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
@@ -147,7 +151,7 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				c,
 				time.Millisecond*10,
 				time.Millisecond*10,
-				m)
+				gm)
 			defer func() {
 				assert.NoError(t, k.Close())
 			}()

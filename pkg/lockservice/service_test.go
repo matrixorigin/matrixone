@@ -25,7 +25,6 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -60,7 +59,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 				require.NoError(t, err, err)
 				require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-				lt, err := s1.getLockTable(table)
+				lt, err := s1.getLockTable("", table)
 				require.NoError(t, err)
 
 				target := s1
@@ -1075,7 +1074,7 @@ func TestLockResultWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, res.Timestamp.IsEmpty())
 
-			lb, err := l.getLockTable(0)
+			lb, err := l.getLockTable("", 0)
 			require.NoError(t, err)
 			assert.Equal(t, lb.getBind(), res.LockedOn)
 		},
@@ -1324,6 +1323,51 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 	}
 }
 
+func TestMultiGroupWithSameTableID(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			g1 := "g1"
+			g2 := "g2"
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+
+					rows := newTestRows(1)
+
+					txn1 := newTestTxnID(1)
+					option1 := newTestRowSharedOptions()
+					option1.Group = g1
+
+					txn2 := newTestTxnID(2)
+					option2 := newTestRowSharedOptions()
+					option2.Group = g2
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows, txn1, option1)
+					require.NoError(t, err)
+					lt1, err := s.getLockTable(g1, table)
+					assert.NoError(t, err)
+					checkLock(t, lt1.(*localLockTable), rows[0], [][]byte{txn1}, nil, nil)
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows, txn2, option2)
+					require.NoError(t, err)
+					lt2, err := s.getLockTable(g2, table)
+					assert.NoError(t, err)
+					checkLock(t, lt2.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
@@ -1459,7 +1503,7 @@ func waitWaiters(
 	table uint64,
 	key []byte,
 	waitersCount int) {
-	require.NoError(t, WaitWaiters(s, table, key, waitersCount))
+	require.NoError(t, WaitWaiters(s, "", table, key, waitersCount))
 }
 
 func newTestRowExclusiveOptions() pb.LockOptions {
@@ -1560,15 +1604,4 @@ func mustAddTestLock(t *testing.T,
 		txnID,
 		lock,
 		granularity)
-}
-
-func TestSharedTableID(t *testing.T) {
-	tenantID := uint32(955)
-	tableID := uint64(2)
-
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, tenantID)
-	tenantID2, tableID2, ok := decodeSharedTableID(encodeSharedTableID(ctx, tableID))
-	require.True(t, ok)
-	require.Equal(t, tenantID, tenantID2)
-	require.Equal(t, tableID, tableID2)
 }

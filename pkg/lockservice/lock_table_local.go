@@ -60,7 +60,11 @@ func newLocalLockTable(
 		clock:  clock,
 		events: events,
 	}
-	l.mu.store = newBtreeBasedStorage()
+	if bind.Sharding == pb.Sharding_None {
+		l.mu.store = newBtreeBasedStorage()
+	} else {
+		l.mu.store = newOneRowStorage()
+	}
 	l.mu.tableCommittedAt, _ = clock.Now()
 	return l
 }
@@ -313,7 +317,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Table, [][]byte{key})
+					c.txn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{key})
 				}
 				continue
 			}
@@ -380,7 +384,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	c.txn.lockAdded(l.bind.Table, [][]byte{row})
+	c.txn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{row})
 	l.mu.store.Add(row, lock)
 }
 
@@ -424,7 +428,7 @@ func (l *localLockTable) addRangeLockLocked(
 				c.w = nil
 			}
 			if newHolder {
-				c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+				c.txn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{start, end})
 			}
 			return nil, Lock{}, nil
 		}
@@ -497,7 +501,7 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Table, [][]byte{conflictKey})
+					c.txn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{conflictKey})
 				}
 				conflictWith = Lock{}
 				conflictKey = nil
@@ -532,7 +536,7 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiters = wq
 
 	// similar to row lock
-	c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+	c.txn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{start, end})
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
@@ -650,6 +654,7 @@ func (c *mergeContext) commit(
 	}
 	txn.lockRemoved(
 		bind.ServiceID,
+		bind.Group,
 		bind.Table,
 		c.mergedLocks)
 

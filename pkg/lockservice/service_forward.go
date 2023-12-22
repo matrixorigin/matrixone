@@ -26,7 +26,11 @@ func (s *service) forwardLock(
 	rows [][]byte,
 	txnID []byte,
 	opts pb.LockOptions) (pb.Result, error) {
-	l, err := s.getLockTableWithCreate(tableID, true)
+	l, err := s.getLockTableWithCreate(
+		opts.Group,
+		tableID,
+		true,
+		opts.Sharding)
 	if err != nil {
 		return pb.Result{}, err
 	}

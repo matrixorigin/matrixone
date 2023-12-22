@@ -323,6 +323,7 @@ func LockRows(
 	vec *vector.Vector,
 	pkType types.Type,
 	lockMode lock.LockMode,
+	sharding lock.Sharding,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -333,6 +334,7 @@ func LockRows(
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
+		WithLockSharding(sharding).
 		WithLockMode(lockMode).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
@@ -520,6 +522,12 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 		maxCountPerLock: 0,
 		parker:          parker,
 	}
+}
+
+// WithLockSharding set lock sharding
+func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
+	opts.sharding = sharding
+	return opts
 }
 
 // WithLockMode set lock mode, Exclusive or Shared

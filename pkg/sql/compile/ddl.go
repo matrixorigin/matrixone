@@ -2589,7 +2589,16 @@ func lockRows(
 	rel engine.Relation,
 	vec *vector.Vector,
 	lockMode lock.LockMode) error {
+	return lockRowsWithSharding(eng, proc, rel, vec, lockMode, lock.Sharding_None)
+}
 
+func lockRowsWithSharding(
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	vec *vector.Vector,
+	lockMode lock.LockMode,
+	sharding lock.Sharding) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2602,7 +2611,8 @@ func lockRows(
 		id,
 		vec,
 		*vec.GetType(),
-		lockMode)
+		lockMode,
+		sharding)
 	return err
 }
 
@@ -2707,7 +2717,7 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
+	if err := lockRowsWithSharding(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_OneRow); err != nil {
 		return err
 	}
 	return nil

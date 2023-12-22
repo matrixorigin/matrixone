@@ -105,14 +105,14 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		txn.lockAdded(l.bind.Table, rows)
+		txn.lockAdded(l.bind.Group, l.bind.Table, rows)
 		logRemoteLockAdded(txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, nil)
 		return
 	}
 
 	// encounter any error, we also added lock to txn, because we need unlock on remote
-	txn.lockAdded(l.bind.Table, rows)
+	txn.lockAdded(l.bind.Group, l.bind.Table, rows)
 
 	logRemoteLockFailed(txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
@@ -260,8 +260,10 @@ func (l *remoteLockTable) handleError(txnID []byte, err error) error {
 	// the bind is valid.
 	new, err := getLockTableBind(
 		l.client,
+		l.bind.Group,
 		l.bind.Table,
-		l.serviceID)
+		l.serviceID,
+		l.bind.Sharding)
 	if err != nil {
 		logGetRemoteBindFailed(l.bind.Table, err)
 		return oldError
