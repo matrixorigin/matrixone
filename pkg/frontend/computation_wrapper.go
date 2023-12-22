@@ -64,10 +64,6 @@ func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
 }
 
-func (ncw *NullComputationWrapper) GetAffectedRows() uint64 {
-	return 0
-}
-
 func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	return nil, nil
 }
@@ -178,10 +174,6 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 	rt := runtime.ProcessLevelRuntime()
 	return rt.Clock()
-}
-
-func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.runResult.AffectRows
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
