@@ -422,7 +422,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+						if tableAlterIndex.IndexAlgoParamList == 0 {
+							// if lists = 0, then use the old value, so don't update the map
+						} else if tableAlterIndex.IndexAlgoParamList > 0 {
+							newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+						}
 					default:
 						return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
 					}

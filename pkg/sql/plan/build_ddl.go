@@ -2571,8 +2571,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList <= 0 {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
+				if opt.AlgoParamList < 0 {
+					// list = 0 means use the old value of lists.
+					// list = -ve means invalid
+					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be >= 0.")
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
 			default:
