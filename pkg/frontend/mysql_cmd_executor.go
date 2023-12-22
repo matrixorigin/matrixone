@@ -3285,9 +3285,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if selfHandle {
 		return
 	}
-	if err = cw.SetDatabaseName(ses.GetDatabaseName()); err != nil {
-		return
-	}
 
 	cmpBegin = time.Now()
 
@@ -3295,30 +3292,30 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return
 	}
 	stmt = cw.GetAst()
-	// // reset some special stmt for execute statement
-	// switch st := stmt.(type) {
-	// case *tree.SetVar:
-	// 	err = mce.handleSetVar(requestCtx, st, sql)
-	// 	if err != nil {
-	// 		return
-	// 	} else {
-	// 		return
-	// 	}
-	// case *tree.ShowVariables:
-	// 	err = mce.handleShowVariables(st, proc, i, len(cws))
-	// 	if err != nil {
-	// 		return
-	// 	} else {
-	// 		return
-	// 	}
-	// case *tree.ShowErrors, *tree.ShowWarnings:
-	// 	err = mce.handleShowErrors(i, len(cws))
-	// 	if err != nil {
-	// 		return
-	// 	} else {
-	// 		return
-	// 	}
-	// }
+	// reset some special stmt for execute statement
+	switch st := stmt.(type) {
+	case *tree.SetVar:
+		err = mce.handleSetVar(requestCtx, st, sql)
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.ShowVariables:
+		err = mce.handleShowVariables(st, proc, i, len(cws))
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.ShowErrors, *tree.ShowWarnings:
+		err = mce.handleShowErrors(i, len(cws))
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	}
 
 	runner = ret.(ComputationRunner)
 
@@ -3330,7 +3327,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
-	switch statement := cw.GetAst().(type) {
+	switch statement := stmt.(type) {
 	//produce result set
 	case *tree.Select:
 		if ep.needExportToFile() {

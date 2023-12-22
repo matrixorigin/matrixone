@@ -60,10 +60,6 @@ func (ncw *NullComputationWrapper) GetAst() tree.Statement {
 	return ncw.stmt
 }
 
-func (ncw *NullComputationWrapper) SetDatabaseName(db string) error {
-	return nil
-}
-
 func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
 }
@@ -119,10 +115,6 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
-}
-
-func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
-	return nil
 }
 
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
