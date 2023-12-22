@@ -94,7 +94,6 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 	s.tableGroups.Range(func(_, v any) bool {
 		m := v.(*sync.Map)
 		m.Range(func(key, value any) bool {
-			tableID := key.(uint64)
 			l, ok := value.(lockTable).(*localLockTable)
 			if !ok {
 				return true
@@ -109,7 +108,7 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 					if lock.isLockRangeStart() {
 						return true
 					}
-					stop = !fn(tableID, keys, lock)
+					stop = !fn(l.bind.OriginTable, keys, lock)
 					keys = keys[:0]
 					return !stop
 				})

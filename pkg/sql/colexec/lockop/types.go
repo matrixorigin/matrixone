@@ -50,6 +50,7 @@ type LockOptions struct {
 	maxCountPerLock          int
 	mode                     lock.LockMode
 	sharding                 lock.Sharding
+	group                    string
 	lockTable                bool
 	changeDef                bool
 	parker                   *types.Packer

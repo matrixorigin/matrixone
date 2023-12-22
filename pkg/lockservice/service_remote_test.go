@@ -330,7 +330,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -351,7 +351,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -374,7 +374,7 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -491,7 +491,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -515,7 +515,7 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -541,7 +541,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -565,7 +565,7 @@ func TestIssue12554(t *testing.T) {
 			// txn1 hold lock row1 on l1
 			mustAddTestLock(t, ctx, l1, table, txn1, [][]byte{row1}, pb.Granularity_Row)
 
-			oldBind := alloc.Get(l1.serviceID, "", table, pb.Sharding_None)
+			oldBind := alloc.Get(l1.serviceID, "", table, 0, pb.Sharding_None)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
 			l1.getTables("").Delete(table)
@@ -665,7 +665,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTableWithCreate("", old.Table, true, pb.Sharding_None)
+		lt, err := l.getLockTableWithCreate("", old.Table, nil, pb.Sharding_None)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {

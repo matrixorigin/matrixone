@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"hash/crc32"
+	"hash/crc64"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,6 +63,8 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 
 				lt, err := s1.getLockTable("", table)
 				require.NoError(t, err)
+				require.Equal(t, table, lt.getBind().Table)
+				require.Equal(t, table, lt.getBind().OriginTable)
 
 				target := s1
 				if remote {
@@ -1368,9 +1372,89 @@ func TestMultiGroupWithSameTableID(t *testing.T) {
 	}
 }
 
+func TestShardingByRowWithSameTableID(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+
+					option := newTestRowSharedOptions()
+					option.Sharding = pb.Sharding_ByRow
+					option.Group = "g1"
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					rows1 := newTestRows(1)
+					rows2 := newTestRows(2)
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows1, txn1, option)
+					require.NoError(t, err)
+					l := s.loadLockTable("g1", shardingByRow(rows1[0]))
+					assert.Equal(t, table, l.getBind().OriginTable)
+					checkLock(t, l.(*localLockTable), rows1[0], [][]byte{txn1}, nil, nil)
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows2, txn2, option)
+					require.NoError(t, err)
+					l = s.loadLockTable("g1", shardingByRow(rows2[0]))
+					assert.Equal(t, table, l.getBind().OriginTable)
+					checkLock(t, l.(*localLockTable), rows2[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
+}
+
+func BenchmarkCrc64(b *testing.B) {
+	b.Run("crc64-ISO", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint64(0)
+			for p.Next() {
+				n := crc64.Checksum([]byte("hello"), crc64.MakeTable(crc64.ISO))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
+	b.Run("crc64-ECMA", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint64(0)
+			for p.Next() {
+				n := crc64.Checksum([]byte("hello"), crc64.MakeTable(crc64.ECMA))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
+	b.Run("crc32", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint32(0)
+			for p.Next() {
+				n := crc32.Checksum([]byte("hello"), crc32.MakeTable(crc32.IEEE))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
 }
 
 var tableID atomic.Uint64

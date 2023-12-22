@@ -262,6 +262,7 @@ func (l *remoteLockTable) handleError(txnID []byte, err error) error {
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
+		l.bind.OriginTable,
 		l.serviceID,
 		l.bind.Sharding)
 	if err != nil {

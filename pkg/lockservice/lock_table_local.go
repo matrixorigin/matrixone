@@ -60,11 +60,7 @@ func newLocalLockTable(
 		clock:  clock,
 		events: events,
 	}
-	if bind.Sharding == pb.Sharding_None {
-		l.mu.store = newBtreeBasedStorage()
-	} else {
-		l.mu.store = newOneRowStorage()
-	}
+	l.mu.store = newBtreeBasedStorage()
 	l.mu.tableCommittedAt, _ = clock.Now()
 	return l
 }

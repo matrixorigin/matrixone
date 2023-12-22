@@ -162,7 +162,7 @@ type lockTable interface {
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
-	Get(serviceID string, group string, tableID uint64, sharding pb.Sharding) pb.LockTable
+	Get(serviceID string, group string, tableID, originTableID uint64, sharding pb.Sharding) pb.LockTable
 	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.

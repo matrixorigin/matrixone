@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc64"
 	"sync"
 	"time"
 
@@ -112,7 +113,7 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	l, err := s.getLockTableWithCreate(options.Group, tableID, true, options.Sharding)
+	l, err := s.getLockTableWithCreate(options.Group, tableID, rows, options.Sharding)
 	if err != nil {
 		return pb.Result{}, err
 	}
@@ -262,11 +263,13 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 func (s *service) getLockTable(
 	group string,
 	tableID uint64) (lockTable, error) {
-	return s.getLockTableWithCreate(
+	if v := s.loadLockTable(group, tableID); v != nil {
+		return v, nil
+	}
+	return s.waitLockTableBind(
 		group,
 		tableID,
-		false,
-		pb.Sharding_None)
+		false), nil
 }
 
 func (s *service) getAllocatingC(
@@ -297,16 +300,15 @@ func (s *service) waitLockTableBind(
 func (s *service) getLockTableWithCreate(
 	group string,
 	tableID uint64,
-	create bool,
+	rows [][]byte,
 	sharding pb.Sharding) (lockTable, error) {
+	originTableID := tableID
+	if sharding == pb.Sharding_ByRow {
+		tableID = shardingByRow(rows[0])
+	}
+
 	if v := s.loadLockTable(group, tableID); v != nil {
 		return v, nil
-	}
-	if !create {
-		return s.waitLockTableBind(
-			group,
-			tableID,
-			false), nil
 	}
 
 	var c chan struct{}
@@ -346,6 +348,7 @@ func (s *service) getLockTableWithCreate(
 		s.remote.client,
 		group,
 		tableID,
+		originTableID,
 		s.serviceID,
 		sharding)
 	if err != nil {
@@ -599,4 +602,8 @@ func getUUIDFromServiceIdentifier(id string) string {
 		return id
 	}
 	return id[19:]
+}
+
+func shardingByRow(row []byte) uint64 {
+	return crc64.Checksum(row, crc64.MakeTable(crc64.ECMA))
 }

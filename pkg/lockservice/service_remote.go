@@ -245,11 +245,9 @@ func (s *service) handleKeepRemoteLock(
 func (s *service) getLocalLockTable(
 	req *pb.Request,
 	resp *pb.Response) (lockTable, error) {
-	l, err := s.getLockTableWithCreate(
+	l, err := s.getLockTable(
 		req.LockTable.Group,
-		req.LockTable.Table,
-		false,
-		pb.Sharding_None)
+		req.LockTable.Table)
 	if err != nil {
 		return nil, err
 	}
@@ -349,6 +347,7 @@ func getLockTableBind(
 	c Client,
 	group string,
 	tableID uint64,
+	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
@@ -360,6 +359,7 @@ func getLockTableBind(
 	req.Method = pb.Method_GetBind
 	req.GetBind.ServiceID = serviceID
 	req.GetBind.Table = tableID
+	req.GetBind.OriginTable = originTableID
 	req.GetBind.Sharding = sharding
 	req.GetBind.Group = group
 

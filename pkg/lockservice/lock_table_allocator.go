@@ -73,13 +73,14 @@ func (l *lockTableAllocator) Get(
 	serviceID string,
 	group string,
 	tableID uint64,
+	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
 	binds := l.getServiceBinds(serviceID)
 	if binds == nil {
 		binds = l.registerService(serviceID, tableID)
 	}
 	binds.active()
-	return l.registerBind(binds, group, tableID, sharding)
+	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
@@ -185,6 +186,7 @@ func (l *lockTableAllocator) registerBind(
 	binds *serviceBinds,
 	group string,
 	tableID uint64,
+	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -192,7 +194,7 @@ func (l *lockTableAllocator) registerBind(
 	if old, ok := l.getLockTablesLocked(group)[tableID]; ok {
 		return l.tryRebindLocked(binds, group, old, tableID)
 	}
-	return l.createBindLocked(binds, group, tableID, sharding)
+	return l.createBindLocked(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) tryRebindLocked(
@@ -224,20 +226,29 @@ func (l *lockTableAllocator) createBindLocked(
 	binds *serviceBinds,
 	group string,
 	tableID uint64,
+	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
 	// current service is invalid
 	if !binds.bind(group, tableID) {
 		return pb.LockTable{}
 	}
 
+	if originTableID == 0 {
+		if sharding == pb.Sharding_ByRow {
+			panic("invalid sharding origin table id")
+		}
+		originTableID = tableID
+	}
+
 	// create new table and service bind
 	b := pb.LockTable{
-		Table:     tableID,
-		ServiceID: binds.serviceID,
-		Version:   1,
-		Valid:     true,
-		Sharding:  sharding,
-		Group:     group,
+		Table:       tableID,
+		OriginTable: originTableID,
+		ServiceID:   binds.serviceID,
+		Version:     1,
+		Valid:       true,
+		Sharding:    sharding,
+		Group:       group,
 	}
 	l.getLockTablesLocked(group)[tableID] = b
 	return b
@@ -371,6 +382,7 @@ func (l *lockTableAllocator) handleGetBind(
 		req.GetBind.ServiceID,
 		req.GetBind.Group,
 		req.GetBind.Table,
+		req.GetBind.OriginTable,
 		req.GetBind.Sharding)
 	writeResponse(ctx, cancel, resp, nil, cs)
 }

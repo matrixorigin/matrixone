@@ -29,7 +29,7 @@ func (s *service) forwardLock(
 	l, err := s.getLockTableWithCreate(
 		opts.Group,
 		tableID,
-		true,
+		rows,
 		opts.Sharding)
 	if err != nil {
 		return pb.Result{}, err

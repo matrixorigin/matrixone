@@ -42,8 +42,8 @@ enum WaitPolicy {
 }
 
 enum Sharding {
-  None    = 0;
-  OneRow  = 1;
+  None   = 0;
+  ByRow  = 1;
 }
 
 // LockOptions lock options
@@ -61,15 +61,16 @@ message LockOptions {
 // LockTable describes which CN manages a Table's Locks.
 message LockTable {
   // Table table id
-  uint64   Table     = 1;
+  uint64   Table       = 1;
   // ServiceID lock service id, a cn node will only run one instance of LockService
-  string   ServiceID = 2;
+  string   ServiceID   = 2;
   // Version will incr if CN-Table bind changed.
-  uint64   Version   = 3;
+  uint64   Version     = 3;
   // Valid false if the service is disabled, and no new service bind this table
-  bool     Valid     = 4;
-  string   Group     = 5;
-  Sharding Sharding  = 6;
+  bool     Valid       = 4;
+  string   Group       = 5;
+  Sharding Sharding    = 6;
+  uint64   OriginTable = 7;
 }
 
 // Method lock table operations
@@ -187,10 +188,11 @@ message UnlockResponse {
 
 // GetBindRequest get bind request from allocator request. CN -> TN
 message GetBindRequest {
-  string   ServiceID = 1;
-  uint64   Table     = 2;
-  string   Group     = 3;
-  Sharding Sharding  = 4;
+  string   ServiceID   = 1;
+  uint64   Table       = 2;
+  string   Group       = 3;
+  Sharding Sharding    = 4;
+  uint64   OriginTable = 5;
 }
 
 // GetBindResponse get bind request from allocator response. TN -> CN

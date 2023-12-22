@@ -2588,17 +2588,9 @@ func lockRows(
 	proc *process.Process,
 	rel engine.Relation,
 	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-	return lockRowsWithSharding(eng, proc, rel, vec, lockMode, lock.Sharding_None)
-}
-
-func lockRowsWithSharding(
-	eng engine.Engine,
-	proc *process.Process,
-	rel engine.Relation,
-	vec *vector.Vector,
 	lockMode lock.LockMode,
-	sharding lock.Sharding) error {
+	sharding lock.Sharding,
+	group string) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2612,7 +2604,8 @@ func lockRowsWithSharding(
 		vec,
 		*vec.GetType(),
 		lockMode,
-		sharding)
+		sharding,
+		group)
 	return err
 }
 
@@ -2701,13 +2694,17 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, vec.GetStringAt(0)); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
+func lockMoTable(
+	c *Compile,
+	dbName string,
+	tblName string,
+	lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -2717,7 +2714,8 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRowsWithSharding(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_OneRow); err != nil {
+
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, vec.GetStringAt(0)); err != nil {
 		return err
 	}
 	return nil

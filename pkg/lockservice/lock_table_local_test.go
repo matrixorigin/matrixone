@@ -347,7 +347,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 			table := uint64(10)
 			for _, c := range cases {
 				stopper := stopper.NewStopper("")
-				v, err := l.getLockTableWithCreate("", table, true, pb.Sharding_None)
+				v, err := l.getLockTableWithCreate("", table, nil, pb.Sharding_None)
 				require.NoError(t, err)
 				lt := v.(*localLockTable)
 
@@ -722,7 +722,7 @@ func TestLockedTSIsLastCommittedTS(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate("", tableID, true, pb.Sharding_None)
+			v, err := l.getLockTableWithCreate("", tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -793,7 +793,7 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate("", tableID, true, pb.Sharding_None)
+			v, err := l.getLockTableWithCreate("", tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
