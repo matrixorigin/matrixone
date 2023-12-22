@@ -169,7 +169,7 @@ func initProxyMetrics() {
 }
 
 func initFrontendMetrics() {
-	registry.MustRegister(AcceptConnDurationHistogram)
+	registry.MustRegister(acceptConnDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

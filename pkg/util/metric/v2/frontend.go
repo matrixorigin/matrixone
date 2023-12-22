@@ -17,7 +17,7 @@ package v2
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	AcceptConnDurationHistogram = prometheus.NewHistogramVec(
+	acceptConnDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "frontend",
@@ -25,13 +25,13 @@ var (
 			Help:      "Bucketed histogram of accept connection duration.",
 			Buckets:   getDurationBuckets(),
 		}, []string{"label"})
-	CreatedDurationHistogram          = AcceptConnDurationHistogram.WithLabelValues("created")
-	EstablishDurationHistogram        = AcceptConnDurationHistogram.WithLabelValues("establish")
-	UpgradeTLSDurationHistogram       = AcceptConnDurationHistogram.WithLabelValues("upgradeTLS")
-	AuthenticateDurationHistogram     = AcceptConnDurationHistogram.WithLabelValues("authenticate")
-	CheckTenantDurationHistogram      = AcceptConnDurationHistogram.WithLabelValues("check-tenant")
-	CheckUserDurationHistogram        = AcceptConnDurationHistogram.WithLabelValues("check-user")
-	CheckRoleDurationHistogram        = AcceptConnDurationHistogram.WithLabelValues("check-role")
-	CheckDbNameDurationHistogram      = AcceptConnDurationHistogram.WithLabelValues("check-dbname")
-	InitGlobalSysVarDurationHistogram = AcceptConnDurationHistogram.WithLabelValues("init-global-sys-var")
+	CreatedDurationHistogram          = acceptConnDurationHistogram.WithLabelValues("created")
+	EstablishDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("establish")
+	UpgradeTLSDurationHistogram       = acceptConnDurationHistogram.WithLabelValues("upgradeTLS")
+	AuthenticateDurationHistogram     = acceptConnDurationHistogram.WithLabelValues("authenticate")
+	CheckTenantDurationHistogram      = acceptConnDurationHistogram.WithLabelValues("check-tenant")
+	CheckUserDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("check-user")
+	CheckRoleDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("check-role")
+	CheckDbNameDurationHistogram      = acceptConnDurationHistogram.WithLabelValues("check-dbname")
+	InitGlobalSysVarDurationHistogram = acceptConnDurationHistogram.WithLabelValues("init-global-sys-var")
 )

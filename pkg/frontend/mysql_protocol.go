@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"math/rand"
 	"net"
@@ -44,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
