@@ -1437,6 +1437,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 	for i, rootID := range builder.qry.Steps {
 		builder.rewriteDistinctToAGG(rootID)
+		builder.rewriteEffectlessAggToProject(rootID)
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 		if err != nil {
