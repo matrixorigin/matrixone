@@ -493,7 +493,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		v2.EstablishDurationHistogram.Observe(float64(ses.timestampMap[TSEstablishEnd].Sub(ses.timestampMap[TSEstablishStart]).Milliseconds()))
 
 		dbName := protocol.GetDatabaseName()
-		if ses != nil && dbName != "" {
+		if dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}
 		rm.sessionManager.AddSession(ses)
