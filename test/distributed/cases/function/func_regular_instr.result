@@ -163,3 +163,55 @@ INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_INSTR(str1, '*'), REGEXP_INSTR(str2,'hav') FROM t;
 invalid argument regexp_instr have invalid regexp pattern arg, bad value [*]
 drop table t;
+create database big_data_test;
+use big_data_test;
+create table table_basic_for_load_100M(col1 varchar(100));
+insert into table_basic_for_load_100M values(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy');
+insert into table_basic_for_load_100M values('a');
+select col1 from table_basic_for_load_100M;
+col1
+,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
+a
+select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
+regexp_instr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)
+1
+select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
+regexp_instr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)
+31
+select REGEXP_INSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
+regexp_instr(col1, ,, 1)
+1
+0
+select REGEXP_INSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
+regexp_instr(col1, a, 1)
+31
+1
+select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',','b',1);
+regexp_replace(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, b, 1)
+bGHIbG;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
+select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a','b',1);
+regexp_replace(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, b, 1)
+,GHI,G;KL/MN?OPQR.STU-_+=VWXYZbbcdefghigklmnopqrstuvwxy
+select REGEXP_REPLACE(col1,',','b',1) from big_data_test.table_basic_for_load_100M;
+regexp_replace(col1, ,, b, 1)
+bGHIbG;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy
+a
+select REGEXP_REPLACE(col1,'a','b',1) from big_data_test.table_basic_for_load_100M;
+regexp_replace(col1, a, b, 1)
+,GHI,G;KL/MN?OPQR.STU-_+=VWXYZbbcdefghigklmnopqrstuvwxy
+b
+select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
+regexp_substr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, ,, 1)
+,
+select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
+regexp_substr(,GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy, a, 1)
+a
+select REGEXP_SUBSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
+regexp_substr(col1, ,, 1)
+,
+null
+select REGEXP_SUBSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
+regexp_substr(col1, a, 1)
+a
+a
+drop database big_data_test;
