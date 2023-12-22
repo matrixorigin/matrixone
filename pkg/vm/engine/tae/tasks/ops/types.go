@@ -15,6 +15,7 @@
 package ops
 
 import (
+	"sync/atomic"
 	"time"
 
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
@@ -26,6 +27,7 @@ type OpDoneCB = func(iops.IOp)
 type Op struct {
 	Impl       iops.IOpInternal
 	ErrorC     chan error
+	WaitedOnce atomic.Bool
 	Worker     iworker.IOpWorker
 	Err        error
 	Result     any

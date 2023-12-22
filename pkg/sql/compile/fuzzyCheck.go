@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package compile
 
 import (
@@ -18,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"strings"
 	"time"
 
@@ -43,7 +45,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 		return nil, moerr.NewInternalErrorNoCtx("fuzzyfilter failed to get the db/tbl name")
 	}
 
-	f := new(fuzzyCheck)
+	f := reuse.Alloc[fuzzyCheck](nil)
 	f.tbl = f.wrapup(tblName)
 	f.db = f.wrapup(dbName)
 	f.attr = n.TableDef.Pkey.PkeyColName
@@ -72,6 +74,25 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	}
 
 	return f, nil
+}
+
+func (f fuzzyCheck) Name() string {
+	return "compile.fuzzyCheck"
+}
+
+func (f *fuzzyCheck) reset() {
+	f.db = ""
+	f.tbl = ""
+	f.attr = ""
+	f.condition = ""
+	f.isCompound = false
+	f.col = nil
+	f.compoundCols = nil
+	f.cnt = 0
+}
+
+func (f *fuzzyCheck) release() {
+	reuse.Free[fuzzyCheck](f, nil)
 }
 
 // fill will generate condition for background SQL to check if duplicate constraint is satisfied
