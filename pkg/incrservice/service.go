@@ -86,9 +86,10 @@ func (s *service) Create(
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
-	if txnOp == nil {
-		panic("txn operator is nil")
-	}
+	s.logger.Info("create auto increment table",
+		zap.Uint64("table-id", tableID),
+		zap.String("txn", txnOp.Txn().DebugString()))
+
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		s.txnClosed)
@@ -127,6 +128,11 @@ func (s *service) Reset(
 	newTableID uint64,
 	keep bool,
 	txnOp client.TxnOperator) error {
+	s.logger.Info("reset auto increment table",
+		zap.Uint64("table-id", oldTableID),
+		zap.String("txn", txnOp.Txn().DebugString()),
+		zap.Uint64("new-table-id", newTableID))
+
 	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
 	if err != nil {
 		return err
@@ -162,9 +168,10 @@ func (s *service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) error {
-	if txnOp == nil {
-		panic("txn operator is nil")
-	}
+	s.logger.Info("delete auto increment table",
+		zap.Uint64("table-id", tableID),
+		zap.String("txn", txnOp.Txn().DebugString()))
+
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		s.txnClosed)
