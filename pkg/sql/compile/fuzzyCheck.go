@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strconv"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"strconv"
 	"strings"
 	"time"
 

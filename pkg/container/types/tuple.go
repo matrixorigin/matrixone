@@ -114,7 +114,7 @@ func (tp Tuple) SQLStrings() []string {
 			res = append(res, fmt.Sprintf("%v", t))
 		case []byte:
 			s := *(*string)(unsafe.Pointer(&t))
-			res =  append(res, strconv.Quote(s))
+			res = append(res, strconv.Quote(s))
 		case Date:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Time:
