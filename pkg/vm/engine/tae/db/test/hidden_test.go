@@ -157,7 +157,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		assert.NoError(t, err)
 		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.NoError(t, err)
-		err = task.WaitDone()
+		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 	}
 
@@ -305,7 +305,7 @@ func TestHidden2(t *testing.T) {
 			assert.NoError(t, err)
 			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 			assert.NoError(t, err)
-			err = task.WaitDone()
+			err = task.WaitDone(ctx)
 			assert.NoError(t, err)
 		}
 	}
@@ -329,7 +329,7 @@ func TestHidden2(t *testing.T) {
 			}
 			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 			assert.NoError(t, err)
-			err = task.WaitDone()
+			err = task.WaitDone(ctx)
 			assert.NoError(t, err)
 		}
 
