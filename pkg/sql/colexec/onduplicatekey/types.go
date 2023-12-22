@@ -35,8 +35,7 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch   //batch to check conflict
-	insertBats       []*batch.Batch //the final batch
+	checkConflictBat *batch.Batch //batch to check conflict
 	rbat             *batch.Batch
 }
 
@@ -73,12 +72,6 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if len(arg.ctr.insertBats) > 0 {
-			for _, bat := range arg.ctr.insertBats {
-				bat.Clean(proc.Mp())
-			}
-			arg.ctr.insertBats = nil
-		}
 		if arg.ctr.rbat != nil {
 			arg.ctr.rbat.Clean(proc.GetMPool())
 		}
