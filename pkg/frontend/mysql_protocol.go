@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -1256,6 +1257,13 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 }
 
 func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
+	ses := mp.GetSession()
+	ses.timestampMap[TSAuthenticateStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSAuthenticateEnd] = time.Now()
+		v2.AuthenticateDurationHistogram.Observe(float64(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Milliseconds()))
+	}()
+
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {

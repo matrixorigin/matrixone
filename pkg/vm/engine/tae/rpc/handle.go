@@ -794,6 +794,8 @@ func (h *Handle) HandlePreCommitWrite(
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
+				logutil.Infof("dropOrTruncateRelation isDrop: %v, name: %s, id: %d, newId: %d, databaseName: %s, databaseId: %d\n",
+					req.IsDrop, req.Name, req.ID, req.NewId, req.DatabaseName, req.DatabaseID)
 				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.DropOrTruncateRelationResp)); err != nil {
 					return err
