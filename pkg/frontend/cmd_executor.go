@@ -196,10 +196,6 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	if err = stmtExec.SetDatabaseName(ses.GetDatabaseName()); err != nil {
-		goto handleRet
-	}
-
 	cmpBegin = time.Now()
 
 	//TODO: selfhandle statements do not need to compile
