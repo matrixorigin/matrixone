@@ -88,7 +88,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -530,7 +529,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		regs:     nil,
 	}
 	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1, engine.Node{})
+		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
 		require.Nil(t, err)
 	}
 }
