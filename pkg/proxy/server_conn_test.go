@@ -254,7 +254,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := &proxy.ExtraInfo{}
+	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
