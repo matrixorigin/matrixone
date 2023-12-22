@@ -49,12 +49,24 @@ var (
 			Name:      "queue_size",
 			Help:      "Size of logtail queue size.",
 		}, []string{"type"})
-	LogTailSendQueueSizeGauge    = logTailQueueSizeGauge.WithLabelValues("send")
-	LogTailReceiveQueueSizeGauge = logTailQueueSizeGauge.WithLabelValues("receive")
-	LogTailApplyQueueSizeGauge   = logTailQueueSizeGauge.WithLabelValues("apply")
+	LogTailSendQueueSizeGauge     = logTailQueueSizeGauge.WithLabelValues("send")
+	LogTailReceiveQueueSizeGauge  = logTailQueueSizeGauge.WithLabelValues("receive")
+	LogTailApplyQueueSizeGauge    = logTailQueueSizeGauge.WithLabelValues("apply")
+	LogTailNotifierQueueSizeGauge = logTailQueueSizeGauge.WithLabelValues("notifier")
 )
 
 var (
+	logTailQueueBlockingDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "queue_blocking_duration_seconds",
+			Help:      "Bucketed histogram of queue blocking duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 10),
+		}, []string{"type"})
+
+	LogTailNotifierBlockingDurationHistogram = logTailQueueBlockingDurationHistogram.WithLabelValues("notifier")
+
 	LogTailBytesHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

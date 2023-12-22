@@ -91,6 +91,7 @@ func initLogtailMetrics() {
 	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
+	registry.MustRegister(logTailQueueBlockingDurationHistogram)
 
 	registry.MustRegister(LogTailBytesHistogram)
 	registry.MustRegister(logTailApplyDurationHistogram)
@@ -133,6 +134,7 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNSideQueueSizeGauge)
+	registry.MustRegister(txnTNSideQueueBlockingHistogram)
 }
 
 func initRPCMetrics() {

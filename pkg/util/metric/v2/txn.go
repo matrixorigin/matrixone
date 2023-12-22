@@ -111,6 +111,7 @@ var (
 			Help:      "Size of txn queues on tn side.",
 		}, []string{"type"})
 
+	// DO NOT change the order
 	TxnTNSideQueueSizeGauges = []prometheus.Gauge{
 		nil,
 		txnTNSideQueueSizeGauge.WithLabelValues("GCManagerQueue"), //1
@@ -318,4 +319,61 @@ var (
 	TxnBlockReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("block-reader")
 	TxnMergeReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("merge-reader")
 	TxnBlockMergeReaderDurationHistogram = txnReaderDurationHistogram.WithLabelValues("block-merge-reader")
+
+	txnRangesSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_selectivity_percentage",
+			Help:      "Bucketed histogram of fast ranges selectivity percentage.",
+			Buckets:   prometheus.LinearBuckets(0, 0.05, 21),
+		}, []string{"type"})
+	TxnRangesBlockSelectivityHistogram     = txnRangesSelectivityHistogram.WithLabelValues("block_selectivity")
+	TxnFastRangesBlockSelectivityHistogram = txnRangesSelectivityHistogram.WithLabelValues("fast_block_selectivity")
+	TxnFastRangesZMapSelectivityHistogram  = txnRangesSelectivityHistogram.WithLabelValues("fast_zm_selectivity")
+
+	txnTNSideQueueBlockingHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_side_queue_blocking_seconds",
+			Help:      "Bucketed histogram of queue blocking duration on tn side.",
+		}, []string{"type"})
+
+	// DO NOT change the order
+	TxnTNSideQueueBlockingHistograms = []prometheus.Observer{
+		nil,
+		txnTNSideQueueBlockingHistogram.WithLabelValues("GCManagerQueue"), //1
+		txnTNSideQueueBlockingHistogram.WithLabelValues("BaseStoreFlushQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("BaseStoreSyncQueue"), //3
+		txnTNSideQueueBlockingHistogram.WithLabelValues("BaseStoreCommitQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("BaseStorePostCommitQueue"), //5
+		txnTNSideQueueBlockingHistogram.WithLabelValues("BaseStoreTruncateQueue"),
+
+		txnTNSideQueueBlockingHistogram.WithLabelValues("TxnMgrPreparingRcvQueue"), //7
+		txnTNSideQueueBlockingHistogram.WithLabelValues("TxnMgrPreparingCkpQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("TxnMgrFlushQueue"), //9
+		txnTNSideQueueBlockingHistogram.WithLabelValues("IOPipelineWaitQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("IOPipelinePrefetchQueue"), //11
+		txnTNSideQueueBlockingHistogram.WithLabelValues("IOPipelineFetchQueue"),
+
+		txnTNSideQueueBlockingHistogram.WithLabelValues("LogDriverPreAppendQueue"), //13
+		txnTNSideQueueBlockingHistogram.WithLabelValues("LogDriverTruncateQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplDriverAppendQueue"), //15
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplDoneWithErrQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplLogInfoQueue"), //17
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplCheckpointQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplTruncatingQueue"), //19
+		txnTNSideQueueBlockingHistogram.WithLabelValues("StoreImplTruncateQueue"),
+
+		txnTNSideQueueBlockingHistogram.WithLabelValues("LogTailCollectLogTailQueue"), //21
+		txnTNSideQueueBlockingHistogram.WithLabelValues("LogTailWaitCommitQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPDirtyEntryQueue"), //23
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPWaitQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPIncrementalCKPQueue"), //25
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPGlobalCKPQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPGCCheckpointQueue"), //27
+		txnTNSideQueueBlockingHistogram.WithLabelValues("CKPPostCheckpointQueue"),
+		txnTNSideQueueBlockingHistogram.WithLabelValues("DiskCleanerProcessQueue"), //29
+	}
 )

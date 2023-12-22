@@ -48,7 +48,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnRangesLoadedObjectMetaRow(),
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
-			c.initTNQueueSizeRow(),
+			c.initTxnTNQueueSizeRow(),
+			c.initTxnTNQueueBlockingDurationRow(),
 		)...)
 	if err != nil {
 		return err
@@ -57,7 +58,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initTNQueueSizeRow() dashboard.Option {
+func (c *DashboardCreator) initTxnTNQueueSizeRow() dashboard.Option {
 	return dashboard.Row(
 		"TN Queue Size Overview",
 		c.withMultiGraph(
@@ -141,6 +142,87 @@ func (c *DashboardCreator) initTNQueueSizeRow() dashboard.Option {
 
 				"DiskCleanerProcessQueue",
 			}),
+	)
+}
+
+func (c *DashboardCreator) initTxnTNQueueBlockingDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"TN Queue Blocking Overview",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="GCManagerQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="BaseStoreFlushQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="BaseStoreSyncQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="BaseStoreCommitQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="BaseStorePostCommitQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="BaseStoreTruncateQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="TxnMgrPreparingRcvQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="TxnMgrPreparingCkpQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="TxnMgrFlushQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="IOPipelineWaitQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="IOPipelinePrefetchQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="IOPipelineFetchQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="LogDriverPreAppendQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="LogDriverTruncateQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplDriverAppendQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplDoneWithErrQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplLogInfoQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplCheckpointQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplTruncatingQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="StoreImplTruncateQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="LogTailCollectLogTailQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="LogTailWaitCommitQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPDirtyEntryQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPWaitQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPIncrementalCKPQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPGlobalCKPQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPGCCheckpointQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="CKPPostCheckpointQueue"`),
+				c.getMetricWithFilter(`mo_txn_tn_side_queue_blocking_seconds_bucket`, `type="DiskCleanerProcessQueue"`),
+			},
+			[]string{
+				"GCManagerQueue",
+
+				"BaseStoreFlushQueue",
+				"BaseStoreSyncQueue",
+				"BaseStoreCommitQueue",
+				"BaseStorePostCommitQueue",
+				"BaseStoreTruncateQueue",
+
+				"TxnMgrPreparingRcvQueue",
+				"TxnMgrPreparingCkpQueue",
+				"TxnMgrFlushQueue",
+
+				"IOPipelineWaitQueue",
+				"IOPipelinePrefetchQueue",
+				"IOPipelineFetchQueue",
+
+				"LogDriverPreAppendQueue",
+				"LogDriverTruncateQueue",
+
+				"StoreImplDriverAppendQueue",
+				"StoreImplDoneWithErrQueue",
+				"StoreImplLogInfoQueue",
+				"StoreImplCheckpointQueue",
+				"StoreImplTruncatingQueue",
+				"StoreImplTruncateQueue",
+
+				"LogTailCollectLogTailQueue",
+				"LogTailWaitCommitQueue",
+
+				"CKPDirtyEntryQueue",
+				"CKPWaitQueue",
+				"CKPIncrementalCKPQueue",
+				"CKPGlobalCKPQueue",
+				"CKPGCCheckpointQueue",
+				"CKPPostCheckpointQueue",
+
+				"DiskCleanerProcessQueue",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }
 

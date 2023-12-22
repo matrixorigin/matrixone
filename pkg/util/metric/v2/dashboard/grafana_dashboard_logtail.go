@@ -36,6 +36,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			c.initLogtailLoadCheckpointRow(),
 			c.initLogtailCollectRow(),
 			c.initLogtailSubscriptionRow(),
+			c.initLogtailQueueBlockingRow(),
 		)...)
 	if err != nil {
 		return err
@@ -101,17 +102,36 @@ func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 				`sum(` + c.getMetricWithFilter("mo_logtail_queue_size", `type="send"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_queue_size", `type="receive"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_logtail_queue_size", `type="apply"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_logtail_queue_size", `type="notifier"`) + `)`,
 			},
 			[]string{
 				"send",
 				"receive",
 				"apply",
+				"notifier",
 			}),
 		c.withGraph(
 			"Checkpoint logtail",
 			4,
 			`sum(rate(`+c.getMetricWithFilter("mo_logtail_load_checkpoint_total", "")+`[$interval])) by (`+c.by+`)`,
 			"{{ "+c.by+" }}"),
+	)
+}
+
+func (c *DashboardCreator) initLogtailQueueBlockingRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Queue Blocking Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_logtail_queue_blocking_duration_seconds_bucket`, `type="notifier"`),
+			},
+			[]string{
+				"notifier",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }
 

@@ -16,13 +16,9 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"path"
 	"sync/atomic"
 	"time"
-
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -249,8 +245,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	db.GCManager.Start()
 
-	go TaeMetricsTask(ctx)
-
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
@@ -267,67 +261,3 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 // 	}
 // 	db.Catalog.RecurLoop(p)
 // }
-
-func TaeMetricsTask(ctx context.Context) {
-	logutil.Info("tae metrics task started")
-	defer logutil.Info("tae metrics task exit")
-
-	sm.SafeQueueMetricChan = make(chan sm.SafeQueueMetric, 10)
-	defer close(sm.SafeQueueMetricChan)
-
-	timer := time.NewTicker(time.Second * 10)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			mpoolAllocatorSubTask()
-			safeQueueSizeUpdateSubTask()
-		case metric := <-sm.SafeQueueMetricChan:
-			safeQueueFullUpdateSubTask(metric)
-		}
-	}
-}
-
-func safeQueueFullUpdateSubTask(metric sm.SafeQueueMetric) {
-	v2.TxnTNSideQueueSizeGauges[metric.Name].Set(float64(metric.Len))
-}
-
-func safeQueueSizeUpdateSubTask() {
-	for idx := 0; idx < int(sm.QueueNameMax); idx++ {
-		if sm.SafeQueueRegister[idx] != nil {
-			v2.TxnTNSideQueueSizeGauges[sm.QueueNameType(idx)].
-				Set(float64(sm.SafeQueueRegister[idx].Len()))
-		}
-	}
-}
-
-func mpoolAllocatorSubTask() {
-	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
-	v2.MemTAEDefaultHighWaterMarkGauge.Set(float64(common.DefaultAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
-	v2.MemTAEMutableHighWaterMarkGauge.Set(float64(common.MutMemAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
-	v2.MemTAESmallHighWaterMarkGauge.Set(float64(common.SmallAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAEVectorPoolDefaultAllocatorGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
-	v2.MemTAEVectorPoolDefaultHighWaterMarkGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().Stats().HighWaterMark.Load()))
-
-	v2.MemTAELogtailAllocatorGauge.Set(float64(common.LogtailAllocator.CurrNB()))
-	v2.MemTAELogtailHighWaterMarkGauge.Set(float64(common.LogtailAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAECheckpointAllocatorGauge.Set(float64(common.CheckpointAllocator.CurrNB()))
-	v2.MemTAECheckpointHighWaterMarkGauge.Set(float64(common.CheckpointAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAEMergeAllocatorGauge.Set(float64(common.MergeAllocator.CurrNB()))
-	v2.MemTAEMergeHighWaterMarkGauge.Set(float64(common.MergeAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAEWorkSpaceAllocatorGauge.Set(float64(common.WorkspaceAllocator.CurrNB()))
-	v2.MemTAEWorkSpaceHighWaterMarkGauge.Set(float64(common.WorkspaceAllocator.Stats().HighWaterMark.Load()))
-
-	v2.MemTAEDebugAllocatorGauge.Set(float64(common.DebugAllocator.CurrNB()))
-	v2.MemTAEDebugHighWaterMarkGauge.Set(float64(common.DebugAllocator.Stats().HighWaterMark.Load()))
-
-}

@@ -16,9 +16,11 @@ package sm
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -31,6 +33,7 @@ const (
 
 type QueueNameType int
 
+// DO NOT change the order
 const (
 	QueueNameForTest QueueNameType = 0
 
@@ -72,17 +75,15 @@ const (
 
 	DiskCleanerProcessQueue QueueNameType = 29
 
-	QueueNameMax QueueNameType = 30
+	LogTailNotifierQueue QueueNameType = 30
+	// new names adding here
+
+	QueueNameMax QueueNameType = 31
 )
 
-type SafeQueueMetric struct {
-	Name QueueNameType
-	Len  int
+var SafeQueueRegister [int(QueueNameMax)]struct {
+	Queue *safeQueue
 }
-
-var SafeQueueMetricChan chan SafeQueueMetric
-
-var SafeQueueRegister [int(QueueNameMax)]*safeQueue
 
 type safeQueue struct {
 	name      QueueNameType
@@ -110,7 +111,7 @@ func NewSafeQueue(name QueueNameType, queueSize, batchSize int, onItem OnItemsCB
 	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
 
-	SafeQueueRegister[name] = q
+	SafeQueueRegister[name].Queue = q
 	return q
 }
 
@@ -198,18 +199,84 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 
 	// if queue is full
 	default:
-		select {
-		// let the metrics chan unblocking
-		case SafeQueueMetricChan <- SafeQueueMetric{q.name, q.Len()}:
-		}
-
 		if q.blocking {
+			start := time.Now()
 			q.queue <- item
+			// observe the blocking duration
+			v2.TxnTNSideQueueBlockingHistograms[q.name].Observe(time.Since(start).Seconds())
 			q.pending.Add(1)
+
 			return item, nil
 		} else {
 			// if queue is non blocking
 			return item, ErrFull
 		}
+	}
+}
+
+func (n QueueNameType) String() string {
+	switch n {
+	case GCManagerQueue:
+		return "GCManagerQueue"
+	case BaseStoreFlushQueue:
+		return "BaseStoreFlushQueue"
+	case BaseStoreSyncQueue:
+		return "BaseStoreSyncQueue"
+	case BaseStoreCommitQueue:
+		return "BaseStoreCommitQueue"
+	case BaseStorePostCommitQueue:
+		return "BaseStorePostCommitQueue"
+	case BaseStoreTruncateQueue:
+		return "BaseStoreTruncateQueue"
+	case TxnMgrPreparingRcvQueue:
+		return "TxnMgrPreparingRcvQueue"
+	case TxnMgrPreparingCkpQueue:
+		return "TxnMgrPreparingCkpQueue"
+	case TxnMgrFlushQueue:
+		return "TxnMgrFlushQueue"
+	case IOPipelineWaitQueue:
+		return "IOPipelineWaitQueue"
+	case IOPipelinePrefetchQueue:
+		return "IOPipelinePrefetchQueue"
+	case IOPipelineFetchQueue:
+		return "IOPipelineFetchQueue"
+	case LogDriverPreAppendQueue:
+		return "LogDriverPreAppendQueue"
+	case LogDriverTruncateQueue:
+		return "LogDriverTruncateQueue"
+	case StoreImplDriverAppendQueue:
+		return "StoreImplDriverAppendQueue"
+	case StoreImplDoneWithErrQueue:
+		return "StoreImplDoneWithErrQueue"
+	case StoreImplLogInfoQueue:
+		return "StoreImplLogInfoQueue"
+	case StoreImplCheckpointQueue:
+		return "StoreImplCheckpointQueue"
+	case StoreImplTruncatingQueue:
+		return "StoreImplTruncatingQueue"
+	case StoreImplTruncateQueue:
+		return "StoreImplTruncateQueue"
+	case LogTailCollectLogTailQueue:
+		return "LogTailCollectLogTailQueue"
+	case LogTailWaitCommitQueue:
+		return "LogTailWaitCommitQueue"
+	case CKPDirtyEntryQueue:
+		return "CKPDirtyEntryQueue"
+	case CKPWaitQueue:
+		return "CKPWaitQueue"
+	case CKPIncrementalCKPQueue:
+		return "CKPIncrementalCKPQueue"
+	case CKPGlobalCKPQueue:
+		return "CKPGlobalCKPQueue"
+	case CKPGCCheckpointQueue:
+		return "CKPGCCheckpointQueue"
+	case CKPPostCheckpointQueue:
+		return "CKPPostCheckpointQueue"
+	case DiskCleanerProcessQueue:
+		return "DiskCleanerProcessQueue"
+	case LogTailNotifierQueue:
+		return "LogTailNotifierQueue"
+	default:
+		return "Unknown"
 	}
 }
