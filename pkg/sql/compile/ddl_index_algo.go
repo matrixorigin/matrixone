@@ -108,32 +108,17 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 	/*
 		The meta table will contain version number for now. In the future, it can contain `index progress` etc.
-		The version number is rotated and reused after maxVersions. This is to avoid version number overflow.
-		If maxVersion = 3, then versions will be 0,1,2,0,1,2,0,1,2,0,1,2,0,1,2 etc.
-
-		We delete old entries from centroids and entries table for the current version number. This is to ensure that
-		1. we don't keep old/stale entries in the table
-		2. we don't delete entries that are being used by a query.
-
-		- If a query is referencing current version (say 1), then during reindex, we will increment current version to 2 (inside the txn),
-		and then delete old entries of version 2.Then we insert new data for version 2. We commit the txn if everything succeeded.
-		- When a new reindex is issued again, we will delete old entries of version 0 ( (2+1)%3 ), and insert new data for version 0.
-		- When a new reindex is issued again, we reach back to version 1.
-		If the query is still referencing version 1, then bad luck! We will get into an inconsistent state.
-		To ensure that we don't get in this state, we need to have maxVersions based reindex frequency and avg query duration etc.
-		For now, lets keep it as 10.
-
-		NOTE: We still hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-			We need to see how to reduce the critical section.
+		The version number is incremented monotonically for each re-index.
+		NOTE: We don't handle version number overflow as BIGINT has a large upper bound.
 
 		Sample SQL:
 
 		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
-		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1)%10 AS CHAR);
+		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1) AS CHAR);
 	*/
 
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
-		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1)%% %d  AS CHAR);",
+		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -141,7 +126,6 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		catalog.MaxIVFFlatVersion,
 	)
 
 	err := c.runSql(insertSQL)
