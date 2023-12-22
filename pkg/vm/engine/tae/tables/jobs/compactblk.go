@@ -259,7 +259,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
 		}
-		if err = ablockTask.WaitDone(); err != nil {
+		if err = ablockTask.WaitDone(ctx); err != nil {
 			return
 		}
 		metaLocABlk := blockio.EncodeLocation(
@@ -294,7 +294,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			if err = task.rt.Scheduler.Schedule(deleteTask); err != nil {
 				return
 			}
-			if err = deleteTask.WaitDone(); err != nil {
+			if err = deleteTask.WaitDone(ctx); err != nil {
 				return
 			}
 			deltaLoc := blockio.EncodeLocation(
@@ -379,7 +379,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
-	if err = ioTask.WaitDone(); err != nil {
+	if err = ioTask.WaitDone(context.Background()); err != nil {
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
