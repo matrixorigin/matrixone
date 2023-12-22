@@ -288,4 +288,93 @@ insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 
 alter table tbl alter reindex idx14 ivfflat lists=2;
 insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
 insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx15 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+insert into tbl values(9, "[130,40,90]");
+delete from tbl where id=9; -- delete 9
+delete from tbl where embedding="[130,40,90]"; -- delete 8
+alter table tbl alter reindex idx15 ivfflat lists=2;
+insert into tbl values(10, "[130,40,90]");
+delete from tbl where id=6; -- removes both (0,6) and (1,6) entries
+delete from tbl where embedding="[1,3,5]"; -- removes both (0,5) and (1,5) entries
+delete from tbl where id=10; -- removes (1,10)
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+delete from tbl;
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+truncate table tbl;
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id=8; -- update 8 to cluster 1 from cluster 2
+update tbl set id=9 where id=8; -- update 8 to 9
+alter table tbl alter reindex idx16 ivfflat lists=2;
+update tbl set embedding="[1,2,3]" where id=7; -- update 7 to cluster 1 from cluster 2 for the latest versions
+update tbl set id=10 where id=7; -- update 7 to 10
+drop table if exists tbl;
+create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id, age));
+insert into tbl values("1", "10", "[1,2,3]");
+insert into tbl values("2", "20", "[1,2,4]");
+insert into tbl values("3", "30", "[1,2.4,4]");
+insert into tbl values("4", "40", "[1,2,5]");
+insert into tbl values("5", "50", "[1,3,5]");
+insert into tbl values("6", "60", "[100,44,50]");
+insert into tbl values("7", "70", "[120,50,70]");
+insert into tbl values("8", "80", "[130,40,90]");
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id="8";
+update tbl set embedding="[1,2,3]" where id="7" and age = "70";
+update tbl set id="70" where id="7";
+alter table tbl alter reindex idx17 ivfflat lists=2;
+update tbl set embedding="[1,2,3]" where id="6";
+update tbl set id="60" where id="6";
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id="8";
+delete from tbl where id="8";
 drop database vecdb2;
