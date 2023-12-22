@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -344,7 +345,7 @@ func (f *fuzzyCheck) formatNonCompound(toCheck *vector.Vector, useInErr bool) ([
 		// string family but not include binary
 		case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
 			for i, str := range ss {
-				ss[i] = "'" + str + "'"
+				ss[i] = strconv.Quote(str)
 			}
 			return ss, nil
 
