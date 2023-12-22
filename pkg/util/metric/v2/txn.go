@@ -235,6 +235,7 @@ var (
 	TxnOnPrepareWALEndPrepareDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_end_prepare")
 	TxnOnPrepareWALFlushQueueDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_flush_queue")
 	TxnOnPrepareWALTotalDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_total")
+	TxnOnPrepareWALGetPrepareTSHistogram       = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_get_prepare_ts")
 
 	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
 	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
