@@ -27,23 +27,6 @@ var (
 		input  string
 		output string
 	}{
-		//input:  "select (col + col) / 2",
-		//output: "select (col + col) / 2",
-		//----------------------------------------------------------------------------------------------
-		//input:  "ALTER TABLE employees ADD PARTITION (PARTITION p05 VALUES LESS THAN (500001))",
-		//output: "alter table employees add partition (partition p05 values less than (500001))",
-		//input:  "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
-		//output: "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
-		//input:  "ALTER TABLE t1 DROP PARTITION p1",
-		//output: "alter table t1 drop partition p1",
-		//input:  "ALTER TABLE t1 DROP PARTITION p0, p1",
-		//output: "alter table t1 drop partition p0, p1",
-		//input:  "ALTER TABLE t1 TRUNCATE PARTITION p0",
-		//output: "alter table t1 truncate partition p0",
-		//input:  "ALTER TABLE t1 TRUNCATE PARTITION p0, p3",
-		//output: "alter table t1 truncate partition p0, p3",
-		//input:  "ALTER TABLE t1 TRUNCATE PARTITION ALL",
-		//output: "alter table t1 truncate partition all",
 		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
 		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}
