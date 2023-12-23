@@ -2600,6 +2600,7 @@ func lockRows(
 	err := lockop.LockRows(
 		eng,
 		proc,
+		rel,
 		id,
 		vec,
 		*vec.GetType(),

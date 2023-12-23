@@ -346,13 +346,13 @@ func TestTable1(t *testing.T) {
 }
 
 // UT Steps
-// 1. Start Txn1, create a database "db", table "tb" and segment "seg1", then commit Txn1
-// 1. Start Txn2, create a segment "seg2". Txn2 scan "tb" and "seg1, seg2" found
-// 2. Start Txn3, scan "tb" and only "seg1" found
+// 1. Start Txn1, create a database "db", table "tb" and Object "obj1", then commit Txn1
+// 1. Start Txn2, create a Object "obj2". Txn2 scan "tb" and "obj1, obj2" found
+// 2. Start Txn3, scan "tb" and only "obj1" found
 // 3. Commit Txn2
-// 4. Txn3 scan "tb" and also only "seg1" found
-// 5. Start Txn4, scan "tb" and both "seg1" and "seg2" found
-func TestSegment1(t *testing.T) {
+// 4. Txn3 scan "tb" and also only "obj1" found
+// 5. Start Txn4, scan "tb" and both "obj1" and "obj2" found
+func TestObject1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	catalog := MockCatalog()
 	defer catalog.Close()
@@ -368,11 +368,11 @@ func TestSegment1(t *testing.T) {
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)
-	seg1, err := tb.CreateSegment(txn1, ES_Appendable, nil)
+	obj1, err := tb.CreateObject(txn1, ES_Appendable, nil)
 	assert.Nil(t, err)
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
-	t.Log(seg1.String())
+	t.Log(obj1.String())
 	t.Log(tb.String())
 }
 

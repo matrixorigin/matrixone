@@ -116,13 +116,9 @@ func NewCompile(
 	c.proc = proc
 	c.stmt = stmt
 	c.addr = addr
-	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
-	c.stepRegs = make(map[int32][][2]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	c.startAt = startAt
-	c.metaTables = make(map[string]struct{})
 	c.disableRetry = false
 	return c
 }
@@ -145,7 +141,11 @@ func (c *Compile) reset() {
 	for i := range c.scope {
 		c.scope[i].release()
 	}
-	c.scope = nil
+	for i := range c.createdFuzzy {
+		c.createdFuzzy[i].release()
+	}
+	c.createdFuzzy = c.createdFuzzy[:0]
+	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil
 	c.u = nil
@@ -160,26 +160,29 @@ func (c *Compile) reset() {
 	c.e = nil
 	c.ctx = nil
 	c.proc = nil
-	c.cnList = nil
+	c.cnList = c.cnList[:0]
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.fuzzy = nil
-	c.metaTables = nil
 	c.needLockMeta = false
-	c.counterSet = &perfcounter.CounterSet{}
-	c.lock = &sync.RWMutex{}
 	c.isInternal = false
+
+	for k := range c.metaTables {
+		delete(c.metaTables, k)
+	}
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
 	for k := range c.stepRegs {
 		delete(c.stepRegs, k)
 	}
-	for k := range c.runtimeFilterReceiverMap {
-		delete(c.runtimeFilterReceiverMap, k)
-	}
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for k := range c.runtimeFilterReceiverMap {
+		delete(c.runtimeFilterReceiverMap, k)
 	}
 }
 
@@ -2697,7 +2700,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	if err != nil {
 		return nil, err
 	}
-
+	c.createdFuzzy = append(c.createdFuzzy, outData)
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{
