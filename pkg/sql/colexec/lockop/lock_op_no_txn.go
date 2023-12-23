@@ -59,6 +59,7 @@ func LockTableWithUniqueID(
 		WithLockTable(true, true).
 		WithHasNewVersionInRangeFunc(func(
 			proc *process.Process,
+			rel engine.Relation,
 			tableID uint64,
 			eng engine.Engine,
 			vec *vector.Vector,
@@ -70,6 +71,7 @@ func LockTableWithUniqueID(
 		proc.Ctx,
 		false,
 		eng,
+		nil,
 		tableID,
 		proc,
 		nil,

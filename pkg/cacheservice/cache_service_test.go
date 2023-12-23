@@ -193,7 +193,7 @@ func runTestWithCacheServer(t *testing.T, fs fileservice.FileService, fn func(sv
 	assert.NotNil(t, cs)
 	defer func() { assert.NoError(t, cs.Close()) }()
 	cs.AddHandleFunc(pb.CmdMethod_RemoteRead,
-		func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+		func(ctx context.Context, req *pb.Request, resp *pb.CacheResponse) error {
 			return fileservice.HandleRemoteRead(ctx, fs, req, resp)
 		},
 		false,
