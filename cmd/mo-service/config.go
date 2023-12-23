@@ -348,9 +348,8 @@ func (c *Config) createFileService(
 	}
 
 	// set distributed cache callbacks
-	for i, config := range c.FileServices {
-		c.setCacheCallbacks(&config)
-		c.FileServices[i] = config
+	for i := range c.FileServices {
+		c.setCacheCallbacks(&c.FileServices[i])
 	}
 
 	for _, config := range c.FileServices {
