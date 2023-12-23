@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -61,6 +62,10 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 		return err
 	}
 	task.blocks, _, err = writer.Sync(ctx)
+	if v := ctx.Value(TestFlushBailoutPos2{}); v != nil {
+		err = moerr.NewInternalErrorNoCtx("test flush deletes bail out")
+		return err
+	}
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)

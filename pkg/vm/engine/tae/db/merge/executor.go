@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -135,7 +136,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
 	logMergeTask(entry.GetLastestSchema().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
-	if err = task.WaitDone(); err != nil {
+	if err = task.WaitDone(context.Background()); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
 	return nil

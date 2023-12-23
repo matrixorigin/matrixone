@@ -71,7 +71,7 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
-	if v := ctx.Value(TestFlushBailout{}); v != nil {
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
 	seg := task.meta.ID.Segment()

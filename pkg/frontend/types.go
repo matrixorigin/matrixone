@@ -53,11 +53,7 @@ type ComputationWrapper interface {
 
 	GetProcess() *process.Process
 
-	SetDatabaseName(db string) error
-
 	GetColumns() ([]interface{}, error)
-
-	// GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 

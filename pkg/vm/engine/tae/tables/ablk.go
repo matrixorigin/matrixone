@@ -16,6 +16,8 @@ package tables
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -34,6 +36,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
+
+type AblkTempFilter struct {
+	sync.RWMutex
+	m map[types.Blockid]bool
+}
+
+func (f *AblkTempFilter) Add(id types.Blockid) {
+	f.Lock()
+	defer f.Unlock()
+	f.m[id] = true
+}
+
+func (f *AblkTempFilter) Check(id types.Blockid) (skip bool) {
+	f.Lock()
+	defer f.Unlock()
+	if _, ok := f.m[id]; ok {
+		delete(f.m, id)
+		return true
+	}
+	return false
+}
+
+var AblkTempF *AblkTempFilter
+
+func init() {
+	AblkTempF = &AblkTempFilter{
+		m: make(map[types.Blockid]bool),
+	}
+}
 
 type ablock struct {
 	*baseBlock
@@ -98,7 +129,33 @@ func (blk *ablock) IsAppendable() bool {
 	return node.Rows() < blk.meta.GetSchema().BlockMaxRows
 }
 
+func (blk *ablock) PrepareCompactInfo() (result bool, reason string) {
+	if n := blk.RefCount(); n > 0 {
+		reason = fmt.Sprintf("entering refcount %d", n)
+		return
+	}
+	blk.FreezeAppend()
+	if !blk.meta.PrepareCompact() || !blk.mvcc.PrepareCompact() {
+		if !blk.meta.PrepareCompact() {
+			reason = "meta preparecomp false"
+		} else {
+			reason = "mvcc preparecomp false"
+		}
+		return
+	}
+
+	if n := blk.RefCount(); n != 0 {
+		reason = fmt.Sprintf("ending refcount %d", n)
+		return
+	}
+	return blk.RefCount() == 0, reason
+}
+
 func (blk *ablock) PrepareCompact() bool {
+	if AblkTempF.Check(blk.meta.ID) {
+		logutil.Infof("temp ablk filter skip blk %v", blk.meta.ID.String())
+		return true
+	}
 	if blk.RefCount() > 0 {
 		return false
 	}

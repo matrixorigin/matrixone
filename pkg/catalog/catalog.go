@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -236,6 +237,9 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	for i, row := range rows {
 		name := string(row[SKIP_ROWID_OFFSET+MO_TABLES_REL_NAME_IDX].([]byte))
 		if id, tblName, ok := isTruncate(name); ok {
+			if id == 0 {
+				logutil.Infof("truncate table %s: %v-%v-%v", name, id, tblName, ok)
+			}
 			cmds[i].Id = id
 			cmds[i].Name = tblName
 			cmds[i].NewId = row[SKIP_ROWID_OFFSET+MO_TABLES_REL_ID_IDX].(uint64)
