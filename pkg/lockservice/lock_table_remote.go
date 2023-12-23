@@ -105,14 +105,14 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		txn.lockAdded(l.bind.Table, rows)
+		txn.lockAdded(l.bind, rows)
 		logRemoteLockAdded(txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, nil)
 		return
 	}
 
 	// encounter any error, we also added lock to txn, because we need unlock on remote
-	txn.lockAdded(l.bind.Table, rows)
+	txn.lockAdded(l.bind, rows)
 
 	logRemoteLockFailed(txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
