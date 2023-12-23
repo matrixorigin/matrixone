@@ -49,8 +49,8 @@ func TestMergeBlocksCmd(t *testing.T) {
 	id1.SetSegmentID(droppedSid)
 	id2 := common.ID{TableID: 1}
 	id2.SetSegmentID(createdSid)
-	droppedSegs := []*common.ID{&id1, &id1}
-	createdSegs := []*common.ID{&id2}
+	droppedObjs := []*common.ID{&id1, &id1}
+	createdObjs := []*common.ID{&id2}
 	droppedBlks := []*common.ID{
 		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 3, 0)},
 		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 4, 0)}}
@@ -60,8 +60,8 @@ func TestMergeBlocksCmd(t *testing.T) {
 	toAddr := []uint32{40000, 40000, 242}
 	cmd := newMergeBlocksCmd(
 		0,
-		droppedSegs,
-		createdSegs,
+		droppedObjs,
+		createdObjs,
 		droppedBlks,
 		createdBlks,
 		mapping,
