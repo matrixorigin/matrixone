@@ -354,7 +354,9 @@ func (s *service) getLockTableWithCreate(
 	if err != nil {
 		return nil, err
 	}
-
+	if originTableID == 2 {
+		bind.ServiceID = s.serviceID
+	}
 	l := s.createLockTableByBind(bind)
 	if _, loaded := s.getTables(group).LoadOrStore(tableID, l); loaded {
 		getLogger().Fatal("BUG: cannot loaded lock table from tables")
