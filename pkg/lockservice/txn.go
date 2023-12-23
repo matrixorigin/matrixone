@@ -28,7 +28,10 @@ import (
 
 var (
 	txnPool = sync.Pool{New: func() any {
-		return &activeTxn{holdLocks: make(map[uint64]*cowSlice)}
+		return &activeTxn{
+			holdLocks: make(map[uint64]*cowSlice),
+			holdBinds: make(map[uint64]pb.LockTable),
+		}
 	}}
 
 	parallelUnlockTables = 2
@@ -42,6 +45,7 @@ type activeTxn struct {
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
 	holdLocks      map[uint64]*cowSlice
+	holdBinds      map[uint64]pb.LockTable
 	remoteService  string
 	deadlockFound  bool
 }
@@ -83,7 +87,7 @@ func (txn *activeTxn) lockRemoved(
 }
 
 func (txn *activeTxn) lockAdded(
-	table uint64,
+	bind pb.LockTable,
 	locks [][]byte) {
 
 	// only in the lockservice node where the transaction was
@@ -103,12 +107,13 @@ func (txn *activeTxn) lockAdded(
 	//    the lock information. We use mutex to solve it.
 
 	defer logTxnLockAdded(txn, locks)
-	v, ok := txn.holdLocks[table]
+	v, ok := txn.holdLocks[bind.Table]
 	if ok {
 		v.append(locks)
 		return
 	}
-	txn.holdLocks[table] = newCowSlice(txn.fsp, locks)
+	txn.holdLocks[bind.Table] = newCowSlice(txn.fsp, locks)
+	txn.holdBinds[bind.Table] = bind
 }
 
 func (txn *activeTxn) close(
@@ -179,6 +184,7 @@ func (txn *activeTxn) close(
 
 	for table := range txn.holdLocks {
 		delete(txn.holdLocks, table)
+		delete(txn.holdBinds, table)
 	}
 	txn.txnID = nil
 	txn.txnKey = ""
