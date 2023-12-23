@@ -90,7 +90,7 @@ type mockDBHandle struct {
 	entry   *DBEntry
 }
 
-type mockSegIt struct {
+type mockObjIt struct {
 	sync.RWMutex
 }
 
@@ -124,11 +124,11 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 	}
 }
 
-func (it *mockSegIt) GetError() error            { return nil }
-func (it *mockSegIt) Valid() bool                { return false }
-func (it *mockSegIt) Next()                      {}
-func (it *mockSegIt) Close() error               { return nil }
-func (it *mockSegIt) GetSegment() handle.Segment { return nil }
+func (it *mockObjIt) GetError() error          { return nil }
+func (it *mockObjIt) Valid() bool              { return false }
+func (it *mockObjIt) Next()                    {}
+func (it *mockObjIt) Close() error             { return nil }
+func (it *mockObjIt) GetObject() handle.Object { return nil }
 
 func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
@@ -202,12 +202,12 @@ func (h *mockDBHandle) GetCreateSql() string {
 	return h.entry.GetCreateSql()
 }
 
-func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
-	return new(mockSegIt)
+func (h *mockTableHandle) MakeObjectIt() (it handle.ObjectIt) {
+	return new(mockObjIt)
 }
 
-func (h *mockTableHandle) MakeSegmentItOnSnap() (it handle.SegmentIt) {
-	return new(mockSegIt)
+func (h *mockTableHandle) MakeObjectItOnSnap() (it handle.ObjectIt) {
+	return new(mockObjIt)
 }
 
 func (h *mockTableHandle) String() string {

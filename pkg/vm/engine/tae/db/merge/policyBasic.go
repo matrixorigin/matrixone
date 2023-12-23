@@ -95,7 +95,7 @@ type Basic struct {
 	id      uint64
 	schema  *catalog.Schema
 	hist    *common.MergeHistory
-	objHeap *heapBuilder[*catalog.SegmentEntry]
+	objHeap *heapBuilder[*catalog.ObjectEntry]
 	accBuf  []int
 
 	config         *BasicPolicyConfig
@@ -104,8 +104,8 @@ type Basic struct {
 
 func NewBasicPolicy() *Basic {
 	return &Basic{
-		objHeap: &heapBuilder[*catalog.SegmentEntry]{
-			items: make(itemSet[*catalog.SegmentEntry], 0, 32),
+		objHeap: &heapBuilder[*catalog.ObjectEntry]{
+			items: make(itemSet[*catalog.ObjectEntry], 0, 32),
 		},
 		accBuf:         make([]int, 1, 32),
 		configProvider: NewCustomConfigProvider(),
@@ -113,22 +113,22 @@ func NewBasicPolicy() *Basic {
 }
 
 // impl Policy for Basic
-func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
-	rowsLeftOnSeg := obj.Stat.GetRemainingRows()
+func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
+	rowsLeftOnObj := obj.Stat.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
-		if rowsLeftOnSeg < o.config.ObjectMinRows {
+		if rowsLeftOnObj < o.config.ObjectMinRows {
 			return true
 		}
-		if rowsLeftOnSeg < obj.Stat.GetRows()/2 {
+		if rowsLeftOnObj < obj.Stat.GetRows()/2 {
 			return true
 		}
 		return false
 	}
 
 	if iscandidate() {
-		o.objHeap.pushWithCap(&mItem[*catalog.SegmentEntry]{
-			row:   rowsLeftOnSeg,
+		o.objHeap.pushWithCap(&mItem[*catalog.ObjectEntry]{
+			row:   rowsLeftOnObj,
 			entry: obj,
 		}, o.config.MergeMaxOneRun)
 	}
@@ -169,21 +169,21 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
-	segs := o.objHeap.finish()
-	sort.Slice(segs, func(i, j int) bool {
-		return segs[i].Stat.GetRemainingRows() < segs[j].Stat.GetRemainingRows()
+func (o *Basic) Revise(cpu, mem int64) []*catalog.ObjectEntry {
+	objs := o.objHeap.finish()
+	sort.Slice(objs, func(i, j int) bool {
+		return objs[i].Stat.GetRemainingRows() < objs[j].Stat.GetRemainingRows()
 	})
-	segs = o.controlMem(segs, mem)
-	segs = o.optimize(segs)
-	return segs
+	objs = o.controlMem(objs, mem)
+	objs = o.optimize(objs)
+	return objs
 }
 
-func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
-	// segs are sorted by remaining rows
+func (o *Basic) optimize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
+	// objs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
-	for i, seg := range segs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.GetRemainingRows())
+	for i, obj := range objs {
+		o.accBuf = append(o.accBuf, o.accBuf[i]+obj.Stat.GetRemainingRows())
 	}
 	acc := o.accBuf
 
@@ -211,31 +211,31 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 		return nil
 	}
 
-	segs = segs[:i]
+	objs = objs[:i]
 
-	return segs
+	return objs
 }
 
-func (o *Basic) controlMem(segs []*catalog.SegmentEntry, mem int64) []*catalog.SegmentEntry {
+func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.ObjectEntry {
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	needPopout := func(ss []*catalog.SegmentEntry) bool {
+	needPopout := func(ss []*catalog.ObjectEntry) bool {
 		_, esize := estimateMergeConsume(ss)
 		return esize > int(2*mem/3)
 	}
 	popCnt := 0
-	for needPopout(segs) {
-		segs = segs[:len(segs)-1]
+	for needPopout(objs) {
+		objs = objs[:len(objs)-1]
 		popCnt++
 	}
 	if popCnt > 0 {
 		logutil.Infof(
 			"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
-			o.id, o.schema.Name, popCnt, len(segs)+popCnt, common.HumanReadableBytes(int(mem)),
+			o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
 		)
 	}
-	return segs
+	return objs
 }
 
 func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
@@ -264,7 +264,7 @@ func determineObjectMinRows(schema *catalog.Schema) int {
 		return runtimeMinRows
 	}
 	// the max rows of a full object
-	objectFullRows := int(schema.SegmentMaxBlocks) * int(schema.BlockMaxRows)
+	objectFullRows := int(schema.ObjectMaxBlocks) * int(schema.BlockMaxRows)
 	// we want every object has at least 5 blks rows
 	objectMinRows := constMergeMinBlks * int(schema.BlockMaxRows)
 	if objectFullRows < objectMinRows { // for small config in unit test
