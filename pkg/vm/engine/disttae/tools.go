@@ -1219,6 +1219,14 @@ func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	}
 }
 
+func genTableKeyByAccountID(id uint32, name string, databaseId uint64) tableKey {
+	return tableKey{
+		name:       name,
+		databaseId: databaseId,
+		accountId:  id,
+	}
+}
+
 func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,

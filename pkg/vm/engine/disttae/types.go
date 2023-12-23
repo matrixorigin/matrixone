@@ -147,14 +147,14 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [6]uint32
 	segId types.Uuid
-	// use to cache table
+	// use to cache opened tables on snapshot by current txn.
 	tableCache struct {
 		cachedIndex int
 		tableMap    *sync.Map
 	}
-	// use to cache database
+	// use to cache databases created by current txn.
 	databaseMap *sync.Map
-	// use to cache created table
+	// use to cache tables created by current txn.
 	createMap *sync.Map
 	/*
 		for deleted table
@@ -411,14 +411,16 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 
 // Entry represents a delete/insert
 type Entry struct {
-	typ          int
+	typ int
+	//the tenant owns the tableId and databaseId
+	accountId    uint32
 	tableId      uint64
 	databaseId   uint64
 	tableName    string
 	databaseName string
 	// blockName for s3 file
 	fileName string
-	// update or delete tuples
+	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
@@ -463,6 +465,7 @@ type databaseKey struct {
 type txnTable struct {
 	sync.Mutex
 
+	accountId uint32
 	tableId   uint64
 	version   uint32
 	tableName string

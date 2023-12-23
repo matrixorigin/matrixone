@@ -70,6 +70,7 @@ func (txn *Transaction) ReadOnly() bool {
 // a table.
 func (txn *Transaction) WriteBatch(
 	typ int,
+	accountId uint32,
 	databaseId uint64,
 	tableId uint64,
 	databaseName string,
@@ -104,6 +105,7 @@ func (txn *Transaction) WriteBatch(
 	}
 	e := Entry{
 		typ:          typ,
+		accountId:    accountId,
 		bat:          bat,
 		tableId:      tableId,
 		databaseId:   databaseId,
@@ -247,8 +249,9 @@ func checkPKDup(
 
 // checkDup check whether the txn.writes has duplicate pk entry
 func (txn *Transaction) checkDup() error {
-	tablesDef := make(map[[2]string]*plan.TableDef)
-	pkIndex := make(map[[2]string]int)
+	//table id is global unique
+	tablesDef := make(map[uint64]*plan.TableDef)
+	pkIndex := make(map[uint64]int)
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -262,42 +265,45 @@ func (txn *Transaction) checkDup() error {
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		tableKey := genTableKey(txn.proc.Ctx, e.tableName, e.databaseId)
+		tableKey := genTableKeyByAccountID(e.accountId, e.tableName, e.databaseId)
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
 		if e.typ == INSERT {
-			key := [2]string{e.databaseName, e.tableName}
-			if _, ok := tablesDef[key]; !ok {
-				tbl, err := txn.getTable(key)
+			if _, ok := tablesDef[e.tableId]; !ok {
+				logutil.Infof("xxxx checkDup start to get table, database:%s, table:%s, txn:%s",
+					e.databaseName,
+					e.tableName,
+					txn.op.Txn().DebugString())
+				tbl, err := txn.getTableByAccountID(e.accountId, e.databaseName, e.tableName)
 				if err != nil {
 					return err
 				}
-				tablesDef[key] = tbl.GetTableDef(txn.proc.Ctx)
+				tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
 			}
-			tableDef := tablesDef[key]
-			if _, ok := pkIndex[key]; !ok {
+			tableDef := tablesDef[e.tableId]
+			if _, ok := pkIndex[e.tableId]; !ok {
 				for idx, colDef := range tableDef.Cols {
 					//FIXME::tableDef.PKey is nil if table is mo_tables, mo_columns, mo_database?
 					if tableDef.Pkey == nil {
 						if colDef.Primary {
-							pkIndex[key] = idx
+							pkIndex[e.tableId] = idx
 							break
 						}
 						continue
 					}
 					if colDef.Name == tableDef.Pkey.PkeyColName {
 						if colDef.Name == catalog.FakePrimaryKeyColName {
-							pkIndex[key] = -1
+							pkIndex[e.tableId] = -1
 						} else {
-							pkIndex[key] = idx
+							pkIndex[e.tableId] = idx
 						}
 						break
 					}
 				}
 			}
 			bat := e.bat
-			if index, ok := pkIndex[key]; ok && index != -1 {
+			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					newBat := batch.NewWithSize(len(bat.Vecs) - 1)
 					newBat.SetAttributes(bat.Attrs[1:])
@@ -417,6 +423,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			MetaLocation().Name().String()
 		err = table.db.txn.WriteFileLocked(
 			INSERT,
+			table.accountId,
 			table.db.databaseId,
 			table.tableId,
 			table.db.databaseName,
@@ -443,6 +450,28 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		txn.workspaceSize -= size
 	}
 	return nil
+}
+
+func (txn *Transaction) getTableByAccountID(
+	accountID uint32,
+	databaseName, tableName string) (engine.Relation, error) {
+	database, err := txn.engine.DatabaseByAccountID(
+		accountID,
+		databaseName,
+		txn.proc.TxnOperator)
+	if err != nil {
+		return nil, err
+	}
+
+	tbl, err := database.(*txnDatabase).RelationByAccountID(
+		accountID,
+		tableName,
+		nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return tbl, nil
 }
 
 func (txn *Transaction) getTable(key [2]string) (engine.Relation, error) {
@@ -481,6 +510,7 @@ func (txn *Transaction) insertPosForCNBlock(
 
 func (txn *Transaction) WriteFileLocked(
 	typ int,
+	accountId uint32,
 	databaseId,
 	tableId uint64,
 	databaseName,
@@ -516,6 +546,7 @@ func (txn *Transaction) WriteFileLocked(
 	txn.readOnly.Store(false)
 	entry := Entry{
 		typ:          typ,
+		accountId:    accountId,
 		tableId:      tableId,
 		databaseId:   databaseId,
 		tableName:    tableName,
@@ -546,6 +577,7 @@ func (txn *Transaction) WriteFileLocked(
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(
 	typ int,
+	accountId uint32,
 	databaseId,
 	tableId uint64,
 	databaseName,
@@ -556,7 +588,7 @@ func (txn *Transaction) WriteFile(
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.WriteFileLocked(
-		typ, databaseId, tableId,
+		typ, accountId, databaseId, tableId,
 		databaseName, tableName, fileName, bat, tnStore)
 }
 
@@ -761,6 +793,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 
 			err := txn.WriteFileLocked(
 				INSERT,
+				tbl.accountId,
 				tbl.db.databaseId,
 				tbl.tableId,
 				tbl.db.databaseName,
@@ -864,6 +897,30 @@ func (txn *Transaction) getCachedTable(
 			}
 		}
 
+	}
+	return tbl
+}
+
+func (txn *Transaction) getCachedTableByAccountID(
+	id uint32,
+	k tableKey,
+	snapshotTS timestamp.Timestamp) *txnTable {
+	var tbl *txnTable
+	if v, ok := txn.tableCache.tableMap.Load(k); ok {
+		tbl = v.(*txnTable)
+
+		tblKey := cache.TableKey{
+			AccountId:  k.accountId,
+			DatabaseId: k.databaseId,
+			Name:       k.name,
+		}
+		val := txn.engine.catalog.GetSchemaVersion(tblKey)
+		if val != nil {
+			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
+				txn.tableCache.tableMap.Delete(genTableKeyByAccountID(id, k.name, k.databaseId))
+				return nil
+			}
+		}
 	}
 	return tbl
 }

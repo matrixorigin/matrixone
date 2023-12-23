@@ -109,54 +109,52 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 	return tblName, rel
 }
 
-func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	logDebugf(db.txn.op.Txn(), "txnDatabase.Relation table %s", name)
+func (db *txnDatabase) RelationByAccountID(
+	accountID uint32,
+	name string,
+	proc any) (engine.Relation, error) {
+	logDebugf(db.txn.op.Txn(), "txnDatabase.RelationByAccountID table %s", name)
 	txn := db.txn
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
 	}
 
+	key := genTableKeyByAccountID(accountID, name, db.databaseId)
+	logutil.Infof("xxxx Relation: txn %s table %s from tableCache, key is %v",
+		txn.op.Txn().DebugString(),
+		name,
+		key)
+
 	// check the table is deleted or not
-	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist, txn %s",
+	if _, exist := db.txn.deletedTableMap.Load(key); exist {
+		logutil.Infof("xxxx Relation:table %s had been deleted by txn %s, key is %v",
 			name,
-			txn.op.Txn().DebugString())
+			txn.op.Txn().DebugString(),
+			key)
+		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
+
 	p := db.txn.proc
 	if proc != nil {
 		p = proc.(*process.Process)
 	}
-	key := genTableKey(ctx, name, db.databaseId)
-	rel := db.txn.getCachedTable(ctx, key, db.txn.op.SnapshotTS())
+
+	rel := db.txn.getCachedTableByAccountID(accountID, key, db.txn.op.SnapshotTS())
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
 	}
+
 	// get relation from the txn created tables cache: created by this txn
-	//TODO::After fixing #13702 ,then reomove the follow code
-	var txnTbl *txnTable
-	txn.createMap.Range(func(key, value interface{}) bool {
-		tableKey := key.(tableKey)
-		if tableKey.name == name &&
-			tableKey.databaseId == db.databaseId {
-			txnTbl = value.(*txnTable)
-			txnTbl.proc.Store(p)
-		}
-		return true
-	})
-	if txnTbl != nil {
-		return txnTbl, nil
+	if v, ok := db.txn.createMap.Load(key); ok {
+		//v.(*txnTable).proc = p
+		logutil.Infof("xxxx txn:%s get table %s from createMap success, key is %v",
+			db.txn.op.Txn().DebugString(),
+			name,
+			key)
+		v.(*txnTable).proc.Store(p)
+		return v.(*txnTable), nil
 	}
-	//TODO:: After fixing #13702 ,then open the follow code
-	//if v, ok := db.txn.createMap.Load(key); ok {
-	//	//v.(*txnTable).proc = p
-	//	logutil.Infof("xxxx txn:%s get table %s from createMap success, key is %v",
-	//		db.txn.op.Txn().DebugString(),
-	//		name,
-	//		key)
-	//	v.(*txnTable).proc.Store(p)
-	//	return v.(*txnTable), nil
-	//}
 
 	// special tables
 	if db.databaseName == catalog.MO_CATALOG {
@@ -164,15 +162,107 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		case catalog.MO_DATABASE:
 			id := uint64(catalog.MO_DATABASE_ID)
 			defs := catalog.MoDatabaseTableDefs
-			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, id, name, defs), nil
 		case catalog.MO_TABLES:
 			id := uint64(catalog.MO_TABLES_ID)
 			defs := catalog.MoTablesTableDefs
-			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, id, name, defs), nil
 		case catalog.MO_COLUMNS:
 			id := uint64(catalog.MO_COLUMNS_ID)
 			defs := catalog.MoColumnsTableDefs
-			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, id, name, defs), nil
+		}
+	}
+	item := &cache.TableItem{
+		Name:       name,
+		DatabaseId: db.databaseId,
+		AccountId:  accountID,
+		Ts:         db.txn.op.SnapshotTS(),
+	}
+	//TODO:: need to fix #13702, otherwise item.AccountID is not correct.
+	if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
+			name,
+			accountID,
+			db.databaseId)
+		logutil.Infof("xxxx table %q not exit in engine.catalog, txn %s",
+			name, txn.op.Txn().DebugString())
+		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
+	}
+
+	tbl := &txnTable{
+		db:            db,
+		accountId:     item.AccountId,
+		tableId:       item.Id,
+		version:       item.Version,
+		tableName:     item.Name,
+		defs:          item.Defs,
+		tableDef:      item.TableDef,
+		primaryIdx:    item.PrimaryIdx,
+		primarySeqnum: item.PrimarySeqnum,
+		clusterByIdx:  item.ClusterByIdx,
+		relKind:       item.Kind,
+		viewdef:       item.ViewDef,
+		comment:       item.Comment,
+		partitioned:   item.Partitioned,
+		partition:     item.Partition,
+		createSql:     item.CreateSql,
+		constraint:    item.Constraint,
+		rowid:         item.Rowid,
+		rowids:        item.Rowids,
+		lastTS:        txn.op.SnapshotTS(),
+	}
+	tbl.proc.Store(p)
+
+	db.txn.tableCache.tableMap.Store(genTableKeyByAccountID(accountID, name, db.databaseId), tbl)
+	return tbl, nil
+}
+
+func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	logDebugf(db.txn.op.Txn(), "txnDatabase.Relation table %s", name)
+	txn := db.txn
+	if txn.op.Status() == txn2.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
+	}
+
+	key := genTableKey(ctx, name, db.databaseId)
+	// check the table is deleted or not
+	if _, exist := db.txn.deletedTableMap.Load(key); exist {
+		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+	}
+
+	p := db.txn.proc
+	if proc != nil {
+		p = proc.(*process.Process)
+	}
+
+	rel := db.txn.getCachedTable(ctx, key, db.txn.op.SnapshotTS())
+	if rel != nil {
+		rel.proc.Store(p)
+		return rel, nil
+	}
+
+	// get relation from the txn created tables cache: created by this txn
+	if v, ok := db.txn.createMap.Load(key); ok {
+		v.(*txnTable).proc.Store(p)
+		return v.(*txnTable), nil
+	}
+
+	// special tables
+	if db.databaseName == catalog.MO_CATALOG {
+		switch name {
+		case catalog.MO_DATABASE:
+			id := uint64(catalog.MO_DATABASE_ID)
+			defs := catalog.MoDatabaseTableDefs
+			return db.openSysTable(p, id, name, defs), nil
+		case catalog.MO_TABLES:
+			id := uint64(catalog.MO_TABLES_ID)
+			defs := catalog.MoTablesTableDefs
+			return db.openSysTable(p, id, name, defs), nil
+		case catalog.MO_COLUMNS:
+			id := uint64(catalog.MO_COLUMNS_ID)
+			defs := catalog.MoColumnsTableDefs
+			return db.openSysTable(p, id, name, defs), nil
 		}
 	}
 	item := &cache.TableItem{
@@ -191,6 +281,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 
 	tbl := &txnTable{
 		db:            db,
+		accountId:     item.AccountId,
 		tableId:       item.Id,
 		version:       item.Version,
 		tableName:     item.Name,
@@ -267,7 +358,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	}
 
 	for _, store := range db.txn.tnStores {
-		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		if err := db.txn.WriteBatch(DELETE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
 			return err
 		}
@@ -281,7 +372,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			return err
 		}
 		for _, store := range db.txn.tnStores {
-			if err = db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			if err = db.txn.WriteBatch(DELETE, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
 				return err
 			}
@@ -331,7 +422,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		return 0, err
 	}
 	for _, store := range db.txn.tnStores {
-		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		if err := db.txn.WriteBatch(DELETE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, true); err != nil {
 			return 0, err
 		}
@@ -358,6 +449,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		return err
 	}
 	tbl := new(txnTable)
+	tbl.accountId = accountId
 	tbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{tableId}))
 	tbl.comment = getTableComment(defs)
 	{
@@ -400,7 +492,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 			return err
 		}
 		for _, store := range db.txn.tnStores {
-			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			if err := db.txn.WriteBatch(INSERT, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
 				return err
 			}
@@ -417,7 +509,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 			return err
 		}
 		for _, store := range db.txn.tnStores {
-			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			if err := db.txn.WriteBatch(INSERT, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
 				return err
 			}
@@ -436,6 +528,10 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableId = tableId
 	tbl.GetTableDef(ctx)
 	key := genTableKey(ctx, name, db.databaseId)
+	logutil.Infof("xxxx txn %s create table %s, key is %v",
+		db.txn.op.Txn().DebugString(),
+		name,
+		key)
 	db.txn.addCreateTable(key, tbl)
 	//CORNER CASE
 	//begin;
@@ -448,9 +544,11 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(p *process.Process, key tableKey, id uint64, name string,
+func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	tbl := &txnTable{
+		//AccountID for mo_tables, mo_database, mo_columns is always 0.
+		accountId:     0,
 		db:            db,
 		tableId:       id,
 		tableName:     name,
