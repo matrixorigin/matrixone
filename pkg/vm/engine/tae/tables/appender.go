@@ -85,7 +85,7 @@ func (appender *blockAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.blk.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
+	appender.blk.meta.GetObject().GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *blockAppender) ApplyAppend(
