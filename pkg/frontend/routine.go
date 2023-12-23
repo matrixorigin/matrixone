@@ -264,7 +264,17 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		logInfof(ses.GetDebugString(), "mo accept connection")
+		ts := ses.timestampMap
+		logInfof(ses.GetDebugString(), fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
 	}
 
 	tenant := ses.GetTenantInfo()
