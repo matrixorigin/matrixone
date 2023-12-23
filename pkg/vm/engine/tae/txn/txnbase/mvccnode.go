@@ -59,7 +59,13 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 		End:     ts,
 	}
 }
-
+func NewTxnMVCCNodeWithStartEnd(start, end types.TS) *TxnMVCCNode {
+	return &TxnMVCCNode{
+		Start:   start,
+		Prepare: end,
+		End:     end,
+	}
+}
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
 }
@@ -420,6 +426,30 @@ func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
 	vector.AppendFixed(
 		bat.GetVectorByName(SnapshotAttr_CommitTS).GetDownstreamVector(),
 		un.End,
+		false,
+		startTSVec.GetAllocator(),
+	)
+}
+
+// In push model, logtail is prepared before committing txn,
+// un.End is txnif.Uncommit
+func (un *TxnMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, commitTS types.TS) {
+	startTSVec := bat.GetVectorByName(SnapshotAttr_StartTS)
+	vector.AppendFixed(
+		startTSVec.GetDownstreamVector(),
+		un.Start,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	vector.AppendFixed(
+		bat.GetVectorByName(SnapshotAttr_PrepareTS).GetDownstreamVector(),
+		un.Prepare,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	vector.AppendFixed(
+		bat.GetVectorByName(SnapshotAttr_CommitTS).GetDownstreamVector(),
+		commitTS,
 		false,
 		startTSVec.GetAllocator(),
 	)
