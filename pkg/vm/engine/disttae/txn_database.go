@@ -120,17 +120,8 @@ func (db *txnDatabase) RelationByAccountID(
 	}
 
 	key := genTableKeyByAccountID(accountID, name, db.databaseId)
-	logutil.Infof("xxxx Relation: txn %s table %s from tableCache, key is %v",
-		txn.op.Txn().DebugString(),
-		name,
-		key)
-
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
-		logutil.Infof("xxxx Relation:table %s had been deleted by txn %s, key is %v",
-			name,
-			txn.op.Txn().DebugString(),
-			key)
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
 
@@ -147,11 +138,6 @@ func (db *txnDatabase) RelationByAccountID(
 
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(key); ok {
-		//v.(*txnTable).proc = p
-		logutil.Infof("xxxx txn:%s get table %s from createMap success, key is %v",
-			db.txn.op.Txn().DebugString(),
-			name,
-			key)
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
@@ -179,14 +165,11 @@ func (db *txnDatabase) RelationByAccountID(
 		AccountId:  accountID,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
-	//TODO:: need to fix #13702, otherwise item.AccountID is not correct.
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
 			accountID,
 			db.databaseId)
-		logutil.Infof("xxxx table %q not exit in engine.catalog, txn %s",
-			name, txn.op.Txn().DebugString())
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
 
@@ -528,10 +511,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableId = tableId
 	tbl.GetTableDef(ctx)
 	key := genTableKey(ctx, name, db.databaseId)
-	logutil.Infof("xxxx txn %s create table %s, key is %v",
-		db.txn.op.Txn().DebugString(),
-		name,
-		key)
 	db.txn.addCreateTable(key, tbl)
 	//CORNER CASE
 	//begin;

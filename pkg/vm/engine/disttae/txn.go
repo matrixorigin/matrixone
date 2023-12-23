@@ -271,10 +271,6 @@ func (txn *Transaction) checkDup() error {
 		}
 		if e.typ == INSERT {
 			if _, ok := tablesDef[e.tableId]; !ok {
-				logutil.Infof("xxxx checkDup start to get table, database:%s, table:%s, txn:%s",
-					e.databaseName,
-					e.tableName,
-					txn.op.Txn().DebugString())
 				tbl, err := txn.getTableByAccountID(e.accountId, e.databaseName, e.tableName)
 				if err != nil {
 					return err
@@ -325,8 +321,7 @@ func (txn *Transaction) checkDup() error {
 		if e.typ == DELETE {
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
-					e.databaseName,
-					e.tableName)
+					e.databaseName, e.tableName)
 				continue
 			}
 			if err := checkPKDup(
