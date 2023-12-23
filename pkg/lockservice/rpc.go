@@ -33,7 +33,7 @@ import (
 
 var (
 	defaultRPCTimeout    = time.Second * 10
-	defaultHandleWorkers = 4
+	defaultHandleWorkers = 16
 )
 
 func acquireRequest() *pb.Request {

@@ -93,7 +93,7 @@ const (
 var (
 	ncpu           = runtime.NumCPU()
 	ctxCancelError = context.Canceled.Error()
-	pool, _        = ants.NewPool(ncpu * 20)
+	pool, _        = ants.NewPool(ncpu * 8)
 )
 
 // NewCompile is used to new an object of compile
