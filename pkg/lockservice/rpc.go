@@ -332,6 +332,11 @@ func (s *server) onMessage(
 
 func (s *server) handle(ctx context.Context) {
 	fn := func(ctx requestCtx) {
+		start := time.Now()
+		defer func() {
+			v2.TxnLockWorkerHandleDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
+
 		req := ctx.req
 		defer releaseRequest(req)
 		resp := getResponse(req)
