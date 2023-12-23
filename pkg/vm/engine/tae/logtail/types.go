@@ -594,6 +594,7 @@ func init() {
 			}
 		} else {
 			if err := ObjectInfoSchema.AppendCol(colname, ObjectInfoTypes[i]); err != nil {
+				panic(err)
 			}
 		}
 	}

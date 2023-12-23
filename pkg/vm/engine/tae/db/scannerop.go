@@ -15,7 +15,6 @@
 package db
 
 import (
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -92,20 +91,21 @@ func (d *objHelper) push(entry *catalog.ObjectEntry) {
 	}
 }
 
+// unused
 // copy out Object entries expect the one with max Object id.
-func (d *objHelper) finish() []*catalog.ObjectEntry {
-	sort.Slice(d.objCandids, func(i, j int) bool { return d.objCandids[i].SortHint < d.objCandids[j].SortHint })
-	if last := len(d.objCandids) - 1; last >= 0 && d.objCandids[last].SortHint == d.maxObjId {
-		d.objCandids = d.objCandids[:last]
-	}
-	if len(d.objCandids) == 0 && len(d.nobjCandids) == 0 {
-		return nil
-	}
-	ret := make([]*catalog.ObjectEntry, len(d.objCandids)+len(d.nobjCandids))
-	copy(ret[:len(d.objCandids)], d.objCandids)
-	copy(ret[len(d.objCandids):], d.nobjCandids)
-	return ret
-}
+// func (d *objHelper) finish() []*catalog.ObjectEntry {
+// 	sort.Slice(d.objCandids, func(i, j int) bool { return d.objCandids[i].SortHint < d.objCandids[j].SortHint })
+// 	if last := len(d.objCandids) - 1; last >= 0 && d.objCandids[last].SortHint == d.maxObjId {
+// 		d.objCandids = d.objCandids[:last]
+// 	}
+// 	if len(d.objCandids) == 0 && len(d.nobjCandids) == 0 {
+// 		return nil
+// 	}
+// 	ret := make([]*catalog.ObjectEntry, len(d.objCandids)+len(d.nobjCandids))
+// 	copy(ret[:len(d.objCandids)], d.objCandids)
+// 	copy(ret[len(d.objCandids):], d.nobjCandids)
+// 	return ret
+// }
 
 type MergeTaskBuilder struct {
 	db *DB

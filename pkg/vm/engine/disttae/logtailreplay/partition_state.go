@@ -416,7 +416,7 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 
 		if old, exist := p.dataObjects.Get(objEntry); exist {
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
-			if !old.DeleteTime.IsEmpty(){
+			if !old.DeleteTime.IsEmpty() {
 				continue
 			}
 		} else {

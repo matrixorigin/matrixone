@@ -850,6 +850,8 @@ func TestReplay5(t *testing.T) {
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
+	err = entry.WaitDone()
+	assert.NoError(t, err)
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, testutil.LenOfBats(bats[:4]), false)
 	assert.NoError(t, txn.Commit(context.Background()))

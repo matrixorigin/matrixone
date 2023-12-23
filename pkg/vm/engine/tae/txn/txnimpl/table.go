@@ -908,6 +908,9 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 }
 func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
 	meta, err := tbl.entry.GetObjectByID(id.ObjectID())
+	if err != nil {
+		return err
+	}
 	isNewNode, err := meta.UpdateObjectInfo(tbl.store.txn, stats)
 	if err != nil {
 		return err
