@@ -241,7 +241,7 @@ jobs:
   ssb_and_tpch_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
-    runs-on: amd64-mo-guangzhou-medium8
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -448,7 +448,7 @@ jobs:
   sysbench_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: SYSBENCH TEST
-    runs-on: amd64-mo-guangzhou-medium8
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load Repo
@@ -543,7 +543,7 @@ jobs:
   tpcc_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success'}}
     name: TPCC TEST
-    runs-on: amd64-mo-guangzhou-medium8
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
