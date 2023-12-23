@@ -136,50 +136,34 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, _ *plan.IndexDef, qryDatabase string, _ *plan.TableDef,
-	metadataTableName string,
-	centroidsTableName string,
-	entriesTableName string) error {
-
-	/*
-		Sample SQL:
-		delete from a.centroids where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-		delete from a.entries   where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-	*/
-
-	deleteCentroidsSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err := c.runSql(deleteCentroidsSQL)
-	if err != nil {
-		return err
-	}
-
-	deleteEntriesSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		entriesTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err = c.runSql(deleteEntriesSQL)
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
+
+	if totalCnt == 0 {
+		// if count is 0, then we insert a NULL centroid that will hold all the entries; this is a special case
+		// when we have few records, we can call re-index to compute original centroids and re-map the entries data.
+		//
+		// SQL: insert into centroids (version, id, centroid) select CAST(value as BIGINT), 1, NULL from meta where key = 'version' limit 1;
+		insertNullCentroidSQL := fmt.Sprintf("insert into `%s`.`%s` (%s, %s, %s) "+
+			"select CAST(%s as BIGINT), 1, NULL from `%s`.`%s` where `%s` = 'version' limit 1",
+			qryDatabase,
+			indexDef.IndexTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metaTableName,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		)
+		err := c.runSql(insertNullCentroidSQL)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	// 1. algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
@@ -255,8 +239,14 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 }
 
 func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+	totalCnt int64,
 	metadataTableName string,
 	centroidsTableName string) error {
+
+	if totalCnt == 0 {
+		// nothing to map
+		return nil
+	}
 
 	// 1. algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
