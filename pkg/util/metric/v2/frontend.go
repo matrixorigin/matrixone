@@ -14,7 +14,11 @@
 
 package v2
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"math"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	acceptConnDurationHistogram = prometheus.NewHistogramVec(
@@ -23,7 +27,7 @@ var (
 			Subsystem: "frontend",
 			Name:      "accept_connection_duration",
 			Help:      "Bucketed histogram of accept connection duration.",
-			Buckets:   getDurationBuckets(),
+			Buckets:   append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64),
 		}, []string{"label"})
 	CreatedDurationHistogram          = acceptConnDurationHistogram.WithLabelValues("created")
 	EstablishDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("establish")
