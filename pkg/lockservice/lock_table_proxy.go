@@ -150,6 +150,8 @@ func (lp *localLockTableProxy) unlock(
 						Skip:      false,
 						ReplaceTo: v.last(),
 					})
+			} else {
+				delete(lp.mu.remoteHolders, row)
 			}
 		}
 		return true
