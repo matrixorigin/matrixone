@@ -46,7 +46,7 @@ func (s *service) initCacheServer() error {
 }
 
 // handleRemoteRead reads the cache data from the local data cache.
-func (s *service) handleRemoteRead(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+func (s *service) handleRemoteRead(ctx context.Context, req *pb.Request, resp *pb.CacheResponse) error {
 	sharedFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err

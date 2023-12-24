@@ -271,25 +271,56 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	if hasUniqueKey || hasSecondaryKey {
 		typMap := make(map[string]*plan.Type)
 		posMap := make(map[string]int)
+		colMap := make(map[string]*ColDef)
 		for idx, col := range delCtx.tableDef.Cols {
 			posMap[col.Name] = idx
 			typMap[col.Name] = col.Typ
+			colMap[col.Name] = col
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
 			if indexdef.TableExist {
 
 				if isUpdate {
-					skipDel := true
-					for _, colName := range indexdef.Parts {
-						if colIdx, ok := posMap[colName]; ok {
-							col := delCtx.tableDef.Cols[colIdx]
-							if _, exists := delCtx.updateColPosMap[colName]; exists || col.OnUpdate != nil {
-								skipDel = false
-								break
+					pkeyName := delCtx.tableDef.Pkey.PkeyColName
+
+					// Check if primary key is being updated.
+					isPrimaryKeyUpdated := func() bool {
+						if pkeyName == catalog.CPrimaryKeyColName {
+							// Handle compound primary key.
+							for _, pkPartColName := range delCtx.tableDef.Pkey.Names {
+								if _, exists := delCtx.updateColPosMap[pkPartColName]; exists || colMap[pkPartColName].OnUpdate != nil {
+									return true
+								}
+							}
+						} else if pkeyName == catalog.FakePrimaryKeyColName {
+							// Handle programmatically generated primary key.
+							if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
+								return true
+							}
+						} else {
+							// Handle single primary key.
+							if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
+								return true
 							}
 						}
+						return false
 					}
-					if skipDel {
+
+					// Check if secondary key is being updated.
+					isSecondaryKeyUpdated := func() bool {
+						for _, colName := range indexdef.Parts {
+							resolvedColName := catalog.ResolveAlias(colName)
+							if colIdx, ok := posMap[resolvedColName]; ok {
+								col := delCtx.tableDef.Cols[colIdx]
+								if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
+									return true
+								}
+							}
+						}
+						return false
+					}
+
+					if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() {
 						continue
 					}
 				}

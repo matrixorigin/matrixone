@@ -103,13 +103,23 @@ func GetUpdateStorageUsageInterval() time.Duration {
 	return time.Duration(gUpdateStorageUsageInterval.Load())
 }
 
+func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
+	// clean metric data for next cron task.
+	metric.StorageUsageFactory.Reset()
+	logger.Info("clean storage usage metric", zap.String("actor", actor))
+}
+
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
+	ctx, cancel := context.WithCancel(ctx)
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")
 	defer func() {
 		logger.Info("finished", zap.Error(err))
+		cleanStorageUsageMetric(logger, "CalculateStorageUsage")
+		// quit CheckNewAccountSize goroutine
+		cancel()
 	}()
 
 	// start background task to check new account
@@ -122,8 +132,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Debug("receive context signal", zap.Error(ctx.Err()))
-			metric.StorageUsageFactory.Reset() // clean CN data for next cron task.
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
@@ -213,7 +222,8 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Debug("receive context signal", zap.Error(ctx.Err()))
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			cleanStorageUsageMetric(logger, "checkNewAccountSize")
 			return
 		case now = <-next.C:
 			logger.Debug("start check new account")
@@ -233,7 +243,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		getNewAccounts := func(ctx context.Context, sql string, lastCheck, now time.Time) ie.InternalExecResult {
 			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getNewAccounts")
 			defer spanQ.End()
-			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheckTime))
+			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheck))
 			spanQ.AddExtraFields(zap.Time("now", now))
 			logger.Debug("query new account", zap.String("sql", sql))
 			return executor.Query(ctx, sql, opts)

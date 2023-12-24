@@ -959,6 +959,10 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	if entry.Mode().Type()&fs.ModeSymlink > 0 {
 		stat, err := os.Stat(filepath.Join(path, name))
 		if err != nil {
+			if os.IsNotExist(err) {
+				// invalid sym link
+				return false, nil
+			}
 			return false, err
 		}
 		return entryIsDir(path, name, stat)
