@@ -68,6 +68,7 @@ type RPCMessage struct {
 	// Message raw rpc message
 	Message Message
 
+	oneWay         bool
 	internal       bool
 	stream         bool
 	streamSequence uint32
@@ -105,7 +106,7 @@ type ClientSession interface {
 	// Write writing the response message to the client.
 	Write(ctx context.Context, response Message) error
 	// AsyncWrite only put message into write queue, and return immediately.
-	AsyncWrite(ctx context.Context, response Message) error
+	AsyncWrite(response Message) error
 	// CreateCache create a message cache using cache ID. Cache will removed if
 	// context is done.
 	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)

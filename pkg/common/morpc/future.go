@@ -53,14 +53,14 @@ type Future struct {
 }
 
 func (f *Future) init(send RPCMessage) {
-	if _, ok := send.Ctx.Deadline(); !ok && !send.internal {
+	if _, ok := send.Ctx.Deadline(); !ok && !send.oneWay && !send.internal {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
 	f.send = send
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
-	f.oneWay = false
+	f.oneWay = send.oneWay
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.notified = false

@@ -128,7 +128,7 @@ func (m *MockClientSession) Write(arg0 context.Context, arg1 morpc.Message) erro
 }
 
 // AsyncWrite mocks base method.
-func (m *MockClientSession) AsyncWrite(arg0 context.Context, arg1 morpc.Message) error {
+func (m *MockClientSession) AsyncWrite(arg1 morpc.Message) error {
 	panic("not supported")
 }
 

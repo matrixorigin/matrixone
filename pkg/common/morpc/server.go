@@ -551,7 +551,7 @@ func (cs *clientSession) cleanSend() {
 }
 
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
-	f, err := cs.send(msg, false)
+	f, err := cs.send(msg)
 	if err != nil {
 		return err
 	}
@@ -573,20 +573,16 @@ func (cs *clientSession) Write(
 	})
 }
 
-func (cs *clientSession) AsyncWrite(ctx context.Context, response Message) error {
-	if ctx == nil {
-		panic("Write nil context")
-	}
+func (cs *clientSession) AsyncWrite(response Message) error {
 	_, err := cs.send(RPCMessage{
-		Ctx:     ctx,
+		Ctx:     context.Background(),
 		Message: response,
-	}, true)
+		oneWay:  true,
+	})
 	return err
 }
 
-func (cs *clientSession) send(
-	msg RPCMessage,
-	oneWay bool) (*Future, error) {
+func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	cs.metrics.sendCounter.Inc()
 
 	response := msg.Message
@@ -610,11 +606,10 @@ func (cs *clientSession) send(
 	}
 
 	f := cs.newFutureFunc()
-	f.oneWay = oneWay
-	if !oneWay {
+	f.init(msg)
+	if !f.oneWay {
 		f.ref()
 	}
-	f.init(msg)
 	cs.c <- f
 	return f, nil
 }
