@@ -93,7 +93,6 @@ const (
 var (
 	ncpu           = runtime.NumCPU()
 	ctxCancelError = context.Canceled.Error()
-	pool, _        = ants.NewPool(ncpu * 8)
 )
 
 // NewCompile is used to new an object of compile
@@ -523,7 +522,7 @@ func (c *Compile) runOnce() error {
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
-		pool.Submit(func() {
+		ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)

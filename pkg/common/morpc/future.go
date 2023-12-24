@@ -42,6 +42,7 @@ type Future struct {
 	writtenC    chan error
 	waiting     atomic.Bool
 	releaseFunc func(*Future)
+	oneWay      bool
 	mu          struct {
 		sync.Mutex
 		notified bool
@@ -59,6 +60,7 @@ func (f *Future) init(send RPCMessage) {
 	f.send = send
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
+	f.oneWay = false
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.notified = false
@@ -98,11 +100,14 @@ func (f *Future) Close() {
 }
 
 func (f *Future) waitSendCompleted() error {
+	if f.oneWay {
+		panic("one way cannot call waitSendCompleted")
+	}
 	return <-f.writtenC
 }
 
 func (f *Future) messageSent(err error) {
-	if f.waiting.CompareAndSwap(false, true) {
+	if !f.oneWay && f.waiting.CompareAndSwap(false, true) {
 		f.writtenC <- err
 		f.unRef()
 	}

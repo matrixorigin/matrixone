@@ -381,7 +381,7 @@ func writeResponse(
 			zap.String("response", detail))
 	}
 	// after write, response will be released by rpc
-	if err := cs.Write(ctx, resp); err != nil {
+	if err := cs.AsyncWrite(ctx, resp); err != nil {
 		getLogger().Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))

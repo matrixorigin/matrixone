@@ -390,6 +390,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 					for _, f := range responses {
 						f.messageSent(nil)
+						if f.oneWay {
+							f.Close()
+						}
 					}
 
 					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -500,7 +503,7 @@ func newClientSession(
 		metrics:                 metrics,
 		closedC:                 make(chan struct{}),
 		codec:                   codec,
-		c:                       make(chan *Future, 32),
+		c:                       make(chan *Future, 1024),
 		receivedStreamSequences: make(map[uint64]uint32),
 		conn:                    conn,
 		ctx:                     ctx,
@@ -548,7 +551,7 @@ func (cs *clientSession) cleanSend() {
 }
 
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
-	f, err := cs.send(msg)
+	f, err := cs.send(msg, false)
 	if err != nil {
 		return err
 	}
@@ -570,7 +573,20 @@ func (cs *clientSession) Write(
 	})
 }
 
-func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
+func (cs *clientSession) AsyncWrite(ctx context.Context, response Message) error {
+	if ctx == nil {
+		panic("Write nil context")
+	}
+	_, err := cs.send(RPCMessage{
+		Ctx:     ctx,
+		Message: response,
+	}, true)
+	return err
+}
+
+func (cs *clientSession) send(
+	msg RPCMessage,
+	oneWay bool) (*Future, error) {
 	cs.metrics.sendCounter.Inc()
 
 	response := msg.Message
@@ -594,7 +610,10 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 
 	f := cs.newFutureFunc()
-	f.ref()
+	f.oneWay = oneWay
+	if !oneWay {
+		f.ref()
+	}
 	f.init(msg)
 	cs.c <- f
 	return f, nil

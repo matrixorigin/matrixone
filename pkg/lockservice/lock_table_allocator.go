@@ -92,7 +92,6 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 }
 
 func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
-	return nil
 	var invalid []uint64
 	l.mu.RLock()
 	defer l.mu.RUnlock()
