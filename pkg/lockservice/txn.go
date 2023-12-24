@@ -120,7 +120,8 @@ func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	lockTableFunc func(string, uint64) (lockTable, error)) error {
+	lockTableFunc func(string, uint64) (lockTable, error),
+	mutations ...pb.ExtraMutation) error {
 	logTxnReadyToClose(serviceID, txn)
 
 	// cancel all blocked waiters
@@ -150,7 +151,7 @@ func (txn *activeTxn) close(
 						serviceID,
 						txn,
 						table)
-					l.unlock(txn, cs, commitTS)
+					l.unlock(txn, cs, commitTS, mutations...)
 					logTxnUnlockTableCompleted(
 						serviceID,
 						txn,
@@ -186,6 +187,7 @@ func (txn *activeTxn) reset() {
 			delete(m, table)
 		}
 	}
+
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]

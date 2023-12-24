@@ -37,7 +37,6 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_GetBind:           defines.MORPCVersion1,
 	pb.Method_KeepLockTableBind: defines.MORPCVersion1,
 	pb.Method_ForwardUnlock:     defines.MORPCVersion1,
-	pb.Method_AppendSharedLocks: defines.MORPCVersion1,
 }
 
 func (s *service) initRemote() {
@@ -82,8 +81,6 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
 		s.handleKeepRemoteLock)
-	s.remote.server.RegisterMethodHandler(pb.Method_AppendSharedLocks,
-		s.handleRemoteAppendSharedLocks)
 }
 
 func (s *service) handleRemoteLock(
@@ -180,7 +177,7 @@ func (s *service) handleRemoteUnlock(
 		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
-	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
+	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
 	writeResponse(ctx, cancel, resp, err, cs)
 }
 
@@ -409,30 +406,4 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 			writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
 		}
 	}
-}
-
-func (s *service) handleRemoteAppendSharedLocks(ctx context.Context,
-	cancel context.CancelFunc,
-	req *pb.Request,
-	resp *pb.Response,
-	cs morpc.ClientSession) {
-	l, err := s.getLocalLockTable(req, resp)
-	if err != nil ||
-		l == nil {
-		// means that the lockservice sending the lock request holds a stale
-		// lock table binding.
-		writeResponse(ctx, cancel, resp, err, cs)
-		return
-	}
-
-	for _, txn := range req.AppendSharedLocks.SharedTxnIDs {
-		s.activeTxnHolder.getActiveTxn(txn.TxnID, true, txn.CreatedOn)
-	}
-
-	err = l.appendSharedLocks(
-		ctx,
-		req.AppendSharedLocks.HoldTxnID,
-		req.AppendSharedLocks.Row,
-		req.AppendSharedLocks.SharedTxnIDs)
-	writeResponse(ctx, cancel, resp, err, cs)
 }

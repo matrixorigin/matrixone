@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"sync"
 
@@ -29,7 +30,8 @@ type localLockTableProxy struct {
 
 	mu struct {
 		sync.RWMutex
-		holders map[string]*sharedOps // key: row
+		holders       map[string]*sharedOps // key: row
+		remoteHolders map[string][]byte
 	}
 }
 
@@ -41,6 +43,7 @@ func newLockTableProxy(
 		serviceID: serviceID,
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
+	lp.mu.remoteHolders = make(map[string][]byte)
 	return lp
 }
 
@@ -71,53 +74,109 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	first := v.isEmpty()
+	hasHolder := lp.hasRemoteHolderLocked(key)
+	r := v.result
 	w := v.add(lp.serviceID, txn, cb)
 	defer w.close()
 
-	if !first {
+	if !first && !hasHolder {
 		w.setStatus(blocking)
 	}
 	lp.mu.Unlock()
 
 	if first {
-		var result pb.Result
-		var err error
 		lp.remote.lock(
 			ctx,
 			txn,
 			rows,
 			options,
 			func(r pb.Result, e error) {
-				result = r
-				err = e
+				lp.mu.Lock()
+				defer lp.mu.Unlock()
+				if e == nil {
+					lp.mu.remoteHolders[key] = v.sharedTxns[0]
+				}
+				v.done(r, e)
 			})
-
-		lp.mu.Lock()
-		defer lp.mu.Unlock()
-		if err == nil && len(v.sharedTxns) > 1 {
-			err = lp.appendSharedLocks(ctx, txn.txnID, rows[0], v.sharedTxns)
-		}
-		v.done(result, err)
 		return
 	}
 
 	// wait first done
-	w.wait(ctx)
+	if !hasHolder {
+		w.wait(ctx)
+		return
+	}
+
+	cb(r, nil)
 }
 
 func (lp *localLockTableProxy) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
-	commitTS timestamp.Timestamp) {
-	lp.remote.unlock(txn, ls, commitTS)
+	commitTS timestamp.Timestamp,
+	_ ...pb.ExtraMutation) {
+	rows := ls.slice()
+	defer rows.unref()
+
+	skipped := 0
+	n := rows.len()
+	var mutations []pb.ExtraMutation
+	lp.mu.Lock()
+	rows.iter(func(key []byte) bool {
+		row := util.UnsafeBytesToString(key)
+		if v, ok := lp.mu.holders[row]; ok {
+			isHolder := lp.isRemoteHolderLocked(row, txn.txnID)
+			v.remove(txn)
+
+			// not the holder, no need to unlock
+			if !isHolder {
+				skipped++
+				if n > 1 {
+					mutations = append(mutations,
+						pb.ExtraMutation{
+							Key:  key,
+							Skip: true,
+						})
+				}
+				return true
+			}
+
+			// update holder to last txn
+			if !v.isEmpty() {
+				lp.mu.remoteHolders[row] = v.last()
+				mutations = append(mutations,
+					pb.ExtraMutation{
+						Key:       key,
+						Skip:      false,
+						ReplaceTo: v.last(),
+					})
+			}
+		}
+		return true
+	})
+	lp.mu.Unlock()
+
+	// all skipped
+	if skipped == rows.len() {
+		return
+	}
+
+	lp.remote.unlock(txn, ls, commitTS, mutations...)
 }
 
-func (lp *localLockTableProxy) appendSharedLocks(
-	ctx context.Context,
-	holdTxnID []byte,
-	row []byte,
-	sharedTxns []pb.WaitTxn) error {
-	return lp.remote.appendSharedLocks(ctx, holdTxnID, row, sharedTxns)
+func (lp *localLockTableProxy) isRemoteHolderLocked(
+	row string,
+	txnID []byte) bool {
+	v, ok := lp.mu.remoteHolders[row]
+	if !ok {
+		return false
+	}
+	return bytes.Equal(txnID, v)
+}
+
+func (lp *localLockTableProxy) hasRemoteHolderLocked(row string) bool {
+	_, ok := lp.mu.remoteHolders[row]
+	return ok
 }
 
 func (lp *localLockTableProxy) getLock(
@@ -137,11 +196,12 @@ func (lp *localLockTableProxy) close() {
 
 type sharedOps struct {
 	bind       pb.LockTable
+	result     pb.Result
 	rows       [][]byte
 	txns       []*activeTxn
 	waiters    []*waiter
 	cbs        []func(pb.Result, error)
-	sharedTxns []pb.WaitTxn
+	sharedTxns [][]byte
 }
 
 func (s *sharedOps) done(
@@ -151,18 +211,25 @@ func (s *sharedOps) done(
 		s.txns[idx].lockAdded(s.bind.Group, s.bind.Table, s.rows)
 		cb(r, err)
 		s.waiters[idx].notify(notifyValue{})
-		s.txns[idx] = nil
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil
 	}
-	s.txns = s.txns[:0]
-	s.cbs = s.cbs[:0]
-	s.waiters = s.waiters[:0]
-	s.sharedTxns = s.sharedTxns[:0]
+	if err != nil {
+		s.txns = s.txns[:0]
+		s.sharedTxns = s.sharedTxns[:0]
+		s.cbs = s.cbs[:0]
+		s.waiters = s.waiters[:0]
+	} else {
+		s.result = r
+	}
 }
 
 func (s *sharedOps) isEmpty() bool {
 	return len(s.txns) == 0
+}
+
+func (s *sharedOps) last() []byte {
+	return s.sharedTxns[len(s.sharedTxns)-1]
 }
 
 func (s *sharedOps) add(
@@ -174,6 +241,25 @@ func (s *sharedOps) add(
 	s.txns = append(s.txns, txn)
 	s.cbs = append(s.cbs, cb)
 	s.waiters = append(s.waiters, w)
-	s.sharedTxns = append(s.sharedTxns, v)
+	s.sharedTxns = append(s.sharedTxns, txn.txnID)
 	return w
+}
+
+func (s *sharedOps) remove(txn *activeTxn) {
+	newTxns := s.txns[:0]
+	newCbs := s.cbs[:0]
+	newWaiters := s.waiters[:0]
+	newSharedTxns := s.sharedTxns[:0]
+	for idx, v := range s.txns {
+		if v != txn {
+			newTxns = append(newTxns, v)
+			newWaiters = append(newWaiters, s.waiters[idx])
+			newCbs = append(newCbs, s.cbs[idx])
+			newSharedTxns = append(newSharedTxns, s.sharedTxns[idx])
+		}
+	}
+	s.txns = newTxns
+	s.waiters = newWaiters
+	s.cbs = newCbs
+	s.sharedTxns = newSharedTxns
 }

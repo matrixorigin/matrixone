@@ -37,11 +37,12 @@ const (
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
-	bind   pb.LockTable
-	fsp    *fixedSlicePool
-	clock  clock.Clock
-	events *waiterEvents
-	mu     struct {
+	bind      pb.LockTable
+	fsp       *fixedSlicePool
+	clock     clock.Clock
+	events    *waiterEvents
+	txnHolder activeTxnHolder
+	mu        struct {
 		sync.RWMutex
 		closed           bool
 		store            LockStorage
@@ -53,12 +54,14 @@ func newLocalLockTable(
 	bind pb.LockTable,
 	fsp *fixedSlicePool,
 	events *waiterEvents,
-	clock clock.Clock) lockTable {
+	clock clock.Clock,
+	txnHolder activeTxnHolder) lockTable {
 	l := &localLockTable{
-		bind:   bind,
-		fsp:    fsp,
-		clock:  clock,
-		events: events,
+		bind:      bind,
+		fsp:       fsp,
+		clock:     clock,
+		events:    events,
+		txnHolder: txnHolder,
 	}
 	l.mu.store = newBtreeBasedStorage()
 	l.mu.tableCommittedAt, _ = clock.Now()
@@ -174,11 +177,21 @@ func (l *localLockTable) doLock(
 func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
-	commitTS timestamp.Timestamp) {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	getMutation := func(key []byte) int {
+		for i := range mutations {
+			if bytes.Equal(mutations[i].Key, key) {
+				return i
+			}
+		}
+		return -1
+	}
 
 	logUnlockTableOnLocal(
 		l.bind.ServiceID,
@@ -199,6 +212,11 @@ func (l *localLockTable) unlock(
 	var startKey []byte
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
+			idx := getMutation(key)
+			if idx != -1 && mutations[idx].Skip {
+				return true
+			}
+
 			if lock.isLockRangeStart() {
 				startKey = key
 				return true
@@ -214,6 +232,18 @@ func (l *localLockTable) unlock(
 			}
 			if len(startKey) > 0 && !lock.isLockRangeEnd() {
 				panic("BUG: missing range end key")
+			}
+
+			if idx != -1 {
+				replaceTo := mutations[idx].ReplaceTo
+				lock.holders.replace(txn.txnID,
+					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})
+				// cannot dead lock here, the replaceTo txn was created on the same cn.
+				replaceToTxn := l.txnHolder.getActiveTxn(mutations[idx].ReplaceTo, true, txn.remoteService)
+				replaceToTxn.Lock()
+				replaceToTxn.lockAdded(l.bind.Group, l.bind.Table, [][]byte{key})
+				replaceToTxn.Unlock()
+				return true
 			}
 
 			lockCanRemoved := lock.closeTxn(
@@ -235,29 +265,6 @@ func (l *localLockTable) unlock(
 	if l.mu.tableCommittedAt.Less(commitTS) {
 		l.mu.tableCommittedAt = commitTS
 	}
-}
-
-func (l *localLockTable) appendSharedLocks(
-	ctx context.Context,
-	holdTxnID []byte,
-	row []byte,
-	sharedTxns []pb.WaitTxn) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.mu.closed {
-		return ErrLockTableNotFound
-	}
-
-	lock, ok := l.mu.store.Get(row)
-	if !ok ||
-		!lock.isLockRow() ||
-		!lock.holders.contains(holdTxnID) {
-		return ErrTxnNotFound
-	}
-	for _, txn := range sharedTxns {
-		lock.holders.add(txn)
-	}
-	return nil
 }
 
 func (l *localLockTable) getLock(

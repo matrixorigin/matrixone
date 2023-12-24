@@ -146,7 +146,8 @@ func (s *service) Lock(
 func (s *service) Unlock(
 	ctx context.Context,
 	txnID []byte,
-	commitTS timestamp.Timestamp) error {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -167,7 +168,7 @@ func (s *service) Unlock(
 	}
 
 	defer logUnlockTxn(s.serviceID, txn)()
-	txn.close(s.serviceID, txnID, commitTS, s.getLockTable)
+	txn.close(s.serviceID, txnID, commitTS, s.getLockTable, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -394,7 +395,8 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			bind,
 			s.fsp,
 			s.events,
-			s.clock)
+			s.clock,
+			s.activeTxnHolder)
 	} else {
 		remote := newRemoteLockTable(
 			s.serviceID,

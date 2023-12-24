@@ -55,7 +55,6 @@ message LockOptions {
   bool        TableDefChanged   = 5;
   string      Group             = 6;
   Sharding    Sharding          = 7;
-  bool        AggregationShared = 8;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -93,8 +92,6 @@ enum Method {
   ForwardLock       = 7;
   // ForwardUnlock forward unlock request to another service
   ForwardUnlock     = 8;
-  // AppendSharedLocks append shared locks with a hold txn
-  AppendSharedLocks = 9;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
@@ -112,7 +109,6 @@ message Request {
   GetBindRequest           GetBind             = 8  [(gogoproto.nullable) = false];
   KeepLockTableBindRequest KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
   KeepRemoteLockRequest    KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
-  AppendSharedLocksRequest AppendSharedLocks   = 11 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -131,7 +127,6 @@ message Response {
     GetBindResponse           GetBind           = 9  [(gogoproto.nullable) = false];
     KeepLockTableBindResponse KeepLockTableBind = 10 [(gogoproto.nullable) = false];
     KeepRemoteLockResponse    KeepRemoteLock    = 11 [(gogoproto.nullable) = false];
-    AppendSharedLocksResponse AppendSharedLocks = 12 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -179,10 +174,11 @@ message WaitTxn {
 
 // UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {
-  bytes               TxnID     = 1;
+  bytes                  TxnID     = 1;
   // CommitTS is the commit timestamp of the current txn. Empty if txn is
   // roll backed
-  timestamp.Timestamp CommitTS  = 2 [(gogoproto.nullable) = false];
+  timestamp.Timestamp    CommitTS  = 2 [(gogoproto.nullable) = false];
+  repeated ExtraMutation Mutations = 3 [(gogoproto.nullable) = false];
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
@@ -241,15 +237,8 @@ message Result {
   bool                TableDefChanged = 5;
 }
 
-
-
-// AppendSharedLocksRequest append shared locks request
-message AppendSharedLocksRequest {
-  bytes            HoldTxnID    = 1;
-  bytes            Row          = 2;
-  repeated WaitTxn SharedTxnIDs = 3 [(gogoproto.nullable) = false];
-}
-
-// AppendSharedLocksResponse append shared locks response
-message AppendSharedLocksResponse {
+message ExtraMutation {
+  bytes key       = 1;
+  bool  skip      = 2;
+  bytes replaceTo = 3;
 }

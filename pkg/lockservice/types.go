@@ -100,7 +100,7 @@ type LockService interface {
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
-	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
+	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
 
 	// Close close the lock service.
 	Close() error
@@ -137,9 +137,7 @@ type lockTable interface {
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
-	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
-	// appendSharedLocks append shared locks
-	appendSharedLocks(ctx context.Context, holdTxnID []byte, row []byte, sharedTxns []pb.WaitTxn) error
+	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getBind returns lock table binding

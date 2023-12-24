@@ -125,14 +125,15 @@ func (l *remoteLockTable) lock(
 func (l *remoteLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
-	commitTS timestamp.Timestamp) {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) {
 	logUnlockTableOnRemote(
 		l.serviceID,
 		txn,
 		l.bind)
 	st := time.Now()
 	for {
-		err := l.doUnlock(txn, commitTS)
+		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
 			return
 		}
@@ -156,28 +157,6 @@ func (l *remoteLockTable) unlock(
 			return
 		}
 	}
-}
-
-func (l *remoteLockTable) appendSharedLocks(
-	ctx context.Context,
-	holdTxnID []byte,
-	row []byte,
-	sharedTxns []pb.WaitTxn) error {
-	req := acquireRequest()
-	defer releaseRequest(req)
-
-	req.LockTable = l.bind
-	req.Method = pb.Method_AppendSharedLocks
-	req.AppendSharedLocks.HoldTxnID = holdTxnID
-	req.AppendSharedLocks.Row = row
-	req.AppendSharedLocks.SharedTxnIDs = sharedTxns
-
-	resp, err := l.client.Send(ctx, req)
-	if err != nil {
-		return err
-	}
-	releaseResponse(resp)
-	return nil
 }
 
 func (l *remoteLockTable) getLock(
@@ -208,7 +187,8 @@ func (l *remoteLockTable) getLock(
 
 func (l *remoteLockTable) doUnlock(
 	txn *activeTxn,
-	commitTS timestamp.Timestamp) error {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -219,6 +199,7 @@ func (l *remoteLockTable) doUnlock(
 	req.LockTable = l.bind
 	req.Unlock.TxnID = txn.txnID
 	req.Unlock.CommitTS = commitTS
+	req.Unlock.Mutations = mutations
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {

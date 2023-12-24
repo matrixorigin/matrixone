@@ -283,6 +283,18 @@ func (h *holders) remove(txnID []byte) {
 	h.txns = newTxns
 }
 
+func (h *holders) replace(
+	from []byte,
+	to pb.WaitTxn) {
+	for i := range h.txns {
+		if bytes.Equal(h.txns[i].TxnID, from) {
+			h.txns[i] = to
+			return
+		}
+	}
+	panic("BUG: missing holder")
+}
+
 func (h *holders) clear() {
 	h.txns = h.txns[:0]
 }

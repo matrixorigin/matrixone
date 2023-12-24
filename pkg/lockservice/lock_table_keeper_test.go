@@ -132,13 +132,15 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					events,
-					runtime.DefaultRuntime().Clock()))
+					runtime.DefaultRuntime().Clock(),
+					nil))
 			m.Store(2,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					events,
-					runtime.DefaultRuntime().Clock()))
+					runtime.DefaultRuntime().Clock(),
+					nil))
 			m.Store(3,
 				newRemoteLockTable(
 					"s1",
