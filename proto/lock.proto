@@ -93,6 +93,8 @@ enum Method {
   ForwardLock       = 7;
   // ForwardUnlock forward unlock request to another service
   ForwardUnlock     = 8;
+  // AppendSharedLocks append shared locks with a hold txn
+  AppendSharedLocks = 9;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
@@ -110,6 +112,7 @@ message Request {
   GetBindRequest           GetBind             = 8  [(gogoproto.nullable) = false];
   KeepLockTableBindRequest KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
   KeepRemoteLockRequest    KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
+  AppendSharedLocksRequest AppendSharedLocks   = 11 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -128,6 +131,7 @@ message Response {
     GetBindResponse           GetBind           = 9  [(gogoproto.nullable) = false];
     KeepLockTableBindResponse KeepLockTableBind = 10 [(gogoproto.nullable) = false];
     KeepRemoteLockResponse    KeepRemoteLock    = 11 [(gogoproto.nullable) = false];
+    AppendSharedLocksResponse AppendSharedLocks = 12 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -235,4 +239,17 @@ message Result {
   timestamp.Timestamp Timestamp       = 4 [(gogoproto.nullable) = false];
   // TableDefChanged conflict with ddl lock, need rebuild plan to get new table def
   bool                TableDefChanged = 5;
+}
+
+
+
+// AppendSharedLocksRequest append shared locks request
+message AppendSharedLocksRequest {
+  bytes            HoldTxnID    = 1;
+  bytes            Row          = 2;
+  repeated WaitTxn SharedTxnIDs = 3 [(gogoproto.nullable) = false];
+}
+
+// AppendSharedLocksResponse append shared locks response
+message AppendSharedLocksResponse {
 }

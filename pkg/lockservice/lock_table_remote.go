@@ -158,6 +158,28 @@ func (l *remoteLockTable) unlock(
 	}
 }
 
+func (l *remoteLockTable) appendSharedLocks(
+	ctx context.Context,
+	holdTxnID []byte,
+	row []byte,
+	sharedTxns []pb.WaitTxn) error {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.LockTable = l.bind
+	req.Method = pb.Method_AppendSharedLocks
+	req.AppendSharedLocks.HoldTxnID = holdTxnID
+	req.AppendSharedLocks.Row = row
+	req.AppendSharedLocks.SharedTxnIDs = sharedTxns
+
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return err
+	}
+	releaseResponse(resp)
+	return nil
+}
+
 func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,

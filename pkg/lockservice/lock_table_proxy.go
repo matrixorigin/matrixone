@@ -23,39 +23,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-type lockTableProxy struct {
-	target lockTable
+type localLockTableProxy struct {
+	remote    lockTable
+	serviceID string
 
 	mu struct {
 		sync.RWMutex
-		holders map[string]*sharedOps
+		holders map[string]*sharedOps // key: row
 	}
 }
 
-func newLockTableProxy(target lockTable) lockTable {
-	lp := &lockTableProxy{
-		target: target,
+func newLockTableProxy(
+	serviceID string,
+	remote lockTable) lockTable {
+	lp := &localLockTableProxy{
+		remote:    remote,
+		serviceID: serviceID,
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
 	return lp
 }
 
-func (lp *lockTableProxy) lock(
+func (lp *localLockTableProxy) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
 	options LockOptions,
 	cb func(pb.Result, error)) {
-	if !options.AggregationShared {
-		lp.lock(ctx, txn, rows, options, cb)
+	if options.Mode != pb.LockMode_Shared {
+		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
 
-	if options.Sharding != pb.Sharding_ByRow {
-		panic("sharding must be by row")
-	}
 	if len(rows) != 1 {
-		panic("aggregation shared lock must be on one row")
+		panic("local lock table proxy can only support on single row")
 	}
 
 	lp.mu.Lock()
@@ -70,51 +71,77 @@ func (lp *lockTableProxy) lock(
 	}
 
 	first := v.isEmpty()
-	v.add(txn, cb)
+	w := v.add(lp.serviceID, txn, cb)
+	defer w.close()
+
+	if !first {
+		w.setStatus(blocking)
+	}
 	lp.mu.Unlock()
 
 	if first {
-		lp.lock(
+		var result pb.Result
+		var err error
+		lp.remote.lock(
 			ctx,
 			txn,
 			rows,
 			options,
-			func(r pb.Result, err error) {
-				lp.mu.Lock()
-				defer lp.mu.Unlock()
-				v.done(r, err)
+			func(r pb.Result, e error) {
+				result = r
+				err = e
 			})
+
+		lp.mu.Lock()
+		defer lp.mu.Unlock()
+		if err == nil && len(v.sharedTxns) > 1 {
+			err = lp.appendSharedLocks(ctx, txn.txnID, rows[0], v.sharedTxns)
+		}
+		v.done(result, err)
 		return
 	}
+
+	// wait first done
+	w.wait(ctx)
 }
 
-func (lp *lockTableProxy) unlock(
+func (lp *localLockTableProxy) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp) {
-	lp.unlock(txn, ls, commitTS)
+	lp.remote.unlock(txn, ls, commitTS)
 }
 
-func (lp *lockTableProxy) getLock(
+func (lp *localLockTableProxy) appendSharedLocks(
+	ctx context.Context,
+	holdTxnID []byte,
+	row []byte,
+	sharedTxns []pb.WaitTxn) error {
+	return lp.remote.appendSharedLocks(ctx, holdTxnID, row, sharedTxns)
+}
+
+func (lp *localLockTableProxy) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
-	lp.target.getLock(key, txn, fn)
+	lp.remote.getLock(key, txn, fn)
 }
 
-func (lp *lockTableProxy) getBind() pb.LockTable {
-	return lp.target.getBind()
+func (lp *localLockTableProxy) getBind() pb.LockTable {
+	return lp.remote.getBind()
 }
 
-func (lp *lockTableProxy) close() {
-	lp.target.close()
+func (lp *localLockTableProxy) close() {
+	lp.remote.close()
 }
 
 type sharedOps struct {
-	bind pb.LockTable
-	rows [][]byte
-	txns []*activeTxn
-	cbs  []func(pb.Result, error)
+	bind       pb.LockTable
+	rows       [][]byte
+	txns       []*activeTxn
+	waiters    []*waiter
+	cbs        []func(pb.Result, error)
+	sharedTxns []pb.WaitTxn
 }
 
 func (s *sharedOps) done(
@@ -123,15 +150,15 @@ func (s *sharedOps) done(
 	for idx, cb := range s.cbs {
 		s.txns[idx].lockAdded(s.bind.Group, s.bind.Table, s.rows)
 		cb(r, err)
-		if err != nil {
-			s.txns[idx] = nil
-			s.cbs[idx] = nil
-		}
+		s.waiters[idx].notify(notifyValue{})
+		s.txns[idx] = nil
+		s.cbs[idx] = nil
+		s.waiters[idx] = nil
 	}
-	if err != nil {
-		s.txns = s.txns[:0]
-		s.cbs = s.cbs[:0]
-	}
+	s.txns = s.txns[:0]
+	s.cbs = s.cbs[:0]
+	s.waiters = s.waiters[:0]
+	s.sharedTxns = s.sharedTxns[:0]
 }
 
 func (s *sharedOps) isEmpty() bool {
@@ -139,8 +166,14 @@ func (s *sharedOps) isEmpty() bool {
 }
 
 func (s *sharedOps) add(
+	serviceID string,
 	txn *activeTxn,
-	cb func(pb.Result, error)) {
+	cb func(pb.Result, error)) *waiter {
+	v := txn.toWaitTxn(serviceID, true)
+	w := acquireWaiter(v)
 	s.txns = append(s.txns, txn)
 	s.cbs = append(s.cbs, cb)
+	s.waiters = append(s.waiters, w)
+	s.sharedTxns = append(s.sharedTxns, v)
+	return w
 }

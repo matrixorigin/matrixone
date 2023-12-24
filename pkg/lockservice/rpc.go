@@ -131,7 +131,8 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		case pb.Method_Lock,
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
-			pb.Method_KeepRemoteLock:
+			pb.Method_KeepRemoteLock,
+			pb.Method_AppendSharedLocks:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),

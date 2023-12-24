@@ -396,12 +396,13 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.events,
 			s.clock)
 	} else {
-		return newRemoteLockTable(
+		remote := newRemoteLockTable(
 			s.serviceID,
 			s.cfg.RemoteLockTimeout.Duration,
 			bind,
 			s.remote.client,
 			s.handleBindChanged)
+		return newLockTableProxy(s.serviceID, remote)
 	}
 }
 

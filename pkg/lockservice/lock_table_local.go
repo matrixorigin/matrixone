@@ -237,6 +237,29 @@ func (l *localLockTable) unlock(
 	}
 }
 
+func (l *localLockTable) appendSharedLocks(
+	ctx context.Context,
+	holdTxnID []byte,
+	row []byte,
+	sharedTxns []pb.WaitTxn) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.mu.closed {
+		return ErrLockTableNotFound
+	}
+
+	lock, ok := l.mu.store.Get(row)
+	if !ok ||
+		!lock.isLockRow() ||
+		!lock.holders.contains(holdTxnID) {
+		return ErrTxnNotFound
+	}
+	for _, txn := range sharedTxns {
+		lock.holders.add(txn)
+	}
+	return nil
+}
+
 func (l *localLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,

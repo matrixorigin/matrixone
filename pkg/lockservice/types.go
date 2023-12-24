@@ -138,6 +138,8 @@ type lockTable interface {
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
+	// appendSharedLocks append shared locks
+	appendSharedLocks(ctx context.Context, holdTxnID []byte, row []byte, sharedTxns []pb.WaitTxn) error
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getBind returns lock table binding
