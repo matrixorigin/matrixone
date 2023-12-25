@@ -368,6 +368,10 @@ func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
 }
 
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.sequenceId.Store(uint32(value))
+}
+
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
 	mp.m.Lock()
 	defer mp.m.Unlock()
