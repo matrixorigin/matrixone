@@ -3281,9 +3281,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if selfHandle {
 		return
 	}
-	if err = cw.SetDatabaseName(ses.GetDatabaseName()); err != nil {
-		return
-	}
 
 	cmpBegin = time.Now()
 
@@ -3326,7 +3323,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
-	switch statement := cw.GetAst().(type) {
+	switch statement := stmt.(type) {
 	//produce result set
 	case *tree.Select:
 		if ep.needExportToFile() {
