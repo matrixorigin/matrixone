@@ -545,11 +545,13 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-// ErrorPkgConst = 56 + 13
-// 56: empty mysql tcp package size
-// 13: avg payload prefix of err msg
-const ErrorPkgConst = 69
-const TcpIpv4HeaderBytes = 66
+// TcpIpv4HeaderSize default tcp header bytes.
+const TcpIpv4HeaderSize = 66
+
+// ResponseErrPacketSize avg prefix size for mysql packet response error.
+// 66: default tcp header bytes.
+// 13: avg payload prefix of err response
+const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
 func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
@@ -568,9 +570,9 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.AggrCount = 0
 		s.MarkResponseAt()
 		if err != nil {
-			outBytes += ErrorPkgConst + int64(len(err.Error()))
+			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		outBytes += TcpIpv4HeaderBytes * outPacket
+		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.Status = StatementStatusSuccess
 		if err != nil {
