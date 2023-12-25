@@ -22,3 +22,4 @@ insert into low_t values(null, null);
 insert into low_t values('AbC 123', 'AbC 123');
 select to_lower(a), lower(a) from low_t;
 select to_lower(b), lower(b) from low_t;
+
