@@ -173,8 +173,8 @@ func requestStorageUsage(ses *Session) (resp any, err error) {
 func handleStorageUsageResponse(
 	ctx context.Context,
 	usage *db.StorageUsageResp,
-) (map[int32]int64, error) {
-	result := make(map[int32]int64, 0)
+) (map[int32]uint64, error) {
+	result := make(map[int32]uint64, 0)
 
 	for x := range usage.AccIds {
 		result[usage.AccIds[x]] = usage.Sizes[x]
@@ -183,12 +183,12 @@ func handleStorageUsageResponse(
 	return result, nil
 }
 
-func checkStorageUsageCache(accIds [][]int32) (result map[int32]int64, succeed bool) {
+func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed bool) {
 	if cnUsageCache.IsExpired() {
 		return nil, false
 	}
 
-	result = make(map[int32]int64)
+	result = make(map[int32]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
 			size, exist := cnUsageCache.GatherAccountSize(uint32(accIds[x][y]))
@@ -204,7 +204,7 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]int64, succeed b
 	return result, true
 }
 
-func updateStorageUsageCache(accIds []int32, sizes []int64) {
+func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 
 	if len(accIds) == 0 {
 		return
@@ -224,7 +224,7 @@ func updateStorageUsageCache(accIds []int32, sizes []int64) {
 
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (map[int32]int64, error) {
+func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32) (map[int32]uint64, error) {
 	if len(accIds) == 0 {
 		return nil, nil
 	}
@@ -251,7 +251,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	return handleStorageUsageResponse(ctx, usage)
 }
 
-func embeddingSizeToBatch(ori *batch.Batch, size int64, mp *mpool.MPool) {
+func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
 	vector.SetFixedAt(ori.Vecs[idxOfSize], 0, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
 

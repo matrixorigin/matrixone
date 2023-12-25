@@ -317,7 +317,7 @@ func (s *StorageUsageReq) UnmarshalBinary(data []byte) error {
 type StorageUsageResp struct {
 	Succeed bool
 	AccIds  []int32
-	Sizes   []int64
+	Sizes   []uint64
 	Magic   uint64
 }
 

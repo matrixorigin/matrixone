@@ -75,7 +75,7 @@ func Test_StorageUsageCache(t *testing.T) {
 
 	// 3. test gather account size
 	{
-		totalSize := int64(0)
+		totalSize := uint64(0)
 		for idx := 0; idx < len(usages); idx++ {
 			totalSize += usages[idx].Size
 		}
@@ -91,7 +91,7 @@ func Test_StorageUsageCache(t *testing.T) {
 
 		require.Equal(t, int64(0), totalSize)
 
-		size := int64(0)
+		size := uint64(0)
 		preAccId := usages[0].AccId
 		for idx := 0; idx < len(usages); idx++ {
 			if usages[idx].AccId == preAccId {
@@ -135,10 +135,10 @@ func mockDeletesAndInserts(
 	usages []logtail.UsageData,
 	delDbIds, delTblIds map[uint64]int,
 	delSegIdxes, insSegIdxes map[int]struct{}) (
-	[]interface{}, []*catalog.SegmentEntry, []*catalog.SegmentEntry) {
+	[]interface{}, []*catalog.ObjectEntry, []*catalog.ObjectEntry) {
 	var deletes []interface{}
-	var segInserts []*catalog.SegmentEntry
-	var segDeletes []*catalog.SegmentEntry
+	var segInserts []*catalog.ObjectEntry
+	var segDeletes []*catalog.ObjectEntry
 
 	// mock deletes, inserts
 	{
@@ -168,7 +168,7 @@ func mockDeletesAndInserts(
 				continue
 			}
 			segDeletes = append(segDeletes,
-				catalog.MockSegEntryWithTbl(
+				catalog.MockObjEntryWithTbl(
 					catalog.MockTableEntryWithDB(
 						catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
 						usages[idx].TblId), usages[idx].Size))
@@ -180,7 +180,7 @@ func mockDeletesAndInserts(
 				continue
 			}
 			segInserts = append(segInserts,
-				catalog.MockSegEntryWithTbl(
+				catalog.MockObjEntryWithTbl(
 					catalog.MockTableEntryWithDB(
 						catalog.MockDBEntryWithAccInfo(usages[idx].AccId, usages[idx].DbId),
 						usages[idx].TblId), usages[idx].Size))
@@ -407,7 +407,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	}
 
 	for idx := 0; idx < version10Cnt; idx++ {
-		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion10, common.DebugAllocator)
+		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion11, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		delBat := data.GetBatches()[logtail.StorageUsageDelIDX]
 
@@ -424,7 +424,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		}
 
 		ckps = append(ckps, data)
-		vers = append(vers, logtail.CheckpointVersion10)
+		vers = append(vers, logtail.CheckpointVersion11)
 	}
 
 	memo := logtail.GetTNUsageMemo()
@@ -452,7 +452,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	for idx := range ckps {
 		if vers[idx] < logtail.CheckpointVersion9 {
 			continue
-		} else if vers[idx] < logtail.CheckpointVersion10 {
+		} else if vers[idx] < logtail.CheckpointVersion11 {
 			ckps[idx].GetBatches()[logtail.StorageUsageInsIDX].Close()
 		} else {
 			ckps[idx].GetBatches()[logtail.StorageUsageInsIDX].Close()
