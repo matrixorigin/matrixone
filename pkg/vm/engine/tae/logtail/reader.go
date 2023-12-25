@@ -21,13 +21,13 @@ import (
 )
 
 // Reader is a snapshot of all txn prepared between from and to.
-// Dirty tables/segments/blocks can be queried based on those txn
+// Dirty tables/objects/blocks can be queried based on those txn
 type Reader struct {
 	from, to types.TS
 	table    *TxnTable
 }
 
-// Merge all dirty table/segment/block into one dirty tree
+// Merge all dirty table/object/block into one dirty tree
 func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
 	op := func(row RowT) (moveOn bool) {
@@ -72,7 +72,7 @@ func (r *Reader) IsCommitted() bool {
 	return committed
 }
 
-// Merge all dirty table/segment/block of **a table** into one tree
+// Merge all dirty table/object/block of **a table** into one tree
 func (r *Reader) GetDirtyByTable(
 	dbID, id uint64,
 ) (tree *model.TableTree) {
