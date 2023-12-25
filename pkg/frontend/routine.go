@@ -262,6 +262,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
+	ses.CountPacket(1)
 
 	if rt.needPrintSessionInfo() {
 		ts := ses.timestampMap

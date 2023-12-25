@@ -208,6 +208,8 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
+	// handlePackets
+	handlePackets atomic.Int64
 
 	createdTime time.Time
 
@@ -471,6 +473,16 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.sqlHelper
+}
+
+func (ses *Session) CountPacket(delta int64) {
+	ses.handlePackets.Add(delta)
+}
+func (ses *Session) ResetPacketCounter() {
+	ses.handlePackets.Store(0)
+}
+func (ses *Session) GetPacketCnt() int64 {
+	return ses.handlePackets.Load()
 }
 
 // The update version. Four function.

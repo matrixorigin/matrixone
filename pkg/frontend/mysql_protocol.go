@@ -396,7 +396,7 @@ func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
-	mp.packetCounter.IncPacketCount()
+	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
 }
 
@@ -432,13 +432,14 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
+	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
 	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
-	packets = mp.packetCounter.Calculate()
+		ses.writeCsvBytes.Load()
+	packets = ses.GetPacketCnt()
 	if reset {
-		mp.packetCounter.Reset()
+		ses.ResetPacketCounter()
 	}
 	return
 }
