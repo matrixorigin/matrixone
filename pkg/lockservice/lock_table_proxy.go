@@ -62,6 +62,11 @@ func (lp *localLockTableProxy) lock(
 		panic("local lock table proxy can only support on single row")
 	}
 
+	defer func() {
+		bind := lp.getBind()
+		txn.lockAdded(bind.Group, bind.Table, rows)
+	}()
+
 	lp.mu.Lock()
 	key := util.UnsafeBytesToString(rows[0])
 	v, ok := lp.mu.holders[key]
@@ -108,8 +113,6 @@ func (lp *localLockTableProxy) lock(
 		return
 	}
 
-	bind := lp.getBind()
-	txn.lockAdded(bind.Group, bind.Table, rows)
 	cb(r, nil)
 }
 
@@ -212,7 +215,6 @@ func (s *sharedOps) done(
 	r pb.Result,
 	err error) {
 	for idx, cb := range s.cbs {
-		s.txns[idx].lockAdded(s.bind.Group, s.bind.Table, s.rows)
 		cb(r, err)
 		if idx > 0 {
 			s.waiters[idx].notify(notifyValue{})
