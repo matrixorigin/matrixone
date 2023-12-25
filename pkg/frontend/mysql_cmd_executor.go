@@ -1727,37 +1727,37 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				if checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				if checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				if checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				if checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				if checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableDef) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableDef) {
 					return true
 				}
 			}
