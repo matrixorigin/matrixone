@@ -51,6 +51,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	maxTs types.TS,
 	maxLSN uint64,
 	isLSNValid bool,
+	ckpVers []uint32,
+	ckpDatas []*logtail.CheckpointData,
 	err error) {
 	defer func() {
 		if maxTs.IsEmpty() {
@@ -118,13 +120,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
-	defer func() {
-		for _, data := range datas {
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
@@ -245,10 +240,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 	}
 
-	// use to reply the storage usage data stored in ckps into TN usage cache
-	var usageDatas []*logtail.CheckpointData
-	var usageVers []uint32
-
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
@@ -257,8 +248,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			return
 		}
 
-		usageVers = append(usageVers, maxGlobal.version)
-		usageDatas = append(usageDatas, datas[globalIdx])
+		ckpVers = append(ckpVers, maxGlobal.version)
+		ckpDatas = append(ckpDatas, datas[globalIdx])
 
 		if maxTs.Less(maxGlobal.end) {
 			maxTs = maxGlobal.end
@@ -275,6 +266,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for _, e := range emptyFile {
 		if e.end.GreaterEq(maxTs) {
 			return types.TS{}, 0, false,
+				ckpVers, ckpDatas,
 				moerr.NewInternalError(ctx,
 					"read checkpoint %v failed",
 					e.String())
@@ -294,8 +286,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			return
 		}
 
-		usageVers = append(usageVers, checkpointEntry.version)
-		usageDatas = append(usageDatas, datas[i])
+		ckpVers = append(ckpVers, checkpointEntry.version)
+		ckpDatas = append(ckpDatas, datas[i])
 
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
@@ -314,9 +306,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
-
-	// replying the usage data into tn usage cache
-	logtail.GetTNUsageMemo().EstablishFromCKPs(r.catalog, usageDatas, usageVers)
 
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),

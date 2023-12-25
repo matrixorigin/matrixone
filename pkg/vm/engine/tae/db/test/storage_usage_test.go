@@ -195,6 +195,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
 
 	memo := logtail.GetTNUsageMemo()
+	memo.Clear()
 
 	sort.Slice(usages, func(i, j int) bool {
 		return memo.GetCache().LessFunc()(usages[i], usages[j])
@@ -328,6 +329,8 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	defer gCollector.Close()
 
 	memo := logtail.GetTNUsageMemo()
+	memo.Clear()
+
 	for idx := range usages {
 		memo.Update(usages[idx], false)
 	}
@@ -428,6 +431,8 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	}
 
 	memo := logtail.GetTNUsageMemo()
+	memo.Clear()
+
 	memo.EstablishFromCKPs(nil, ckps, vers)
 
 	memoShadow := logtail.NewTNUsageMemo()
