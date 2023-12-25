@@ -15,6 +15,7 @@
 package source
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,6 +45,46 @@ type Argument struct {
 	buf      *batch.Batch
 
 	status int
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.TblDef = nil
+	arg.Offset = 0
+	arg.Limit = 0
+	arg.attrs = nil
+	arg.types = nil
+	arg.Configs = nil
+	arg.info = nil
+	arg.children = nil
+	arg.buf = nil
+	arg.status = retrieve
+}
+
+func (arg Argument) Name() string {
+	return "source.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

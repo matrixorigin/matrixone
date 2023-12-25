@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"time"
 
 	"github.com/google/uuid"
@@ -101,6 +102,47 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	Children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.IsSink = false
+	arg.RecSink = false
+	arg.FuncId = 0
+	arg.LocalRegs = nil
+	arg.RemoteRegs = nil
+	arg.ShuffleType = 0
+	arg.ShuffleRegIdxLocal = nil
+	arg.ShuffleRegIdxRemote = nil
+	arg.info = nil
+	arg.Children = nil
+}
+
+func (arg Argument) Name() string {
+	return "dispatch.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

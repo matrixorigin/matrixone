@@ -24,12 +24,12 @@ import (
 )
 
 func TestString(t *testing.T) {
-	arg := Argument{Name: "unnest"}
+	arg := Argument{Name2: "unnest"}
 	arg.String(bytes.NewBuffer(nil))
 }
 
 func TestCall(t *testing.T) {
-	arg := Argument{Name: "unnest",
+	arg := Argument{Name2: "unnest",
 		info: &vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,
@@ -43,18 +43,18 @@ func TestCall(t *testing.T) {
 	// end, err = arg.Call(testutil.NewProc())
 	// require.NoError(t, err)
 	require.True(t, end.Status == vm.ExecStop)
-	arg.Name = "metadata_scan"
+	arg.Name2 = "metadata_scan"
 	end, err = arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end.Status == vm.ExecStop)
-	arg.Name = "not_exist"
+	arg.Name2 = "not_exist"
 	end, err = arg.Call(testutil.NewProc())
 	require.Error(t, err)
 	require.True(t, end.Status == vm.ExecStop)
 }
 
 func TestPrepare(t *testing.T) {
-	arg := Argument{Name: "unnest",
+	arg := Argument{Name2: "unnest",
 		info: &vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,
@@ -62,13 +62,13 @@ func TestPrepare(t *testing.T) {
 		}}
 	err := arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
-	arg.Name = "generate_series"
+	arg.Name2 = "generate_series"
 	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
-	arg.Name = "metadata_scan"
+	arg.Name2 = "metadata_scan"
 	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
-	arg.Name = "not_exist"
+	arg.Name2 = "not_exist"
 	err = arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 }

@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,6 +79,49 @@ type Argument struct {
 
 	Info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.NeedExpr = false
+	arg.NeedHashMap = false
+	arg.IsDup = false
+	arg.Ibucket = 0
+	arg.Nbucket = 0
+	arg.Typs = nil
+	arg.Conditions = nil
+	arg.HashOnPK = false
+	arg.NeedMergedBatch = false
+	arg.RuntimeFilterSenders = nil
+	arg.Info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "hashbuild.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {

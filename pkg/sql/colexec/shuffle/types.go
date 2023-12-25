@@ -15,6 +15,7 @@
 package shuffle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,6 +38,45 @@ type Argument struct {
 	ShuffleRangeInt64  []int64
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = 0
+	arg.AliveRegCnt = 0
+	arg.ShuffleColMin = 0
+	arg.ShuffleColMax = 0
+	arg.info = nil
+	arg.children = nil
+	arg.ShuffleRangeUint64 = nil
+	arg.ShuffleRangeInt64 = nil
+}
+
+func (arg Argument) Name() string {
+	return "shuffle.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
 }

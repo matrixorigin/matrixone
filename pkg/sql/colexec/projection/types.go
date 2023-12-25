@@ -49,9 +49,9 @@ func init() {
 
 func (arg *Argument) reset() {
 	arg.ctr = nil
-	arg.Es = arg.Es[:0]
+	arg.Es = nil
 	arg.info = nil
-	arg.children = arg.children[:0]
+	arg.children = nil
 	arg.buf = nil
 }
 

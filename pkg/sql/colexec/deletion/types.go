@@ -97,8 +97,7 @@ func init() {
 		func(a *Argument) {
 			a.reset()
 		},
-		reuse.DefaultOptions[Argument]().
-			WithEnableChecker(),
+		reuse.DefaultOptions[Argument](),
 	)
 }
 
@@ -112,7 +111,7 @@ func (arg *Argument) reset() {
 	arg.Nbucket = 0
 	arg.ctr = nil
 	arg.info = nil
-	arg.children = arg.children[:0]
+	arg.children = nil
 	arg.resBat = nil
 }
 

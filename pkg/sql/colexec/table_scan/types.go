@@ -15,6 +15,7 @@
 package table_scan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -31,6 +32,41 @@ type Argument struct {
 	children []vm.Operator
 
 	buf *batch.Batch
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Reader = nil
+	arg.Attrs = nil
+	arg.info = nil
+	arg.children = nil
+	arg.buf = nil
+}
+
+func (arg Argument) Name() string {
+	return "table_scan.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

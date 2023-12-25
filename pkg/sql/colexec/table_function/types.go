@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,7 +38,7 @@ type Argument struct {
 	Args      []*plan.Expr
 	Attrs     []string
 	Params    []byte
-	Name      string
+	Name2     string
 	retSchema []types.Type
 
 	info     *vm.OperatorInfo
@@ -45,6 +46,47 @@ type Argument struct {
 	buf      *batch.Batch
 
 	generateSeries *generateSeriesArg
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.Rets = nil
+	arg.Args = nil
+	arg.Attrs = nil
+	arg.Params = nil
+	arg.Name2 = ""
+	arg.retSchema = nil
+	arg.info = nil
+	arg.children = nil
+	arg.buf = nil
+	arg.generateSeries = nil
+}
+
+func (arg Argument) Name() string {
+	return "table_function.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

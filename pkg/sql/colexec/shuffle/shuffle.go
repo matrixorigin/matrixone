@@ -146,7 +146,7 @@ func (arg *Argument) initShuffle() {
 
 func (arg *Argument) getSels() [][]int32 {
 	for i := range arg.ctr.sels {
-		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+		arg.ctr.sels[i] = nil
 	}
 	return arg.ctr.sels
 }

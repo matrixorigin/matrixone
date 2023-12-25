@@ -458,7 +458,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 	beforeCall := proc.Mp().CurrNB()
 	arg := &Argument{
 		Attrs: []string{"result"},
-		Name:  "generate_series",
+		Name2: "generate_series",
 		info: &vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,

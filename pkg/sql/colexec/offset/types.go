@@ -15,6 +15,7 @@
 package offset
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -27,6 +28,45 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Seen = 0
+	arg.Offset = 0
+	arg.info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "offset.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithOffset(offset uint64) *Argument {
+	arg.Offset = offset
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

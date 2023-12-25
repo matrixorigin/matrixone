@@ -15,6 +15,7 @@ package fuzzyfilter
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,51 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.state = 0
+	arg.ReceiverOperator = colexec.ReceiverOperator{}
+	arg.N = 0
+	arg.PkName = ""
+	arg.PkTyp = nil
+	arg.bloomFilter = nil
+	arg.roaringFilter = nil
+	arg.collisionCnt = 0
+	arg.rbat = nil
+	arg.inFilterCardLimit = 0
+	arg.pass2RuntimeFilter = nil
+	arg.RuntimeFilterSpecs = nil
+	arg.RuntimeFilterSenders = nil
+	arg.info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "fuzzyfilter.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {

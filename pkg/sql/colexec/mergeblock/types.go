@@ -15,6 +15,7 @@ package mergeblock
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,6 +50,52 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Tbl = nil
+	arg.PartitionSources = nil
+	arg.affectedRows = 0
+	arg.container = nil
+	arg.info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "mergeblock.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithTbl(tbl engine.Relation) *Argument {
+	arg.Tbl = tbl
+	return arg
+}
+
+func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
+	arg.PartitionSources = partitionSources
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

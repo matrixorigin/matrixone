@@ -15,6 +15,7 @@
 package onduplicatekey
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -60,6 +61,47 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Ts = 0
+	arg.Affected = 0
+	arg.Engine = nil
+	arg.TableDef = nil
+	arg.OnDuplicateIdx = nil
+	arg.OnDuplicateExpr = nil
+	arg.IdxIdx = nil
+	arg.ctr = nil
+	arg.IsIgnore = false
+	arg.info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "onduplicatekey.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

@@ -14,6 +14,7 @@
 package group_concat
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -35,4 +36,39 @@ type Argument struct {
 	// but for 'select avg(a), group_concat(a) from t;'
 	// this orderId will be 1.
 	OrderId int32
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Dist = false
+	arg.GroupExpr = nil
+	arg.OrderByExpr = nil
+	arg.Separator = ""
+	arg.OrderId = 0
+}
+
+func (arg Argument) Name() string {
+	return "group_concat.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }

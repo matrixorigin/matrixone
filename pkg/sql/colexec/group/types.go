@@ -17,6 +17,7 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,6 +92,74 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.ctr = nil
+	arg.IsShuffle = false
+	arg.PreAllocSize = 0
+	arg.NeedEval = false
+	arg.Ibucket = 0
+	arg.Nbucket = 0
+	arg.Exprs = nil
+	arg.Types = nil
+	arg.Aggs = nil
+	arg.MultiAggs = nil
+	arg.PartialResults = nil
+	arg.info = nil
+	arg.children = nil
+}
+
+func (arg Argument) Name() string {
+	return "group.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithAggs(aggs []agg.Aggregate) *Argument {
+	arg.Aggs = aggs
+	return arg
+}
+
+func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
+	arg.Exprs = exprs
+	return arg
+}
+
+func (arg *Argument) WithTypes(types []types.Type) *Argument {
+	arg.Types = types
+	return arg
+}
+
+func (arg *Argument) WithMultiAggs(multiAggs []group_concat.Argument) *Argument {
+	arg.MultiAggs = multiAggs
+	return arg
+}
+
+func (arg *Argument) WithPartialResults(partialResults []any) *Argument {
+	arg.PartialResults = partialResults
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

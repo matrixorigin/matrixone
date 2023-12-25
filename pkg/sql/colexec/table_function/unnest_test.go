@@ -136,7 +136,7 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 		arg: &Argument{
 			Attrs: attrs,
 			Rets:  colDefs,
-			Name:  "unnest",
+			Name2: "unnest",
 			info: &vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,

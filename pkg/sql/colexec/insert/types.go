@@ -56,7 +56,8 @@ func init() {
 		func(a *Argument) {
 			a.reset()
 		},
-		reuse.DefaultOptions[Argument]().WithEnableChecker(),
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
 	)
 }
 
@@ -66,7 +67,7 @@ func (arg *Argument) reset() {
 	arg.ToWriteS3 = false
 	arg.InsertCtx = nil
 	arg.info = nil
-	arg.children = arg.children[:0]
+	arg.children = nil
 }
 
 func (arg Argument) Name() string {

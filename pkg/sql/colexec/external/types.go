@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -101,6 +102,45 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 	buf      *batch.Batch
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			a.reset()
+		},
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
+	)
+}
+
+func (arg *Argument) reset() {
+	arg.Es = nil
+	arg.info = nil
+	arg.children = nil
+	arg.buf = nil
+}
+
+func (arg Argument) Name() string {
+	return "external.Argument"
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithEs(es *ExternalParam) *Argument {
+	arg.Es = es
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

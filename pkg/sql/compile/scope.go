@@ -18,9 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -88,15 +85,8 @@ func (s *Scope) release() {
 		s.PreScopes[i].release()
 	}
 	for i := range s.Instructions {
-		if arg, ok := s.Instructions[i].Arg.(*deletion.Argument); ok {
-			arg.Release()
-		}
-		if arg, ok := s.Instructions[i].Arg.(*insert.Argument); ok {
-			arg.Release()
-		}
-		if arg, ok := s.Instructions[i].Arg.(*projection.Argument); ok {
-			arg.Release()
-		}
+		s.Instructions[i].Arg.Release()
+		s.Instructions[i].Arg = nil
 	}
 	reuse.Free[Scope](s, nil)
 }
@@ -639,6 +629,30 @@ func (s *Scope) LoadRun(c *Compile) error {
 func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
+	// TODO: Fix this
+	releaseInsBeforeIdx := func(scope *Scope, idx int) {
+		return
+		//for _, ins := range scope.Instructions[:idx] {
+		//	if ins.Arg != nil {
+		//		ins.Arg.Release()
+		//		ins.Arg = nil
+		//	}
+		//}
+	}
+	releaseInsAfterIdx := func(scope *Scope, idx int) {
+		return
+		//for _, ins := range scope.Instructions[idx:] {
+		//	if ins.Arg != nil {
+		//		ins.Arg.Release()
+		//	}
+		//}
+	}
+	releaseInsInIdx := func(scope *Scope, idx int) {
+		return
+		//if scope.Instructions[idx].Arg != nil {
+		//	scope.Instructions[idx].Arg.Release()
+		//}
+	}
 	for i, in := range s.Instructions {
 		if flg {
 			break
@@ -647,24 +661,25 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		case vm.Top:
 			flg = true
 			arg := in.Arg.(*top.Argument)
+			// release the useless arg
+			releaseInsBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
+			releaseInsInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeTop,
 				Idx: in.Idx,
-				Arg: &mergetop.Argument{
-					Fs:    arg.Fs,
-					Limit: arg.Limit,
-				},
+				Arg: mergetop.NewArgument().
+					WithFs(arg.Fs).
+					WithLimit(arg.Limit),
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Top,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
-					Arg: &top.Argument{
-						Fs:    arg.Fs,
-						Limit: arg.Limit,
-					},
+					Arg: top.NewArgument().
+						WithFs(arg.Fs).
+						WithLimit(arg.Limit),
 				})
 			}
 		//case vm.Order:
@@ -691,47 +706,47 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		case vm.Limit:
 			flg = true
 			arg := in.Arg.(*limit.Argument)
+			releaseInsBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
+			releaseInsInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
-				Arg: &mergelimit.Argument{
-					Limit: arg.Limit,
-				},
+				Arg: mergelimit.NewArgument().
+					WithLimit(arg.Limit),
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Limit,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
-					Arg: &limit.Argument{
-						Limit: arg.Limit,
-					},
+					Arg: limit.NewArgument().
+						WithLimit(arg.Limit),
 				})
 			}
 		case vm.Group:
 			flg = true
 			arg := in.Arg.(*group.Argument)
+			releaseInsBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
+			releaseInsInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
 				Idx: in.Idx,
-				Arg: &mergegroup.Argument{
-					NeedEval: false,
-				},
+				Arg: mergegroup.NewArgument().
+					WithNeedEval(false),
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Group,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
-					Arg: &group.Argument{
-						Aggs:           arg.Aggs,
-						Exprs:          arg.Exprs,
-						Types:          arg.Types,
-						MultiAggs:      arg.MultiAggs,
-						PartialResults: arg.PartialResults,
-					},
+					Arg: group.NewArgument().
+						WithAggs(arg.Aggs).
+						WithExprs(arg.Exprs).
+						WithTypes(arg.Types).
+						WithMultiAggs(arg.MultiAggs).
+						WithPartialResults(arg.PartialResults),
 				})
 			}
 		case vm.Sample:
@@ -740,10 +755,12 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				flg = true
 
 				// if by percent, there is no need to do merge sample.
+				releaseInsBeforeIdx(s, i)
 				if arg.IsByPercent() {
 					s.Instructions = s.Instructions[i:]
 				} else {
 					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
+					releaseInsInIdx(s, 1)
 					s.Instructions[1] = vm.Instruction{
 						Op:      vm.Sample,
 						Idx:     in.Idx,
@@ -751,10 +768,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Arg:     sample.NewMergeSample(arg),
 					}
 				}
+				releaseInsInIdx(s, 0)
 				s.Instructions[0] = vm.Instruction{
 					Op:  vm.Merge,
 					Idx: s.Instructions[0].Idx,
-					Arg: &merge.Argument{},
+					Arg: merge.NewArgument(),
 				}
 
 				for j := range ss {
@@ -770,22 +788,22 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
+			releaseInsBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
+			releaseInsInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
-				Arg: &mergeoffset.Argument{
-					Offset: arg.Offset,
-				},
+				Arg: mergeoffset.NewArgument().
+					WithOffset(arg.Offset),
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Offset,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
-					Arg: &offset.Argument{
-						Offset: arg.Offset,
-					},
+					Arg: offset.NewArgument().
+						WithOffset(arg.Offset),
 				})
 			}
 		case vm.Output:
@@ -797,12 +815,14 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	}
 	if !flg {
 		for i := range ss {
+			// releaseInsAfterIdx(ss[i], len(ss[i].Instructions)-1)
 			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
 		}
+		releaseInsInIdx(s, 0)
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
-			Arg: &merge.Argument{},
+			Arg: merge.NewArgument(),
 		}
 		//Add log for cn panic which reported on issue 10656
 		//If you find this log is printed, please report the repro details
@@ -812,7 +832,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
 		}
+		if 1 != len(s.Instructions)-1 {
+			releaseInsInIdx(s, 1)
+		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
+		releaseInsAfterIdx(s, 2)
 		s.Instructions = s.Instructions[:2]
 	}
 	s.Magic = Merge
@@ -838,9 +862,8 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Reg: s.Proc.Reg.MergeReceivers[j],
-				},
+				Arg: connector.NewArgument().
+					WithReg(s.Proc.Reg.MergeReceivers[j]),
 			})
 			j++
 		}

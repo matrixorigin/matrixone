@@ -39,8 +39,8 @@ func init() {
 		func(a *Argument) {
 			a.reset()
 		},
-		reuse.DefaultOptions[Argument]().
-			WithEnableChecker(),
+		// TODO: EnableChecker
+		reuse.DefaultOptions[Argument](),
 	)
 }
 
@@ -48,7 +48,7 @@ func (arg *Argument) reset() {
 	arg.Data = nil
 	arg.Func = nil
 	arg.info = nil
-	arg.children = arg.children[:0]
+	arg.children = nil
 }
 
 func (arg Argument) Name() string {
@@ -57,6 +57,16 @@ func (arg Argument) Name() string {
 
 func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithData(data interface{}) *Argument {
+	arg.Data = data
+	return arg
+}
+
+func (arg *Argument) WithFunc(Func func(interface{}, *batch.Batch) error) *Argument {
+	arg.Func = Func
+	return arg
 }
 
 func (arg *Argument) Release() {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -567,10 +568,10 @@ func (opts LockOptions) WithHasNewVersionInRangeFunc(fn hasNewVersionInRangeFunc
 }
 
 // NewArgument create new lock op argument.
-func NewArgument(engine engine.Engine) *Argument {
-	return &Argument{
-		engine: engine,
-	}
+func NewArgumentByEngine(engine engine.Engine) *Argument {
+	arg := reuse.Alloc[Argument](nil)
+	arg.engine = engine
+	return arg
 }
 
 // Block return if lock operator is a blocked node.
