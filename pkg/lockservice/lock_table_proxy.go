@@ -128,11 +128,14 @@ func (lp *localLockTableProxy) unlock(
 	n := rows.len()
 	var mutations []pb.ExtraMutation
 	lp.mu.Lock()
+	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
 		row := util.UnsafeBytesToString(key)
 		if v, ok := lp.mu.holders[row]; ok {
 			isHolder := lp.isRemoteHolderLocked(row, txn.txnID)
-			v.remove(txn)
+			if !v.remove(txn) {
+				return true
+			}
 
 			// not the holder, no need to unlock
 			if !isHolder {
@@ -162,7 +165,6 @@ func (lp *localLockTableProxy) unlock(
 		}
 		return true
 	})
-	lp.mu.Unlock()
 
 	// all skipped
 	if skipped == rows.len() {
@@ -260,18 +262,25 @@ func (s *sharedOps) add(
 	return w
 }
 
-func (s *sharedOps) remove(txn *activeTxn) {
+func (s *sharedOps) remove(txn *activeTxn) bool {
+	found := false
 	newTxns := s.txns[:0]
 	newCbs := s.cbs[:0]
 	newWaiters := s.waiters[:0]
 	for idx, v := range s.txns {
 		if v != txn {
+			if bytes.Equal(v.txnID, txn.txnID) {
+				panic("fatal")
+			}
 			newTxns = append(newTxns, v)
 			newWaiters = append(newWaiters, s.waiters[idx])
 			newCbs = append(newCbs, s.cbs[idx])
+		} else {
+			found = true
 		}
 	}
 	s.txns = newTxns
 	s.waiters = newWaiters
 	s.cbs = newCbs
+	return found
 }

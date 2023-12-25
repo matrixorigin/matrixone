@@ -286,13 +286,17 @@ func (h *holders) remove(txnID []byte) {
 func (h *holders) replace(
 	from []byte,
 	to pb.WaitTxn) {
+	find := false
 	for i := range h.txns {
 		if bytes.Equal(h.txns[i].TxnID, from) {
 			h.txns[i] = to
-			return
+			find = true
+			continue
 		}
 	}
-	panic("BUG: missing holder")
+	if !find {
+		panic("BUG: missing holder")
+	}
 }
 
 func (h *holders) clear() {
