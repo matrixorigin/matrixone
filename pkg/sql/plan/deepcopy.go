@@ -107,6 +107,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		RowIdIdx:            ctx.RowIdIdx,
 		Ref:                 DeepCopyObjectRef(ctx.Ref),
 		IsClusterTable:      ctx.IsClusterTable,
+		TableDef:            DeepCopyTableDef(ctx.TableDef, true),
 		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
 		PartitionIdx:        ctx.PartitionIdx,
