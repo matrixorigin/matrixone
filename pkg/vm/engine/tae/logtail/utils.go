@@ -183,7 +183,7 @@ func init() {
 		TxnNodeSchema,
 		DelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
 		DelSchema, // 7
 		TblTNSchema,
@@ -212,14 +212,14 @@ func init() {
 		MetaSchema_V1,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
 		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
@@ -243,14 +243,14 @@ func init() {
 		MetaSchema_V1,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
@@ -271,17 +271,17 @@ func init() {
 		StorageUsageSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
-		MetaSchema_V1,
+		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
@@ -303,30 +303,30 @@ func init() {
 	}
 
 	checkpointDataSchemas_V6 = [MaxIDX]*catalog.Schema{
-		MetaSchema_V1,
+		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
 		SegTNSchema,
-		BlkMetaSchema_V1, // 15
+		BlkMetaSchema, // 15
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 19
+		BlkMetaSchema, // 19
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 23
+		BlkMetaSchema, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
@@ -341,30 +341,30 @@ func init() {
 	// changing and the account, db, table info the blk belongs to.
 	// this enabled the optimization of `show accounts` in CN side.
 	checkpointDataSchemas_V9 = [MaxIDX]*catalog.Schema{
-		MetaSchema_V1,
+		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
 		SegTNSchema,
-		BlkMetaSchema_V1, // 15
+		BlkMetaSchema, // 15
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 19
+		BlkMetaSchema, // 19
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 23
+		BlkMetaSchema, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
@@ -374,35 +374,36 @@ func init() {
 	// version 10 add objectinfo
 	checkpointDataSchemas_V10 = checkpointDataSchemas_V9
 
+	// v11 add storage usage del bat
 	checkpointDataSchemas_V11 = [MaxIDX]*catalog.Schema{
-		MetaSchema_V1,
+		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
-		DelSchema, // 3
+		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema_V1,
+		catalog.SystemTableSchema,
 		TblTNSchema,
-		DelSchema, // 7
+		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema_V1,
-		DelSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
 		DelSchema,
 		SegTNSchema,
-		BlkMetaSchema_V1, // 15
+		BlkMetaSchema, // 15
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 19
+		BlkMetaSchema, // 19
 		BlkTNSchema,
 		DelSchema,
 		BlkTNSchema,
-		BlkMetaSchema_V1, // 23
+		BlkMetaSchema, // 23
 		TNMetaSchema,
 		StorageUsageSchema, // 25
 		ObjectInfoSchema,
-		ObjectInfoSchema, // 27
+		ObjectInfoSchema,
 		StorageUsageSchema,
 	}
 
@@ -1028,7 +1029,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32, loc o
 	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Object_LOC_IDX]
 
 	var usageInsVec, usageDelVec *vector.Vector
-	if version >= CheckpointVersion10 {
+	if version >= CheckpointVersion11 {
 		usageInsVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Ins_LOC_IDX]
 		usageDelVec = data.bats[MetaIDX].Vecs[Checkpoint_Meta_Usage_Del_LOC_IDX]
 	}
@@ -2285,7 +2286,7 @@ func (data *CheckpointData) replayMetaBatch(version uint32) {
 	segVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
 
 	var usageInsVec, usageDelVec *vector.Vector
-	if version >= CheckpointVersion10 {
+	if version >= CheckpointVersion11 {
 		usageInsVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
 		usageDelVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
 	}
