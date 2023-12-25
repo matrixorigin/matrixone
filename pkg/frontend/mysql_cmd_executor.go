@@ -3911,11 +3911,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
-				plans[i] = cwft.plan
-				stmts[i] = cwft.stmt
-			} else {
-				return nil
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				if checkNodeCanCache(cwft.plan) {
+					plans[i] = cwft.plan
+					stmts[i] = cwft.stmt
+				} else {
+					cwft.Free()
+					return nil
+				}
 			}
 		}
 		ses.cachePlan(input.getSql(), stmts, plans)
