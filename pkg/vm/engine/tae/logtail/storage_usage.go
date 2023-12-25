@@ -321,6 +321,16 @@ func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.T
 	return
 }
 
+func (m *TNUsageMemo) Clear() {
+	m.EnterProcessing()
+	defer m.LeaveProcessing()
+
+	m.reqTrace = m.reqTrace[:0]
+	m.cache.ClearForUpdate()
+	m.pending = false
+	m.cache.setUpdateTime(time.Time{})
+}
+
 func (m *TNUsageMemo) GetCache() *StorageUsageCache {
 	return m.cache
 }
@@ -475,7 +485,7 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 	var tblEntry *catalog.TableEntry
 
 	dbEntry, err = c.GetDatabaseByID(usage.DbId)
-	if err != nil {
+	if err != nil || dbEntry.HasDropCommitted() {
 		// the db has been deleted
 		return usage, true
 	}
@@ -513,6 +523,14 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog, entries []*CheckpointData, vers []uint32) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
+
+	defer func() {
+		for _, data := range entries {
+			if data != nil {
+				data.Close()
+			}
+		}
+	}()
 
 	for x := range entries {
 		if vers[x] < CheckpointVersion9 {

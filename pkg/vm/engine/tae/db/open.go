@@ -141,7 +141,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, ckpLSN, valid, ckpVers, ckpDatas, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
@@ -153,6 +153,9 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
+
+	// replying the usage data into tn usage cache
+	logtail.GetTNUsageMemo().EstablishFromCKPs(db.Catalog, ckpDatas, ckpVers)
 	// checkObjectState(db)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
