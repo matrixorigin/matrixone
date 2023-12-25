@@ -880,6 +880,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	// build index table
 	for _, def := range qry.IndexTables {
+
 		planCols = def.GetCols()
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
@@ -906,6 +907,48 @@ func (s *Scope) CreateTable(c *Compile) error {
 				zap.Error(err),
 			)
 			return err
+		}
+
+		switch def.TableType {
+		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+			// +----------------+----------------+------+------+---------+-------+---------+
+			// | Field          | Type           | Null | Key  | Default | Extra | Comment |
+			// +----------------+----------------+------+------+---------+-------+---------+
+			// | __mo_index_key | VARCHAR(65535) | NO   | PRI  | NULL    |       |         |
+			// | __mo_index_val | VARCHAR(65535) | NO   |      | NULL    |       |         |
+			// +----------------+----------------+------+------+---------+-------+---------+
+			var bat batch.Batch
+			bat.Ro = true
+			bat.Cnt = 0
+
+			bat.Attrs = []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val}
+			bat.Vecs = make([]*vector.Vector, 2)
+			bat.Vecs[0] = vector.NewConstBytes(types.T_varchar.ToType(), []byte("version"), 1, c.proc.Mp()) // c.proc.Mp()
+			bat.Vecs[1] = vector.NewConstBytes(types.T_varchar.ToType(), []byte("0"), 1, c.proc.Mp())
+			bat.SetRowCount(1)
+
+			rel, err := dbSource.Relation(c.ctx, def.Name, nil) // c.ctx
+			if err != nil {
+				return err
+			}
+
+			err = rel.Write(c.proc.Ctx, &bat) //c.proc.Ctx because, vec uses c.proc.Mp()
+			if err != nil {
+				return err
+			}
+
+			bat.Clean(c.proc.Mp())
+
+		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+			//initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			//	qry.Database,
+			//	def.Name,
+			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			//)
 		}
 	}
 
@@ -956,6 +999,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
 	}
 
 	return maybeCreateAutoIncrement(
