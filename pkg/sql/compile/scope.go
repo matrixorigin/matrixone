@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -43,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -629,29 +629,23 @@ func (s *Scope) LoadRun(c *Compile) error {
 func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
-	// TODO: Fix this
+	var deleteArgs []vm.Operator
+	defer func() {
+		for i := range deleteArgs {
+			deleteArgs[i].Release()
+		}
+	}()
 	releaseInsBeforeIdx := func(scope *Scope, idx int) {
-		return
-		//for _, ins := range scope.Instructions[:idx] {
-		//	if ins.Arg != nil {
-		//		ins.Arg.Release()
-		//		ins.Arg = nil
-		//	}
-		//}
-	}
-	releaseInsAfterIdx := func(scope *Scope, idx int) {
-		return
-		//for _, ins := range scope.Instructions[idx:] {
-		//	if ins.Arg != nil {
-		//		ins.Arg.Release()
-		//	}
-		//}
+		for i := 0; i < idx; i++ {
+			if scope.Instructions[i].Arg != nil {
+				deleteArgs = append(deleteArgs, scope.Instructions[i].Arg)
+			}
+		}
 	}
 	releaseInsInIdx := func(scope *Scope, idx int) {
-		return
-		//if scope.Instructions[idx].Arg != nil {
-		//	scope.Instructions[idx].Arg.Release()
-		//}
+		if scope.Instructions[idx].Arg != nil {
+			deleteArgs = append(deleteArgs, scope.Instructions[idx].Arg)
+		}
 	}
 	for i, in := range s.Instructions {
 		if flg {
@@ -815,7 +809,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	}
 	if !flg {
 		for i := range ss {
-			// releaseInsAfterIdx(ss[i], len(ss[i].Instructions)-1)
+			releaseInsInIdx(ss[i], len(ss[i].Instructions)-1)
 			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
 		}
 		releaseInsInIdx(s, 0)
@@ -836,7 +830,9 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			releaseInsInIdx(s, 1)
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
-		releaseInsAfterIdx(s, 2)
+		for i := 2; i < len(s.Instructions)-1; i++ {
+			releaseInsInIdx(s, i)
+		}
 		s.Instructions = s.Instructions[:2]
 	}
 	s.Magic = Merge

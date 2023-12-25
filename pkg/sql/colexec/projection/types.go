@@ -43,7 +43,8 @@ func init() {
 		func(a *Argument) {
 			a.reset()
 		},
-		reuse.DefaultOptions[Argument](),
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
 	)
 }
 

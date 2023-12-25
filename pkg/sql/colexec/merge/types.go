@@ -46,8 +46,8 @@ func init() {
 		func(a *Argument) {
 			a.reset()
 		},
-		// TODO: EnableChecker
-		reuse.DefaultOptions[Argument](),
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
 	)
 }
 
@@ -64,7 +64,6 @@ func (arg Argument) Name() string {
 }
 
 func NewArgument() *Argument {
-	return &Argument{}
 	return reuse.Alloc[Argument](nil)
 }
 
@@ -74,7 +73,6 @@ func (arg *Argument) WithSinkScan(sinkScan bool) *Argument {
 }
 
 func (arg *Argument) Release() {
-	return
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
