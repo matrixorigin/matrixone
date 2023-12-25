@@ -826,7 +826,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
 		}
-		if 1 != len(s.Instructions)-1 {
+		if len(s.Instructions)-1 != 1 {
 			releaseArgInIdx(s, 1)
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
