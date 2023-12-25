@@ -107,8 +107,6 @@ type Session struct {
 	//protocol layer
 	protocol Protocol
 
-	lastGetSequenceId uint8
-
 	//cmd from the client
 	cmd CommandType
 
@@ -208,8 +206,8 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
-	// handlePackets
-	handlePackets atomic.Int64
+	// packetCounter count the packet communicated with client.
+	packetCounter atomic.Int64
 
 	createdTime time.Time
 
@@ -476,13 +474,13 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 }
 
 func (ses *Session) CountPacket(delta int64) {
-	ses.handlePackets.Add(delta)
+	ses.packetCounter.Add(delta)
 }
 func (ses *Session) ResetPacketCounter() {
-	ses.handlePackets.Store(0)
+	ses.packetCounter.Store(0)
 }
 func (ses *Session) GetPacketCnt() int64 {
-	return ses.handlePackets.Load()
+	return ses.packetCounter.Load()
 }
 
 // The update version. Four function.

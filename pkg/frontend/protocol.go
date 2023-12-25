@@ -237,6 +237,10 @@ func (pi *ProtocolImpl) GetSequenceId() uint8 {
 	return uint8(pi.sequenceId.Load())
 }
 
+func (pi *ProtocolImpl) SetSequenceID(value uint8) {
+	pi.sequenceId.Store(uint32(value))
+}
+
 func (pi *ProtocolImpl) getDebugStringUnsafe() string {
 	if pi.tcpConn != nil {
 		return fmt.Sprintf("connectionId %d|%s", pi.connectionID, pi.tcpConn.RemoteAddress())
