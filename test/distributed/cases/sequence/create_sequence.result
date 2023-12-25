@@ -58,7 +58,6 @@ table seq_temp already exists
 create sequence Seq_temp start 10;
 table seq_temp already exists
 create sequence sequence;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near " sequence;";
 create sequence table as bigint;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " table as bigint;";
 create sequence seq_01 as tinyint unsigned MINVALUE 26  NO CYCLE;
@@ -313,6 +312,7 @@ _acc    BIGINT
 ab.cd    BIGINT
 abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff    BIGINT
 seq_temp    BIGINT
+sequence    BIGINT
 seq_03    BIGINT
 seq_04    BIGINT
 seq_05    BIGINT
