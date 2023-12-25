@@ -53,8 +53,8 @@ upper(rtrim(  3782dfw23123123123   ))
 select to_upper(trim('  32431 %^ 3829  3huicn2432g23   '));
 to_upper(trim(  32431 %^ 3829  3huicn2432g23   ))
 32431 %^ 3829  3HUICN2432G23
-select upper(substring('21214avewwe12 ',3,20));
-upper(substring(21214avewwe12 , 3, 20))
+select upper(substring('21214avewwe12',3,20));
+upper(substring(21214avewwe12, 3, 20))
 214AVEWWE12
 select upper(reverse('sjkdakjevenjwvev')) as result;
 result
@@ -68,8 +68,8 @@ to_lower(rtrim(  3782dfWWWW23123123123   ))
 select lower(trim('  32431 %^ 3829  3huICN2432g23   '));
 lower(trim(  32431 %^ 3829  3huICN2432g23   ))
 32431 %^ 3829  3huicn2432g23
-select to_lower(substring('21214AewWE12 ',3,20));
-to_lower(substring(21214AewWE12 , 3, 20))
+select to_lower(substring('21214AewWE12',3,20));
+to_lower(substring(21214AewWE12, 3, 20))
 214aewwe12
 select lower(reverse('sjkDAKjeveBJwvev')) as result;
 result
