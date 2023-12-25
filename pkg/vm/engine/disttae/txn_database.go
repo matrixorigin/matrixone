@@ -305,6 +305,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		oldId = item.Id
 		rowid = item.Rowid
 	}
+	logutil.Infof("Truncate table %s, oldId %d, newId %d", name, oldId, newId)
 	bat, err := genTruncateTableTuple(rowid, newId, db.databaseId,
 		genMetaTableName(oldId)+name, db.databaseName, db.txn.proc.Mp())
 	if err != nil {

@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"fmt"
 	"math"
 	"sort"
 
@@ -173,106 +172,35 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
-	var find bool
-	var ts timestamp.Timestamp
-	/**
-	In push mode.
-	It is necessary to distinguish the case create table/drop table
-	from truncate table.
-
-	CORNER CASE 1:
-	begin;
-	create table t1(a int);//table id x. catalog.insertTable(table id x)
-	insert into t1 values (1);
-	drop table t1; //same table id x. catalog.deleteTable(table id x)
-	commit;
-
-	CORNER CASE 2:
-	create table t1(a int); //table id x.
-	begin;
-	insert into t1 values (1);
-	-- @session:id=1{
-	truncate table t1;//insert table id y, then delete table id x. catalog.insertTable(table id y). catalog.deleteTable(table id x)
-	-- @session}
-	commit;
-
-	CORNER CASE 3:
-	create table t1(a int); //table id x.
-	begin;
-	truncate t1;//table id x changed to x1
-	truncate t1;//table id x1 changed to x2
-	truncate t1;//table id x2 changed to x3
-	commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
-
-	To be clear that the TableItem in catalogCache is sorted by the table id.
-	*/
 	var tableId uint64
-	deleted := make(map[uint64]bool)
-	inserted := make(map[uint64]*TableItem)
+	var ts timestamp.Timestamp
+
 	tbl.Id = math.MaxUint64
-	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if item.deleted && item.AccountId == tbl.AccountId &&
-			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
-			if !ts.IsEmpty() {
-				//if it is the truncate operation, we collect deleteTable together.
-				if item.Ts.Equal(ts) {
-					deleted[item.Id] = true
-					return true
-				} else {
-					return false
-				}
-			}
-			ts = item.Ts
-			tableId = item.Id
-			deleted[item.Id] = true
-			return true
-		}
-		if !item.deleted && item.AccountId == tbl.AccountId &&
-			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
-			(ts.IsEmpty() || ts.Equal(item.Ts) && tableId != item.Id) {
-			//if it is the truncate operation, we collect insertTable together first.
-			if !ts.IsEmpty() && ts.Equal(item.Ts) && tableId != item.Id {
-				inserted[item.Id] = item
-				return true
-			} else {
-				find = true
-				copyTableItem(tbl, item)
-				return false
-			}
-		}
-		if find {
+	tableId = math.MaxUint64
+	itr := cc.tables.data.Iter()
+	defer itr.Release()
+	ok := itr.Seek(tbl)
+	if ok {
+		ts = itr.Item().Ts
+	}
+	for ; ok; ok = itr.Next() {
+		item := itr.Item()
+		if item.AccountId != tbl.AccountId ||
+			item.DatabaseId != tbl.DatabaseId || item.Name != tbl.Name {
 			return false
 		}
-		return false
-	})
-
-	if find {
-		return true
+		if !item.deleted && item.Id != tableId {
+			copyTableItem(tbl, item)
+			return true
+		}
+		if item.deleted {
+			tableId = item.Id
+		}
+		if !item.Ts.Equal(ts) {
+			return false
+		}
 	}
-
-	//handle truncate operation independently
-	//remove deleted item from inserted item
-	for rowid := range deleted {
-		delete(inserted, rowid)
-	}
-
-	//if there is no inserted item, it means that the table is deleted.
-	if len(inserted) == 0 {
-		return false
-	}
-
-	//if there is more than one inserted item, it means that it is wrong
-	if len(inserted) > 1 {
-		panic(fmt.Sprintf("account %d database %d has multiple tables %s",
-			tbl.AccountId, tbl.DatabaseId, tbl.Name))
-	}
-
-	//get item
-	for _, item := range inserted {
-		copyTableItem(tbl, item)
-	}
-
-	return true
+	return false
 }
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
