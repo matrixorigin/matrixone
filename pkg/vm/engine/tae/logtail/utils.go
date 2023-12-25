@@ -52,7 +52,7 @@ const (
 	CheckpointVersion8  uint32 = 8
 	CheckpointVersion9  uint32 = 9
 	CheckpointVersion10 uint32 = 10
-	CheckpointVersion11 uint32 = 10
+	CheckpointVersion11 uint32 = 11
 
 	CheckpointCurrentVersion = CheckpointVersion11
 )
@@ -1935,8 +1935,8 @@ func (data *CheckpointData) WriteTo(
 }
 
 func validateBeforeLoadBlkCol(version uint32, idxs []uint16, colNames []string) []uint16 {
-	// in version 10, the storage usage ins/del was added into the ckp meta batch
-	if version <= CheckpointVersion9 {
+	// in version 11, the storage usage ins/del was added into the ckp meta batch
+	if version <= CheckpointVersion10 {
 		if colNames[len(colNames)-1] == CheckpointMetaAttr_StorageUsageDelLocation {
 			return idxs[0 : len(idxs)-2]
 		}

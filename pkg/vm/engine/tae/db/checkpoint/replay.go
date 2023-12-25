@@ -316,7 +316,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 
 	// replying the usage data into tn usage cache
-	logtail.GetTNUsageMemo().EstablishFromCKPs(usageDatas, usageVers)
+	logtail.GetTNUsageMemo().EstablishFromCKPs(r.catalog, usageDatas, usageVers)
 
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),

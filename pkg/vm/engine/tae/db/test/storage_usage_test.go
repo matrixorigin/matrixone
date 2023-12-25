@@ -89,7 +89,7 @@ func Test_StorageUsageCache(t *testing.T) {
 			require.Equal(t, gathered[accId], size)
 		}
 
-		require.Equal(t, int64(0), totalSize)
+		require.Equal(t, uint64(0), totalSize)
 
 		size := uint64(0)
 		preAccId := usages[0].AccId
@@ -254,7 +254,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 			}
 
 			if _, ok := delSegIdxes[idx]; ok {
-				require.Equal(t, old.Size, int64(0))
+				require.Equal(t, old.Size, uint64(0))
 				require.True(t, exist)
 			}
 		}
@@ -307,7 +307,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 		accCol := vector.MustFixedCol[uint32](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-		sizeCol := vector.MustFixedCol[int64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+		sizeCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 		require.Equal(t, len(accCol), len(delUsages))
 
@@ -353,7 +353,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 		accCol := vector.MustFixedCol[uint32](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-		sizeCol := vector.MustFixedCol[int64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
+		sizeCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
 
 		for idx := 0; idx < len(accCol); idx++ {
 			require.Equal(t, accCol[idx], usages[idx].AccId)
@@ -428,7 +428,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	}
 
 	memo := logtail.GetTNUsageMemo()
-	memo.EstablishFromCKPs(ckps, vers)
+	memo.EstablishFromCKPs(nil, ckps, vers)
 
 	memoShadow := logtail.NewTNUsageMemo()
 	for idx := range usageIns {
