@@ -648,7 +648,7 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.Start = start
 			node.Prepare = end
 			node.End = end
-			node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
+			node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation, ObjectID)
 			obj.Insert(node)
 			node.DeletedAt = end
 		}

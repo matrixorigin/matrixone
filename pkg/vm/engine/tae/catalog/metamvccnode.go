@@ -95,26 +95,21 @@ type ObjectMVCCNode struct {
 	objectio.ObjectStats
 }
 
-func NewObjectMVCCNodeWithMetaloc(metaLoc objectio.Location) *ObjectMVCCNode {
-	node := NewEmptyObjectMVCCNode()
-	if metaLoc.IsEmpty() {
-		return node
-	}
-	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
-	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
-	return node
-}
-
 func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		ObjectStats: *objectio.NewObjectStats(),
 	}
 }
 
-func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
-	obj := NewEmptyObjectMVCCNode()
-	objectio.SetObjectStatsObjectName(&obj.ObjectStats, metalocation.Name())
-	return obj
+func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	if metaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+		return node
+	}
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
+	return node
 }
 
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {

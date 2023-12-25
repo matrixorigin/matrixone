@@ -725,21 +725,24 @@ func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
+				return true
+			}
 			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
 			assert.NoError(e.t, err)
 			if onlyCheckName {
 				assert.Equal(e.t, stats.ObjectLocation().Name(),
 					node.BaseNode.ObjectStats.ObjectLocation().Name(),
 					"load %v, get %v",
-					stats.ObjectLocation().Name(),
-					node.BaseNode.ObjectStats.ObjectLocation().Name())
+					stats.String(),
+					node.BaseNode.ObjectStats.String())
 				assert.Equal(e.t, stats.ObjectLocation().Extent(),
 					node.BaseNode.ObjectStats.ObjectLocation().Extent(),
 					"load %v, get %v",
-					stats.ObjectLocation().Extent(),
-					node.BaseNode.ObjectStats.ObjectLocation().Extent())
+					stats.String(),
+					node.BaseNode.ObjectStats.String())
 			} else {
-				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats, node.BaseNode.ObjectStats)
+				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
 			}
 			return true
 		})

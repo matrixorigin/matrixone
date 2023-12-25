@@ -136,7 +136,7 @@ func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}
-	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation))
+	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
 	e.Stat.entry = e
 	return e
 }
@@ -234,7 +234,7 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 			lastNode = n
 		}
 	}
-	if !lastNode.BaseNode.ObjectStats.IsZero() {
+	if !lastNode.BaseNode.IsEmpty() {
 		return
 	}
 	blk = entry.GetFirstBlkEntry()
@@ -258,7 +258,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	blk := entry.GetFirstBlkEntry()
 	// for gc in test
 	if blk == nil {
-		return *objectio.NewObjectStats(), nil
+		return stats, nil
 	}
 	blk.RLock()
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
@@ -273,7 +273,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 
 	entry.RLock()
 	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
-		if !n.BaseNode.ObjectStats.IsZero() {
+		if !n.BaseNode.IsEmpty() {
 			stats = *n.BaseNode.ObjectStats.Clone()
 			return false
 		}
