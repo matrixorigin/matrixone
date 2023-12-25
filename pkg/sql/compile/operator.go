@@ -327,7 +327,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
-			NeedEval: t.NeedEval,
+			NeedEval:           t.NeedEval,
+			PartialResults:     t.PartialResults,
+			PartialResultTypes: t.PartialResultTypes,
 		}
 	case vm.MergeLimit:
 		t := sourceIns.Arg.(*mergelimit.Argument)
