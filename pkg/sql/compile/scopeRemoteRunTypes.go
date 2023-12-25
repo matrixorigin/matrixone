@@ -373,7 +373,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i] = process.NewAnalyzeInfo()
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
-	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+	proc.DispatchNotifyCh = make(chan process.WrapCs)
 
 	c := &Compile{
 		proc: proc,
