@@ -196,7 +196,8 @@ type MysqlProtocol interface {
 	GetStats() string
 
 	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
-	CalculateOutTrafficBytes() (int64, int64)
+	// reset marks Do reset counter after calculation or not.
+	CalculateOutTrafficBytes(reset bool) (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
@@ -430,12 +431,16 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 }
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() (int64, int64) {
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	// Case 1: send data as ResultSet
-	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
-			// Case 2: send data as CSV
-			mp.GetSession().writeCsvBytes.Load(),
-		mp.packetCounter.Calculate()
+	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+		// Case 2: send data as CSV
+		mp.GetSession().writeCsvBytes.Load()
+	packets = mp.packetCounter.Calculate()
+	if reset {
+		mp.packetCounter.Reset()
+	}
+	return
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {

@@ -495,7 +495,7 @@ func (fp *FakeProtocol) GetStats() string {
 	return ""
 }
 
-func (fp *FakeProtocol) CalculateOutTrafficBytes() (int64, int64) { return 0, 0 }
+func (fp *FakeProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (fp *FakeProtocol) IsEstablished() bool {
 	return true
