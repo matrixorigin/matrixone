@@ -194,7 +194,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
 
-	memo := logtail.GetTNUsageMemo()
+	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
 
 	sort.Slice(usages, func(i, j int) bool {
@@ -232,6 +232,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 		usages, delDbIds, delTblIds, delSegIdxes, insSegIdxes)
 
 	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
+	iCollector.UsageMemo = memo
 	defer iCollector.Close()
 
 	iCollector.Usage.Deletes = deletes
@@ -325,11 +326,12 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
 
-	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
-	defer gCollector.Close()
-
-	memo := logtail.GetTNUsageMemo()
+	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
+
+	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
+	gCollector.UsageMemo = memo
+	defer gCollector.Close()
 
 	for idx := range usages {
 		memo.Update(usages[idx], false)
@@ -430,10 +432,11 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		vers = append(vers, logtail.CheckpointVersion11)
 	}
 
-	memo := logtail.GetTNUsageMemo()
+	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
 
-	memo.EstablishFromCKPs(nil, ckps, vers)
+	memo.PrepareReplay(ckps, vers)
+	memo.EstablishFromCKPs(nil)
 
 	memoShadow := logtail.NewTNUsageMemo()
 	for idx := range usageIns {
@@ -453,16 +456,4 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		require.Equal(t, usage, iter.Item())
 	}
 	iter.Release()
-
-	for idx := range ckps {
-		if vers[idx] < logtail.CheckpointVersion9 {
-			continue
-		} else if vers[idx] < logtail.CheckpointVersion11 {
-			ckps[idx].GetBatches()[logtail.StorageUsageInsIDX].Close()
-		} else {
-			ckps[idx].GetBatches()[logtail.StorageUsageInsIDX].Close()
-			ckps[idx].GetBatches()[logtail.StorageUsageDelIDX].Close()
-		}
-
-	}
 }

@@ -449,6 +449,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) fu
 		err = collector.PostLoop(c)
 
 		if collectUsage {
+			collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
 			// collecting usage happens only when do ckp
 			FillUsageBatOfIncremental(collector)
 		}
@@ -487,6 +488,7 @@ func GlobalCheckpointDataFactory(
 		}
 		err = collector.PostLoop(c)
 
+		collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
 		FillUsageBatOfGlobal(collector)
 
 		data = collector.OrphanData()
@@ -711,6 +713,7 @@ type BaseCollector struct {
 		SegInserts []*catalog.ObjectEntry
 		SegDeletes []*catalog.ObjectEntry
 	}
+	UsageMemo *TNUsageMemo
 }
 
 type IncrementalCollector struct {
