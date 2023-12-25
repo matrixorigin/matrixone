@@ -876,7 +876,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	// build index table
 	for _, def := range qry.IndexTables {
-
 		planCols = def.GetCols()
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
