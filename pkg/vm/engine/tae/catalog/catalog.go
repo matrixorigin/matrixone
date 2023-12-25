@@ -630,7 +630,7 @@ func (catalog *Catalog) replayObjectByBlock(
 			obj = NewObjectEntryOnReplay(
 				tbl,
 				ObjectID,
-				start, end, state)
+				start, end, state, metaLocation)
 			tbl.AddEntryLocked(obj)
 		}
 	}
@@ -648,6 +648,7 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.Start = start
 			node.Prepare = end
 			node.End = end
+			node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
 			obj.Insert(node)
 			node.DeletedAt = end
 		}

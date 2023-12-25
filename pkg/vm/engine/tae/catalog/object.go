@@ -122,7 +122,7 @@ func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn
 	return e
 }
 
-func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState) *ObjectEntry {
+func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, metalocation objectio.Location) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -136,7 +136,7 @@ func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}
-	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation))
 	e.Stat.entry = e
 	return e
 }
