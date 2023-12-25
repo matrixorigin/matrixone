@@ -122,4 +122,178 @@ id    text_data    orange_position    peach_position    strawberry_position
 2    grapepeach桃子mango    0    11    0
 3    西瓜猕猴桃watermelonkiwistrawberry草莓    0    0    20
 DROP TABLE IF EXISTS mixed_language_table;
+select locate('he','hello',-2);
+locate(he, hello, -2)
+0
+select locate('lo','hello',-4294967295);
+locate(lo, hello, -4294967295)
+0
+select locate('lo','hello',4294967295);
+locate(lo, hello, 4294967295)
+0
+select locate('lo','hello',-4294967296);
+locate(lo, hello, -4294967296)
+0
+select locate('lo','hello',4294967296);
+locate(lo, hello, 4294967296)
+0
+select locate('lo','hello',-4294967297);
+locate(lo, hello, -4294967297)
+0
+select locate('lo','hello',4294967297);
+locate(lo, hello, 4294967297)
+0
+select locate('DB', 'ewhDBfjiejwew');
+locate(DB, ewhDBfjiejwew)
+4
+select locate('db', 'HHUHDNDBDBDBfewoiujfewqf vew');
+locate(db, HHUHDNDBDBDBfewoiujfewqf vew)
+7
+select locate("3q", 'fwfwefw3rqfw3fqff3qwfw');
+locate(3q, fwfwefw3rqfw3fqff3qwfw)
+18
+select locate("&&**", " ekwefw&&&**^^&3928u3f ") as result;
+result
+9
+select locate(1,2);
+locate(1, 2)
+0
+select locate(100, 2300100100);
+locate(100, 2300100100)
+5
+select locate(-100, 3243211433100);
+locate(-100, 3243211433100)
+0
+select locate('foo', null);
+locate(foo, null)
+null
+select locate(null, 'o');
+locate(null, o)
+null
+select locate(null, null);
+locate(null, null)
+null
+select locate('foo', null) is null;
+locate(foo, null) is null
+true
+select locate(null, 'o') is null;
+locate(null, o) is null
+true
+select locate(null, null) is null;
+locate(null, null) is null
+true
+select isnull(locate('foo', null));
+isnull(locate(foo, null))
+true
+select isnull(locate(null, 'o'));
+isnull(locate(null, o))
+true
+select isnull(locate(null, null));
+isnull(locate(null, null))
+true
+select locate('lo','hello',3) as result;
+result
+4
+select locate('he','hello',null),locate('he',null,2),locate(null,'hello',2);
+locate(he, hello, null)    locate(he, null, 2)    locate(null, hello, 2)
+null    null    null
+select locate(null,'hello',null),locate('he',null,null);
+locate(null, hello, null)    locate(he, null, null)
+null    null
+select locate('abc',ltrim('   ueenjfwabc123'));
+locate(abc, ltrim(   ueenjfwabc123))
+8
+select locate('123',rtrim('  3782dfw23123123123   '));
+locate(123, rtrim(  3782dfw23123123123   ))
+12
+select locate('%^',trim('  32431 %^ 3829  3huicn2432g23   '));
+locate(%^, trim(  32431 %^ 3829  3huicn2432g23   ))
+7
+select locate('12',substring('21214avewwe12 ',3,20));
+locate(12, substring(21214avewwe12 , 3, 20))
+10
+select locate('kjs', reverse('sjkdakjevenjwvev')) as result;
+result
+14
+drop table if exists locate01;
+create table locate01(col1 char(5), col2 varchar(20));
+insert into locate01 values ('da','database数据库DB数据库管理系统');
+insert into locate01 values (null,null);
+insert into locate01 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
+internal error: Can't cast 'GHIJKLMNabcdfeowejfwve' to VARCHAR type. Src length 22 is larger than Dest length 20
+insert into locate01 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
+internal error: Can't cast '圣诞节快乐Merry Charismas!' to VARCHAR type. Src length 31 is larger than Dest length 20
+insert into locate01 values ('@#$', '^&**(&^$@@#$');
+select * from locate01;
+col1    col2
+da    database数据库DB数据库管理系统
+null    null
+@#$    ^&**(&^$@@#$
+prepare s1 from 'select locate(col1, col2) from locate01';
+execute s1;
+locate(col1, col2)
+1
+null
+10
+prepare s2 from 'select isnull(locate(col1, col2)) from locate01';
+execute s2;
+isnull(locate(col1, col2))
+false
+true
+false
+drop table locate01;
+drop table if exists locate02;
+create table locate02 (col1 tinytext, col2 text);
+insert into locate02 values ('融合异构分布式','MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。');
+insert into locate02 values (null, 'MatrixOne 具备实时 HTAP，多租户，流式计算，极致扩展性，高性价比，企业级高可用及 MySQL 高度兼容等重要特性，通过为用户提供一站式超融合数据解决方案，可以将过去由多个数据库完成的工作合并到一个数据库里，从而简化开发运维，消减数据碎片，提高开发敏捷度。');
+insert into locate02 values ('分布式', null);
+select *  from locate02;
+col1    col2
+融合异构分布式    MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。
+null    MatrixOne 具备实时 HTAP，多租户，流式计算，极致扩展性，高性价比，企业级高可用及 MySQL 高度兼容等重要特性，通过为用户提供一站式超融合数据解决方案，可以将过去由多个数据库完成的工作合并到一个数据库里，从而简化开发运维，消减数据碎片，提高开发敏捷度。
+分布式    null
+select locate(col1, col2) from locate02;
+locate(col1, col2)
+15
+null
+null
+select locate(col1, col2, 10) from locate02;
+locate(col1, col2, 10)
+15
+null
+null
+select locate(col1, col2, -10) form locate02;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 44 near " locate02;";
+drop table locate02;
+drop table if exists locate03;
+create temporary table locate03(col1 char(5), col2 mediumtext);
+insert into locate03 values ('DB','database数据库DB数据库管理系统');
+insert into locate03 values (null,null);
+insert into locate03 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
+insert into locate03 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
+insert into locate03 values ('@#$', '^&**(&^$@@#$');
+select * from locate03;
+col1    col2
+DB    database数据库DB数据库管理系统
+null    null
+ABCDF    GHIJKLMNabcdfeowejfwve
+圣诞节快乐    圣诞节快乐Merry Charismas!
+@#$    ^&**(&^$@@#$
+prepare s1 from 'select locate(col1, col2) from locate03';
+execute s1;
+locate(col1, col2)
+12
+null
+9
+1
+10
+prepare s2 from 'select isnull(locate(col1, col2)) from locate03';
+execute s2;
+isnull(locate(col1, col2))
+false
+true
+false
+false
+false
+drop table locate03;
 drop database testx;
