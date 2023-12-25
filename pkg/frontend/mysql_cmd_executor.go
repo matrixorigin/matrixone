@@ -2494,7 +2494,6 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	}()
 	var setProtocolSequenceID = func(val uint8) {
 		proto.SetSequenceID(val)
-		ses.CountPacket(1)
 	}
 	err = plan2.InitInfileParam(param)
 	if err != nil {

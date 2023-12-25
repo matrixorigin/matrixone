@@ -254,15 +254,12 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer span.End()
 
 	parameters := rt.getParameters()
-	mpi := rt.getProtocol()
-	mpi.SetSequenceID(req.seq)
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 	executor := rt.getCmdExecutor()
 	executor.SetCancelFunc(cancelRequestFunc)
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
-	ses.CountPacket(1)
 
 	if rt.needPrintSessionInfo() {
 		ts := ses.timestampMap

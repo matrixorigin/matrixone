@@ -369,6 +369,7 @@ func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 }
 
 func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.ses.CountPacket(1)
 	mp.sequenceId.Store(uint32(value))
 }
 
