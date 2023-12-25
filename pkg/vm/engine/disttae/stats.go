@@ -153,7 +153,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
-				if info.ColumnNDVs[idx] > 100 {
+				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
