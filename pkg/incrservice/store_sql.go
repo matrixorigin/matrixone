@@ -186,6 +186,7 @@ func (s *sqlStore) Allocate(
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),
+						zap.String("select-all", s.SelectAll(ctx, tableID, txnOp)),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
 				}
