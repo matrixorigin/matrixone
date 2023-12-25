@@ -52,8 +52,9 @@ const (
 	CheckpointVersion8  uint32 = 8
 	CheckpointVersion9  uint32 = 9
 	CheckpointVersion10 uint32 = 10
+	CheckpointVersion11 uint32 = 10
 
-	CheckpointCurrentVersion = CheckpointVersion10
+	CheckpointCurrentVersion = CheckpointVersion11
 )
 
 const (
@@ -137,6 +138,7 @@ var checkpointDataSchemas_V7 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V8 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V9 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V10 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V11 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -414,7 +416,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V8[:])
 	registerCheckpointDataReferVersion(CheckpointVersion9, checkpointDataSchemas_V9[:])
 	registerCheckpointDataReferVersion(CheckpointVersion10, checkpointDataSchemas_V10[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V10
+	registerCheckpointDataReferVersion(CheckpointVersion11, checkpointDataSchemas_V11[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V11
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
