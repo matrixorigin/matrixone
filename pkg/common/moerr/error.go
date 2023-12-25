@@ -201,7 +201,7 @@ const (
 	ErrTxnInternal                uint16 = 20621
 	ErrTxnReadConflict            uint16 = 20622
 	ErrPrimaryKeyDuplicated       uint16 = 20623
-	ErrAppendableSegmentNotFound  uint16 = 20624
+	ErrAppendableObjectNotFound   uint16 = 20624
 	ErrAppendableBlockNotFound    uint16 = 20625
 	ErrTAEDebug                   uint16 = 20626
 	ErrDuplicateKey               uint16 = 20627
@@ -410,7 +410,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnInternal:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
 	ErrTxnReadConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
 	ErrPrimaryKeyDuplicated:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
-	ErrAppendableSegmentNotFound:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
+	ErrAppendableObjectNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable Object not found"},
 	ErrAppendableBlockNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:               {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
@@ -1061,8 +1061,8 @@ func NewDuplicateKey(ctx context.Context, k string) *Error {
 	return newError(ctx, ErrDuplicateKey, k)
 }
 
-func NewAppendableSegmentNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableSegmentNotFound)
+func NewAppendableObjectNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrAppendableObjectNotFound)
 }
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {

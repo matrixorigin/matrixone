@@ -445,6 +445,7 @@ type TableLogtailRespBuilder struct {
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
 	segMetaDelBatch *containers.Batch
+	objectMetaBatch *containers.Batch
 	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
 }
@@ -458,7 +459,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		checkpoint:    ckp,
 	}
 	b.BlockFn = b.VisitBlk
-	b.SegmentFn = b.VisitSeg
+	b.ObjectFn = b.VisitObj
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
@@ -470,6 +471,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }
 
@@ -494,19 +496,51 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
-func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
+func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	e.RUnlock()
 
 	for _, node := range mvccNodes {
 		if node.HasDropCommitted() {
-			// send segment deletation event
+			// send Object deletation event
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackSegid2Rowid(&e.ID), false)
+			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
+		if e.IsAppendable() && node.BaseNode.IsEmpty() {
+			continue
+		}
+		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
 	}
 	return nil
+}
+
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
+	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
+	if push {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
+	} else {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+	}
+	node.BaseNode.AppendTuple(&entry.ID, batch)
+	if push {
+		node.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.TxnMVCCNode.AppendTuple(batch)
+	}
+	if push {
+		node.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.EntryMVCCNode.AppendTuple(batch)
+	}
+	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
+	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
+	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
+	sorted := false
+	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+		sorted = true
+	}
+	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
 }
 
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
@@ -570,7 +604,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*e.GetObject().ID.Segment(), false)
 	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
 	// produced by flush table tail, it's safe to truncate mem data in CN
 	memTruncTs := node.Start
@@ -645,7 +679,7 @@ type TableRespKind int
 const (
 	TableRespKind_Data TableRespKind = iota
 	TableRespKind_Blk
-	TableRespKind_Seg
+	TableRespKind_Obj
 )
 
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
@@ -669,10 +703,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		case TableRespKind_Seg:
-			tableName = fmt.Sprintf("_%d_seg", b.tid)
+		case TableRespKind_Obj:
+			tableName = fmt.Sprintf("_%d_obj", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
+				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		}
 
 		entry := &api.Entry{
@@ -694,7 +728,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Seg, b.segMetaDelBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Obj, b.objectMetaBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
@@ -828,7 +862,7 @@ func LoadCheckpointEntries(
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
+		ins, del, cnIns, objInfo, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
@@ -875,14 +909,14 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if segDel != nil {
+		if objInfo != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
+				EntryType:    api.Entry_Insert,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_seg", tableID),
+				TableName:    fmt.Sprintf("_%d_obj", tableID),
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
-				Bat:          segDel,
+				Bat:          objInfo,
 			}
 			entries = append(entries, entry)
 		}

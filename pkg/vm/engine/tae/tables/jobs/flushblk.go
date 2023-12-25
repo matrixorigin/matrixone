@@ -39,7 +39,10 @@ type flushBlkTask struct {
 	blocks    []objectio.BlockObject
 	schemaVer uint32
 	seqnums   []uint16
+	stat      objectio.ObjectStats
 	isABlk    bool
+
+	Stats objectio.ObjectStats
 }
 
 func NewFlushBlkTask(
@@ -84,6 +87,8 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	}
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+	} else if task.meta.GetSchema().HasSortKey() {
+		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
 	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
@@ -97,9 +102,11 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 	task.blocks, _, err = writer.Sync(ctx)
+	task.Stats = writer.GetObjectStats()[objectio.SchemaData]
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)
 	})
+	task.stat = writer.Stats()
 	return err
 }

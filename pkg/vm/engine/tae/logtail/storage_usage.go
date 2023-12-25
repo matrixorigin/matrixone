@@ -73,13 +73,13 @@ func appendToStorageUsageVectors(data UsageData, vecs []*vector.Vector, mp *mpoo
 	vector.AppendFixed(vecs[UsageSize], data[UsageSize].(uint64), false, mp)
 }
 
-func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
+func checkObject(entry *catalog.ObjectEntry, collector *BaseCollector) bool {
 	if !entry.IsSorted() || entry.IsAppendable() || entry.HasDropCommitted() {
 		return false
 	}
 
 	// the incremental ckp should consider the time range.
-	// we only collect the segments which updates happened in [start, end]
+	// we only collect the Objects which updates happened in [start, end]
 	entry.RLock()
 	cnt := len(entry.ClonePreparedInRange(collector.start, collector.end))
 	entry.RUnlock()
@@ -89,21 +89,21 @@ func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 	return true
 }
 
-func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry, mp *mpool.MPool) {
+func fillUsageBat(collector *BaseCollector, entry *catalog.ObjectEntry, mp *mpool.MPool) {
 	vecs := getStorageUsageBatVectors(collector.data)
 	accId := uint64(entry.GetTable().GetDB().GetTenantID())
 	dbId := entry.GetTable().GetDB().GetID()
 	tblId := entry.GetTable().GetID()
-	segId := entry.ID
+	objId := entry.ID.Segment()
 	appendTo := func(size uint64) {
 		appendToStorageUsageVectors(
-			UsageData{accId, dbId, tblId, segId, size},
+			UsageData{accId, dbId, tblId, *objId, size},
 			vecs,
 			mp,
 		)
 	}
 
-	if err := entry.LoadObjectInfo(); err != nil {
+	if err := entry.CheckAndLoad(); err != nil {
 		return
 	}
 
@@ -205,13 +205,13 @@ func traverseCatalog(
 	mp *mpool.MPool,
 ) (loaded int) {
 	processor := new(catalog.LoopProcessor)
-	var segs []*catalog.SegmentEntry
+	var objs []*catalog.ObjectEntry
 
 	// need to accelerate the load process through prefetch,
-	// so we collect valid segments first
-	processor.SegmentFn = func(entry *catalog.SegmentEntry) error {
-		if checkSegment(entry, collector) {
-			segs = append(segs, entry)
+	// so we collect valid Objects first
+	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
+		if checkObject(entry, collector) {
+			objs = append(objs, entry)
 		}
 		return nil
 	}
@@ -222,9 +222,9 @@ func traverseCatalog(
 	// of the prefetch cache
 	batchCnt := 100
 	i := 0
-	for idx := 1; idx <= len(segs); idx++ {
+	for idx := 1; idx <= len(objs); idx++ {
 		// prefetch obj meta
-		blk := segs[idx-1].GetFirstBlkEntry()
+		blk := objs[idx-1].GetFirstBlkEntry()
 		if blk != nil && len(blk.GetMetaLoc()) != 0 {
 			loaded++
 			blockio.PrefetchMeta(fs, blk.GetMetaLoc())
@@ -232,14 +232,14 @@ func traverseCatalog(
 
 		// deal with the previously prefetched batch
 		for idx%batchCnt == 0 && i < idx {
-			fillUsageBat(collector, segs[i], mp)
+			fillUsageBat(collector, objs[i], mp)
 			i++
 		}
 	}
 
-	// deal with the left segments
-	for ; i < len(segs); i++ {
-		fillUsageBat(collector, segs[i], mp)
+	// deal with the left Objects
+	for ; i < len(objs); i++ {
+		fillUsageBat(collector, objs[i], mp)
 	}
 
 	return loaded
