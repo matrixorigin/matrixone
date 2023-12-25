@@ -147,7 +147,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 			}
@@ -192,7 +192,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 			}
@@ -279,7 +279,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				}
 				ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+					if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 						return err
 					}
 				}
