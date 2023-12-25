@@ -2492,9 +2492,6 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			err = err2
 		}
 	}()
-	var setProtocolSequenceID = func(val uint8) {
-		proto.SetSequenceID(val)
-	}
 	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
@@ -2507,7 +2504,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	var msg interface{}
 	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 	if err != nil {
-		setProtocolSequenceID(proto.GetSequenceId() + 1)
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
@@ -2519,12 +2516,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 
 	packet, ok := msg.(*Packet)
 	if !ok {
-		setProtocolSequenceID(proto.GetSequenceId() + 1)
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		err = moerr.NewInvalidInput(ctx, "invalid packet")
 		return
 	}
 
-	setProtocolSequenceID(uint8(packet.SequenceID + 1))
+	proto.SetSequenceID(uint8(packet.SequenceID + 1))
 	seq := uint8(packet.SequenceID + 1)
 	length := packet.Length
 	if length == 0 {
@@ -2552,7 +2549,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				seq += 1
-				setProtocolSequenceID(seq)
+				proto.SetSequenceID(seq)
 				err = nil
 			}
 			break
@@ -2568,11 +2565,11 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		if !ok {
 			err = moerr.NewInvalidInput(ctx, "invalid packet")
 			seq += 1
-			setProtocolSequenceID(seq)
+			proto.SetSequenceID(seq)
 			break
 		}
 		seq = uint8(packet.SequenceID + 1)
-		setProtocolSequenceID(seq)
+		proto.SetSequenceID(seq)
 
 		writeStart := time.Now()
 		if !skipWrite {
