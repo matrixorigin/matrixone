@@ -45,6 +45,7 @@ func init() {
 	initPipelineMetrics()
 	initMemMetrics()
 	initProxyMetrics()
+	initFrontendMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -158,4 +159,8 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
 	registry.MustRegister(ProxyTransferQueueSizeGauge)
 	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
+}
+
+func initFrontendMetrics() {
+	registry.MustRegister(acceptConnDurationHistogram)
 }
