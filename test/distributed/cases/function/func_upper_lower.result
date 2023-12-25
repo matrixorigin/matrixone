@@ -44,3 +44,33 @@ to_lower(b)    lower(b)
 abc    abc
 null    null
 abc 123    abc 123
+select to_upper(ltrim('   ueenjfwabc123'));
+to_upper(ltrim(   ueenjfwabc123))
+UEENJFWABC123
+select upper(rtrim('  3782dfw23123123123   '));
+upper(rtrim(  3782dfw23123123123   ))
+  3782DFW23123123123
+select to_upper(trim('  32431 %^ 3829  3huicn2432g23   '));
+to_upper(trim(  32431 %^ 3829  3huicn2432g23   ))
+32431 %^ 3829  3HUICN2432G23
+select upper(substring('21214avewwe12',3,20));
+upper(substring(21214avewwe12, 3, 20))
+214AVEWWE12
+select upper(reverse('sjkdakjevenjwvev')) as result;
+result
+VEVWJNEVEJKADKJS
+select lower(ltrim('   uEENjfwabc123'));
+lower(ltrim(   uEENjfwabc123))
+ueenjfwabc123
+select to_lower(rtrim('  3782dfWWWW23123123123   '));
+to_lower(rtrim(  3782dfWWWW23123123123   ))
+  3782dfwwww23123123123
+select lower(trim('  32431 %^ 3829  3huICN2432g23   '));
+lower(trim(  32431 %^ 3829  3huICN2432g23   ))
+32431 %^ 3829  3huicn2432g23
+select to_lower(substring('21214AewWE12',3,20));
+to_lower(substring(21214AewWE12, 3, 20))
+214aewwe12
+select lower(reverse('sjkDAKjeveBJwvev')) as result;
+result
+vevwjbevejkadkjs
