@@ -31,7 +31,7 @@ type localLockTableProxy struct {
 	mu struct {
 		sync.RWMutex
 		holders       map[string]*sharedOps // key: row
-		remoteHolders map[string][]byte
+		currentHolder map[string][]byte
 	}
 }
 
@@ -43,7 +43,7 @@ func newLockTableProxy(
 		serviceID: serviceID,
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
-	lp.mu.remoteHolders = make(map[string][]byte)
+	lp.mu.currentHolder = make(map[string][]byte)
 	return lp
 }
 
@@ -74,13 +74,14 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	first := v.isEmpty()
-	hasHolder := lp.hasRemoteHolderLocked(key)
 	r := v.result
-	w := v.add(lp.serviceID, txn, cb)
-	defer w.close()
-
-	if !first && !hasHolder {
-		w.setStatus(blocking)
+	w := v.add(
+		lp.serviceID,
+		txn,
+		cb,
+		lp.hasRemoteHolderLocked(key))
+	if w != nil {
+		defer w.close()
 	}
 	lp.mu.Unlock()
 
@@ -94,7 +95,7 @@ func (lp *localLockTableProxy) lock(
 				lp.mu.Lock()
 				defer lp.mu.Unlock()
 				if e == nil {
-					lp.mu.remoteHolders[key] = v.sharedTxns[0]
+					lp.mu.currentHolder[key] = v.txns[0].txnID
 				}
 				v.done(r, e)
 			})
@@ -102,11 +103,13 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	// wait first done
-	if !hasHolder {
+	if w != nil {
 		w.wait(ctx)
 		return
 	}
 
+	bind := lp.getBind()
+	txn.lockAdded(bind.Group, bind.Table, rows)
 	cb(r, nil)
 }
 
@@ -143,7 +146,7 @@ func (lp *localLockTableProxy) unlock(
 
 			// update holder to last txn
 			if !v.isEmpty() {
-				lp.mu.remoteHolders[row] = v.last()
+				lp.mu.currentHolder[row] = v.last()
 				mutations = append(mutations,
 					pb.ExtraMutation{
 						Key:       key,
@@ -151,7 +154,7 @@ func (lp *localLockTableProxy) unlock(
 						ReplaceTo: v.last(),
 					})
 			} else {
-				delete(lp.mu.remoteHolders, row)
+				delete(lp.mu.currentHolder, row)
 			}
 		}
 		return true
@@ -169,7 +172,7 @@ func (lp *localLockTableProxy) unlock(
 func (lp *localLockTableProxy) isRemoteHolderLocked(
 	row string,
 	txnID []byte) bool {
-	v, ok := lp.mu.remoteHolders[row]
+	v, ok := lp.mu.currentHolder[row]
 	if !ok {
 		return false
 	}
@@ -177,7 +180,7 @@ func (lp *localLockTableProxy) isRemoteHolderLocked(
 }
 
 func (lp *localLockTableProxy) hasRemoteHolderLocked(row string) bool {
-	_, ok := lp.mu.remoteHolders[row]
+	_, ok := lp.mu.currentHolder[row]
 	return ok
 }
 
@@ -197,13 +200,12 @@ func (lp *localLockTableProxy) close() {
 }
 
 type sharedOps struct {
-	bind       pb.LockTable
-	result     pb.Result
-	rows       [][]byte
-	txns       []*activeTxn
-	waiters    []*waiter
-	cbs        []func(pb.Result, error)
-	sharedTxns [][]byte
+	bind    pb.LockTable
+	result  pb.Result
+	rows    [][]byte
+	txns    []*activeTxn
+	waiters []*waiter
+	cbs     []func(pb.Result, error)
 }
 
 func (s *sharedOps) done(
@@ -212,13 +214,14 @@ func (s *sharedOps) done(
 	for idx, cb := range s.cbs {
 		s.txns[idx].lockAdded(s.bind.Group, s.bind.Table, s.rows)
 		cb(r, err)
-		s.waiters[idx].notify(notifyValue{})
+		if idx > 0 {
+			s.waiters[idx].notify(notifyValue{})
+		}
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil
 	}
 	if err != nil {
 		s.txns = s.txns[:0]
-		s.sharedTxns = s.sharedTxns[:0]
 		s.cbs = s.cbs[:0]
 		s.waiters = s.waiters[:0]
 	} else {
@@ -231,19 +234,27 @@ func (s *sharedOps) isEmpty() bool {
 }
 
 func (s *sharedOps) last() []byte {
-	return s.sharedTxns[len(s.sharedTxns)-1]
+	return s.txns[len(s.txns)-1].txnID
 }
 
 func (s *sharedOps) add(
 	serviceID string,
 	txn *activeTxn,
-	cb func(pb.Result, error)) *waiter {
-	v := txn.toWaitTxn(serviceID, true)
-	w := acquireWaiter(v)
+	cb func(pb.Result, error),
+	hasHolder bool) *waiter {
+	var w *waiter
+	if !hasHolder && !s.isEmpty() {
+		v := txn.toWaitTxn(serviceID, true)
+		w = acquireWaiter(v)
+		w.setStatus(blocking)
+	}
+	if hasHolder {
+		cb = nil
+	}
+
 	s.txns = append(s.txns, txn)
 	s.cbs = append(s.cbs, cb)
 	s.waiters = append(s.waiters, w)
-	s.sharedTxns = append(s.sharedTxns, txn.txnID)
 	return w
 }
 
@@ -251,17 +262,14 @@ func (s *sharedOps) remove(txn *activeTxn) {
 	newTxns := s.txns[:0]
 	newCbs := s.cbs[:0]
 	newWaiters := s.waiters[:0]
-	newSharedTxns := s.sharedTxns[:0]
 	for idx, v := range s.txns {
 		if v != txn {
 			newTxns = append(newTxns, v)
 			newWaiters = append(newWaiters, s.waiters[idx])
 			newCbs = append(newCbs, s.cbs[idx])
-			newSharedTxns = append(newSharedTxns, s.sharedTxns[idx])
 		}
 	}
 	s.txns = newTxns
 	s.waiters = newWaiters
 	s.cbs = newCbs
-	s.sharedTxns = newSharedTxns
 }
