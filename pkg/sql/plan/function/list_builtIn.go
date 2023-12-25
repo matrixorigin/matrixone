@@ -5596,7 +5596,7 @@ var supportedOthersBuiltIns = []FuncNew{
 									if !null2 {
 										tuples, _, err := types.DecodeTuple(value)
 										if err == nil { // complex key
-											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(), string(col))
+											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(nil), string(col))
 										}
 										return moerr.NewDuplicateEntry(proc.Ctx, string(value), string(col))
 									}
