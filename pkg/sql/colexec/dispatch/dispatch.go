@@ -168,7 +168,7 @@ func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
 	}
 	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	if err != nil {
+	if err == nil {
 		batch.SetLength(b, 1)
 		b.SetEnd()
 	}
