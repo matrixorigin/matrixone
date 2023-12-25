@@ -374,7 +374,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
 		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
-	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+	proc.DispatchNotifyCh = make(chan process.WrapCs)
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc

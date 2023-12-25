@@ -32,19 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
-const (
-	// Note: Do not edit this id!!!
-	LocalSegmentStartID uint64 = 1 << 47
-)
-
-// var localSegmentIdAlloc *common.IdAlloctor
-
-// func init() {
-// 	localSegmentIdAlloc = common.NewIdAlloctor(LocalSegmentStartID)
-// }
-
-type localSegment struct {
-	entry *catalog.SegmentEntry
+type tableSpace struct {
+	entry *catalog.ObjectEntry
 
 	appendable InsertNode
 	//index for primary key
@@ -55,14 +44,14 @@ type localSegment struct {
 	rows        uint32
 	appends     []*appendCtx
 	tableHandle data.TableHandle
-	nseg        handle.Segment
+	nobj        handle.Object
 
 	stats []objectio.ObjectStats
 }
 
-func newLocalSegment(table *txnTable) *localSegment {
-	return &localSegment{
-		entry: catalog.NewStandaloneSegment(
+func newTableSpace(table *txnTable) *tableSpace {
+	return &tableSpace{
+		entry: catalog.NewStandaloneObject(
 			table.entry,
 			table.store.txn.GetStartTS()),
 		nodes:   make([]InsertNode, 0),
@@ -72,9 +61,9 @@ func newLocalSegment(table *txnTable) *localSegment {
 	}
 }
 
-func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
+func (space *tableSpace) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	var sum uint32
-	for i, node := range seg.nodes {
+	for i, node := range space.nodes {
 		sum += node.Rows()
 		if row <= sum-1 {
 			return i, node.Rows() - (sum - (row + 1)) - 1
@@ -84,15 +73,15 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerStats(stats objectio.ObjectStats) {
-	if seg.stats == nil {
-		seg.stats = make([]objectio.ObjectStats, 0)
+func (space *tableSpace) registerStats(stats objectio.ObjectStats) {
+	if space.stats == nil {
+		space.stats = make([]objectio.ObjectStats, 0)
 	}
-	seg.stats = append(seg.stats, stats)
+	space.stats = append(space.stats, stats)
 }
 
-func (seg *localSegment) isStatsExisted(o objectio.ObjectStats) bool {
-	for _, stats := range seg.stats {
+func (space *tableSpace) isStatsExisted(o objectio.ObjectStats) bool {
+	for _, stats := range space.stats {
 		if stats.ObjectName().Equal(o.ObjectName()) {
 			return true
 		}
@@ -101,35 +90,35 @@ func (seg *localSegment) isStatsExisted(o objectio.ObjectStats) bool {
 }
 
 // register an appendable insertNode.
-func (seg *localSegment) registerANode() {
-	entry := seg.entry
+func (space *tableSpace) registerANode() {
+	entry := space.entry
 	meta := catalog.NewStandaloneBlock(
 		entry,
-		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
-		seg.table.store.txn.GetStartTS())
+		objectio.NewBlockidWithObjectID(&entry.ID, uint16(len(space.nodes))),
+		space.table.store.txn.GetStartTS())
 	entry.AddEntryLocked(meta)
 	n := NewANode(
-		seg.table,
+		space.table,
 		meta,
 	)
-	seg.appendable = n
-	seg.nodes = append(seg.nodes, n)
+	space.appendable = n
+	space.nodes = append(space.nodes, n)
 }
 
 // ApplyAppend applies all the anodes into appendable blocks
 // and un-reference the appendable blocks which had been referenced when PrepareApply.
-func (seg *localSegment) ApplyAppend() (err error) {
+func (space *tableSpace) ApplyAppend() (err error) {
 	var destOff int
 	defer func() {
 		// Close All unclosed Appends:un-reference the appendable block.
-		seg.CloseAppends()
+		space.CloseAppends()
 	}()
-	for _, ctx := range seg.appends {
+	for _, ctx := range space.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
-			seg.table.store.txn); err != nil {
+			space.table.store.txn); err != nil {
 			return
 		}
 		id := ctx.driver.GetID()
@@ -139,76 +128,76 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			uint32(destOff),
 			ctx.count, id)
 	}
-	if seg.tableHandle != nil {
-		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
+	if space.tableHandle != nil {
+		space.table.entry.GetTableData().ApplyHandle(space.tableHandle)
 	}
 	return
 }
 
-func (seg *localSegment) PrepareApply() (err error) {
+func (space *tableSpace) PrepareApply() (err error) {
 	defer func() {
 		if err != nil {
 			// Close All unclosed Appends: un-reference all the appendable blocks.
-			seg.CloseAppends()
+			space.CloseAppends()
 		}
 	}()
-	for _, node := range seg.nodes {
-		if err = seg.prepareApplyNode(node); err != nil {
+	for _, node := range space.nodes {
+		if err = space.prepareApplyNode(node); err != nil {
 			return
 		}
 	}
-	for _, stats := range seg.stats {
-		if err = seg.prepareApplyObjectStats(stats); err != nil {
+	for _, stats := range space.stats {
+		if err = space.prepareApplyObjectStats(stats); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func (seg *localSegment) prepareApplyANode(node *anode) error {
+func (space *tableSpace) prepareApplyANode(node *anode) error {
 	node.Compact()
-	tableData := seg.table.entry.GetTableData()
-	if seg.tableHandle == nil {
-		seg.tableHandle = tableData.GetHandle()
+	tableData := space.table.entry.GetTableData()
+	if space.tableHandle == nil {
+		space.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	vec := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	vec := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	for appended < node.Rows() {
-		appender, err := seg.tableHandle.GetAppender()
-		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
-			segH, err := seg.table.CreateSegment(true)
+		appender, err := space.tableHandle.GetAppender()
+		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
+			objH, err := space.table.CreateObject(true)
 			if err != nil {
 				return err
 			}
-			blk, err := segH.CreateBlock(true)
-			segH.Close()
+			blk, err := objH.CreateBlock(true)
+			objH.Close()
 			if err != nil {
 				return err
 			}
-			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			appender = space.tableHandle.SetAppender(blk.Fingerprint())
 			blk.Close()
 		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 			id := appender.GetID()
-			blk, err := seg.table.CreateBlock(id.SegmentID(), true)
+			blk, err := space.table.CreateBlock(id.ObjectID(), true)
 			if err != nil {
 				return err
 			}
-			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			appender = space.tableHandle.SetAppender(blk.Fingerprint())
 			blk.Close()
 		}
-		if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
+		if !appender.IsSameColumns(space.table.GetLocalSchema()) {
 			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 		}
 		//PrepareAppend: It is very important that appending a AppendNode into
 		// block's MVCCHandle before applying data into block.
 		anode, created, toAppend, err := appender.PrepareAppend(
 			node.Rows()-appended,
-			seg.table.store.txn)
+			space.table.store.txn)
 		if err != nil {
 			return err
 		}
 		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
-		col := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
@@ -230,39 +219,43 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 			count:  toAppend,
 		}
 		if created {
-			seg.table.store.IncreateWriteCnt()
-			seg.table.txnEntries.Append(anode)
+			space.table.store.IncreateWriteCnt()
+			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
-		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
-		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
+		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
+		space.table.store.txn.GetMemo().AddBlock(space.table.entry.GetDB().ID,
 			id.TableID, &id.BlockID)
-		seg.appends = append(seg.appends, ctx)
+		space.appends = append(space.appends, ctx)
 		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
-		// 	id.String(), toAppend, appended, len(seg.appends))
+		// 	id.String(), toAppend, appended, len(space.appends))
 		appended += toAppend
 		if appended == node.Rows() {
 			break
 		}
 	}
-	node.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
-	node.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
+	node.data.Vecs[space.table.GetLocalSchema().PhyAddrKey.Idx].Close()
+	node.data.Vecs[space.table.GetLocalSchema().PhyAddrKey.Idx] = vec
 	return nil
 }
 
-func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (err error) {
-	sid := stats.ObjectName().SegmentId()
-	shouldCreateNewSeg := func() bool {
-		if seg.nseg == nil {
+func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (err error) {
+	sid := stats.ObjectName().ObjectId()
+	shouldCreateNewObj := func() bool {
+		if space.nobj == nil {
 			return true
 		}
-		entry := seg.nseg.GetMeta().(*catalog.SegmentEntry)
-		return entry.ID != sid
+		entry := space.nobj.GetMeta().(*catalog.ObjectEntry)
+		return !entry.ID.Eq(*sid)
 	}
 
-	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
-		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
+	if shouldCreateNewObj() {
+		space.nobj, err = space.table.CreateNonAppendableObject(true, new(objectio.CreateObjOpt).WithId(sid))
+		if err != nil {
+			return
+		}
+		space.nobj.GetMeta().(*catalog.ObjectEntry).SetSorted()
+		err = space.nobj.UpdateStats(stats)
 		if err != nil {
 			return
 		}
@@ -271,7 +264,7 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	num := stats.ObjectName().Num()
 	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	blkMaxRows := seg.table.schema.BlockMaxRows
+	blkMaxRows := space.table.schema.BlockMaxRows
 	for i := uint16(0); i < uint16(blkCount); i++ {
 		var blkRow uint32
 		if totalRow > blkMaxRows {
@@ -286,7 +279,7 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			WithMetaloc(metaloc).
 			WithFileIdx(num).
 			WithBlkIdx(i)
-		_, err = seg.nseg.CreateNonAppendableBlock(opts)
+		_, err = space.nobj.CreateNonAppendableBlock(opts)
 		if err != nil {
 			return
 		}
@@ -294,16 +287,16 @@ func (seg *localSegment) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	return
 }
 
-func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
+func (space *tableSpace) prepareApplyNode(node InsertNode) (err error) {
 	if !node.IsPersisted() {
-		return seg.prepareApplyANode(node.(*anode))
+		return space.prepareApplyANode(node.(*anode))
 	}
 	return nil
 }
 
 // CloseAppends un-reference the appendable blocks
-func (seg *localSegment) CloseAppends() {
-	for _, ctx := range seg.appends {
+func (space *tableSpace) CloseAppends() {
+	for _, ctx := range space.appends {
 		if ctx.driver != nil {
 			ctx.driver.Close()
 			ctx.driver = nil
@@ -312,39 +305,38 @@ func (seg *localSegment) CloseAppends() {
 }
 
 // Append appends batch of data into anode.
-func (seg *localSegment) Append(data *containers.Batch) (err error) {
-	if seg.appendable == nil {
-		seg.registerANode()
+func (space *tableSpace) Append(data *containers.Batch) (err error) {
+	if space.appendable == nil {
+		space.registerANode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
 	length := uint32(data.Length())
-	schema := seg.table.GetLocalSchema()
+	schema := space.table.GetLocalSchema()
 	for {
-		h := seg.appendable
-		space := h.GetSpace()
-		if space == 0 {
-			seg.registerANode()
-			h = seg.appendable
+		h := space.appendable
+		if h.GetSpace() == 0 {
+			space.registerANode()
+			h = space.appendable
 		}
 		appended, err = h.Append(data, offset)
 		if err != nil {
 			return
 		}
-		dedupType := seg.table.store.txn.GetDedupType()
+		dedupType := space.table.store.txn.GetDedupType()
 		if schema.HasPK() && dedupType == txnif.FullDedup {
-			if err = seg.index.BatchInsert(
+			if err = space.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
 				data.Vecs[schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
-				seg.rows,
+				space.rows,
 				false); err != nil {
 				break
 			}
 		}
 		offset += appended
-		seg.rows += appended
+		space.rows += appended
 		if offset >= length {
 			break
 		}
@@ -353,39 +345,39 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 }
 
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
-func (seg *localSegment) AddBlksWithMetaLoc(
+func (space *tableSpace) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {
-	seg.registerStats(stats)
+	space.registerStats(stats)
 	for i := range pkVecs {
-		dedupType := seg.table.store.txn.GetDedupType()
-		//insert primary keys into seg.index
+		dedupType := space.table.store.txn.GetDedupType()
+		//insert primary keys into space.index
 		if pkVecs != nil && dedupType == txnif.FullDedup {
-			if err = seg.index.BatchInsert(
-				seg.table.GetLocalSchema().GetSingleSortKey().Name,
+			if err = space.index.BatchInsert(
+				space.table.GetLocalSchema().GetSingleSortKey().Name,
 				pkVecs[i],
 				0,
 				pkVecs[i].Length(),
-				seg.rows,
+				space.rows,
 				false,
 			); err != nil {
 				return
 			}
-			seg.rows += uint32(pkVecs[i].Length())
+			space.rows += uint32(pkVecs[i].Length())
 		}
 	}
 	return nil
 }
 
-func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
-	schema := seg.table.GetLocalSchema()
+func (space *tableSpace) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	schema := space.table.GetLocalSchema()
 	for i := from; i <= to; i++ {
 		v, _, err := node.GetValue(schema.GetSingleSortKeyIdx(), i)
 		if err != nil {
 			return err
 		}
-		if err = seg.index.Delete(v); err != nil {
+		if err = space.index.Delete(v); err != nil {
 			return err
 		}
 	}
@@ -393,46 +385,46 @@ func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err 
 }
 
 // RangeDelete delete rows : [start, end]
-func (seg *localSegment) RangeDelete(start, end uint32) error {
-	first, firstOffset := seg.GetLocalPhysicalAxis(start)
-	last, lastOffset := seg.GetLocalPhysicalAxis(end)
+func (space *tableSpace) RangeDelete(start, end uint32) error {
+	first, firstOffset := space.GetLocalPhysicalAxis(start)
+	last, lastOffset := space.GetLocalPhysicalAxis(end)
 	var err error
 	if last == first {
-		node := seg.nodes[first]
+		node := space.nodes[first]
 		err = node.RangeDelete(firstOffset, lastOffset)
 		if err != nil {
 			return err
 		}
-		if !seg.table.GetLocalSchema().HasPK() {
+		if !space.table.GetLocalSchema().HasPK() {
 			// If no pk defined
 			return err
 		}
-		err = seg.DeleteFromIndex(firstOffset, lastOffset, node)
+		err = space.DeleteFromIndex(firstOffset, lastOffset, node)
 		return err
 	}
 
-	node := seg.nodes[first]
+	node := space.nodes[first]
 	if err = node.RangeDelete(firstOffset, node.Rows()-1); err != nil {
 
 		return err
 	}
-	if err = seg.DeleteFromIndex(firstOffset, node.Rows()-1, node); err != nil {
+	if err = space.DeleteFromIndex(firstOffset, node.Rows()-1, node); err != nil {
 		return err
 	}
-	node = seg.nodes[last]
+	node = space.nodes[last]
 	if err = node.RangeDelete(0, lastOffset); err != nil {
 		return err
 	}
-	if err = seg.DeleteFromIndex(0, lastOffset, node); err != nil {
+	if err = space.DeleteFromIndex(0, lastOffset, node); err != nil {
 		return err
 	}
 	if last > first+1 {
 		for i := first + 1; i < last; i++ {
-			node = seg.nodes[i]
+			node = space.nodes[i]
 			if err = node.RangeDelete(0, node.Rows()-1); err != nil {
 				break
 			}
-			if err = seg.DeleteFromIndex(0, node.Rows()-1, node); err != nil {
+			if err = space.DeleteFromIndex(0, node.Rows()-1, node); err != nil {
 				break
 			}
 		}
@@ -441,8 +433,8 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 }
 
 // CollectCmd collect txnCmd for anode whose data resides in memory.
-func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
-	for _, node := range seg.nodes {
+func (space *tableSpace) CollectCmd(cmdMgr *commandManager) (err error) {
+	for _, node := range space.nodes {
 		csn := uint32(0xffff) // Special cmd
 		cmd, err := node.MakeCommand(csn)
 		if err != nil {
@@ -455,39 +447,39 @@ func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (seg *localSegment) DeletesToString() string {
+func (space *tableSpace) DeletesToString() string {
 	var s string
-	for i, n := range seg.nodes {
+	for i, n := range space.nodes {
 		s = fmt.Sprintf("%s\t<INode-%d>: %s\n", s, i, n.PrintDeletes())
 	}
 	return s
 }
 
-func (seg *localSegment) IsDeleted(row uint32) bool {
-	npos, noffset := seg.GetLocalPhysicalAxis(row)
-	n := seg.nodes[npos]
+func (space *tableSpace) IsDeleted(row uint32) bool {
+	npos, noffset := space.GetLocalPhysicalAxis(row)
+	n := space.nodes[npos]
 	return n.IsRowDeleted(noffset)
 }
 
-func (seg *localSegment) Rows() (n uint32) {
-	for _, node := range seg.nodes {
+func (space *tableSpace) Rows() (n uint32) {
+	for _, node := range space.nodes {
 		n += node.Rows()
 	}
 	return
 }
 
-func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if !seg.table.GetLocalSchema().HasPK() {
-		id = seg.table.entry.AsCommonID()
+func (space *tableSpace) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+	if !space.table.GetLocalSchema().HasPK() {
+		id = space.table.entry.AsCommonID()
 		rid := filter.Val.(types.Rowid)
 		id.BlockID, offset = rid.Decode()
 		return
 	}
-	id = seg.entry.AsCommonID()
+	id = space.entry.AsCommonID()
 	if v, ok := filter.Val.([]byte); ok {
-		offset, err = seg.index.Search(string(v))
+		offset, err = space.index.Search(string(v))
 	} else {
-		offset, err = seg.index.Search(filter.Val)
+		offset, err = space.index.Search(filter.Val)
 	}
 	if err != nil {
 		return
@@ -495,69 +487,69 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	return
 }
 
-func (seg *localSegment) GetPKColumn() containers.Vector {
-	schema := seg.table.entry.GetLastestSchema()
-	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
+func (space *tableSpace) GetPKColumn() containers.Vector {
+	schema := space.table.entry.GetLastestSchema()
+	return space.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
-func (seg *localSegment) GetPKVecs() []containers.Vector {
-	schema := seg.table.entry.GetLastestSchema()
-	return seg.index.KeyToVectors(schema.GetSingleSortKeyType())
+func (space *tableSpace) GetPKVecs() []containers.Vector {
+	schema := space.table.entry.GetLastestSchema()
+	return space.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
-func (seg *localSegment) BatchDedup(key containers.Vector) error {
-	return seg.index.BatchDedup(seg.table.GetLocalSchema().GetSingleSortKey().Name, key)
+func (space *tableSpace) BatchDedup(key containers.Vector) error {
+	return space.index.BatchDedup(space.table.GetLocalSchema().GetSingleSortKey().Name, key)
 }
 
-func (seg *localSegment) GetColumnDataByIds(
+func (space *tableSpace) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	_, pos := blk.ID.Offsets()
-	n := seg.nodes[int(pos)]
+	n := space.nodes[int(pos)]
 	return n.GetColumnDataByIds(colIdxes, mp)
 }
 
-func (seg *localSegment) GetColumnDataById(
+func (space *tableSpace) GetColumnDataById(
 	ctx context.Context,
 	blk *catalog.BlockEntry,
 	colIdx int,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	_, pos := blk.ID.Offsets()
-	n := seg.nodes[int(pos)]
+	n := space.nodes[int(pos)]
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }
 
-func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
+func (space *tableSpace) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
 	_, pos := blk.ID.Offsets()
-	n := seg.nodes[int(pos)]
+	n := space.nodes[int(pos)]
 	return n.Prefetch(idxes)
 }
 
-func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
+func (space *tableSpace) GetBlockRows(blk *catalog.BlockEntry) int {
 	_, pos := blk.ID.Offsets()
-	n := seg.nodes[int(pos)]
+	n := space.nodes[int(pos)]
 	return int(n.Rows())
 }
 
-func (seg *localSegment) GetValue(row uint32, col uint16) (any, bool, error) {
-	npos, noffset := seg.GetLocalPhysicalAxis(row)
-	n := seg.nodes[npos]
+func (space *tableSpace) GetValue(row uint32, col uint16) (any, bool, error) {
+	npos, noffset := space.GetLocalPhysicalAxis(row)
+	n := space.nodes[npos]
 	return n.GetValue(int(col), noffset)
 }
 
 // Close free the resource when transaction commits.
-func (seg *localSegment) Close() (err error) {
-	for _, node := range seg.nodes {
+func (space *tableSpace) Close() (err error) {
+	for _, node := range space.nodes {
 		if err = node.Close(); err != nil {
 			return
 		}
 	}
-	seg.index.Close()
-	seg.index = nil
-	seg.nodes = nil
-	seg.appendable = nil
+	space.index.Close()
+	space.index = nil
+	space.nodes = nil
+	space.appendable = nil
 	return
 }

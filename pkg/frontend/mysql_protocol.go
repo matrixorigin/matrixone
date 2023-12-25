@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -1256,6 +1257,13 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 }
 
 func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
+	ses := mp.GetSession()
+	ses.timestampMap[TSAuthenticateStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSAuthenticateEnd] = time.Now()
+		v2.AuthenticateDurationHistogram.Observe(float64(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Milliseconds()))
+	}()
+
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
@@ -2701,27 +2709,41 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	extraInfo := &proxy.ExtraInfo{}
+	ve := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
 	reader := bufio.NewReader(rs.RawConn())
-	if err := extraInfo.Decode(reader); err != nil {
-		if err != nil {
-			// Something wrong when try to read the salt value.
-			// If the error is timeout, we treat it as normal case and do not update salt.
-			if err, ok := err.(net.Error); ok && err.Timeout() {
-				logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
-					zap.Error(err))
-			} else {
-				logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
-					zap.Error(err))
-			}
+	if err := ve.Decode(reader); err != nil {
+		// If the error is timeout, we treat it as normal case and do not update extra info.
+		if err, ok := err.(net.Error); ok && err.Timeout() {
+			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+				zap.Error(err))
+		} else {
+			logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+				zap.Error(err))
 		}
+		return
+	}
+
+	salt, ok := ve.ExtraInfo.GetSalt()
+	if ok {
+		mp.SetSalt(salt)
 	} else {
-		mp.SetSalt(extraInfo.Salt)
-		mp.GetSession().requestLabel = extraInfo.Label.Labels
-		if extraInfo.ConnectionID > 0 {
-			mp.connectionID = extraInfo.ConnectionID
+		logError(mp.ses, mp.GetDebugString(), "cannot get salt")
+	}
+	label, ok := ve.ExtraInfo.GetLabel()
+	if ok {
+		mp.GetSession().requestLabel = label.Labels
+	} else {
+		logError(mp.ses, mp.GetDebugString(), "cannot get label")
+	}
+	connID, ok := ve.ExtraInfo.GetConnectionID()
+	if ok {
+		if connID > 0 {
+			mp.connectionID = connID
 		}
-		if extraInfo.InternalConn {
+	}
+	internalConn, ok := ve.ExtraInfo.GetInternalConn()
+	if ok {
+		if internalConn {
 			mp.GetSession().connType = ConnTypeInternal
 		} else {
 			mp.GetSession().connType = ConnTypeExternal

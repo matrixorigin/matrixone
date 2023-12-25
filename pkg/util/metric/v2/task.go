@@ -31,6 +31,7 @@ var (
 	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
 	TaskGCkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
 	TaskICkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("ickp_collect_uage")
+	GetObjectStatsDurationHistogram       = taskShortDurationHistogram.WithLabelValues("get_object_stats")
 
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

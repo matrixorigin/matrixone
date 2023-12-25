@@ -244,6 +244,11 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		v := c.mu.sharedAllocID.nextID
 		c.mu.sharedAllocID.nextID++
 		c.mu.Unlock()
+		if v == 0 {
+			logutil.Error("id should not be 0",
+				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
+				zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
+		}
 		return v, nil
 	}
 
@@ -262,6 +267,13 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		c.mu.sharedAllocID.nextID = firstID + 1
 		c.mu.sharedAllocID.lastID = firstID + c.cfg.AllocateIDBatch - 1
 		c.mu.Unlock()
+		if firstID == 0 {
+			logutil.Error("id should not be 0",
+				zap.Error(err),
+				zap.Uint64("batch", c.cfg.AllocateIDBatch),
+				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
+				zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
+		}
 		return firstID, err
 	}
 }

@@ -83,12 +83,12 @@ func (h *heapBuilder[T]) finish() []T {
 	return ret
 }
 
-func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
-	if len(msegs) == 0 {
+func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) {
+	if len(mobjs) == 0 {
 		return
 	}
 	rows, merged := 0, 0
-	for _, m := range msegs {
+	for _, m := range mobjs {
 		rows += m.Stat.GetRows()
 		merged += m.Stat.GetRemainingRows()
 		origSize += m.Stat.GetOriginSize()
