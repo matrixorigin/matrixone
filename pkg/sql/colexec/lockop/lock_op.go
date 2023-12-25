@@ -340,6 +340,7 @@ func LockRows(
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
 		WithLockMode(lockMode).
+		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
@@ -422,6 +423,8 @@ func doLock(
 		Policy:          lock.WaitPolicy_Wait,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		Sharding:        opts.sharding,
+		Group:           opts.group,
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
