@@ -50,6 +50,37 @@ func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
 	return &sqlStore{exec: exec}, nil
 }
 
+func (s *sqlStore) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	return s.exec.NewTxnOperator(ctx)
+}
+
+// only use for debug
+func (s *sqlStore) SelectAll(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator) string {
+	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(ctx, fetchSQL, opts)
+	if err != nil {
+		return ""
+	}
+	defer res.Close()
+
+	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
+		ctx.Value(defines.TenantIDKey{}), txnOp.Txn().DebugString())
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
+			executor.GetStringRows(cols[0])[0],
+			executor.GetFixedRows[uint64](cols[1])[0])
+		return true
+	})
+	return str
+}
+
 func (s *sqlStore) Create(
 	ctx context.Context,
 	tableID uint64,

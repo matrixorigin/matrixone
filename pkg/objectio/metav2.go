@@ -27,7 +27,7 @@ const (
 	CkpMetaStart DataMetaType = 2
 
 	// CkpMetaEnd = CkpMetaStart + `MaxIDX`
-	CkpMetaEnd DataMetaType = 26 + 2
+	CkpMetaEnd DataMetaType = 28 + 2
 )
 
 const (

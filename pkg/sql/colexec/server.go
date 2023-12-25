@@ -33,27 +33,11 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 		return Srv
 	}
 	Srv = &Server{
-		mp:            make(map[uint64]*process.WaitRegister),
 		hakeeper:      client,
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
 	}
 	return Srv
-}
-
-func (srv *Server) GetConnector(id uint64) *process.WaitRegister {
-	srv.Lock()
-	defer srv.Unlock()
-	defer func() { delete(srv.mp, id) }()
-	return srv.mp[id]
-}
-
-func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
-	srv.Lock()
-	defer srv.Unlock()
-	srv.mp[srv.id] = reg
-	defer func() { srv.id++ }()
-	return srv.id
 }
 
 // GetProcByUuid try to get process from map, and decrease referenceCount by 1 when get succeed.
@@ -78,16 +62,14 @@ func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Proce
 	return p.proc, true
 }
 
-func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
 		delete(srv.uuidCsChanMap.mp, u)
-		return nil
+	} else {
+		srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
 	}
-
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
-	return nil
 }
 
 func (srv *Server) DeleteUuids(uuids []uuid.UUID) {

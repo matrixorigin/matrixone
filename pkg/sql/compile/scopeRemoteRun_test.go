@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -87,7 +88,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -247,15 +247,14 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		nil)
 	vp.AnalInfos = []*process.AnalyzeInfo{}
 	vp.Reg = process.Register{}
-	c := &Compile{
-		proc: vp,
-	}
-	s := &Scope{
-		Proc: vp,
-	}
+	c := reuse.Alloc[Compile](nil)
+	c.proc = vp
+	s := reuse.Alloc[Scope](nil)
+	s.Proc = vp
 	sender := &messageSenderOnClient{
 		ctx:          ctx,
 		streamSender: streamSender,
+		c:            c,
 	}
 	ch2 := make(chan *batch.Batch)
 	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -277,13 +276,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
 
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
 	proc := &process.Process{
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
 		Ctx:         context.TODO(),
 		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{{NodeId: 1}},
+		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{
 			Account:        "",
 			User:           "",
@@ -315,14 +315,12 @@ func Test_refactorScope(t *testing.T) {
 	ctx := context.TODO()
 	proc := &process.Process{}
 
-	s := &Scope{
-		Proc: proc,
-	}
-	c := &Compile{
-		anal: &anaylze{},
-		ctx:  ctx,
-		proc: proc,
-	}
+	s := reuse.Alloc[Scope](nil)
+	s.Proc = proc
+	c := reuse.Alloc[Compile](nil)
+	c.anal = newAnaylze()
+	c.ctx = ctx
+	c.proc = proc
 	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, rs.Instructions[1].Idx, -1)
 }
@@ -334,19 +332,17 @@ func Test_convertPipelineUuid(t *testing.T) {
 			{Idx: 1, Uuid: id[:]},
 		},
 	}
-	s := &Scope{
-		RemoteReceivRegInfos: make([]RemoteReceivRegInfo, 0),
-	}
+	s := reuse.Alloc[Scope](nil)
+	s.RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0)
 	err := convertPipelineUuid(p, s)
 	require.Nil(t, err)
 }
 
 func Test_convertScopeRemoteReceivInfo(t *testing.T) {
 	id, _ := uuid.NewUUID()
-	s := &Scope{
-		RemoteReceivRegInfos: []RemoteReceivRegInfo{
-			{Idx: 1, Uuid: id},
-		},
+	s := reuse.Alloc[Scope](nil)
+	s.RemoteReceivRegInfos = []RemoteReceivRegInfo{
+		{Idx: 1, Uuid: id},
 	}
 	ret := convertScopeRemoteReceivInfo(s)
 	require.Equal(t, ret[0].Idx, int32(1))
@@ -533,7 +529,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		regs:     nil,
 	}
 	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1, engine.Node{})
+		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -604,11 +600,9 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
-	target := &anaylze{
-		analInfos: []*process.AnalyzeInfo{
-			{},
-		},
-	}
+	target := newAnaylze()
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	target.analInfos = []*process.AnalyzeInfo{a}
 	ana := &pipeline.AnalysisList{
 		List: []*plan2.AnalyzeInfo{
 			{},
@@ -652,7 +646,8 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := &process.AnalyzeInfo{InputRows: 100}
+	info := reuse.Alloc[process.AnalyzeInfo](nil)
+	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))
 }
@@ -695,34 +690,4 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 	_, err = decodeBatch(mp, vp, data)
 	require.Nil(t, err)
-}
-
-func TestScopeContext_addSubPipeline(t *testing.T) {
-	proc := process.New(context.TODO(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	proc.Reg = process.Register{
-		MergeReceivers: []*process.WaitRegister{{}},
-	}
-	ctx := &scopeContext{
-		id:   2,
-		plan: &plan.Plan{},
-		scope: &Scope{
-			NodeInfo: engine.Node{},
-			Proc:     proc,
-		},
-		root:   &scopeContext{id: 0},
-		parent: &scopeContext{id: 1},
-		children: []*scopeContext{
-			{id: 3},
-		},
-		pipe: &pipeline.Pipeline{},
-		regs: nil,
-	}
-	_, err := ctx.addSubPipeline(4, 0, 4, engine.Node{})
-	require.Nil(t, err)
-}
-
-func TestScopeContext_isDescendant(t *testing.T) {
-	ctx := &scopeContext{id: 0, children: []*scopeContext{{id: 1}}}
-	dsc := &scopeContext{id: 2}
-	require.Equal(t, ctx.isDescendant(dsc), false)
 }

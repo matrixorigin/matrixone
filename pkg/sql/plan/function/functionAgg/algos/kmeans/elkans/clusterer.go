@@ -135,32 +135,38 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 
 // Normalize is required for spherical kmeans initialization.
 func (km *ElkanClusterer) Normalize() {
-	moarray.NormalizeGonumVectors(km.vectorList)
+	//moarray.NormalizeGonumVectors(km.vectorList)
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
-// Right now, we don't support kmeans++ since it is very slow for large scale clustering.
-func (km *ElkanClusterer) InitCentroids() {
+func (km *ElkanClusterer) InitCentroids() error {
 	var initializer Initializer
 	switch km.initType {
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
+	case kmeans.KmeansPlusPlus:
+		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	default:
 		initializer = NewRandomInitializer()
 	}
 	km.centroids = initializer.InitCentroids(km.vectorList, km.clusterCnt)
+	return nil
 }
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
-	km.Normalize() // spherical kmeans initialization
+	//km.Normalize() // spherical kmeans initialization
 
 	if km.vectorCnt == km.clusterCnt {
 		return moarray.ToMoArrays[float64](km.vectorList), nil
 	}
 
-	km.InitCentroids() // step 0.1
-	km.initBounds()    // step 0.2
+	err := km.InitCentroids() // step 0.1
+	if err != nil {
+		return nil, err
+	}
+
+	km.initBounds() // step 0.2
 
 	res, err := km.elkansCluster()
 	if err != nil {
@@ -209,7 +215,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	if distanceType > 2 {
 		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
-	if initType != 0 {
+	if initType > 1 {
 		return moerr.NewInternalErrorNoCtx("init type is not supported")
 	}
 
@@ -366,7 +372,7 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
-			moarray.NormalizeGonumVector(newCentroids[c])
+			//moarray.NormalizeGonumVector(newCentroids[c])
 		} else {
 			// find the mean of the cluster members
 			// note: we don't need to normalize here, since the vectors are already normalized

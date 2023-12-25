@@ -53,11 +53,7 @@ type ComputationWrapper interface {
 
 	GetProcess() *process.Process
 
-	SetDatabaseName(db string) error
-
 	GetColumns() ([]interface{}, error)
-
-	// GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
@@ -97,6 +93,7 @@ func (ec *engineColumnInfo) GetType() types.T {
 
 type PrepareStmt struct {
 	Name           string
+	Sql            string
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte

@@ -27,6 +27,10 @@ import (
 )
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	tblArg := arg
 	var (
 		f bool
@@ -39,7 +43,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 

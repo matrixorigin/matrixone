@@ -38,6 +38,14 @@ func NewMemStore() IncrValueStore {
 	}
 }
 
+func (s *memStore) NewTxnOperator(_ context.Context) client.TxnOperator {
+	return nil
+}
+
+func (s *memStore) SelectAll(_ context.Context, _ uint64, _ client.TxnOperator) string {
+	return ""
+}
+
 func (s *memStore) Create(
 	ctx context.Context,
 	tableID uint64,

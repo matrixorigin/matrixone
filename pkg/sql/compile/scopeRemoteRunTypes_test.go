@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	err = server.Start()
 	require.Nil(t, err)
 
-	sender, err := newMessageSenderOnClient(context.TODO(), "127.0.0.1:9999")
+	sender, err := newMessageSenderOnClient(context.TODO(), nil, "127.0.0.1:9999")
 	require.Nil(t, err)
 	defer sender.close()
 
@@ -113,7 +114,8 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 		cli,
 		nil,
 	)
-	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{{}}
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{a}
 
 	_, err = receiver.acquireMessage()
 	require.Nil(t, err)

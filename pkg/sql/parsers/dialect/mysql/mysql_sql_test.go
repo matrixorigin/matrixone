@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select (col + col) / 2",
-		output: "select (col + col) / 2",
+		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
+		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
 	}
 )
 
@@ -78,11 +78,17 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
+		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
+	}, {
+		input:  "select enable from t1;",
+		output: "select enable from t1",
+	}, {
 		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
 		input:  "select cluster_centers(a) from t1;",
-		output: "select cluster_centers(a, 1,vector_cosine_ops) from t1",
+		output: "select cluster_centers(a, 1,vector_l2_ops,random) from t1",
 	}, {
 		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
 		output: "select cluster_centers(a, 5) from t1",
@@ -92,6 +98,15 @@ var (
 	}, {
 		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,kmeansplusplus') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops,kmeansplusplus) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,random') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops,random) from t1",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",
 	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
@@ -551,6 +566,9 @@ var (
 	}, {
 		input:  "SELECT sum(a) as 'hello' from t1;",
 		output: "select sum(a) as hello from t1",
+	}, {
+		input:  "select stream from t1;",
+		output: "select stream from t1",
 	}, {
 		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
 		output: "select date_add(2017-06-15, interval(-10, month))",
@@ -1408,8 +1426,8 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
-			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
-			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
@@ -2293,6 +2311,38 @@ var (
 			input: "alter table t1 drop column a, drop column b",
 		},
 		{
+			input:  "ALTER TABLE employees ADD PARTITION (PARTITION p05 VALUES LESS THAN (500001))",
+			output: "alter table employees add partition (partition p05 values less than (500001))",
+		},
+		{
+			input:  "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
+			output: "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
+		},
+		{
+			input:  "ALTER TABLE t1 DROP PARTITION p1",
+			output: "alter table t1 drop partition p1",
+		},
+		{
+			input:  "ALTER TABLE t1 DROP PARTITION p0, p1",
+			output: "alter table t1 drop partition p0, p1",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION p0",
+			output: "alter table t1 truncate partition p0",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION p0, p3",
+			output: "alter table t1 truncate partition p0, p3",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION ALL",
+			output: "alter table t1 truncate partition all",
+		},
+		{
+			input:  "ALTER TABLE titles partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
+			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
+		},
+		{
 			input: "create publication pub1 database db1",
 		},
 		{
@@ -2818,6 +2868,9 @@ var (
 		},
 		{
 			input: "create table t (a int, b char, constraint index idx(a, b) )",
+		},
+		{
+			input: "ALTER TABLE t1 TRUNCATE PARTITION ALL, p0",
 		},
 	}
 )

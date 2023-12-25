@@ -17,6 +17,7 @@ package moconnector
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -50,7 +51,14 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 		if err != nil {
 			return "", err // Handle the error appropriately
 		}
-		fields += name
+
+		if strings.Contains(name, ".") {
+			parts := strings.SplitN(name, ".", 2)
+			fields += "`" + parts[0] + "`.`" + parts[1] + "`"
+		} else {
+			fields += "`" + name + "`"
+		}
+
 		if i < columnCount-1 {
 			fields += ", "
 		}
@@ -63,20 +71,20 @@ func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (
 			var val string
 			val, err = obj.StringValueByName(ctx, uint64(i), colNames[j])
 			// Enclose the value in single quotes if it is a string
-			rowValues += "'" + val + "'"
+			if err != nil {
+				rowValues += "NULL"
+			} else {
+				rowValues += "'" + val + "'"
+			}
 			if j < columnCount-1 {
 				rowValues += ", "
 			}
 		}
 
-		if err == nil {
-			if i > 0 && len(values) > 0 {
-				values += ", "
-			}
-			values += fmt.Sprintf("(%s)", rowValues)
-		} else {
-			err = nil
+		if i > 0 && len(values) > 0 {
+			values += ", "
 		}
+		values += fmt.Sprintf("(%s)", rowValues)
 	}
 	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES %s ",
 		c.dbName, c.tableName, fields, values)

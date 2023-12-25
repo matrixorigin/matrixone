@@ -23,16 +23,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -325,15 +323,15 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if ret {
 		switch s.DataTypeMap[col.Name] {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
 			}
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_U64Val); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
 			}
 		case types.T_date:
-			if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_Dateval); valOk {
 				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
 			}
 		}
@@ -344,7 +342,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if ret {
 		switch leftFuncName {
 		case "year":
-			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
 				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
@@ -386,17 +384,30 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in", "startswith":
-			// use ndv map,do not need nodeID
+		case "prefix_eq":
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
 				return 10 / ndv
 			}
 			return 0.5
+		case "in":
+			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			ndv := getExprNdv(expr, builder)
+			if ndv > card {
+				return card / ndv
+			}
+			return 1
+		case "prefix_in":
+			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			ndv := getExprNdv(expr, builder)
+			if ndv > 10*card {
+				return 10 * card / ndv
+			}
+			return 0.5
 		default:
 			return 0.15
 		}
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		return 1
 	}
 	return 1
@@ -439,7 +450,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 
 // harsh estimate of block selectivity, will improve it in the future
 func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
-	if !CheckExprIsMonotonic(ctx, expr) {
+	if !CheckExprIsZonemappable(ctx, expr) {
 		return 1
 	}
 	ret, col := CheckFilter(expr)
@@ -685,10 +696,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
+		node.Stats = builder.qry.Nodes[sourceNode].Stats
 
 	case plan.Node_RECURSIVE_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
+		node.Stats = builder.qry.Nodes[sourceNode].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -718,6 +731,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
 
+	case plan.Node_FUNCTION_SCAN:
+		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {
+			if len(node.Children) > 0 && childStats != nil {
+				node.Stats.Outcnt = childStats.Outcnt
+				node.Stats.Cost = childStats.Outcnt
+				node.Stats.Selectivity = childStats.Selectivity
+			}
+		}
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -728,12 +750,97 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				node.Stats.Outcnt = float64(c.I64Val)
 			}
 		}
 	}
+}
+
+func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {
+	if name != "generate_series" {
+		return false
+	}
+	var cost float64
+	var canGetCost bool
+	if len(exprs) == 2 {
+		if exprs[0].Typ.Id != exprs[1].Typ.Id {
+			return false
+		}
+		cost, canGetCost = getCost(exprs[0], exprs[1], nil)
+	} else if len(exprs) == 3 {
+		if !(exprs[0].Typ.Id == exprs[1].Typ.Id && exprs[1].Typ.Id == exprs[2].Typ.Id) {
+			return false
+		}
+		cost, canGetCost = getCost(exprs[0], exprs[1], exprs[2])
+	} else {
+		return false
+	}
+	if !canGetCost {
+		return false
+	}
+	nodeStat.Outcnt = cost
+	nodeStat.TableCnt = cost
+	nodeStat.Cost = cost
+	nodeStat.Selectivity = 1
+	return true
+}
+
+func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
+	var startNum, endNum, stepNum float64
+	var flag1, flag2, flag3 bool
+	getInt32Val := func(e *Expr) (float64, bool) {
+		if s, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if v, ok := s.Lit.Value.(*plan.Literal_I32Val); ok && !s.Lit.Isnull {
+				return float64(v.I32Val), true
+			}
+		}
+		return 0, false
+	}
+	getInt64Val := func(e *Expr) (float64, bool) {
+		if s, ok := e.Expr.(*plan.Expr_Lit); ok {
+			if v, ok := s.Lit.Value.(*plan.Literal_I64Val); ok && !s.Lit.Isnull {
+				return float64(v.I64Val), true
+			}
+		}
+		return 0, false
+	}
+
+	switch start.Typ.Id {
+	case int32(types.T_int32):
+		startNum, flag1 = getInt32Val(start)
+		endNum, flag2 = getInt32Val(end)
+		flag3 = true
+		if step != nil {
+			stepNum, flag3 = getInt32Val(step)
+		}
+		if !(flag1 && flag2 && flag3) {
+			return 0, false
+		}
+	case int32(types.T_int64):
+		startNum, flag1 = getInt64Val(start)
+		endNum, flag2 = getInt64Val(end)
+		flag3 = true
+		if step != nil {
+			stepNum, flag3 = getInt64Val(step)
+		}
+		if !(flag1 && flag2 && flag3) {
+			return 0, false
+		}
+	}
+	if step == nil {
+		if startNum > endNum {
+			stepNum = -1
+		} else {
+			stepNum = 1
+		}
+	}
+	ret := (endNum - startNum) / stepNum
+	if ret < 0 {
+		return 0, false
+	}
+	return ret, true
 }
 
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {

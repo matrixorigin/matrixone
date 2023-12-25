@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime"
 	"strings"
 	"sync"
@@ -69,6 +70,36 @@ const (
 	ConnTypeExternal ConnType = 2
 )
 
+type TS string
+
+const (
+	// Created
+	TSCreatedStart TS = "TSCreatedStart"
+	TSCreatedEnd   TS = "TSCreatedEnd"
+
+	// Handler
+	TSEstablishStart  TS = "TSEstablishStart"
+	TSEstablishEnd    TS = "TSEstablishEnd"
+	TSUpgradeTLSStart TS = "TSUpgradeTLSStart"
+	TSUpgradeTLSEnd   TS = "TSUpgradeTLSEnd"
+
+	// mysql protocol
+	TSAuthenticateStart TS = "TSAuthenticateStart"
+	TSAuthenticateEnd   TS = "TSAuthenticateEnd"
+
+	// session
+	TSCheckTenantStart      TS = "TSCheckTenantStart"
+	TSCheckTenantEnd        TS = "TSCheckTenantEnd"
+	TSCheckUserStart        TS = "TSCheckUserStart"
+	TSCheckUserEnd          TS = "TSCheckUserEnd"
+	TSCheckRoleStart        TS = "TSCheckRoleStart"
+	TSCheckRoleEnd          TS = "TSCheckRoleEnd"
+	TSCheckDbNameStart      TS = "TSCheckDbNameStart"
+	TSCheckDbNameEnd        TS = "TSCheckDbNameEnd"
+	TSInitGlobalSysVarStart TS = "TSInitGlobalSysVarStart"
+	TSInitGlobalSysVarEnd   TS = "TSInitGlobalSysVarEnd"
+)
+
 type Session struct {
 	// account id
 	accountId uint32
@@ -102,7 +133,7 @@ type Session struct {
 	sql           string
 
 	sysVars         map[string]interface{}
-	userDefinedVars map[string]interface{}
+	userDefinedVars map[string]*UserDefinedVar
 	gSysVars        *GlobalSystemVariables
 
 	//the server status
@@ -251,6 +282,9 @@ type Session struct {
 	queryInProgress atomic.Bool
 	// queryInExecute indicates whether the query is in execute
 	queryInExecute atomic.Bool
+
+	// timestampMap record timestamp for statistical purposes
+	timestampMap map[TS]time.Time
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -540,10 +574,12 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
+
+		timestampMap: map[TS]time.Time{},
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
-		ses.userDefinedVars = make(map[string]interface{})
+		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
@@ -646,6 +682,8 @@ func (ses *Session) Close() {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	ses.timestampMap = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -671,6 +709,8 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
+		// Reset background session id as frontend stmt id
+		ses.uuid = stmt.StatementID
 		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
@@ -1168,11 +1208,13 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-	if isInsertValues {
-		prepareStmt.proc = ses.proc
-		prepareStmt.exprList = exprList
+	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
+		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		if isInsertValues {
+			prepareStmt.proc = ses.proc
+			prepareStmt.exprList = exprList
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -1329,15 +1371,15 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session
-func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = value
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
@@ -1471,6 +1513,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
+	ses.timestampMap[TSCheckTenantStart] = time.Now()
 	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
 	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
@@ -1523,9 +1566,13 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
+	ses.timestampMap[TSCheckTenantEnd] = time.Now()
+	v2.CheckTenantDurationHistogram.Observe(float64(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Milliseconds()))
+
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
+	ses.timestampMap[TSCheckUserStart] = time.Now()
 	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
 
 	logDebugf(sessionInfo, "check user of %s exists", tenant)
@@ -1566,6 +1613,8 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	tenant.SetUserID(uint32(userID))
 	tenant.SetDefaultRoleID(uint32(defaultRoleID))
+	ses.timestampMap[TSCheckUserEnd] = time.Now()
+	v2.CheckUserDurationHistogram.Observe(float64(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Milliseconds()))
 
 	/*
 		login case 1: tenant:user
@@ -1581,6 +1630,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	if tenant.HasDefaultRole() {
 		logDebugf(sessionInfo, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
+		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
 		if err != nil {
 			return nil, err
@@ -1624,7 +1674,10 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 			return nil, err
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
+		ses.timestampMap[TSCheckRoleEnd] = time.Now()
+		v2.CheckRoleDurationHistogram.Observe(float64(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Milliseconds()))
 	} else {
+		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
@@ -1646,6 +1699,8 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 			return nil, err
 		}
 		tenant.SetDefaultRole(defaultRole)
+		ses.timestampMap[TSCheckRoleEnd] = time.Now()
+		v2.CheckRoleDurationHistogram.Observe(float64(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Milliseconds()))
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	psw, err := GetPassWord(pwd)
@@ -1663,11 +1718,14 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
+		ses.timestampMap[TSCheckDbNameStart] = time.Now()
 		_, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, pu, "use "+dbName)
 		if err != nil {
 			return nil, err
 		}
 		logDebugf(sessionInfo, "check database name succeeded")
+		ses.timestampMap[TSCheckDbNameEnd] = time.Now()
+		v2.CheckDbNameDurationHistogram.Observe(float64(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Milliseconds()))
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
@@ -1680,6 +1738,12 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 func (ses *Session) InitGlobalSystemVariables() error {
 	var err error
 	var rsset []ExecResult
+	ses.timestampMap[TSInitGlobalSysVarStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSInitGlobalSysVarEnd] = time.Now()
+		v2.InitGlobalSysVarDurationHistogram.Observe(float64(ses.timestampMap[TSInitGlobalSysVarEnd].Sub(ses.timestampMap[TSInitGlobalSysVarStart]).Milliseconds()))
+	}()
+
 	tenantInfo := ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
@@ -2109,13 +2173,13 @@ func (ses *Session) getCNLabels() map[string]string {
 }
 
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+func (ses *Session) getGlobalSystemVariableValue(varName string) (val interface{}, err error) {
 	var sql string
-	var err error
+	//var err error
 	var erArray []ExecResult
 	var accountId uint32
 	var variableValue string
-	var val interface{}
+	//var val interface{}
 	ctx := ses.GetRequestContext()
 
 	// check the variable name isValid or not

@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,7 +47,8 @@ func LoadPersistedColumnData(
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
-		nil)
+		nil,
+		fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -88,7 +90,8 @@ func LoadPersistedColumnDatas(
 		typs,
 		rt.Fs.Service,
 		location,
-		nil)
+		nil,
+		fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}

@@ -14,7 +14,7 @@ ts    col2
 2021-01-12 00:00:00    34
 2020-01-12 12:00:12    20
 select _wstart, _wend, max(col2), min(col2) from time_window01 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
-not supported: time_window01.ts is not only primary key in time window
+not supported: time_window01.ts is not primary key in time window
 drop table time_window01;
 drop table if exists time_window02;
 create table time_window02 (ts timestamp primary key , col2 bool);
@@ -102,6 +102,7 @@ insert into time_window08 values ('2020-01-01 10:00:00.000', 127);
 insert into time_window08 values ('2020-01-02 12:00:00.000', 0);
 insert into time_window08 values ('2020-01-03 12:00:00.000', 22);
 select _wstart, _wend, max(col2) from time_window08 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) sliding(2,day);
+invalid input: sliding value should be smaller than the interval value
 
 drop table time_window08;
 drop table if exists int01;
@@ -137,7 +138,13 @@ _wstart    _wend    max(col2)    min(col3)    avg(col4)
 2020-01-05 00:00:00    2020-01-06 00:00:00    200    0    3.7219739821E10
 2020-01-06 00:00:00    2020-01-07 00:00:00    200    0    294095.0
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(next);
-
+_wstart    _wend    max(col2)    min(col3)    avg(col4)
+2020-01-01 00:00:00    2020-01-02 00:00:00    127    -1921    3.2151654354E10
+2020-01-02 00:00:00    2020-01-03 00:00:00    0    -1921    9.223372036854776E18
+2020-01-03 00:00:00    2020-01-04 00:00:00    64    -1921    3.2173892173092E13
+2020-01-04 00:00:00    2020-01-05 00:00:00    100    -1921    3.2173892173092E13
+2020-01-05 00:00:00    2020-01-06 00:00:00    200    0    3.7219739821E10
+2020-01-06 00:00:00    2020-01-07 00:00:00    200    0    294095.0
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(linear);
 _wstart    _wend    max(col2)    min(col3)    avg(col4)
 2020-01-01 00:00:00    2020-01-02 00:00:00    127    null    3.2151654354E10
@@ -230,9 +237,24 @@ _wstart    _wend    max(col2)    min(col3)    min(col4)
 2023-10-27 13:00:00    2023-10-27 14:00:00    8430923.0    332.0    0E-10
 2023-10-27 22:00:00    2023-10-27 23:00:00    321421.44    null    null
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 10, minute) fill(next);
-
+_wstart    _wend    max(col2)    min(col3)    min(col4)
+2023-10-27 01:00:00    2023-10-27 01:10:00    -2379823.0    214214.32143214    -321798372091.3242134214
+2023-10-27 01:50:00    2023-10-27 02:00:00    321421.44    -38021.111    321798372091.3242134214
+2023-10-27 02:10:00    2023-10-27 02:20:00    321421.44    -38021.111    321798372091.3242134214
+2023-10-27 02:30:00    2023-10-27 02:40:00    0.0    38021.324143214    321798372091.3242134214
+2023-10-27 03:00:00    2023-10-27 03:10:00    -321.42316    43824.43543    0E-10
+2023-10-27 12:10:00    2023-10-27 12:20:00    0.0    0.0    0E-10
+2023-10-27 12:30:00    2023-10-27 12:40:00    321421.44    2222.0    3211.3242134877
+2023-10-27 13:30:00    2023-10-27 13:40:00    8430923.0    332.0    0E-10
+2023-10-27 22:30:00    2023-10-27 22:40:00    321421.44    null    null
 select _wstart, _wend, sum(col2), sum(col3), sum(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 60, minute) fill(next);
-
+_wstart    _wend    sum(col2)    sum(col3)    sum(col4)
+2023-10-27 01:00:00    2023-10-27 02:00:00    -2058401.5625    214214.32143214    0E-10
+2023-10-27 02:00:00    2023-10-27 03:00:00    321421.4375    0.2131432140013203    321798372091.3242134214
+2023-10-27 03:00:00    2023-10-27 04:00:00    -321.42315673828125    43824.43543    3211.3242134877
+2023-10-27 12:00:00    2023-10-27 13:00:00    321421.4375    2222.0    3211.3242134877
+2023-10-27 13:00:00    2023-10-27 14:00:00    1.05721665E7    38353.324143214    321798372091.3242134214
+2023-10-27 22:00:00    2023-10-27 23:00:00    321421.4375    null    null
 select _wstart, _wend, avg(col2), avg(col3), avg(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 20, minute);
 _wstart    _wend    avg(col2)    avg(col3)    avg(col4)
 2023-10-27 01:00:00    2023-10-27 01:20:00    -2379823.0    214214.32143214    -321798372091.324213421400
@@ -391,10 +413,7 @@ _wstart    _wend    max(col2)    min(col2)    sum(col2)    count(col2)    avg(co
 2023-08-01 00:01:04    2023-08-01 00:01:05    -3289.3289    -3289.3289    -3289.328857421875    1    -3289.328857421875
 prepare s2 from 'select _wstart, _wend, max(col2), min(col2), sum(col2), count(col2), avg(col2) from sliding_window03 where ts > "2023-08-01 00:01:00.000" and ts < "2023-08-01 00:01:10.000" interval(ts, 1, second) sliding(2, second) fill(none);';
 execute s2;
-_wstart    _wend    max(col2)    min(col2)    sum(col2)    count(col2)    avg(col2)
-2023-08-01 00:01:01    2023-08-01 00:01:02    32412.342    32412.342    32412.341796875    1    32412.341796875
-2023-08-01 00:01:03    2023-08-01 00:01:04    -23.23232    -23.23232    -23.23232078552246    1    -23.23232078552246
-2023-08-01 00:01:05    2023-08-01 00:01:06    -23.23232    -3289.3289    -3312.5611782073975    2    -1656.2805891036987
+invalid input: sliding value should be smaller than the interval value
 drop table sliding_window03;
 drop table if exists sliding_window04;
 create table sliding_window04 (ts timestamp primary key , col2 double);
@@ -788,4 +807,8 @@ _wstart    _wend    count(col2)    sum(col10)
 2014-01-01 00:00:00    2014-01-01 00:15:00    10    48.22709999999999
 2014-01-01 00:10:00    2014-01-01 00:25:00    4    16.676199999999998
 drop table external01;
+drop table if exists tt1;
+create table tt1(ts timestamp primary key, a int);
+select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
+enable
 drop database time_window;
