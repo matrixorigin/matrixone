@@ -42,6 +42,7 @@ func TestProxySharedLock(t *testing.T) {
 			txn4 := newTestTxnID(4)
 			txn5 := newTestTxnID(5)
 
+			s1.cfg.EnableRemoteLocalProxy = true
 			_, err := s1.Lock(ctx, tableID, rows, txn1, option)
 			require.NoError(t, err, err)
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -50,6 +51,7 @@ func TestProxySharedLock(t *testing.T) {
 			lt := v.(*localLockTable)
 
 			// s2 will enable shared remote proxy
+			s2.cfg.EnableRemoteLocalProxy = true
 			_, err = s2.Lock(ctx, tableID, rows, txn2, option)
 			require.NoError(t, err)
 			checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
@@ -116,6 +118,7 @@ func TestProxySharedUnlock(t *testing.T) {
 			txn3 := newTestTxnID(3)
 			txn4 := newTestTxnID(3)
 
+			s1.cfg.EnableRemoteLocalProxy = true
 			_, err := s1.Lock(ctx, tableID, rows, txn1, option)
 			require.NoError(t, err, err)
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -124,6 +127,7 @@ func TestProxySharedUnlock(t *testing.T) {
 			lt := v.(*localLockTable)
 
 			// s2 will enable shared remote proxy
+			s2.cfg.EnableRemoteLocalProxy = true
 			_, err = s2.Lock(ctx, tableID, rows, txn2, option)
 			require.NoError(t, err)
 
