@@ -116,7 +116,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 func (db *txnDB) AddBlksWithMetaLoc(
 	ctx context.Context,
 	tid uint64,
-	metaLocs []objectio.Location) error {
+	stats containers.Vector) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return err
@@ -124,7 +124,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(ctx, metaLocs)
+	return table.AddBlksWithMetaLoc(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -298,30 +298,37 @@ func (db *txnDB) GetRelationByID(id uint64) (relation handle.Relation, err error
 	return
 }
 
-func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
+func (db *txnDB) GetObject(id *common.ID) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.GetSegment(id.SegmentID())
+	return table.GetObject(id.ObjectID())
 }
 
-func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateSegment(is1PC)
+	return table.CreateObject(is1PC)
 }
-
-func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableSegment(is1PC, nil)
+	return table.CreateNonAppendableObject(is1PC, nil)
 }
 
+func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
+	table, err := db.getOrSetTable(id.TableID)
+	if err != nil {
+		return err
+	}
+	table.UpdateObjectStats(id, stats)
+	return nil
+}
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	db.mu.RLock()
 	table = db.tables[id]
@@ -356,7 +363,7 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBl
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateNonAppendableBlock(id.SegmentID(), opts)
+	return table.CreateNonAppendableBlock(id.ObjectID(), opts)
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
@@ -372,7 +379,7 @@ func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err e
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateBlock(id.SegmentID(), is1PC)
+	return table.CreateBlock(id.ObjectID(), is1PC)
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
@@ -396,12 +403,12 @@ func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err 
 	}
 	return table.UpdateDeltaLoc(id, deltaLoc)
 }
-func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
+func (db *txnDB) SoftDeleteObject(id *common.ID) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.SoftDeleteSegment(id.SegmentID())
+	return table.SoftDeleteObject(id.ObjectID())
 }
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil
