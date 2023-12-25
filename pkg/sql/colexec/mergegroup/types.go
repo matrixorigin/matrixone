@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,6 +58,9 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+
+	PartialResults     []any
+	PartialResultTypes []types.T
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
