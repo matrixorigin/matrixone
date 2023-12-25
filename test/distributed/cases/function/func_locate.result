@@ -122,7 +122,6 @@ id    text_data    orange_position    peach_position    strawberry_position
 2    grapepeach桃子mango    0    11    0
 3    西瓜猕猴桃watermelonkiwistrawberry草莓    0    0    20
 DROP TABLE IF EXISTS mixed_language_table;
-drop database testx;
 select locate('he','hello',-2);
 locate(he, hello, -2)
 0
@@ -297,3 +296,4 @@ false
 false
 false
 drop table locate03;
+drop database testx;

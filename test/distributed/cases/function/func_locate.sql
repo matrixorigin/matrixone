@@ -113,7 +113,6 @@ FROM
     mixed_language_table;
 
 DROP TABLE IF EXISTS mixed_language_table;
-drop database testx;
 
 select locate('he','hello',-2);
 select locate('lo','hello',-4294967295);
@@ -191,4 +190,7 @@ execute s1;
 prepare s2 from 'select isnull(locate(col1, col2)) from locate03';
 execute s2;
 drop table locate03;
+drop database testx;
+
+
 
