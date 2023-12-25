@@ -109,7 +109,7 @@ const (
 )
 
 var cnUsageCache = logtail.NewStorageUsageCache(
-	logtail.WithLazyThreshold(30))
+	logtail.WithLazyThreshold(5))
 
 func getSqlForAllAccountInfo(like *tree.ComparisonExpr) string {
 	var likePattern = ""

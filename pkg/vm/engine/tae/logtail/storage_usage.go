@@ -465,8 +465,52 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
+func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) {
+	if c == nil {
+		return usage, false
+	}
+
+	var err error
+	var dbEntry *catalog.DBEntry
+	var tblEntry *catalog.TableEntry
+
+	dbEntry, err = c.GetDatabaseByID(usage.DbId)
+	if err != nil {
+		// the db has been deleted
+		return usage, true
+	}
+
+	tblEntry, err = dbEntry.GetTableEntryByID(usage.TblId)
+	if err != nil || tblEntry.HasDropCommitted() {
+		// the tbl has been deleted
+		return usage, true
+	}
+
+	size := int64(0)
+	processor := new(catalog.LoopProcessor)
+	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
+		if !entry.IsAppendable() {
+			if entry.HasDropCommitted() {
+				size -= int64(entry.Stat.GetCompSize())
+			} else if entry.IsCommitted() {
+				size += int64(entry.Stat.GetCompSize())
+			}
+		}
+		return nil
+	}
+
+	tblEntry.RecurLoop(processor)
+
+	if size < 0 {
+		size = 0
+	}
+
+	usage.Size = uint64(size)
+	return usage, false
+}
+
 // EstablishFromCKPs replays usage info which stored in ckps into the tn cache
-func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32) {
+func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog, entries []*CheckpointData, vers []uint32) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 
@@ -480,8 +524,22 @@ func (m *TNUsageMemo) EstablishFromCKPs(entries []*CheckpointData, vers []uint32
 		insVecs := getStorageUsageBatVectors(entries[x].bats[StorageUsageInsIDX])
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
+		var skip bool
 		for y := 0; y < insVecs[UsageAccID].Length(); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
+
+			// these ckps, older than version 11, haven't del bat, we need clear the
+			// usage data which belongs the deleted databases or tables.
+			//
+			// (if a table or db recreate, it's id will change)
+			//
+			if vers[x] < CheckpointVersion11 {
+				usage, skip = try2RemoveStaleData(usage, c)
+				if skip {
+					continue
+				}
+			}
+
 			m.Update(usage, false)
 		}
 

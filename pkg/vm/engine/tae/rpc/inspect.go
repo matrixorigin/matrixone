@@ -936,7 +936,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 	var locations []objectio.Location
 
 	for idx := range entries {
-		if entries[idx].GetVersion() < logtail.CheckpointVersion10 {
+		if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
 			continue
 		}
 		versions = append(versions, entries[idx].GetVersion())
@@ -1046,8 +1046,6 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 func storageTrace(c *storageUsageHistoryArg) (err error) {
 
 	filter := func(accId uint32, stamp time.Time) bool {
-		fmt.Println(c.trace.tStart, c.trace.tEnd)
-		fmt.Println(stamp.UTC())
 		if !c.trace.tStart.IsZero() {
 			if stamp.UTC().Add(time.Hour*8).Before(c.trace.tStart) ||
 				stamp.UTC().Add(time.Hour*8).After(c.trace.tEnd) {

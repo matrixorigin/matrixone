@@ -145,7 +145,7 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.mp)
 	}
 
-	size := int64(1024 * 1024 * 11235)
+	size := uint64(1024 * 1024 * 11235)
 	embeddingSizeToBatch(bat, size, ses.mp)
 
 	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
