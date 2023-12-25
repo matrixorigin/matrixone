@@ -404,7 +404,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			bind,
 			s.remote.client,
 			s.handleBindChanged)
-		if !s.cfg.DisableRemoteLocalProxy {
+		if !s.cfg.EnableRemoteLocalProxy {
 			return remote
 		}
 		return newLockTableProxy(s.serviceID, remote)
