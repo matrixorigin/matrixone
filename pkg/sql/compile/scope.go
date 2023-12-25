@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -712,11 +713,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:           arg.Aggs,
-						Exprs:          arg.Exprs,
-						Types:          arg.Types,
-						MultiAggs:      arg.MultiAggs,
-						PartialResults: arg.PartialResults,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}

@@ -192,3 +192,13 @@ set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
 deallocate prepare stmt1;
+
+--escape
+drop table if exists indup_08;
+create table indup_08(a varchar, primary key (a));
+insert into indup_08 values ('matrixone\''), ('matrixone\'');
+
+
+drop table if exists indup_09;
+create table indup_09(a varchar, b varchar, primary key (a, b));
+insert into indup_09 values ('matrixone\'', 'mo-tester\''), ('matrixone\'', 'mo-tester\'');
