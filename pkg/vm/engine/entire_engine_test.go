@@ -330,6 +330,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) CheckPKDupWhenCommit() bool {
+	panic("should not call")
+}
+
 func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }

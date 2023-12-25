@@ -170,21 +170,28 @@ func WithTxnSkipLock(
 	}
 }
 
+func WithTxnEnableCheckPKDupWhenCommit() TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.checkPKDupWhenCommit = true
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
 	txnID  []byte
 
 	option struct {
-		user             bool
-		readyOnly        bool
-		enableCacheWrite bool
-		disable1PCOpt    bool
-		coordinator      bool
-		createBy         string
-		lockService      lockservice.LockService
-		skipLocks        []uint64
-		skipLockModes    []lock.LockMode
+		user                 bool
+		readyOnly            bool
+		enableCacheWrite     bool
+		disable1PCOpt        bool
+		coordinator          bool
+		checkPKDupWhenCommit bool
+		createBy             string
+		lockService          lockservice.LockService
+		skipLocks            []uint64
+		skipLockModes        []lock.LockMode
 	}
 
 	mu struct {
@@ -580,6 +587,10 @@ func (tc *txnOperator) IsOpenLog() bool {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.openlog
+}
+
+func (tc *txnOperator) CheckPKDupWhenCommit() bool {
+	return tc.option.checkPKDupWhenCommit
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
