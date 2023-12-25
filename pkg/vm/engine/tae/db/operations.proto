@@ -90,6 +90,7 @@ message TraceSpan {
 
 message StorageUsageReq {
     option (gogoproto.typedecl) = false;
+    repeated int32 AccIds = 1;
 }
 
 message StorageUsageResp {

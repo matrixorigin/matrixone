@@ -51,8 +51,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	maxTs types.TS,
 	maxLSN uint64,
 	isLSNValid bool,
-	ckpVers []uint32,
-	ckpDatas []*logtail.CheckpointData,
 	err error) {
 	defer func() {
 		if maxTs.IsEmpty() {
@@ -240,6 +238,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 	}
 
+	var ckpVers []uint32
+	var ckpDatas []*logtail.CheckpointData
+
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
@@ -266,7 +267,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	for _, e := range emptyFile {
 		if e.end.GreaterEq(maxTs) {
 			return types.TS{}, 0, false,
-				ckpVers, ckpDatas,
 				moerr.NewInternalError(ctx,
 					"read checkpoint %v failed",
 					e.String())
@@ -306,6 +306,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
+
+	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
 
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),

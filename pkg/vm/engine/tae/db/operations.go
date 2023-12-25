@@ -304,6 +304,7 @@ func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 }
 
 type StorageUsageReq struct {
+	AccIds []int32
 }
 
 func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {

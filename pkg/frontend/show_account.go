@@ -131,10 +131,17 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session) (resp any, err error) {
+func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-		return nil, nil
+		req := db.StorageUsageReq{}
+		for x := 0; x < len(accIds); x++ {
+			for y := range accIds[x] {
+				req.AccIds = append(req.AccIds, accIds[x][y])
+			}
+		}
+
+		return req.Marshal()
 	}
 
 	responseUnmarshaler := func(payload []byte) (any, error) {
@@ -235,7 +242,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 
 	// step 2: query to tn
-	response, err := requestStorageUsage(ses)
+	response, err := requestStorageUsage(ses, accIds)
 	if err != nil {
 		return nil, err
 	}

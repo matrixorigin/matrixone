@@ -75,9 +75,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:    dirname,
-		Opts:   opts,
-		Closed: new(atomic.Value),
+		Dir:       dirname,
+		Opts:      opts,
+		Closed:    new(atomic.Value),
+		usageMemo: logtail.NewTNUsageMemo(),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
@@ -101,9 +102,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
 		return
 	}
+
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
@@ -141,7 +143,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, ckpLSN, valid, ckpVers, ckpDatas, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
@@ -154,8 +156,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
 
-	// replying the usage data into tn usage cache
-	logtail.GetTNUsageMemo().EstablishFromCKPs(db.Catalog, ckpDatas, ckpVers)
 	// checkObjectState(db)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),

@@ -1017,7 +1017,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 			}
 		}
 
-		dbNames, tblNames, dbLen, tblLen = getAllDbAndTblNames(usageInsData[x])
+		dbNames, tblNames, dbLen, tblLen = getAllDbAndTblNames(usageDelData[x])
 		for _, data := range usageDelData[x] {
 			if checkUsageData(data, c) {
 				eachCkpTotal -= formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "delete")
@@ -1037,7 +1037,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 	b.WriteString(fmt.Sprintf(
 		"total accumulation in all ckps: %f (mb), current tn cache mem used: %f (mb)\n",
-		totalSize, logtail.GetTNUsageMemo().MemoryUsed()))
+		totalSize, c.ctx.db.GetUsageMemo().MemoryUsed()))
 
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -1063,7 +1063,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 
 	var b bytes.Buffer
 
-	memo := logtail.GetTNUsageMemo()
+	memo := c.ctx.db.GetUsageMemo()
 	accIds, stamps, sizes := memo.GetAllReqTrace()
 
 	for idx := range accIds {

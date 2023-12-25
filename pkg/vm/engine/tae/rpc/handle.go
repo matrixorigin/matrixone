@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"golang.org/x/exp/slices"
 	"os"
 	"regexp"
 	"strings"
@@ -1216,9 +1217,64 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
+func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMemo, ids []uint32) {
+	if len(ids) == 0 {
+		return
+	}
+	processor := new(catalog2.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog2.DBEntry) error {
+		if entry.HasDropCommitted() {
+			return nil
+		}
+
+		accId := entry.GetTenantID()
+		if !slices.Contains(ids, accId) {
+			return nil
+		}
+
+		tblIt := entry.MakeTableIt(true)
+		for tblIt.Valid() {
+			var insUsage, delUsage logtail.UsageData
+			insUsage = logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+			delUsage = insUsage
+
+			tblEntry := tblIt.Get().GetPayload()
+			if tblEntry.HasDropCommitted() {
+				tblIt.Next()
+				continue
+			}
+
+			objIt := tblEntry.MakeObjectIt(true)
+			for objIt.Valid() {
+				objEntry := objIt.Get().GetPayload()
+				if !objEntry.IsAppendable() {
+					if objEntry.HasDropCommitted() {
+						delUsage.Size += uint64(objEntry.Stat.GetCompSize())
+					} else if objEntry.IsCommitted() {
+						insUsage.Size += uint64(objEntry.Stat.GetCompSize())
+					}
+				}
+				objIt.Next()
+			}
+
+			if insUsage.Size-delUsage.Size > 0 {
+				memo.UpdateNewAccCache(insUsage, false)
+				memo.UpdateNewAccCache(delUsage, true)
+			}
+
+			tblIt.Next()
+		}
+		return nil
+	}
+
+	c.RecurLoop(processor)
+
+	return
+}
+
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
-	memo := logtail.GetTNUsageMemo()
+	memo := h.db.GetUsageMemo()
 
 	memo.EnterProcessing()
 	defer func() {
@@ -1237,6 +1293,30 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.Sizes = append(resp.Sizes, size)
 		memo.AddReqTrace(accId, size)
 	}
+
+	var newIds []uint32
+	for _, id := range req.AccIds {
+		if usages != nil {
+			if _, exist := usages[uint32(id)]; exist {
+				continue
+			}
+		}
+
+		// new account which haven't been collect
+		newIds = append(newIds, uint32(id))
+	}
+
+	// new accounts
+	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
+
+	for idx := range newIds {
+		if size, exist := memo.GatherNewAccountSize(newIds[idx]); exist {
+			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
+			resp.Sizes = append(resp.Sizes, size)
+		}
+	}
+
+	memo.ClearNewAccCache()
 
 	resp.Succeed = true
 
