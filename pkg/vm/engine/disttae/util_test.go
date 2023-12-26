@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math/rand"
 	"sync"
 	"testing"
