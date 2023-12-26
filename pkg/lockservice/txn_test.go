@@ -33,9 +33,9 @@ func TestLockAdded(t *testing.T) {
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
-		txn.lockAdded(1, [][]byte{[]byte("k1")})
-		txn.lockAdded(1, [][]byte{[]byte("k11")})
-		txn.lockAdded(2, [][]byte{[]byte("k2"), []byte("k22")})
+		txn.lockAdded(pb.LockTable{Table: 1}, [][]byte{[]byte("k1")})
+		txn.lockAdded(pb.LockTable{Table: 1}, [][]byte{[]byte("k11")})
+		txn.lockAdded(pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")})
 
 		assert.Equal(t, 2, len(txn.holdLocks))
 

@@ -104,3 +104,7 @@ func TestTxnTable1(t *testing.T) {
 	// 2 blocks left and skip deleting only one block
 	assert.Equal(t, 0, cnt)
 }
+
+func Less(a int, b int) bool {
+	return a < b
+}

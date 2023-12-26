@@ -68,9 +68,10 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	tblName := ""
 	//first check the tableID is deleted or not
 	deleted := false
-	db.txn.deletedTableMap.Range(func(k, _ any) bool {
+	db.txn.deletedTableMap.Range(func(k, v any) bool {
 		key := k.(tableKey)
-		if key.databaseId == db.databaseId && key.tableId == id {
+		val := v.(uint64)
+		if key.databaseId == db.databaseId && val == id {
 			deleted = true
 			return false
 		}
@@ -79,9 +80,10 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	if deleted {
 		return ""
 	}
-	db.txn.createMap.Range(func(k, _ any) bool {
+	db.txn.createMap.Range(func(k, v any) bool {
 		key := k.(tableKey)
-		if key.databaseId == db.databaseId && key.tableId == id {
+		val := v.(*txnTable)
+		if key.databaseId == db.databaseId && val.tableId == id {
 			tblName = key.name
 			return false
 		}
@@ -297,7 +299,6 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	k := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
-		db.txn.deletedTableMap.Store(k, nil)
 		table := v.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -362,7 +363,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		}
 	}
 
-	db.txn.deletedTableMap.Store(k, nil)
+	db.txn.deletedTableMap.Store(k, id)
 	return nil
 }
 
