@@ -473,6 +473,7 @@ const (
 	fail
 	sessionId = "session_id"
 
+	txnId       = "txn_id"
 	statementId = "statement_id"
 )
 
@@ -536,6 +537,10 @@ func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
 		if ses.tStmt != nil {
 			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
 			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
+			txnInfo := ses.GetTxnInfo()
+			if txnInfo != "" {
+				fields = append(fields, zap.String(txnId, txnInfo))
+			}
 		} else {
 			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
 		}
