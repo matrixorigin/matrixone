@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -25,7 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 )
 
 const (
@@ -180,10 +180,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.
-// For more detail, see disttae.SelectForSuperTenant.
+// For more detail, see route.RouteForSuperTenant.
 func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	disttae.SelectForSuperTenant(c.labelInfo.genSelector(), c.username, filter,
+	route.RouteForSuperTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), c.username, filter,
 		func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
 				reqLabel: c.labelInfo,
@@ -196,10 +196,10 @@ func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []
 }
 
 // selectForCommonTenant is used to select CN servers for common tenant.
-// For more detail, see disttae.SelectForCommonTenant.
+// For more detail, see route.RouteForCommonTenant.
 func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	disttae.SelectForCommonTenant(c.labelInfo.genSelector(), filter, func(s *metadata.CNService) {
+	route.RouteForCommonTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), filter, func(s *metadata.CNService) {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
