@@ -1212,6 +1212,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
+// TODO::replace ctx with account id
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
 		name:      name,
@@ -1219,6 +1220,7 @@ func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	}
 }
 
+// TODO:: remove it
 func genTableKeyByAccountID(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
@@ -1227,6 +1229,7 @@ func genTableKeyByAccountID(id uint32, name string, databaseId uint64) tableKey 
 	}
 }
 
+// TODO:: replace it with genTableKey(accountId, tbName, dbNae, dbId, tbId)
 func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"math"
 	"strings"
@@ -249,6 +250,10 @@ func checkPKDup(
 
 // checkDup check whether the txn.writes has duplicate pk entry
 func (txn *Transaction) checkDup() error {
+	start := time.Now()
+	defer func() {
+		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
@@ -447,6 +452,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	return nil
 }
 
+// TODO::remove it
 func (txn *Transaction) getTableByAccountID(
 	accountID uint32,
 	databaseName, tableName string) (engine.Relation, error) {
@@ -469,6 +475,7 @@ func (txn *Transaction) getTableByAccountID(
 	return tbl, nil
 }
 
+// TODO::replace it with getTable(tbKey tableKey)
 func (txn *Transaction) getTable(key [2]string) (engine.Relation, error) {
 	databaseName := key[0]
 	tableName := key[1]
