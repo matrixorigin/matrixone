@@ -314,6 +314,9 @@ insert into tbl values(6, "[100,44,50]");
 insert into tbl values(7, "[120,50,70]");
 insert into tbl values(8, "[130,40,90]");
 
+-- 26. Update table add new column
+alter table tbl add column id2 VARCHAR(20);
+update tbl set id2 = id;
 
 -- post
 drop database vecdb2;

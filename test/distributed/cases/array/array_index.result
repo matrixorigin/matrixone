@@ -387,4 +387,6 @@ insert into tbl values(5, "[1,3,5]");
 insert into tbl values(6, "[100,44,50]");
 insert into tbl values(7, "[120,50,70]");
 insert into tbl values(8, "[130,40,90]");
+alter table tbl add column id2 VARCHAR(20);
+update tbl set id2 = id;
 drop database vecdb2;
