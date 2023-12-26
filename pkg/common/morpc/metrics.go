@@ -26,6 +26,8 @@ type metrics struct {
 	closeCounter                  prometheus.Counter
 	connectCounter                prometheus.Counter
 	connectFailedCounter          prometheus.Counter
+	inputBytesCounter             prometheus.Counter
+	outputBytesCounter            prometheus.Counter
 	sendingQueueSizeGauge         prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
 	poolSizeGauge                 prometheus.Gauge
@@ -50,12 +52,16 @@ func newMetrics(name string) *metrics {
 		connectDurationHistogram:      v2.NewRPCBackendConnectDurationHistogramByName(name),
 		doneDurationHistogram:         v2.NewRPCBackendDoneDurationHistogramByName(name),
 		writeLatencyDurationHistogram: v2.NewRPCBackendWriteLatencyDurationHistogramByName(name),
+		inputBytesCounter:             v2.NewRPCInputCounter(),
+		outputBytesCounter:            v2.NewRPCOutputCounter(),
 	}
 }
 
 type serverMetrics struct {
 	sendCounter                   prometheus.Counter
 	receiveCounter                prometheus.Counter
+	inputBytesCounter             prometheus.Counter
+	outputBytesCounter            prometheus.Counter
 	sendingQueueSizeGauge         prometheus.Gauge
 	sessionSizeGauge              prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
@@ -72,5 +78,7 @@ func newServerMetrics(name string) *serverMetrics {
 		sendingQueueSizeGauge:         v2.NewRPCServerSendingQueueSizeGaugeByName(name),
 		writeLatencyDurationHistogram: v2.NewRPCServerWriteLatencyDurationHistogramByName(name),
 		sessionSizeGauge:              v2.NewRPCServerSessionSizeGaugeByName(name),
+		inputBytesCounter:             v2.NewRPCInputCounter(),
+		outputBytesCounter:            v2.NewRPCOutputCounter(),
 	}
 }

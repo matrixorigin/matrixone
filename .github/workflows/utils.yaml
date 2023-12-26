@@ -253,7 +253,7 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.action == 'opened' }}
     steps:
-    - uses: feiskyer/ChatGPT-Reviewer@v0
+    - uses: matrixorigin/ChatGPT-Reviewer@main
       name: ChatGPT Review
       env:
         GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
