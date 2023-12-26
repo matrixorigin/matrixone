@@ -153,6 +153,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	now = time.Now()
 	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
+	// checkObjectState(db)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
 		common.AnyField("cost", time.Since(now)))
@@ -250,6 +251,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
 }
+
+// TODO: remove it
+// func checkObjectState(db *DB) {
+// 	p := &catalog.LoopProcessor{}
+// 	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+// 		if oe.IsAppendable() == oe.IsSorted() {
+// 			panic(fmt.Sprintf("logic err %v", oe.ID.String()))
+// 		}
+// 		return nil
+// 	}
+// 	db.Catalog.RecurLoop(p)
+// }
 
 func TaeMetricsTask(ctx context.Context) {
 	logutil.Info("tae metrics task started")

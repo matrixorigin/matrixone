@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/spf13/cobra"
 )
 
@@ -127,11 +129,13 @@ func (c *catalogArg) Run() error {
 type objStatArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
+	topk    int
 	verbose common.PPLevel
 }
 
 func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.topk, _ = cmd.Flags().GetInt("topk")
 	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
 	switch count {
@@ -149,9 +153,6 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
-	}
-	if c.tbl == nil {
-		return moerr.NewInvalidInputNoCtx("need table target")
 	}
 	return nil
 }
@@ -171,6 +172,17 @@ func (c *objStatArg) Run() error {
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
+		c.ctx.resp.Payload = b.Bytes()
+	} else {
+		visitor := newObjectVisitor()
+		visitor.topk = c.topk
+		c.ctx.db.Catalog.RecurLoop(visitor)
+		b := &bytes.Buffer{}
+		b.WriteString(fmt.Sprintf("db count: %d, table count: %d\n", visitor.db, visitor.tbl))
+		for i, l := 0, visitor.candidates.Len(); i < l; i++ {
+			item := heap.Pop(&visitor.candidates).(mItem)
+			b.WriteString(fmt.Sprintf("  %d.%d: %d\n", item.did, item.tid, item.objcnt))
+		}
 		c.ctx.resp.Payload = b.Bytes()
 	}
 	return nil
@@ -196,14 +208,66 @@ func (c *manualyIgnoreArg) Run() error {
 	return nil
 }
 
-type infoArg struct {
+type manualyIgnorePrepareCompactArg struct {
 	ctx *inspectContext
-	tbl *catalog.TableEntry
-	blk *catalog.BlockEntry
+	bid types.Blockid
+}
+
+func (c *manualyIgnorePrepareCompactArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("blk")
+
+	parts := strings.Split(address, "_")
+	if len(parts) != 3 {
+		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+	}
+	uid, err := types.ParseUuid(parts[0])
+	if err != nil {
+		return err
+	}
+	fn, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+	bn, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return err
+	}
+	c.bid = *objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
+	return nil
+}
+
+func (c *manualyIgnorePrepareCompactArg) String() string {
+	return fmt.Sprintf("ignore blk: %v", c.bid.String())
+}
+
+func (c *manualyIgnorePrepareCompactArg) Run() error {
+	tables.AblkTempF.Add(c.bid)
+	return nil
+}
+
+type infoArg struct {
+	ctx     *inspectContext
+	tbl     *catalog.TableEntry
+	blk     *catalog.BlockEntry
+	verbose common.PPLevel
 }
 
 func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	count, _ := cmd.Flags().GetCount("verbose")
+	var lv common.PPLevel
+	switch count {
+	case 0:
+		lv = common.PPL0
+	case 1:
+		lv = common.PPL1
+	case 2:
+		lv = common.PPL2
+	case 3:
+		lv = common.PPL3
+	}
+	c.verbose = lv
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
@@ -245,7 +309,12 @@ func (c *infoArg) Run() error {
 	if c.blk != nil {
 		b.WriteRune('\n')
 		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
-		b.WriteString(fmt.Sprintf("delchain: %v\n", c.blk.GetBlockData().DeletesInfo()))
+		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
+		rows := c.blk.GetBlockData().Rows()
+		dels := c.blk.GetBlockData().GetTotalChanges()
+		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
+		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -254,7 +323,7 @@ func (c *infoArg) Run() error {
 type manuallyMergeArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	objects []*catalog.SegmentEntry
+	objects []*catalog.ObjectEntry
 }
 
 func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -281,24 +350,26 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 	if len(dedup) < 2 {
 		return moerr.NewInvalidInputNoCtx("need at least 2 objects")
 	}
-	segs := make([]*catalog.SegmentEntry, 0, len(objects))
+	objs := make([]*catalog.ObjectEntry, 0, len(objects))
 	for o := range dedup {
 		parts := strings.Split(o, "_")
 		uid, err := types.ParseUuid(parts[0])
 		if err != nil {
 			return err
 		}
-		seg, err := c.tbl.GetSegmentByID(&uid)
+		objects, err := c.tbl.GetObjectsByID(&uid)
 		if err != nil {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
-		if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
-			return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+		for _, obj := range objects {
+			if !obj.IsActive() || obj.IsAppendable() || obj.GetNextObjectIndex() != 1 {
+				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+			}
+			objs = append(objs, obj)
 		}
-		segs = append(segs, seg)
 	}
 
-	c.objects = segs
+	c.objects = objs
 	return nil
 }
 
@@ -310,7 +381,7 @@ func (c *manuallyMergeArg) String() string {
 
 	b := &bytes.Buffer{}
 	for _, o := range c.objects {
-		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.ToString()))
+		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.String()))
 	}
 
 	return fmt.Sprintf("(%s) objects: %s", t, b.String())
@@ -439,6 +510,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&objStatArg{}),
 	}
 	objectCmd.Flags().CountP("verbose", "v", "verbose level")
+	objectCmd.Flags().IntP("topk", "k", 10, "tables with topk objects count")
 	objectCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	rootCmd.AddCommand(objectCmd)
 
@@ -471,6 +543,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&infoArg{}),
 	}
 
+	infoCmd.Flags().CountP("verbose", "v", "verbose level")
 	infoCmd.Flags().StringP("target", "t", "*", "format: table-id")
 	infoCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
 
@@ -484,6 +557,15 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 
 	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
 	rootCmd.AddCommand(miCmd)
+
+	maiCmd := &cobra.Command{
+		Use:    "abkignore",
+		Short:  "manually ignore ablk prepare compact false",
+		Run:    RunFactory(&manualyIgnorePrepareCompactArg{}),
+		Hidden: true,
+	}
+	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	rootCmd.AddCommand(maiCmd)
 
 	return rootCmd
 }
@@ -499,7 +581,7 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 	}
 	parts := strings.Split(address, "_")
 	if len(parts) != 3 {
-		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
 	}
 	uid, err := types.ParseUuid(parts[0])
 	if err != nil {
@@ -514,7 +596,8 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 		return nil, err
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
-	sentry, err := tbl.GetSegmentByID(&uid)
+	objid := bid.Object()
+	sentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
 		return nil, err
 	}
@@ -568,4 +651,38 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 		txn.Commit(context.Background())
 		return tbl, nil
 	}
+}
+
+type objectVisitor struct {
+	catalog.LoopProcessor
+	topk       int
+	db, tbl    int
+	candidates itemSet
+}
+
+func newObjectVisitor() *objectVisitor {
+	v := &objectVisitor{}
+	heap.Init(&v.candidates)
+	return &objectVisitor{}
+}
+
+func (o *objectVisitor) OnDatabase(db *catalog.DBEntry) error {
+	if !db.IsActive() {
+		return moerr.GetOkStopCurrRecur()
+	}
+	o.db++
+	return nil
+}
+func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
+	if !table.IsActive() {
+		return moerr.GetOkStopCurrRecur()
+	}
+	o.tbl++
+
+	stat, _ := table.ObjectStats(common.PPL0)
+	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
+	if o.candidates.Len() > o.topk {
+		heap.Pop(&o.candidates)
+	}
+	return nil
 }

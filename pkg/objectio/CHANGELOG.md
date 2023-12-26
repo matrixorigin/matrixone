@@ -35,12 +35,19 @@
 | 3    | 1       | Bloomfilter |
 | 4    | 1       | Zonemap     |
 
-## MatrixOne 1.0 (TBD)
+## MatrixOne 1.0
 
 ### Log Entry
 
-| Type | Version | Name                           |
-| ---- | ------- | ------------------------------ |
-| 3005 | 2       | TxnCommand_DeleteNode          |
-| 3010 | 3       | TxnCommand_Table               |
-| 3013 | 1       | TxnCommand_PersistedDeleteNode |
+| Type | Version | Name                              |
+| ---- | ------- | --------------------------------- |
+| 3005 | 2       | TxnCommand_DeleteNode             |
+| 3010 | 3       | TxnCommand_Table                  |
+| 3013 | 1       | TxnCommand_PersistedDeleteNode    |
+| 3014 | 1       | IOET_WALTxnCommand_FlushTableTail |
+
+## MatrixOne 1.1 (TBD)
+
+### Log Entry
+| 3015 | 1       | IOET_WALTxnCommand_Object |
+| 3000 | 2       | TxnEntry              |

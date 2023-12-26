@@ -133,6 +133,7 @@ type RowsFilter func(row int, filterCols []int32) bool
 
 type hasNewVersionInRangeFunc func(
 	proc *process.Process,
+	rel engine.Relation,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,

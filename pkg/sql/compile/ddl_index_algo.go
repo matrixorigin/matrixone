@@ -132,7 +132,6 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1)%10 AS CHAR);
 	*/
 
-	maxVersions := 3
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
 		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1)%% %d  AS CHAR);",
 		qryDatabase,
@@ -142,7 +141,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		maxVersions,
+		catalog.MaxIVFFlatVersion,
 	)
 
 	err := c.runSql(insertSQL)

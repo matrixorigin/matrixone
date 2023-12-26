@@ -28,8 +28,8 @@ const (
 )
 
 type StorageCfg struct {
-	BlockMaxRows     uint32 `toml:"block-max-rows"`
-	SegmentMaxBlocks uint16 `toml:"segment-max-blocks"`
+	BlockMaxRows    uint32 `toml:"block-max-rows"`
+	ObjectMaxBlocks uint16 `toml:"object-max-blocks"`
 }
 
 type CheckpointCfg struct {
