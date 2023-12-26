@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,7 +113,7 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 
 	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := plan2.CheckExprIsMonotonic(context.TODO(), testCase.expr)
+			isMonotonic := plan2.CheckExprIsZonemappable(context.TODO(), testCase.expr)
 			if isMonotonic != testCase.result {
 				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
 			}
@@ -447,7 +448,7 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 	}
 	pks := []string{"d", "c", "b"}
 	for i, expr := range tc.exprs {
-		vals := make([]*plan.Const, len(pks))
+		vals := make([]*plan.Literal, len(pks))
 		ok, hasNull := getCompositPKVals(expr, pks, vals, nil)
 		cnt := 0
 		require.Equal(t, tc.hasNull[i], hasNull)

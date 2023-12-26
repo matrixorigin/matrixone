@@ -1206,7 +1206,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ:  &plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 			})
 		} else {
 			internalRemapping := &ColRefRemapping{
@@ -1386,9 +1386,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								NotNullable: true,
 								Width:       int32(len(str)),
 							},
-							Expr: &plan.Expr_C{
-								C: &plan.Const{
-									Value: &plan.Const_Sval{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Sval{
 										Sval: str,
 									},
 								},
@@ -1401,9 +1401,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								NotNullable: true,
 								Width:       int32(len(str)),
 							},
-							Expr: &plan.Expr_C{
-								C: &plan.Const{
-									Value: &plan.Const_Sval{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Sval{
 										Sval: str,
 									},
 								},
@@ -1479,8 +1479,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.autoUseIndices(rootID)
-		ReCalcNodeStats(rootID, builder, true, true, true)
+		rootID = builder.applyIndices(rootID)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -1830,8 +1830,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				return 0, err
 			}
 
-			if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
@@ -2530,8 +2530,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, err
 			}
 
-			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					if c.I64Val < 0 {
 						return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
 					}
@@ -2544,8 +2544,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, err
 			}
 
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					if c.I64Val < 0 {
 						return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
 					}
@@ -3378,8 +3378,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 								return 0, err
 							}
 
-							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
-								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
+								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 									if c.I64Val < 0 {
 										return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
 									}
@@ -3392,8 +3392,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 								return 0, err
 							}
 
-							if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+							if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 									if c.I64Val < 0 {
 										return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
 									}
