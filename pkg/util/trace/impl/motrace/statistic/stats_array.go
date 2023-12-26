@@ -82,7 +82,11 @@ func NewStatsArrayV2() *StatsArray {
 }
 
 func NewStatsArrayV3() *StatsArray {
-	return NewStatsArray()
+	return NewStatsArray().WithVersion(StatsArrayVersion3)
+}
+
+func NewStatsArrayV4() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion4)
 }
 
 func (s *StatsArray) Init() *StatsArray {
