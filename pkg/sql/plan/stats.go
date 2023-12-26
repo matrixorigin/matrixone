@@ -879,16 +879,14 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
 	}
-	//get statsInfoMap from statscache
-	s := getStatsInfoByTableID(node.TableDef.TblId, builder)
-	if s != nil && shouldReturnMinimalStats(node, s) {
-		return DefaultMinimalStats(s.TableCnt)
+	if shouldReturnMinimalStats(node) {
+		return DefaultMinimalStats()
 	}
 	if !builder.compCtx.Stats(node.ObjRef) {
 		return DefaultStats()
 	}
-	//get statsInfoMap from statscache again
-	s = getStatsInfoByTableID(node.TableDef.TblId, builder)
+	//get statsInfoMap from statscache
+	s := getStatsInfoByTableID(node.TableDef.TblId, builder)
 	if s == nil {
 		return DefaultStats()
 	}
@@ -917,37 +915,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	return stats
 }
 
-func shouldReturnMinimalStats(node *plan.Node, s *StatsInfoMap) bool {
-	if node.NodeType != plan.Node_TABLE_SCAN {
-		return false
-	}
-	if len(node.FilterList) == 0 {
-		return false
-	}
-	if node.TableDef.Pkey == nil {
-		return false
-	}
-	if s.TableCnt < 10000 {
-		return false
-	}
-	equalCol := make([]int32, 0)
-	for _, expr := range node.FilterList {
-		equiCond, ok := expr.Expr.(*plan.Expr_F)
-		if !ok {
-			continue
-		}
-		if equiCond.F.Func.GetObjName() != "=" {
-			continue
-		}
-		leftcol, ok := equiCond.F.Args[0].Expr.(*plan.Expr_Col)
-		if !ok {
-			continue
-		}
-		if HasColExpr(equiCond.F.Args[1], -1) == -1 {
-			equalCol = append(equalCol, leftcol.Col.ColPos)
-		}
-	}
-	return containsAllPKs(equalCol, node.TableDef)
+func shouldReturnMinimalStats(node *plan.Node) bool {
+	return false
 }
 
 func needStats(tableDef *TableDef) bool {
@@ -982,12 +951,12 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-func DefaultMinimalStats(tablecnt float64) *plan.Stats {
+func DefaultMinimalStats() *plan.Stats {
 	stats := new(Stats)
-	stats.TableCnt = tablecnt
-	stats.Cost = 1
-	stats.Outcnt = 1
-	stats.Selectivity = 1 / tablecnt
+	stats.TableCnt = 100000
+	stats.Cost = 10
+	stats.Outcnt = 10
+	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
 	return stats
 }

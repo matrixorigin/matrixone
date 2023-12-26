@@ -49,7 +49,7 @@ var (
 	}
 )
 
-func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
+func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_int8:
 		return newGenericMedian[int8](overloadID, inputTypes[0], outputType, dist)
@@ -76,13 +76,13 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimal128Median{}
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for median", inputTypes[0])
 }
@@ -92,7 +92,7 @@ func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputT
 	if dist {
 		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggMedian[T numeric] struct{ values []numericSlice[T] }

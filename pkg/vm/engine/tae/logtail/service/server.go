@@ -141,7 +141,7 @@ func NewLogtailServer(
 		cfg:       cfg,
 		ssmgr:     NewSessionManager(),
 		waterline: NewWaterliner(),
-		errChan:   make(chan sessionError),
+		errChan:   make(chan sessionError, 1),
 		subChan:   make(chan subscription, 10),
 		logtail:   logtail,
 	}
