@@ -16,26 +16,18 @@ package frontend
 
 import (
 	"context"
-	"math"
-	"os"
-	"path"
-	"testing"
-
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"math"
+	"testing"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -157,64 +149,4 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 	embeddingSizeToBatch(bat, size, ses.mp)
 
 	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
-}
-
-func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
-	ckpData := logtail.NewCheckpointData(common.CheckpointAllocator)
-	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
-
-	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
-	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
-
-	for idx := range accIds {
-		vector.AppendFixed(accVec, accIds[idx], false, ckpData.Allocator())
-		vector.AppendFixed(sizeVec, sizes[idx], false, ckpData.Allocator())
-	}
-
-	return ckpData
-}
-
-func mockObjectFileService(ctx context.Context, dirName string) *objectio.ObjectFS {
-	fs := objectio.TmpNewFileservice(ctx, path.Join(dirName, "data"))
-	serviceDir := path.Join(dirName, "data")
-	return objectio.NewObjectFS(fs, serviceDir)
-}
-
-// test plan
-// 1. mock a checkpoint and write it down
-// 2. mock a storage usage response
-// 3. handle this response
-func Test_ShowAccounts(t *testing.T) {
-	ctx := context.Background()
-	accIds := []uint64{0, 1, 2, 3, 4}
-	sizes := []uint64{0, 1024, 2048, 4096, 8192}
-
-	ckpData := mockCheckpointData(t, accIds, sizes)
-	defer ckpData.Close()
-
-	dirName := "show_account_test"
-	objFs := mockObjectFileService(ctx, dirName)
-	cnLocation, _, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
-	require.Nil(t, err)
-
-	defer func() {
-		err = os.RemoveAll(dirName)
-		require.Nil(t, err)
-	}()
-
-	resp := &db.StorageUsageResp{}
-	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-		Location: cnLocation,
-		Version:  9,
-	})
-
-	usage, err := handleStorageUsageResponse(ctx, resp, objFs.Service)
-	require.Nil(t, err)
-
-	require.Equal(t, len(usage), len(accIds))
-
-	for idx := range accIds {
-		require.Equal(t, sizes[idx], usage[int32(accIds[idx])])
-	}
-
 }
