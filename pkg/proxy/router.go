@@ -57,6 +57,13 @@ type Router interface {
 	Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
 }
 
+// RefreshableRouter is a router that can be refreshed to get latest route strategy
+type RefreshableRouter interface {
+	Router
+
+	Refresh(sync bool)
+}
+
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 // When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
@@ -280,4 +287,9 @@ func (r *router) Connect(
 	r.rebalancer.connManager.connect(cn, t)
 
 	return sc, packetToBytes(resp), nil
+}
+
+// Refresh refreshes the router
+func (r *router) Refresh(sync bool) {
+	r.moCluster.ForceRefresh(sync)
 }
