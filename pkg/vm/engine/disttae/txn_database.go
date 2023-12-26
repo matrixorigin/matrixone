@@ -79,9 +79,10 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	if deleted {
 		return ""
 	}
-	db.txn.createMap.Range(func(k, _ any) bool {
+	db.txn.createMap.Range(func(k, v any) bool {
 		key := k.(tableKey)
-		if key.databaseId == db.databaseId && key.tableId == id {
+		val := v.(*txnTable)
+		if key.databaseId == db.databaseId && val.tableId == id {
 			tblName = key.name
 			return false
 		}
@@ -424,6 +425,8 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	//select * from t1; //t1 does not exist.
 	//create table t1(a int); //t1 does not exist. t1 can be created again.
 	//	t1 needs be deleted from deleteTableMap
+	delKey := genTableKey(ctx, name, db.databaseId)
+	delKey.tableId = tbl.tableId
 	db.txn.deletedTableMap.Delete(key)
 	return nil
 }
