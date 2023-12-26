@@ -214,3 +214,19 @@ drop table test_table;
 drop database ssb;
 -- @session
 drop account `abc2`;
+
+drop table if exists t1;
+create table t1(
+col1 char(225),
+col2 varchar(225),
+col3 text,
+col4 varchar(225)
+);
+
+load data infile '$resources/load_data/char_varchar_5.csv' into table t1 fields terminated by'?';
+delete from t1;
+load data infile '$resources/load_data/char_varchar_5.csv' into table t1 fields terminated by'?';
+delete from t1;
+load data infile '$resources/load_data/char_varchar_5.csv' into table t1 fields terminated by'?';
+delete from t1;
+drop table t1;
