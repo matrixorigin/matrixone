@@ -181,7 +181,7 @@ type Transaction struct {
 	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
-	toFreeBatches   map[[2]string][]*batch.Batch
+	toFreeBatches   map[tableKey][]*batch.Batch
 
 	rollbackCount int
 	statementID   int
@@ -195,11 +195,12 @@ type Transaction struct {
 }
 
 type Pos struct {
-	bat     *batch.Batch
-	tbName  string
-	dbName  string
-	offset  int64
-	blkInfo catalog.BlockInfo
+	bat       *batch.Batch
+	accountId uint32
+	tbName    string
+	dbName    string
+	offset    int64
+	blkInfo   catalog.BlockInfo
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -451,6 +452,7 @@ type txnDatabase struct {
 type tableKey struct {
 	accountId  uint32
 	databaseId uint64
+	dbName     string
 	tableId    uint64
 	name       string
 }

@@ -252,7 +252,7 @@ func checkPKDup(
 func (txn *Transaction) checkDup() error {
 	start := time.Now()
 	defer func() {
-		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
@@ -270,13 +270,13 @@ func (txn *Transaction) checkDup() error {
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		tableKey := genTableKeyByAccountID(e.accountId, e.tableName, e.databaseId)
+		tableKey := genTableKey(e.accountId, e.tableName, e.databaseId)
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
 		if e.typ == INSERT {
 			if _, ok := tablesDef[e.tableId]; !ok {
-				tbl, err := txn.getTableByAccountID(e.accountId, e.databaseName, e.tableName)
+				tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
 				if err != nil {
 					return err
 				}
@@ -349,7 +349,8 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 
 	txn.hasS3Op.Store(true)
-	mp := make(map[[2]string][]*batch.Batch)
+	mp := make(map[tableKey][]*batch.Batch)
+
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -360,7 +361,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+			tbKey := tableKey{
+				accountId:  txn.writes[i].accountId,
+				databaseId: txn.writes[i].databaseId,
+				dbName:     txn.writes[i].databaseName,
+				name:       txn.writes[i].tableName,
+			}
 			bat := txn.writes[i].bat
 			size += uint64(bat.Size())
 			// skip rowid
@@ -373,8 +379,8 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			newBat.SetAttributes(bat.Attrs[1:])
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
-			mp[key] = append(mp[key], newBat)
-			txn.toFreeBatches[key] = append(txn.toFreeBatches[key], bat)
+			mp[tbKey] = append(mp[tbKey], newBat)
+			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
@@ -385,9 +391,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		}
 	}
 
-	for key := range mp {
+	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl, err := txn.getTable(key)
+		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
 		if err != nil {
 			return err
 		}
@@ -400,9 +406,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		}
 		defer s3Writer.Free(txn.proc)
 
-		s3Writer.InitBuffers(txn.proc, mp[key][0])
-		for i := 0; i < len(mp[key]); i++ {
-			s3Writer.Put(mp[key][i], txn.proc)
+		s3Writer.InitBuffers(txn.proc, mp[tbKey][0])
+		for i := 0; i < len(mp[tbKey]); i++ {
+			s3Writer.Put(mp[tbKey][i], txn.proc)
 		}
 		err = s3Writer.SortAndFlush(txn.proc)
 
@@ -452,39 +458,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	return nil
 }
 
-// TODO::remove it
-func (txn *Transaction) getTableByAccountID(
-	accountID uint32,
-	databaseName, tableName string) (engine.Relation, error) {
-	database, err := txn.engine.DatabaseByAccountID(
-		accountID,
-		databaseName,
-		txn.proc.TxnOperator)
+func (txn *Transaction) getTable(id uint32, dbName string, tbName string) (engine.Relation, error) {
+	database, err := txn.engine.DatabaseByAccountID(id, dbName, txn.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-
-	tbl, err := database.(*txnDatabase).RelationByAccountID(
-		accountID,
-		tableName,
-		nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return tbl, nil
-}
-
-// TODO::replace it with getTable(tbKey tableKey)
-func (txn *Transaction) getTable(key [2]string) (engine.Relation, error) {
-	databaseName := key[0]
-	tableName := key[1]
-
-	database, err := txn.engine.Database(txn.proc.Ctx, databaseName, txn.proc.TxnOperator)
-	if err != nil {
-		return nil, err
-	}
-	tbl, err := database.Relation(txn.proc.Ctx, tableName, nil)
+	tbl, err := database.(*txnDatabase).RelationByAccountID(id, tbName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -494,6 +473,7 @@ func (txn *Transaction) getTable(key [2]string) (engine.Relation, error) {
 // vec contains block infos.
 func (txn *Transaction) insertPosForCNBlock(
 	vec *vector.Vector,
+	id uint32,
 	b *batch.Batch,
 	dbName string,
 	tbName string) error {
@@ -501,11 +481,12 @@ func (txn *Transaction) insertPosForCNBlock(
 	for i, blk := range blks {
 		blkInfo := *catalog.DecodeBlockInfo(blk)
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
-			bat:     b,
-			dbName:  dbName,
-			tbName:  tbName,
-			offset:  int64(i),
-			blkInfo: blkInfo}
+			bat:       b,
+			accountId: id,
+			dbName:    dbName,
+			tbName:    tbName,
+			offset:    int64(i),
+			blkInfo:   blkInfo}
 	}
 	return nil
 }
@@ -567,6 +548,7 @@ func (txn *Transaction) WriteFileLocked(
 			colexec.Srv.PutCnSegment(&sid, colexec.CnBlockIdType)
 			txn.insertPosForCNBlock(
 				bat.GetVector(0),
+				accountId,
 				entry.bat,
 				entry.databaseName,
 				entry.tableName)
@@ -734,7 +716,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[[2]string]map[catalog.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[catalog.BlockInfo][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -742,10 +724,18 @@ func (txn *Transaction) mergeCompactionLocked() error {
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
 			pos := txn.cnBlkId_Pos[*blkId]
-			if v, ok := compactedBlks[[2]string{pos.dbName, pos.tbName}]; ok {
+			if v, ok := compactedBlks[tableKey{
+				accountId: pos.accountId,
+				dbName:    pos.dbName,
+				name:      pos.tbName,
+			}]; ok {
 				v[pos.blkInfo] = offsets
 			} else {
-				compactedBlks[[2]string{pos.dbName, pos.tbName}] =
+				compactedBlks[tableKey{
+					accountId: pos.accountId,
+					dbName:    pos.dbName,
+					name:      pos.tbName,
+				}] =
 					map[catalog.BlockInfo][]int64{pos.blkInfo: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
@@ -753,8 +743,8 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			return true
 		})
 
-	for key, blks := range compactedBlks {
-		rel, err := txn.getTable(key)
+	for tbKey, blks := range compactedBlks {
+		rel, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
 		if err != nil {
 			return err
 		}
@@ -880,7 +870,8 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 func (txn *Transaction) getCachedTable(
-	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
+	k tableKey,
+	snapshotTS timestamp.Timestamp,
 ) *txnTable {
 	var tbl *txnTable
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
@@ -894,7 +885,7 @@ func (txn *Transaction) getCachedTable(
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
 			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
-				txn.tableCache.tableMap.Delete(genTableKey(ctx, k.name, k.databaseId))
+				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}
 		}
@@ -919,7 +910,7 @@ func (txn *Transaction) getCachedTableByAccountID(
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
 			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
-				txn.tableCache.tableMap.Delete(genTableKeyByAccountID(id, k.name, k.databaseId))
+				txn.tableCache.tableMap.Delete(genTableKey(id, k.name, k.databaseId))
 				return nil
 			}
 		}

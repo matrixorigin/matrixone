@@ -128,7 +128,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		bat.Clean(e.mp)
 		return err
 	}
-	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
+	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
 		txn:          txn,
 		databaseId:   databaseId,
 		databaseName: name,
@@ -180,7 +180,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
+	if v, ok := txn.databaseMap.Load(genDatabaseKey(defines.GetAccountId(ctx), name)); ok {
 		return v.(*txnDatabase), nil
 	}
 	if name == catalog.MO_CATALOG {
@@ -333,7 +333,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	key := genDatabaseKey(ctx, name)
+	key := genDatabaseKey(defines.GetAccountId(ctx), name)
 	if _, ok := txn.databaseMap.Load(key); ok {
 		txn.databaseMap.Delete(key)
 		return nil
@@ -421,7 +421,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
-		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
+		toFreeBatches:                   make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
 	txn.readOnly.Store(true)

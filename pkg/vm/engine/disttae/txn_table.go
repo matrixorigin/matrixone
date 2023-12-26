@@ -1783,7 +1783,7 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	tbl.tnList = []int{0}
 
-	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.txn.createMap.Load(genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId))
 	// check if the table is not created in this txn, and the block infos are not updated, then update:
 	// 1. update logtail
 	// 2. generate block infos
@@ -1804,7 +1804,8 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	}
 
 	// if the table is created in this txn, skip
-	if _, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId)); created {
+	if _, created := tbl.db.txn.createMap.Load(
+		genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 

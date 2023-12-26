@@ -1212,29 +1212,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-// TODO::replace ctx with account id
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-// TODO:: remove it
-func genTableKeyByAccountID(id uint32, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
 		accountId:  id,
-	}
-}
-
-// TODO:: replace it with genTableKey(accountId, tbName, dbNae, dbId, tbId)
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
-	return tableKey{
-		name:       name,
-		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
 	}
 }
 

@@ -119,7 +119,7 @@ func (db *txnDatabase) RelationByAccountID(
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
 	}
 
-	key := genTableKeyByAccountID(accountID, name, db.databaseId)
+	key := genTableKey(accountID, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
@@ -197,7 +197,7 @@ func (db *txnDatabase) RelationByAccountID(
 	}
 	tbl.proc.Store(p)
 
-	db.txn.tableCache.tableMap.Store(genTableKeyByAccountID(accountID, name, db.databaseId), tbl)
+	db.txn.tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
 }
 
@@ -208,7 +208,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
 	}
 
-	key := genTableKey(ctx, name, db.databaseId)
+	key := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
@@ -219,7 +219,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	rel := db.txn.getCachedTable(ctx, key, db.txn.op.SnapshotTS())
+	rel := db.txn.getCachedTable(key, db.txn.op.SnapshotTS())
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -286,7 +286,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	}
 	tbl.proc.Store(p)
 
-	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	db.txn.tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
 }
 
@@ -294,7 +294,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
-	k := genTableKey(ctx, name, db.databaseId)
+	k := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
 		db.txn.deletedTableMap.Store(k, nil)
@@ -375,7 +375,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	k := genTableKey(ctx, name, db.databaseId)
+	k := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
 	v, ok = db.txn.createMap.Load(k)
 	if !ok {
 		v, ok = db.txn.tableCache.tableMap.Load(k)
@@ -510,7 +510,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	tbl.tableName = name
 	tbl.tableId = tableId
 	tbl.GetTableDef(ctx)
-	key := genTableKey(ctx, name, db.databaseId)
+	key := genTableKey(accountId, name, db.databaseId)
 	db.txn.addCreateTable(key, tbl)
 	//CORNER CASE
 	//begin;
