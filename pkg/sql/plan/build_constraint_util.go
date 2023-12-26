@@ -1004,6 +1004,10 @@ func buildValueScan(
 						return err
 					}
 				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1036,6 +1040,10 @@ func buildValueScan(
 					return err
 				}
 				if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
