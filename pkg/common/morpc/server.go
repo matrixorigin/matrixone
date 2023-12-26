@@ -199,6 +199,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
+	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -268,6 +269,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 		responses := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() {
+			defer func() {
+				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
+			}()
+
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
@@ -365,6 +370,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 
 					if written > 0 {
+						s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
 						err := cs.conn.Flush(timeout)
 						if err != nil {
 							if ce != nil {
@@ -597,6 +603,7 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	f.ref()
 	f.init(msg)
 	cs.c <- f
+	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
 }
 
