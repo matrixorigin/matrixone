@@ -22,8 +22,6 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -48,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -291,8 +290,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 											Typ: &plan.Type{
 												Id: int32(types.T_tuple),
 											},
-											Expr: &plan.Expr_Bin{
-												Bin: &plan.BinaryData{
+											Expr: &plan.Expr_Vec{
+												Vec: &plan.LiteralVec{
+													Len:  filter.Card,
 													Data: filter.Data,
 												},
 											},

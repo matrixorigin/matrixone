@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"golang.org/x/exp/slices"
 	"os"
 	"regexp"
 	"strings"
@@ -1216,38 +1217,107 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
-//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
-//	processor := new(catalog2.LoopProcessor)
-//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
-//
-//		return nil
-//	}
-//
-//	h.db.Catalog.RecurLoop(processor)
-//}
+func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMemo, ids []uint32) {
+	if len(ids) == 0 {
+		return
+	}
+	processor := new(catalog2.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog2.DBEntry) error {
+		if entry.HasDropCommitted() {
+			return nil
+		}
 
-func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+		accId := entry.GetTenantID()
+		if !slices.Contains(ids, accId) {
+			return nil
+		}
 
-	// get all checkpoints.
-	//var ckp *checkpoint.CheckpointEntry
-	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
-	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	for idx := range allCkp {
-		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-			Version:  allCkp[idx].GetVersion(),
-			Location: allCkp[idx].GetLocation(),
-		})
+		tblIt := entry.MakeTableIt(true)
+		for tblIt.Valid() {
+			insUsage := logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+
+			tblEntry := tblIt.Get().GetPayload()
+			if tblEntry.HasDropCommitted() {
+				tblIt.Next()
+				continue
+			}
+
+			objIt := tblEntry.MakeObjectIt(true)
+			for objIt.Valid() {
+				objEntry := objIt.Get().GetPayload()
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
+					insUsage.Size += uint64(objEntry.Stat.GetCompSize())
+				}
+				objIt.Next()
+			}
+
+			if insUsage.Size > 0 {
+				memo.UpdateNewAccCache(insUsage, false)
+			}
+
+			tblIt.Next()
+		}
+		return nil
 	}
 
-	resp.Succeed = true
+	c.RecurLoop(processor)
+}
 
-	// TODO
-	// exist a gap!
-	// collecting block entries that have been not been checkpoint yet
-	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
-	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
-	//}
+func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
+	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	memo := h.db.GetUsageMemo()
+
+	start := time.Now()
+	defer v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+
+	memo.EnterProcessing()
+	defer func() {
+		resp.Magic = logtail.StorageUsageMagic
+		memo.LeaveProcessing()
+	}()
+
+	if !memo.HasUpdate() {
+		resp.Succeed = true
+		return nil, nil
+	}
+
+	usages := memo.GatherAllAccSize()
+
+	newIds := make([]uint32, 0)
+	for _, id := range req.AccIds {
+		if usages != nil {
+			if size, exist := usages[uint32(id)]; exist {
+				memo.AddReqTrace(uint32(id), size, start, "req")
+				resp.AccIds = append(resp.AccIds, int32(id))
+				resp.Sizes = append(resp.Sizes, size)
+				delete(usages, uint32(id))
+				continue
+			}
+		}
+		// new account which haven't been collect
+		newIds = append(newIds, uint32(id))
+	}
+
+	for accId, size := range usages {
+		memo.AddReqTrace(accId, size, start, "oth")
+		resp.AccIds = append(resp.AccIds, int32(accId))
+		resp.Sizes = append(resp.Sizes, size)
+	}
+
+	// new accounts
+	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
+
+	for idx := range newIds {
+		if size, exist := memo.GatherNewAccountSize(newIds[idx]); exist {
+			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
+			resp.Sizes = append(resp.Sizes, size)
+			memo.AddReqTrace(newIds[idx], size, start, "new")
+		}
+	}
+
+	memo.ClearNewAccCache()
+
+	resp.Succeed = true
 
 	return nil, nil
 }
