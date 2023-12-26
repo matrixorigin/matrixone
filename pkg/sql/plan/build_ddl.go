@@ -1711,7 +1711,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[1].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id},
-			//PkeyColName: catalog.CPrimaryKeyColName,
+			PkeyColName: catalog.CPrimaryKeyColName,
 		}
 	}
 
@@ -1778,7 +1778,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
-			//PkeyColName: catalog.CPrimaryKeyColName,
+			PkeyColName: catalog.CPrimaryKeyColName,
 		}
 	}
 
