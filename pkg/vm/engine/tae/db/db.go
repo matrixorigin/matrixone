@@ -49,7 +49,8 @@ type DB struct {
 	Dir  string
 	Opts *options.Options
 
-	Catalog *catalog.Catalog
+	usageMemo *logtail.TNUsageMemo
+	Catalog   *catalog.Catalog
 
 	TxnMgr *txnbase.TxnManager
 
@@ -69,6 +70,10 @@ type DB struct {
 	DBLocker io.Closer
 
 	Closed *atomic.Value
+}
+
+func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {
+	return db.usageMemo
 }
 
 func (db *DB) FlushTable(
@@ -169,6 +174,8 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64
 	replayer.Replay()
 
 	err := db.TxnMgr.Init(replayer.GetMaxTS())
+
+	db.usageMemo.EstablishFromCKPs(db.Catalog)
 	if err != nil {
 		panic(err)
 	}
@@ -193,5 +200,6 @@ func (db *DB) Close() error {
 	db.Catalog.Close()
 	db.DiskCleaner.Stop()
 	db.Runtime.TransferTable.Close()
+	db.usageMemo.Clear()
 	return db.DBLocker.Close()
 }

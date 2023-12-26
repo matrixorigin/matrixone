@@ -632,3 +632,15 @@ func (e *DBEntry) PrepareRollback() (err error) {
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()
 }
+
+// only for test
+func MockDBEntryWithAccInfo(accId uint32, dbId uint64) *DBEntry {
+	entry := &DBEntry{
+		ID: dbId,
+	}
+
+	entry.DBNode = &DBNode{}
+	entry.DBNode.acInfo.TenantID = accId
+
+	return entry
+}
