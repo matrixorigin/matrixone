@@ -915,13 +915,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 
 		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			//initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
-			//	qry.Database,
-			//	def.Name,
-			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			//	catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-			//)
+			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+				qry.Database,
+				def.Name,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			)
 		}
 		err = c.runSql(initSQL)
 		if err != nil {
