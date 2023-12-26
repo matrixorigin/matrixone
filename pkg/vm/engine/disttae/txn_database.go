@@ -427,7 +427,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	//	t1 needs be deleted from deleteTableMap
 	delKey := genTableKey(ctx, name, db.databaseId)
 	delKey.tableId = tbl.tableId
-	db.txn.deletedTableMap.Delete(key)
+	db.txn.deletedTableMap.Delete(delKey)
 	return nil
 }
 
