@@ -267,11 +267,15 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		defer s.closeClientSession(cs)
 
 		responses := make([]*Future, 0, s.options.batchSendSize)
+		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() {
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
-			responses = responses[:0]
+			for i := 0; i < len(needClose); i++ {
+				needClose[i] = nil
+			}
+			needClose = needClose[:0]
 
 			for i := 0; i < s.options.batchSendSize; i++ {
 				if len(responses) == 0 {
@@ -328,6 +332,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+						if f.oneWay {
+							needClose = append(needClose, f)
+						}
 
 						if !s.options.filter(f.send.Message) {
 							f.messageSent(messageSkipped)
@@ -390,9 +397,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 					for _, f := range responses {
 						f.messageSent(nil)
-						if f.oneWay {
-							f.Close()
-						}
+					}
+					for _, f := range needClose {
+						f.Close()
 					}
 
 					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
