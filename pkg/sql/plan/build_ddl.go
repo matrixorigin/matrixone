@@ -1418,6 +1418,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_IVFFLAT:
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		default:
+			return moerr.NewInvalidInputNoCtx("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
 
 		if err != nil {
