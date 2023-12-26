@@ -2501,6 +2501,11 @@ func appendPreInsertUkPlan(
 	isUpddate bool,
 	uniqueTableDef *TableDef,
 	isUK bool) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
+
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	colsMap := make(map[string]int)
@@ -2627,6 +2632,10 @@ func appendDeleteUniqueTablePlan(
 	baseNodeId int32,
 	isUK bool,
 ) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNode(builder, lastNodeId)
