@@ -8,19 +8,19 @@ col5 varchar(255),
 col6 text
 );
 set global save_query_result = on;
-show create table test_table;
+/* save_result */show create table test_table;
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` FLOAT DEFAULT NULL,\n`col3` BOOL DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` VARCHAR(255) DEFAULT NULL,\n`col6` TEXT DEFAULT NULL\n)
 select * from result_scan(last_query_id()) as u;
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` FLOAT DEFAULT NULL,\n`col3` BOOL DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` VARCHAR(255) DEFAULT NULL,\n`col6` TEXT DEFAULT NULL\n)
-show tables;
+/* save_result */show tables;
 Tables_in_save_query_result
 test_table
 select * from result_scan(last_query_id()) as u;
 Tables_in_save_query_result
 test_table
-show databases like "mysql";
+/* save_result */show databases like "mysql";
 Database
 mysql
 select * from result_scan(last_query_id()) as u;
@@ -754,7 +754,7 @@ col1
 28
 29
 create view test_view as select * from test_table;
-show tables;
+/* save_result */show tables;
 Tables_in_save_query_result
 test_table
 test_view
@@ -762,7 +762,7 @@ select * from result_scan(last_query_id()) as u;
 Tables_in_save_query_result
 test_table
 test_view
-show create view test_view;
+/* save_result */show create view test_view;
 View    Create View
 test_view    create view test_view as select * from test_table;
 select * from result_scan(last_query_id()) as u;
@@ -2330,7 +2330,7 @@ col1    col2    col3    col4    col5    col6
 49    49.1    false    1988-10-06    varchar_49    text_49
 set @xxx=10;
 prepare s1 from select * from test_table where col1<?;
-execute s1 using @xxx;
+/* save_result */execute s1 using @xxx;
 col1    col2    col3    col4    col5    col6
 0    0.1    true    1982-03-24    varchar_0    text_0
 1    1.1    false    1982-07-31    varchar_1    text_1
@@ -2415,7 +2415,7 @@ set global save_query_result = off;
 set global save_query_result = on;
 drop table if exists t1;
 create table t1(a int);
-show columns from t1;
+/* save_result */show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 select * from result_scan(last_query_id()) as t;

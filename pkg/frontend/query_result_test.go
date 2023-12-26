@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -146,10 +147,11 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "/* cloud_user */ select a,b,c from t", 1)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]
+	ses.tStmt.SqlSourceType = constant.CloudUserSql
 	ses.p = &plan.Plan{}
 
 	yes := openSaveQueryResult(ses)

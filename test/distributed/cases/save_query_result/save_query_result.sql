@@ -12,11 +12,11 @@ col6 text
 set global save_query_result = on;
 
 -- show sql result cache
-show create table test_table;
+/* save_result */show create table test_table;
 select * from result_scan(last_query_id()) as u;
-show tables;
+/* save_result */show tables;
 select * from result_scan(last_query_id()) as u;
-show databases like "mysql";
+/* save_result */show databases like "mysql";
 select * from result_scan(last_query_id()) as u;
 
 -- test select table result cache
@@ -48,9 +48,9 @@ select * from result_scan(last_query_id()) as u;
 
 -- test view result cache
 create view test_view as select * from test_table;
-show tables;
+/* save_result */show tables;
 select * from result_scan(last_query_id()) as u;
-show create view test_view;
+/* save_result */show create view test_view;
 select * from result_scan(last_query_id()) as u;
 
 /* save_result */select * from test_view;
@@ -116,7 +116,7 @@ select * from result_scan(last_query_id(-2)) as u;
 -- test prepare select sql
 set @xxx=10;
 prepare s1 from select * from test_table where col1<?;
-execute s1 using @xxx;
+/* save_result */execute s1 using @xxx;
 select * from result_scan(last_query_id(-1)) as u;
 deallocate prepare s1;
 
@@ -133,7 +133,7 @@ set global save_query_result = off;
 set global save_query_result = on;
 drop table if exists t1;
 create table t1(a int);
-show columns from t1;
+/* save_result */show columns from t1;
 select * from result_scan(last_query_id()) as t;
 set global save_query_result = off;
 
