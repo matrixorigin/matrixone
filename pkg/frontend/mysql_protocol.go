@@ -410,7 +410,8 @@ func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, 
 	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
 		ses.writeCsvBytes.Load()
-	packets = ses.GetPacketCnt()
+	// mysql packet num + length(sql) / 16KiB
+	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14)
 	if reset {
 		ses.ResetPacketCounter()
 	}

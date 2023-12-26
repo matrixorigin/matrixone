@@ -191,8 +191,6 @@ type StatementInfo struct {
 	StatementType string `json:"statement_type"`
 	QueryType     string `json:"query_type"`
 
-	StatementLength int64 `json:"-"`
-
 	// after
 	Status     StatementInfoStatus `json:"status"`
 	Error      error               `json:"error"`
@@ -555,8 +553,6 @@ const TcpIpv4HeaderSize = 66
 // 13: avg payload prefix of err response
 const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
-const RawStatementAckBatchSize = 1 << 14
-
 func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
@@ -576,7 +572,6 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		outPacket += s.StatementLength >> 14
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.Status = StatementStatusSuccess

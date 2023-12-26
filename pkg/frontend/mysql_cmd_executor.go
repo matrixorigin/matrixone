@@ -296,7 +296,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
 	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
-	stm.StatementLength = int64(len(envStmt))
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
 		stm.User = ""
