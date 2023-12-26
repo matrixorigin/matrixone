@@ -67,7 +67,7 @@ func Test_StorageUsageCache(t *testing.T) {
 				require.True(t, usages[idx].DbId >= usages[idx-1].DbId)
 
 				if usages[idx].DbId == usages[idx-1].DbId {
-					require.True(t, usages[idx].TblId >= usages[idx].TblId)
+					require.True(t, usages[idx].TblId >= usages[idx-1].TblId)
 				}
 			}
 		}

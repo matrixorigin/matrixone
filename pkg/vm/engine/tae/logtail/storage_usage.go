@@ -15,6 +15,7 @@
 package logtail
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 	"math"
 	"math/rand"
 	"sync"
@@ -279,6 +281,7 @@ type TNUsageMemo struct {
 	cache    *StorageUsageCache
 	pending  bool
 	reqTrace []struct {
+		hint      string
 		timeStamp time.Time
 		accountId uint32
 		totalSize uint64
@@ -316,20 +319,22 @@ func (m *TNUsageMemo) ClearNewAccCache() {
 	m.newAccCache.ClearForUpdate()
 }
 
-func (m *TNUsageMemo) AddReqTrace(accountId uint32, tSize uint64) {
+func (m *TNUsageMemo) AddReqTrace(accountId uint32, tSize uint64, t time.Time, hint string) {
 	m.reqTrace = append(m.reqTrace,
 		struct {
+			hint      string
 			timeStamp time.Time
 			accountId uint32
 			totalSize uint64
 		}{
-			timeStamp: time.Now(),
+			hint:      hint,
+			timeStamp: t,
 			accountId: accountId,
 			totalSize: tSize,
 		})
 }
 
-func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.Time, sizes []uint64) {
+func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.Time, sizes []uint64, hints []string) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 
@@ -337,6 +342,7 @@ func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.T
 		timestamps = append(timestamps, m.reqTrace[idx].timeStamp)
 		accountIds = append(accountIds, m.reqTrace[idx].accountId)
 		sizes = append(sizes, m.reqTrace[idx].totalSize)
+		hints = append(hints, m.reqTrace[idx].hint)
 	}
 	return
 }
@@ -434,8 +440,9 @@ func (m *TNUsageMemo) Delete(usage UsageData) {
 func (m *TNUsageMemo) applyDeletes(
 	deletes []interface{},
 	ckpData *CheckpointData,
-	mp *mpool.MPool) {
+	mp *mpool.MPool) string {
 
+	var buf bytes.Buffer
 	var dbs []*catalog.DBEntry
 
 	for _, del := range deletes {
@@ -449,21 +456,21 @@ func (m *TNUsageMemo) applyDeletes(
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
 				m.Delete(usage)
+				buf.WriteString(fmt.Sprintf("[tbl]%s_%d_%d_%d_%d; ",
+					e.GetFullName(), usage.AccId, usage.DbId, usage.TblId, usage.Size))
 			}
 		}
 	}
 
-	var usages []UsageData
+	usages := make([]UsageData, 0)
 	for _, db := range dbs {
 		iter := m.cache.Iter()
-		if found := iter.Seek(UsageData{
-			db.GetTenantID(), db.ID, 0, 0}); !found {
-			iter.Release()
-			continue
-		}
+		iter.Seek(UsageData{db.GetTenantID(), db.ID, 0, 0})
 
 		if iter.Item().DbId != db.ID || iter.Item().AccId != db.GetTenantID() {
 			iter.Release()
+			buf.WriteString(fmt.Sprintf("[db]%s_%d_%d_%d; ",
+				db.GetFullName(), db.GetTenantID(), db.GetID(), 0))
 			continue
 		}
 
@@ -473,13 +480,21 @@ func (m *TNUsageMemo) applyDeletes(
 		}
 
 		iter.Release()
+
+		totalSize := uint64(0)
 		for idx := 0; idx < len(usages); idx++ {
 			m.cache.Delete(usages[idx])
 			appendToStorageUsageBat(ckpData, usages[idx], true, mp)
+			totalSize += usages[idx].Size
 		}
+
+		buf.WriteString(fmt.Sprintf("[db]%s_%d_%d_%d; ",
+			db.GetFullName(), db.GetTenantID(), db.GetID(), totalSize))
 
 		usages = usages[:0]
 	}
+
+	return buf.String()
 }
 
 func (m *TNUsageMemo) applySegInserts(inserts []UsageData, ckpData *CheckpointData, mp *mpool.MPool) {
@@ -550,6 +565,46 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 
 	usage.Size = uint64(size)
 	return usage, false
+}
+
+func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
+	trash := make([]UsageData, 0)
+	povit := UsageData{accId, 0, 0, 0}
+
+	iter := m.cache.Iter()
+	defer iter.Release()
+
+	iter.Seek(povit)
+
+	if iter.Item().AccId != accId {
+		return 0
+	}
+
+	trash = append(trash, iter.Item())
+	for iter.Next() {
+		if iter.Item().AccId != accId {
+			break
+		}
+
+		trash = append(trash, iter.Item())
+	}
+
+	for idx := range trash {
+		m.Delete(trash[idx])
+	}
+
+	return len(trash)
+}
+
+func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint32]struct{}) (cleaned int) {
+	usages := m.GatherAllAccSize()
+	for accId, _ := range usages {
+		if _, ok := reserved[accId]; !ok {
+			// this account has been deleted
+			cleaned += m.deleteAccount(accId)
+		}
+	}
+	return
 }
 
 // EstablishFromCKPs replays usage info which stored in ckps into the tn cache
@@ -711,7 +766,7 @@ func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, 
 	}
 }
 
-func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) {
+func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	tnUsageMemo.newAccCache.ClearForUpdate()
 
 	// must apply seg insert first
@@ -720,11 +775,13 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) {
 	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
-	tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
+	log := tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
 	usage = objects2Usages(collector.Usage.SegDeletes)
 	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
+
+	return log
 }
 
 func FillUsageBatOfGlobal(collector *GlobalCollector) {
@@ -736,7 +793,10 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	cleaned := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
 	collector.UsageMemo.replayIntoGCKP(collector)
+
+	logutil.Infof("[storage usage] CKP[G]: cleaned %d accounts", cleaned)
 }
 
 func FillUsageBatOfIncremental(collector *IncrementalCollector) {
@@ -748,9 +808,11 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	applyChanges(collector.BaseCollector, collector.UsageMemo)
-	logutil.Info(fmt.Sprintf("[storage usage] CKP[I]: current usage cache size: %f",
-		collector.UsageMemo.MemoryUsed()))
+	log := applyChanges(collector.BaseCollector, collector.UsageMemo)
+
+	logutil.Info("[storage usage] CKP[I]",
+		zap.Float64("cache mem used", collector.UsageMemo.MemoryUsed()),
+		zap.String("applied deletes", log))
 }
 
 // GetStorageUsageHistory is for debug to show these storage usage changes.
@@ -780,6 +842,10 @@ func GetStorageUsageHistory(
 	for idx := 0; idx < len(datas); idx++ {
 		datas[idx].GetTableMeta(UsageBatMetaTableId, selectedVers[idx], selectedLocs[idx])
 		usageMeta := datas[idx].meta[UsageBatMetaTableId]
+
+		if usageMeta == nil {
+			continue
+		}
 
 		// 2.1. load storage usage ins bat
 		if usageInsBat, err = loadStorageUsageBatch(
@@ -831,7 +897,7 @@ func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
 	tblCol := vector.MustFixedCol[uint64](bat.GetVector(4))
 	sizeCol := vector.MustFixedCol[uint64](bat.GetVector(6))
 
-	var usages []UsageData
+	usages := make([]UsageData, 0)
 
 	for idx := range accCol {
 		usages = append(usages, UsageData{
