@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -415,9 +416,9 @@ func (e *Engine) Nodes(
 		return nodes, nil
 	}
 
-	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
-		SelectForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
+		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
 				Mcpu: runtime.NumCPU(),
 				Id:   s.ServiceID,
@@ -425,7 +426,7 @@ func (e *Engine) Nodes(
 			})
 		})
 	} else {
-		SelectForCommonTenant(selector, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
 				Mcpu: runtime.NumCPU(),
 				Id:   s.ServiceID,
