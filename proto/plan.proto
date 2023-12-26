@@ -618,6 +618,11 @@ message PartitionPrune {
 	repeated PartitionItem selected_partitions = 2;
 }
 
+message OriginTableMessageForFuzzy {
+	string ParentTableName = 1;
+	repeated ColDef ParentUniqueCols = 2;
+}
+
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
@@ -687,6 +692,7 @@ message Node {
 		TIME_WINDOW = 64;
 		Fill = 65;
 		PARTITION = 66;
+		FUZZY_FILTER = 67;
 	}
 
 	enum JoinType {
@@ -799,6 +805,8 @@ message Node {
 	SampleFuncSpec sample_func = 51;
 
 	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
+	OriginTableMessageForFuzzy fuzzymessage = 54;
 }
 
 message ExternScan {
@@ -869,6 +877,7 @@ message DeleteCtx {
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
+	TableDef table_def 	= 10;
 }
 
 message Query {

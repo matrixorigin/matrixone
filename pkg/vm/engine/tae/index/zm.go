@@ -111,7 +111,7 @@ func (zm ZM) StringForCompose() string {
 	return zm.innerString(func(b []byte) string {
 		s := string(b)
 		if r, _, e := types.DecodeTuple(b); e == nil {
-			s = r.ErrString()
+			s = r.ErrString(nil)
 		}
 		return s
 	})
