@@ -1327,6 +1327,46 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 	}
 }
 
+func TestTxnUnlockWithBindChanged(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					// changed bind
+					bind := lt.getBind()
+					bind.Version = bind.Version + 1
+					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
+					s.getTables("").Store(table, new)
+					lt.close()
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.NoError(t, err)
+					checkLock(t, new.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
 func TestMultiGroupWithSameTableID(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {

@@ -275,6 +275,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			for i := 0; i < len(needClose); i++ {
 				needClose[i] = nil
 			}
+			responses = responses[:0]
 			needClose = needClose[:0]
 
 			for i := 0; i < s.options.batchSendSize; i++ {
