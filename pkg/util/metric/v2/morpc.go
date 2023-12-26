@@ -58,6 +58,14 @@ var (
 			Name:      "backend_connect_total",
 			Help:      "Total number of morpc backend connect.",
 		}, []string{"name", "type"})
+
+	rpcNetworkBytesCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "network_bytes_total",
+			Help:      "Total bytes of rpc network transfer.",
+		}, []string{"type"})
 )
 
 var (
@@ -202,4 +210,12 @@ func NewRPCBackendDoneDurationHistogramByName(name string) prometheus.Observer {
 
 func NewRPCServerSessionSizeGaugeByName(name string) prometheus.Gauge {
 	return rpcServerSessionSizeGauge.WithLabelValues(name)
+}
+
+func NewRPCInputCounter() prometheus.Counter {
+	return rpcNetworkBytesCounter.WithLabelValues("input")
+}
+
+func NewRPCOutputCounter() prometheus.Counter {
+	return rpcNetworkBytesCounter.WithLabelValues("output")
 }

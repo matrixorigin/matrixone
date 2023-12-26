@@ -140,6 +140,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcNetworkBytesCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)
