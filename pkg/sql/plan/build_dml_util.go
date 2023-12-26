@@ -970,14 +970,14 @@ func makeInsertPlan(
 				originTableMessageForFuzzy := &OriginTableMessageForFuzzy{
 					ParentTableName: tableDef.Name,
 				}
-				partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
+				partialUniqueCols := make([]*plan.ColDef, 0, len(indexdef.Parts))
 				set := make(map[string]int)
 				for i, n := range indexdef.Parts {
 					set[n] = i
 				}
 				for _, c := range tableDef.Cols { // sort
-					if i, ok := set[c.Name]; ok {
-						partialUniqueCols[i] = c
+					if _, ok := set[c.Name]; ok {
+						partialUniqueCols = append(partialUniqueCols, c)
 					}
 				}
 				originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
