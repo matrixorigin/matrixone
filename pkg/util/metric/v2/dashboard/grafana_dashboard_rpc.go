@@ -47,6 +47,22 @@ func (c *DashboardCreator) initRPCOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"RPC overview",
 		c.withGraph(
+			"RPC Network Input",
+			6,
+			`sum(irate(`+c.getMetricWithFilter("mo_rpc_network_bytes", `type="input"`)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"RPC Network Output",
+			6,
+			`sum(irate(`+c.getMetricWithFilter("mo_rpc_network_bytes", `type="output"`)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
 			"RPC Client Create",
 			6,
 			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_create_total", "")+`[$interval])) by (name)`,
