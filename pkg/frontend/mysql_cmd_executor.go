@@ -64,7 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
@@ -1512,7 +1512,7 @@ func doShowBackendServers(ses *Session) error {
 	}
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
-		filterLabels(labels), clusterservice.EQ)
+		filterLabels(labels), clusterservice.Contain)
 	if isSysTenant(tenant) {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
@@ -1523,10 +1523,10 @@ func doShowBackendServers(ses *Session) error {
 					return true
 				})
 		} else {
-			disttae.SelectForSuperTenant(se, u, nil, appendFn)
+			route.RouteForSuperTenant(se, u, nil, appendFn)
 		}
 	} else {
-		disttae.SelectForCommonTenant(se, nil, appendFn)
+		route.RouteForCommonTenant(se, nil, appendFn)
 	}
 	return nil
 }
