@@ -105,6 +105,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	_ = ses.SetGlobalVar("save_query_result", int8(1))
 	defer ses.Close()
+	ses.SetConnectContext(context.Background())
+
 	const blockCnt int = 3
 
 	tenant := &TenantInfo{
