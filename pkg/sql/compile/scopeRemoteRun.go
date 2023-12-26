@@ -315,7 +315,7 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
-	for _, ins := range s.Instructions[lastIdx:] {
+	for _, ins := range s.Instructions[lastIdx+1:] {
 		ins.Arg.Release()
 		ins.Arg = nil
 	}
