@@ -339,12 +339,14 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	var oldBind pb.LockTable
 	new := s.createLockTableByBind(newBind)
 	old, loaded := s.tables.Swap(newBind.Table, new)
 	if loaded {
 		old.(lockTable).close()
+		oldBind = old.(lockTable).getBind()
 	}
-	logRemoteBindChanged(s.serviceID, old.(lockTable).getBind(), newBind)
+	logRemoteBindChanged(s.serviceID, oldBind, newBind)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
