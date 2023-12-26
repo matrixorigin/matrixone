@@ -118,13 +118,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
-	defer func() {
-		for _, data := range datas {
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
@@ -244,6 +237,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
+
+	var ckpVers []uint32
+	var ckpDatas []*logtail.CheckpointData
+
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
@@ -251,6 +248,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if err != nil {
 			return
 		}
+
+		ckpVers = append(ckpVers, maxGlobal.version)
+		ckpDatas = append(ckpDatas, datas[globalIdx])
+
 		if maxTs.Less(maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
@@ -284,6 +285,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if err != nil {
 			return
 		}
+
+		ckpVers = append(ckpVers, checkpointEntry.version)
+		ckpDatas = append(ckpDatas, datas[i])
+
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
@@ -301,6 +306,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
+
+	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
+
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
