@@ -263,7 +263,7 @@ func (r *router) Connect(
 	if r.test {
 		r.rebalancer.connManager.connect(cn, t)
 		// The second value should be recognized OK packet.
-		return sc, makeOKPacket(), nil
+		return sc, makeOKPacket(8), nil
 	}
 
 	// Use the handshakeResp, which is auth request from client, to communicate

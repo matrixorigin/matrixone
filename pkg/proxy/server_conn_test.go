@@ -79,7 +79,7 @@ func (s *mockServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*
 	return nil, nil
 }
 func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
-	sendResp(makeOKPacket(), resp)
+	sendResp(makeOKPacket(8), resp)
 	return true, nil
 }
 func (s *mockServerConn) Close() error {
