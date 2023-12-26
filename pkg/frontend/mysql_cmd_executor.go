@@ -2527,6 +2527,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2570,6 +2571,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		seq = uint8(packet.SequenceID + 1)
 		proto.SetSequenceID(seq)
+		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
