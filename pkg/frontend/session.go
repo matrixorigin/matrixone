@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -1383,6 +1384,19 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDef
 		return SystemVariableNullType{}, nil, nil
 	}
 	return InitSystemVariableStringType(name), val, nil
+}
+
+func (ses *Session) GetTxnInfo() string {
+	txnH := ses.GetTxnHandler()
+	if txnH == nil {
+		return ""
+	}
+	_, txnOp := txnH.GetTxnOperator()
+	if txnOp == nil {
+		return ""
+	}
+	meta := txnOp.Txn()
+	return meta.DebugString()
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
