@@ -453,7 +453,6 @@ type txnDatabase struct {
 type tableKey struct {
 	accountId  uint32
 	databaseId uint64
-	tableId    uint64
 	name       string
 }
 
