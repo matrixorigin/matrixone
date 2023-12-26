@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
