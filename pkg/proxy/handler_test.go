@@ -454,9 +454,6 @@ func TestHandler_HandleEventKillQuery(t *testing.T) {
 			_ = db2.Close()
 		}()
 
-		_, err = db2.Exec("kill query 9999")
-		require.Error(t, err)
-
 		_, err = db2.Exec(fmt.Sprintf("kill query %d", connID))
 		require.NoError(t, err)
 

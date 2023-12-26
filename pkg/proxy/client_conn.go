@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -333,6 +334,11 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) error {
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
+		// If no server found, means that the query has been terminated.
+		if errors.Is(err, noCNServerErr) {
+			sendResp(makeOKPacket(8), resp)
+			return nil
+		}
 		c.log.Error("failed to select CN server", zap.Error(err))
 		c.sendErr(err, resp)
 		return err
