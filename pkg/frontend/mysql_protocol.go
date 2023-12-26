@@ -1261,7 +1261,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	ses.timestampMap[TSAuthenticateStart] = time.Now()
 	defer func() {
 		ses.timestampMap[TSAuthenticateEnd] = time.Now()
-		v2.AuthenticateDurationHistogram.Observe(float64(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Milliseconds()))
+		v2.AuthenticateDurationHistogram.Observe(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Seconds())
 	}()
 
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
