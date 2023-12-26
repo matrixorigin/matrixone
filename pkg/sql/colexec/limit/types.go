@@ -36,18 +36,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.Seen = 0
-	arg.Limit = 0
-	arg.info = nil
-	arg.children = nil
 }
 
 func (arg Argument) Name() string {

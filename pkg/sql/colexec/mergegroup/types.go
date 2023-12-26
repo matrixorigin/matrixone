@@ -70,20 +70,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.NeedEval = false
-	arg.ctr = nil
-	arg.info = nil
-	arg.children = nil
-	arg.PartialResults = nil
-	arg.PartialResultTypes = nil
 }
 
 func (arg Argument) Name() string {

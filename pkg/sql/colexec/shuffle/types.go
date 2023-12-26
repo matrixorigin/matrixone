@@ -44,24 +44,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.ctr = nil
-	arg.ShuffleColIdx = 0
-	arg.ShuffleType = 0
-	arg.AliveRegCnt = 0
-	arg.ShuffleColMin = 0
-	arg.ShuffleColMax = 0
-	arg.info = nil
-	arg.children = nil
-	arg.ShuffleRangeUint64 = nil
-	arg.ShuffleRangeInt64 = nil
 }
 
 func (arg Argument) Name() string {

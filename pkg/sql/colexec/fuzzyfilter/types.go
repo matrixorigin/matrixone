@@ -67,29 +67,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.state = 0
-	arg.ReceiverOperator = colexec.ReceiverOperator{}
-	arg.N = 0
-	arg.PkName = ""
-	arg.PkTyp = nil
-	arg.bloomFilter = nil
-	arg.roaringFilter = nil
-	arg.collisionCnt = 0
-	arg.rbat = nil
-	arg.inFilterCardLimit = 0
-	arg.pass2RuntimeFilter = nil
-	arg.RuntimeFilterSpecs = nil
-	arg.RuntimeFilterSenders = nil
-	arg.info = nil
-	arg.children = nil
 }
 
 func (arg Argument) Name() string {

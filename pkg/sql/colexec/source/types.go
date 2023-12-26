@@ -53,24 +53,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.TblDef = nil
-	arg.Offset = 0
-	arg.Limit = 0
-	arg.attrs = nil
-	arg.types = nil
-	arg.Configs = nil
-	arg.info = nil
-	arg.children = nil
-	arg.buf = nil
-	arg.status = retrieve
 }
 
 func (arg Argument) Name() string {

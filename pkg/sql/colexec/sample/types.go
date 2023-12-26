@@ -88,25 +88,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.ctr = nil
-	arg.Type = 0
-	arg.Rows = 0
-	arg.Percents = 0
-	arg.SampleExprs = nil
-	arg.GroupExprs = nil
-	arg.IBucket = 0
-	arg.NBucket = 0
-	arg.info = nil
-	arg.children = nil
-	arg.buf = nil
 }
 
 func (arg Argument) Name() string {

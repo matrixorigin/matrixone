@@ -44,19 +44,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.Dist = false
-	arg.GroupExpr = nil
-	arg.OrderByExpr = nil
-	arg.Separator = ""
-	arg.OrderId = 0
 }
 
 func (arg Argument) Name() string {

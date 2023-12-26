@@ -40,19 +40,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.AffectedRows = 0
-	arg.DelSource = nil
-	arg.PartitionSources = nil
-	arg.info = nil
-	arg.children = nil
 }
 
 func (arg Argument) Name() string {

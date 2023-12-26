@@ -98,32 +98,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.ctr = nil
-	arg.Ibucket = 0
-	arg.Nbucket = 0
-	arg.Result = nil
-	arg.LeftTypes = nil
-	arg.RightTypes = nil
-	arg.Cond = nil
-	arg.Conditions = nil
-
-	arg.IsMerger = false
-	arg.Channel = nil
-	arg.NumCPU = 0
-
-	arg.HashOnPK = false
-	arg.IsShuffle = false
-	arg.RuntimeFilterSpecs = nil
-	arg.info = nil
-	arg.children = nil
 }
 
 func (arg Argument) Name() string {

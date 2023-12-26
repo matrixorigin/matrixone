@@ -48,23 +48,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.Ctx = nil
-	arg.HasAutoCol = false
-	arg.SchemaName = ""
-	arg.TableDef = nil
-	arg.Attrs = nil
-	arg.IsUpdate = false
-	arg.info = nil
-	arg.children = nil
-	arg.buf = nil
 }
 
 func (arg Argument) Name() string {

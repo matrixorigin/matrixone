@@ -91,25 +91,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.ctr = nil
-	arg.IsSink = false
-	arg.RecSink = false
-	arg.FuncId = 0
-	arg.LocalRegs = nil
-	arg.RemoteRegs = nil
-	arg.ShuffleType = 0
-	arg.ShuffleRegIdxLocal = nil
-	arg.ShuffleRegIdxRemote = nil
-	arg.info = nil
-	arg.Children = nil
 }
 
 func (arg Argument) Name() string {

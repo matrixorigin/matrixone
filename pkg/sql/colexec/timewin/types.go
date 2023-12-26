@@ -118,24 +118,11 @@ func init() {
 			return &Argument{}
 		},
 		func(a *Argument) {
-			a.reset()
+			*a = Argument{}
 		},
 		reuse.DefaultOptions[Argument]().
 			WithEnableChecker(),
 	)
-}
-
-func (arg *Argument) reset() {
-	arg.ctr = nil
-	arg.Types = nil
-	arg.Aggs = nil
-	arg.Interval = nil
-	arg.Sliding = nil
-	arg.Ts = nil
-	arg.WStart = false
-	arg.WEnd = false
-	arg.info = nil
-	arg.children = nil
 }
 
 func (arg Argument) Name() string {
