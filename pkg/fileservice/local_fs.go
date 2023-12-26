@@ -308,7 +308,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -320,7 +320,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.memCache != nil {
-		if err := l.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, l.memCache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -332,7 +332,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.diskCache != nil {
-		if err := l.diskCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, l.diskCache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -344,7 +344,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.remoteCache != nil {
-		if err := l.remoteCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, l.remoteCache, vector); err != nil {
 			return err
 		}
 	}
@@ -380,7 +380,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -392,7 +392,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.memCache != nil {
-		if err := l.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, l.memCache, vector); err != nil {
 			return err
 		}
 	}
