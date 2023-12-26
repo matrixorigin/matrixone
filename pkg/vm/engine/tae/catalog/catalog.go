@@ -637,10 +637,10 @@ func (catalog *Catalog) replayObjectByBlock(
 	// create
 	if create {
 		if obj == nil {
-			obj = NewObjectEntryOnReplay(
+			obj = NewObjectEntryByMetaLocation(
 				tbl,
 				ObjectID,
-				start, end, state)
+				start, end, state, metaLocation)
 			tbl.AddEntryLocked(obj)
 		}
 	}
@@ -658,6 +658,9 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.Start = start
 			node.Prepare = end
 			node.End = end
+			if node.BaseNode.IsEmpty() {
+				node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation, ObjectID)
+			}
 			obj.Insert(node)
 			node.DeletedAt = end
 		}

@@ -1783,6 +1783,7 @@ func makeOneDeletePlan(
 		Children: []int32{lastNodeId},
 		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{
+			TableDef:            delNodeInfo.tableDef,
 			RowIdIdx:            int32(delNodeInfo.deleteIndex),
 			Ref:                 delNodeInfo.objRef,
 			CanTruncate:         canTruncate,
