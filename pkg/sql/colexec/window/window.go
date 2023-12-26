@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,7 +56,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 || w.Name == plan2.NameGroupConcat {
+	if len(w.PartitionBy) == 0 {
 		ctr.status = receiveAll
 	}
 
@@ -410,17 +408,6 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
 		return nil
 	}
-	if w.Name == plan2.NameGroupConcat {
-		orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
-		for _, p := range w.PartitionBy {
-			orderBy = append(orderBy, &plan.OrderBySpec{
-				Expr: p,
-				Flag: plan.OrderBySpec_INTERNAL,
-			})
-		}
-		orderBy = append(orderBy, w.OrderBy...)
-		return orderBy
-	}
 	return w.OrderBy
 }
 
@@ -542,9 +529,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		}
 	}
 
-	if w.Name != plan2.NameGroupConcat {
-		ctr.ps = nil
-	}
+	ctr.ps = nil
 
 	return false, nil
 }

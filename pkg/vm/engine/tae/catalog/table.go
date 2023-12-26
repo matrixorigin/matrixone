@@ -659,3 +659,13 @@ func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dro
 	name = un.BaseNode.Schema.Name
 	return
 }
+
+// only for test
+func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
+	entry := NewReplayTableEntry()
+	entry.TableNode = &TableNode{}
+	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.ID = tblId
+	entry.db = dbEntry
+	return entry
+}

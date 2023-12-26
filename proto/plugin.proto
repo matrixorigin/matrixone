@@ -50,4 +50,5 @@ message Recommendation {
   Action             action    = 1;
   metadata.CNService CN        = 2;
   string             message   = 3;
+  bool               updated   = 4;
 }
