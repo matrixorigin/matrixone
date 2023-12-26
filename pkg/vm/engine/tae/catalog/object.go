@@ -117,12 +117,12 @@ func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}
-	e.CreateWithTxn(txn, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
 	e.Stat.entry = e
 	return e
 }
 
-func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, metalocation objectio.Location) *ObjectEntry {
+func NewObjectEntryByMetaLocation(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, metalocation objectio.Location) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(

@@ -112,6 +112,12 @@ func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.Objec
 	return node
 }
 
+func NewObjectInfoWithObjectID(id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+	return node
+}
+
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		ObjectStats: *stats.Clone(),
