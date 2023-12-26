@@ -2442,6 +2442,58 @@ func appendPreInsertSkVectorPlan(
 	}
 
 	//1.b Handle mo_cp_key
+	lastNodeId = handleRecomputedMoCPKeyProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+
+	// 2. scan meta table to find the `current version` number
+	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
+	if err != nil {
+		return -1, err
+	}
+
+	// 3. create a scan node for centroids table with version = `current version`
+	currVersionCentroidsTblScanId, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
+		indexTableDefs, idxRefs, metaTblScanId)
+	if err != nil {
+		return -1, err
+	}
+
+	// 4. create a cross join node for tbl and centroids
+	var leftChildTblId = lastNodeId
+	var rightChildCentroidsId = currVersionCentroidsTblScanId
+	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
+		leftChildTblId, rightChildCentroidsId,
+		typeOriginPk, posOriginPk,
+		typeOriginVecColumn, posOriginVecColumn)
+
+	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
+	// project version, centroid_id, pk, serial(version,pk)
+	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID, lastNodeId, isUpdate)
+	if err != nil {
+		return -1, err
+	}
+	lastNodeId = sortByL2DistanceId
+
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		indexTableDefs[2],
+		false,
+		false,
+		-1,
+		nil,
+		isUpdate,
+	); ok {
+		lastNodeId = lockNodeId
+	}
+
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
+
+	return sourceStep, nil
+}
+
+func handleRecomputedMoCPKeyProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -2515,54 +2567,7 @@ func appendPreInsertSkVectorPlan(
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
-
-	// 2. scan meta table to find the `current version` number
-	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
-	if err != nil {
-		return -1, err
-	}
-
-	// 3. create a scan node for centroids table with version = `current version`
-	currVersionCentroidsTblScanId, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
-		indexTableDefs, idxRefs, metaTblScanId)
-	if err != nil {
-		return -1, err
-	}
-
-	// 4. create a cross join node for tbl and centroids
-	var leftChildTblId = lastNodeId
-	var rightChildCentroidsId = currVersionCentroidsTblScanId
-	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
-		leftChildTblId, rightChildCentroidsId,
-		typeOriginPk, posOriginPk,
-		typeOriginVecColumn, posOriginVecColumn)
-
-	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
-	// project version, centroid_id, pk, serial(version,pk)
-	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID, lastNodeId, isUpdate)
-	if err != nil {
-		return -1, err
-	}
-	lastNodeId = sortByL2DistanceId
-
-	if lockNodeId, ok := appendLockNode(
-		builder,
-		bindCtx,
-		lastNodeId,
-		indexTableDefs[2],
-		false,
-		false,
-		-1,
-		nil,
-		isUpdate,
-	); ok {
-		lastNodeId = lockNodeId
-	}
-
-	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	sourceStep := builder.appendStep(lastNodeId)
-
-	return sourceStep, nil
+	return lastNodeId
 }
 
 // appendPreInsertUkPlan  build preinsert plan.
@@ -2596,81 +2601,7 @@ func appendPreInsertUkPlan(
 	}
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
-	//------------------------------------------------------------------------------------------
-	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-
-		projectProjection := make([]*Expr, len(lastProject))
-		for i := 0; i < len(lastProject); i++ {
-			projectProjection[i] = &plan.Expr{
-				Typ: lastProject[i].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-						//Name:   "col" + strconv.FormatInt(int64(i), 10),
-					},
-				},
-			}
-		}
-
-		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			pkNamesMap := make(map[string]int)
-			for _, name := range tableDef.Pkey.Names {
-				pkNamesMap[name] = 1
-			}
-
-			prikeyPos := make([]int, 0)
-			for i, coldef := range tableDef.Cols {
-				if _, ok := pkNamesMap[coldef.Name]; ok {
-					prikeyPos = append(prikeyPos, i)
-				}
-			}
-
-			serialArgs := make([]*plan.Expr, len(prikeyPos))
-			for i, position := range prikeyPos {
-				serialArgs[i] = &plan.Expr{
-					Typ: lastProject[position].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: int32(position),
-							Name:   tableDef.Cols[position].Name,
-						},
-					},
-				}
-			}
-			compkey, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-			projectProjection[pkColumn] = compkey
-		} else {
-			pkPos := -1
-			for i, coldef := range tableDef.Cols {
-				if tableDef.Pkey.PkeyColName == coldef.Name {
-					pkPos = i
-					break
-				}
-			}
-			if pkPos != -1 {
-				projectProjection[pkColumn] = &plan.Expr{
-					Typ: lastProject[pkPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: int32(pkPos),
-							Name:   tableDef.Pkey.PkeyColName,
-						},
-					},
-				}
-			}
-		}
-		projectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
-			ProjectList: projectProjection,
-		}
-		lastNodeId = builder.appendNode(projectNode, bindCtx)
-	}
-	//------------------------------------------------------------------------------------------
+	lastNodeId = handleRecomputedMoCPKeyProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {
