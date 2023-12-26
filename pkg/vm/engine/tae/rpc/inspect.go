@@ -932,8 +932,8 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 
-	var versions []uint32
-	var locations []objectio.Location
+	versions := make([]uint32, 0)
+	locations := make([]objectio.Location, 0)
 
 	for idx := range entries {
 		if entries[idx].GetVersion() < logtail.CheckpointVersion11 {

@@ -1236,8 +1236,7 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 
 		tblIt := entry.MakeTableIt(true)
 		for tblIt.Valid() {
-			var insUsage logtail.UsageData
-			insUsage = logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+			insUsage := logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
 
 			tblEntry := tblIt.Get().GetPayload()
 			if tblEntry.HasDropCommitted() {

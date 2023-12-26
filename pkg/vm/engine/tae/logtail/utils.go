@@ -772,6 +772,9 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector.TableFn = collector.VisitTable
 	collector.ObjectFn = collector.VisitObj
 	collector.BlockFn = collector.VisitBlk
+
+	collector.Usage.ReservedAccIds = make(map[uint32]struct{})
+
 	return collector
 }
 
