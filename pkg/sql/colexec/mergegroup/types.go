@@ -82,6 +82,8 @@ func (arg *Argument) reset() {
 	arg.ctr = nil
 	arg.info = nil
 	arg.children = nil
+	arg.PartialResults = nil
+	arg.PartialResultTypes = nil
 }
 
 func (arg Argument) Name() string {
