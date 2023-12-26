@@ -894,30 +894,6 @@ func (txn *Transaction) getCachedTable(
 	return tbl
 }
 
-func (txn *Transaction) getCachedTableByAccountID(
-	id uint32,
-	k tableKey,
-	snapshotTS timestamp.Timestamp) *txnTable {
-	var tbl *txnTable
-	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		tbl = v.(*txnTable)
-
-		tblKey := cache.TableKey{
-			AccountId:  k.accountId,
-			DatabaseId: k.databaseId,
-			Name:       k.name,
-		}
-		val := txn.engine.catalog.GetSchemaVersion(tblKey)
-		if val != nil {
-			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
-				txn.tableCache.tableMap.Delete(genTableKey(id, k.name, k.databaseId))
-				return nil
-			}
-		}
-	}
-	return tbl
-}
-
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
 	txn.IncrStatementID(ctx, true)

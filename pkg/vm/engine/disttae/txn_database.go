@@ -130,7 +130,7 @@ func (db *txnDatabase) RelationByAccountID(
 		p = proc.(*process.Process)
 	}
 
-	rel := db.txn.getCachedTableByAccountID(accountID, key, db.txn.op.SnapshotTS())
+	rel := db.txn.getCachedTable(key, db.txn.op.SnapshotTS())
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
