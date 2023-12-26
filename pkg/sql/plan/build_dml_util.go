@@ -2442,7 +2442,7 @@ func appendPreInsertSkVectorPlan(
 	}
 
 	//1.b Handle mo_cp_key
-	lastNodeId = handleRecomputedMoCPKeyProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
 
 	// 2. scan meta table to find the `current version` number
 	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
@@ -2493,7 +2493,7 @@ func appendPreInsertSkVectorPlan(
 	return sourceStep, nil
 }
 
-func handleRecomputedMoCPKeyProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
+func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -2601,7 +2601,7 @@ func appendPreInsertUkPlan(
 	}
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
-	lastNodeId = handleRecomputedMoCPKeyProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {
