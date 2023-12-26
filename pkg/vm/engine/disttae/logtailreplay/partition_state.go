@@ -26,7 +26,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,7 +126,7 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 type BlockEntry struct {
-	catalog.BlockInfo
+	objectio.BlockInfo
 
 	CreateTime types.TS
 	DeleteTime types.TS
@@ -141,7 +140,7 @@ type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
 	CommitTs types.TS
-	DeltaLoc catalog.ObjectLocation
+	DeltaLoc objectio.ObjectLocation
 }
 
 func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {

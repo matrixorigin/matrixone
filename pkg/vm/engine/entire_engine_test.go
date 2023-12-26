@@ -269,7 +269,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
+	_ *plan.Expr, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state

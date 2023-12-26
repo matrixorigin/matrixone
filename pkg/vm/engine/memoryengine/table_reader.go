@@ -41,15 +41,7 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(
-	ctx context.Context,
-	parallel int,
-	expr *plan.Expr,
-	shardIDs [][]byte,
-) (
-	readers []engine.Reader,
-	err error,
-) {
+func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, shardIDs []byte) (readers []engine.Reader, err error) {
 	readers = make([]engine.Reader, parallel)
 
 	var shards []Shard
@@ -78,8 +70,8 @@ func (t *Table) NewReader(
 	} else {
 		// some
 		idSet := make(map[uint64]bool)
-		for _, bs := range shardIDs {
-			id := binary.LittleEndian.Uint64(bs)
+		for i := 0; i < len(shardIDs); i += 8 {
+			id := binary.LittleEndian.Uint64(shardIDs[i : i+8])
 			idSet[id] = true
 		}
 		for _, store := range getTNServices(t.engine.cluster) {
@@ -208,15 +200,15 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([]byte, error) {
 	// return encoded shard ids
 	nodes := getTNServices(t.engine.cluster)
-	shards := make([][]byte, 0, len(nodes))
+	shards := make([]byte, 0, len(nodes)*8)
 	for _, node := range nodes {
 		for _, shard := range node.Shards {
 			id := make([]byte, 8)
 			binary.LittleEndian.PutUint64(id, shard.ShardID)
-			shards = append(shards, id)
+			shards = append(shards, id...)
 		}
 	}
 	return shards, nil

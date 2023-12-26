@@ -3430,7 +3430,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	var ranges [][]byte
+	var ranges objectio.BlockInfoSlice
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
@@ -3486,15 +3486,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				var subranges objectio.BlockInfoSlice
+				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := subranges.Get(j)
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
+					ranges = append(ranges, subranges.GetBytes(j)...)
 				}
 			}
 		} else {
@@ -3507,23 +3508,24 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				var subranges objectio.BlockInfoSlice
+				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := subranges.Get(j)
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
+					ranges = append(ranges, subranges.GetBytes(j)...)
 				}
 			}
 		}
 	}
 
 	if len(n.AggList) > 0 && len(ranges) > 1 {
-		newranges := make([][]byte, 0, len(ranges))
-		newranges = append(newranges, ranges[0])
+		newranges := make([]byte, 0, len(ranges))
+		newranges = append(newranges, ranges.GetBytes(0)...)
 		partialResults = make([]any, 0, len(n.AggList))
 		partialResultTypes = make([]types.T, len(n.AggList))
 
@@ -3565,13 +3567,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
 			}
-			for _, buf := range ranges[1:] {
+			for i := 1; i < ranges.Len(); i++ {
 				if partialResults == nil {
 					break
 				}
-				blk := catalog.DecodeBlockInfo(buf)
+				blk := ranges.Get(i)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-					newranges = append(newranges, buf)
+					newranges = append(newranges, ranges.GetBytes(i)...)
 					continue
 				}
 				var objMeta objectio.ObjectMeta
@@ -3909,12 +3911,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
 }
 
-func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInAverage(c *Compile, ranges objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
-	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < len(ranges); i += step {
+	step := (ranges.Len() + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < ranges.Len(); i += step {
 		j := i / step
-		if i+step >= len(ranges) {
+		if i+step >= ranges.Len() {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
@@ -3923,14 +3925,14 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
-				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
+				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, ranges.Len())...)
 			} else {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: ranges[i:],
+					Data: ranges.Slice(i, ranges.Len()),
 				})
 			}
 		} else {
@@ -3942,14 +3944,14 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
-				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
+				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
 			} else {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: ranges[i : i+step],
+					Data: ranges.Slice(i, i+step),
 				})
 			}
 		}
@@ -3957,7 +3959,7 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, ranges objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{
@@ -3966,10 +3968,10 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	//add memory table block
-	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-	ranges = ranges[1:]
+	nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
+	ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
-	if len(ranges) == 0 {
+	if ranges.Len() == 0 {
 		return nodes, nil
 	}
 	//only one cn
@@ -3978,14 +3980,13 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		return nodes, nil
 	}
 	// put dirty blocks which can't be distributed remotely in current CN.
-	newRanges := make([][]byte, 0, len(ranges))
-	for _, blk := range ranges {
-		blkInfo := catalog.DecodeBlockInfo(blk)
-		if blkInfo.CanRemote {
-			newRanges = append(newRanges, blk)
-			continue
+	newRanges := make(objectio.BlockInfoSlice, 0, len(ranges))
+	for i := 0; i < ranges.Len(); i++ {
+		if ranges.Get(i).CanRemote {
+			newRanges = append(newRanges, ranges.GetBytes(i)...)
+		} else {
+			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
 		}
-		nodes[0].Data = append(nodes[0].Data, blk)
 	}
 
 	//add the rest of CNs in list
@@ -4037,17 +4038,17 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	return newNodes, nil
 }
 
-func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
-	for i, blk := range ranges {
-		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSlice, nodes engine.Nodes) {
+	for i := 0; i < ranges.Len(); i++ {
+		unmarshalledBlockInfo := ranges.Get(i)
 		// get timestamp in objName to make sure it is random enough
 		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
 		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-		nodes[index].Data = append(nodes[index].Data, blk)
+		nodes[index].Data = append(nodes[index].Data, ranges.GetBytes(i)...)
 	}
 }
 
-func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
+func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.Node, nodes engine.Nodes) error {
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
@@ -4055,8 +4056,8 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var shuffleRangeInt64 []int64
 	var init bool
 	var index uint64
-	for i, blk := range ranges {
-		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+	for i := 0; i < ranges.Len(); i++ {
+		unmarshalledBlockInfo := ranges.Get(i)
 		location := unmarshalledBlockInfo.MetaLocation()
 		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
 		if err != nil {
@@ -4072,7 +4073,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		if !zm.IsInited() {
 			// a block with all null will send to first CN
-			nodes[0].Data = append(nodes[0].Data, blk)
+			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
 			continue
 		}
 		if !init {
@@ -4091,12 +4092,12 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		} else {
 			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		}
-		nodes[index].Data = append(nodes[index].Data, blk)
+		nodes[index].Data = append(nodes[index].Data, ranges.GetBytes(i)...)
 	}
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, ranges []byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{

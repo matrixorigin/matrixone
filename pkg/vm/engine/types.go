@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,11 +34,12 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu int
-	Id   string   `json:"id"`
-	Addr string   `json:"address"`
-	Data [][]byte `json:"payload"`
-	Rel  Relation // local relation
+	Mcpu   int
+	Id     string `json:"id"`
+	Addr   string `json:"address"`
+	Header objectio.InfoHeader
+	Data   []byte   `json:"payload"`
+	Rel    Relation // local relation
 }
 
 // Attribute is a column
@@ -572,7 +574,7 @@ type Relation interface {
 
 	UpdateObjectInfos(context.Context) error
 
-	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
+	Ranges(context.Context, []*plan.Expr) ([]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -606,7 +608,7 @@ type Relation interface {
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
+	NewReader(context.Context, int, *plan.Expr, []byte) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -665,8 +667,7 @@ type Engine interface {
 	// since implementations may update hints after engine had initialized
 	Hints() Hints
 
-	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
+	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -694,5 +695,5 @@ type EntireEngine struct {
 }
 
 func IsMemtable(tblRange []byte) bool {
-	return len(tblRange) == 0
+	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
 }

@@ -4957,7 +4957,7 @@ func TestBlockRead(t *testing.T) {
 
 	bid, sid := blkEntry.ID, blkEntry.GetObject().ID
 
-	info := &pkgcatalog.BlockInfo{
+	info := &objectio.BlockInfo{
 		BlockID:    bid,
 		SegmentID:  *sid.Segment(),
 		EntryState: true,
@@ -4979,8 +4979,8 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Runtime.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	infos := make([][]*pkgcatalog.BlockInfo, 0)
-	infos = append(infos, []*pkgcatalog.BlockInfo{info})
+	infos := make([][]*objectio.BlockInfo, 0)
+	infos = append(infos, []*objectio.BlockInfo{info})
 	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(

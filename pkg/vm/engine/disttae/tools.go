@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1446,8 +1447,8 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
-	var infos [][]*catalog.BlockInfo
+func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objectio.BlockInfo, []int) {
+	var infos [][]*objectio.BlockInfo
 	objMap := make(map[string]int)
 	lenObjs := 0
 	for _, blkInfo := range blkInfos {
@@ -1458,7 +1459,7 @@ func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{blkInfo})
+			infos = append(infos, []*objectio.BlockInfo{blkInfo})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1485,7 +1486,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	return rds
 }
 
-func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*objectio.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		//distribute objects and steps for prefetch

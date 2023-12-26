@@ -203,7 +203,7 @@ type Pos struct {
 	tbName  string
 	dbName  string
 	offset  int64
-	blkInfo catalog.BlockInfo
+	blkInfo objectio.BlockInfo
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -587,13 +587,13 @@ type blockReader struct {
 	withFilterMixin
 
 	// used for prefetch
-	infos       [][]*catalog.BlockInfo
+	infos       [][]*objectio.BlockInfo
 	steps       []int
 	currentStep int
 
 	scanType int
 	// block list to scan
-	blks []*catalog.BlockInfo
+	blks []*objectio.BlockInfo
 	//buffer for block's deletes
 	buffer []int64
 }
