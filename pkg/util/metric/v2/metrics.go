@@ -72,6 +72,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+
+	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
 
 func initFileServiceMetrics() {

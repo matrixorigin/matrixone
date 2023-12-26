@@ -1271,6 +1271,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
+	defer v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
 
 	memo.EnterProcessing()
 	defer func() {

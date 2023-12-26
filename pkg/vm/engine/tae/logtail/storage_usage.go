@@ -805,6 +805,7 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
 		collector.UsageMemo.LeaveProcessing()
+		v2.TaskStorageUsageCacheMemUsedGauge.Set(collector.UsageMemo.MemoryUsed())
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
