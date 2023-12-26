@@ -522,7 +522,7 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_TILDE:
 		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
-		return nil, moerr.NewNYI(b.GetContext(), "'%v'", astExpr)
+		return b.bindFuncExprImplByAstExpr("unary_mark", []tree.Expr{astExpr.Expr}, depth)
 	}
 	return nil, moerr.NewNYI(b.GetContext(), "'%v'", astExpr)
 }
