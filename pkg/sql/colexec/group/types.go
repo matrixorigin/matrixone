@@ -117,7 +117,6 @@ func (arg *Argument) reset() {
 	arg.Types = nil
 	arg.Aggs = nil
 	arg.MultiAggs = nil
-	arg.PartialResults = nil
 	arg.info = nil
 	arg.children = nil
 }
@@ -147,11 +146,6 @@ func (arg *Argument) WithTypes(types []types.Type) *Argument {
 
 func (arg *Argument) WithMultiAggs(multiAggs []group_concat.Argument) *Argument {
 	arg.MultiAggs = multiAggs
-	return arg
-}
-
-func (arg *Argument) WithPartialResults(partialResults []any) *Argument {
-	arg.PartialResults = partialResults
 	return arg
 }
 
