@@ -38,7 +38,7 @@ type Argument struct {
 	Args      []*plan.Expr
 	Attrs     []string
 	Params    []byte
-	Name2     string
+	FuncName  string
 	retSchema []types.Type
 
 	info     *vm.OperatorInfo
@@ -67,7 +67,7 @@ func (arg *Argument) reset() {
 	arg.Args = nil
 	arg.Attrs = nil
 	arg.Params = nil
-	arg.Name2 = ""
+	arg.FuncName = ""
 	arg.retSchema = nil
 	arg.info = nil
 	arg.children = nil

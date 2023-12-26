@@ -370,7 +370,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.TableFunction:
 		t := sourceIns.Arg.(*table_function.Argument)
 		arg := table_function.NewArgument()
-		arg.Name2 = t.Name2
+		arg.FuncName = t.FuncName
 		arg.Args = t.Args
 		arg.Rets = t.Rets
 		arg.Attrs = t.Attrs
@@ -765,7 +765,7 @@ func constructTableFunction(n *plan.Node) *table_function.Argument {
 	arg.Attrs = attrs
 	arg.Rets = n.TableDef.Cols
 	arg.Args = n.TblFuncExprList
-	arg.Name2 = n.TableDef.TblFunc.Name
+	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
 	return arg
 }

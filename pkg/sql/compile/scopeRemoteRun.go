@@ -1038,7 +1038,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Rets:   t.Rets,
 			Args:   t.Args,
 			Params: t.Params,
-			Name:   t.Name2,
+			Name:   t.FuncName,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
@@ -1467,7 +1467,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Attrs = opr.TableFunction.Attrs
 		arg.Rets = opr.TableFunction.Rets
 		arg.Args = opr.TableFunction.Args
-		arg.Name2 = opr.TableFunction.Name
+		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		v.Arg = arg
 	case vm.HashBuild:
