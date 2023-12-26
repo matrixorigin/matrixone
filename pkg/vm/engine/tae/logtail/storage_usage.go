@@ -291,8 +291,9 @@ type TNUsageMemo struct {
 	newAccCache *StorageUsageCache
 
 	pendingReplay struct {
-		datas []*CheckpointData
-		vers  []uint32
+		datas   []*CheckpointData
+		vers    []uint32
+		delayed map[uint64]UsageData
 	}
 }
 
@@ -545,26 +546,6 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 		return usage, true
 	}
 
-	size := int64(0)
-	processor := new(catalog.LoopProcessor)
-	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
-		if !entry.IsAppendable() {
-			if entry.HasDropCommitted() {
-				size -= int64(entry.GetCompSize())
-			} else if entry.IsCommitted() {
-				size += int64(entry.GetCompSize())
-			}
-		}
-		return nil
-	}
-
-	tblEntry.RecurLoop(processor)
-
-	if size < 0 {
-		size = 0
-	}
-
-	usage.Size = uint64(size)
 	return usage, false
 }
 
@@ -600,6 +581,10 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 }
 
 func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint32]struct{}) (cleaned int) {
+	if reserved == nil {
+		return
+	}
+
 	usages := m.GatherAllAccSize()
 	for accId := range usages {
 		if _, ok := reserved[accId]; !ok {
@@ -643,10 +628,16 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 			// (if a table or db recreate, it's id will change)
 			//
 			if m.pendingReplay.vers[x] < CheckpointVersion11 {
+				// here only remove the deleted db and table.
+				// if table has deletes, we update it in gckp
 				usage, skip = try2RemoveStaleData(usage, c)
 				if skip {
 					continue
 				}
+				if m.pendingReplay.delayed == nil {
+					m.pendingReplay.delayed = make(map[uint64]UsageData)
+				}
+				m.pendingReplay.delayed[usage.TblId] = usage
 			}
 
 			m.Update(usage, false)
@@ -769,6 +760,43 @@ func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, 
 	}
 }
 
+func tryClearDataFromOldVersion(collector *GlobalCollector) string {
+	memo := collector.UsageMemo
+	if len(memo.pendingReplay.delayed) == 0 {
+		return ""
+	}
+
+	var buf bytes.Buffer
+
+	tblChanges := make(map[uint64]int64)
+
+	usages := objects2Usages(collector.Usage.SegDeletes)
+	for idx := range usages {
+		tblChanges[usages[idx].TblId] -= int64(usages[idx].Size)
+	}
+
+	usages = objects2Usages(collector.Usage.SegInserts)
+	for idx := range usages {
+		tblChanges[usages[idx].TblId] += int64(usages[idx].Size)
+	}
+
+	for id, size := range tblChanges {
+		if size <= 0 {
+			size = 0
+		}
+		if usage, ok := memo.pendingReplay.delayed[id]; ok {
+			memo.Delete(usage)
+			usage.Size = uint64(size)
+			memo.Update(usage, false)
+			delete(memo.pendingReplay.delayed, id)
+
+			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_%d; ",
+				usage.AccId, usage.DbId, usage.TblId, usage.Size))
+		}
+	}
+	return buf.String()
+}
+
 func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	tnUsageMemo.newAccCache.ClearForUpdate()
 
@@ -796,10 +824,13 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	log := tryClearDataFromOldVersion(collector)
 	cleaned := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
 	collector.UsageMemo.replayIntoGCKP(collector)
 
-	logutil.Infof("[storage usage] CKP[G]: cleaned %d accounts", cleaned)
+	logutil.Info("[storage usage] CKP[G]",
+		zap.Int("accounts cleaned", cleaned),
+		zap.String("update old data", log))
 }
 
 func FillUsageBatOfIncremental(collector *IncrementalCollector) {
