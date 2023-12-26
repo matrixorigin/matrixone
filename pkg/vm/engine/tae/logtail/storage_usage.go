@@ -598,7 +598,7 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 
 func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint32]struct{}) (cleaned int) {
 	usages := m.GatherAllAccSize()
-	for accId, _ := range usages {
+	for accId := range usages {
 		if _, ok := reserved[accId]; !ok {
 			// this account has been deleted
 			cleaned += m.deleteAccount(accId)
