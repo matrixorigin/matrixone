@@ -288,7 +288,7 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 
 	return &plan.Expr{
 		Typ:  typ,
-		Expr: &plan.Expr_C{C: c},
+		Expr: &plan.Expr_Lit{Lit: c},
 	}, nil
 }
 
@@ -296,14 +296,14 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	e1 := e.Expr.(*plan.Expr_List).List.List[0]
 	e2 := e.Expr.(*plan.Expr_List).List.List[1]
 
-	intervalTypeStr := e2.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	intervalTypeStr := e2.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
 		return nil, err
 	}
 
 	if e1.Typ.Id == int32(types.T_varchar) || e1.Typ.Id == int32(types.T_char) {
-		s := e1.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+		s := e1.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 		if err != nil {
 			return nil, err
@@ -331,7 +331,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 
-	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: typ, Expr: &plan.Expr_C{C: c}}
+	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: typ, Expr: &plan.Expr_Lit{Lit: c}}
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 
 	return e, nil

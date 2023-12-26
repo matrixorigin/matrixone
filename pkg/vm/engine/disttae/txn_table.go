@@ -1669,10 +1669,8 @@ func (tbl *txnTable) newMergeReader(
 		// right now for composite primary key, the filter expr will not be pushed down
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Const, len(pk.Names))
+			pkVals := make([]*plan.Literal, len(pk.Names))
 			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
-
-			// return empty reader if the composite primary key has null value
 			if hasNull {
 				return []engine.Reader{
 					new(emptyReader),

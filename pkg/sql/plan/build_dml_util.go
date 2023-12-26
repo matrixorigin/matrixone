@@ -708,8 +708,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, e := range rightConds {
 							projectProjection = append(projectProjection, &plan.Expr{
 								Typ: e.Typ,
-								Expr: &plan.Expr_C{
-									C: &Const{
+								Expr: &plan.Expr_Lit{
+									Lit: &Const{
 										Isnull: true,
 									},
 								},
