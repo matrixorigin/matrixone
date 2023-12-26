@@ -203,16 +203,6 @@ func (h *Handle) HandleCommit(
 	return
 }
 
-type handleRequestsTraceValue struct {
-	Duration               time.Duration
-	CreateDB               int
-	CreateRelation         int
-	DropDB                 int
-	DropOrTruncateRelation int
-	AlterTable             int
-	Write                  int
-}
-
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
