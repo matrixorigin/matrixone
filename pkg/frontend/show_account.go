@@ -135,10 +135,8 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := db.StorageUsageReq{}
-		for x := 0; x < len(accIds); x++ {
-			for y := range accIds[x] {
-				req.AccIds = append(req.AccIds, accIds[x][y])
-			}
+		for x := range accIds {
+			req.AccIds = append(req.AccIds, accIds[x]...)
 		}
 
 		return req.Marshal()

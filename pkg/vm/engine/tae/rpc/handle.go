@@ -1236,9 +1236,8 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 
 		tblIt := entry.MakeTableIt(true)
 		for tblIt.Valid() {
-			var insUsage, delUsage logtail.UsageData
+			var insUsage logtail.UsageData
 			insUsage = logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
-			delUsage = insUsage
 
 			tblEntry := tblIt.Get().GetPayload()
 			if tblEntry.HasDropCommitted() {
@@ -1249,19 +1248,14 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 			objIt := tblEntry.MakeObjectIt(true)
 			for objIt.Valid() {
 				objEntry := objIt.Get().GetPayload()
-				if !objEntry.IsAppendable() {
-					if objEntry.HasDropCommitted() {
-						delUsage.Size += uint64(objEntry.Stat.GetCompSize())
-					} else if objEntry.IsCommitted() {
-						insUsage.Size += uint64(objEntry.Stat.GetCompSize())
-					}
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
+					insUsage.Size += uint64(objEntry.Stat.GetCompSize())
 				}
 				objIt.Next()
 			}
 
-			if insUsage.Size-delUsage.Size > 0 {
+			if insUsage.Size > 0 {
 				memo.UpdateNewAccCache(insUsage, false)
-				memo.UpdateNewAccCache(delUsage, true)
 			}
 
 			tblIt.Next()
@@ -1270,13 +1264,13 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 	}
 
 	c.RecurLoop(processor)
-
-	return
 }
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
 	memo := h.db.GetUsageMemo()
+
+	start := time.Now()
 
 	memo.EnterProcessing()
 	defer func() {
@@ -1290,22 +1284,26 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	usages := memo.GatherAllAccSize()
-	for accId, size := range usages {
-		resp.AccIds = append(resp.AccIds, int32(accId))
-		resp.Sizes = append(resp.Sizes, size)
-		memo.AddReqTrace(accId, size)
-	}
 
-	var newIds []uint32
+	newIds := make([]uint32, 0)
 	for _, id := range req.AccIds {
 		if usages != nil {
-			if _, exist := usages[uint32(id)]; exist {
+			if size, exist := usages[uint32(id)]; exist {
+				memo.AddReqTrace(uint32(id), size, start, "req")
+				resp.AccIds = append(resp.AccIds, int32(id))
+				resp.Sizes = append(resp.Sizes, size)
+				delete(usages, uint32(id))
 				continue
 			}
 		}
-
 		// new account which haven't been collect
 		newIds = append(newIds, uint32(id))
+	}
+
+	for accId, size := range usages {
+		memo.AddReqTrace(accId, size, start, "oth")
+		resp.AccIds = append(resp.AccIds, int32(accId))
+		resp.Sizes = append(resp.Sizes, size)
 	}
 
 	// new accounts
@@ -1315,6 +1313,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		if size, exist := memo.GatherNewAccountSize(newIds[idx]); exist {
 			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
+			memo.AddReqTrace(newIds[idx], size, start, "new")
 		}
 	}
 

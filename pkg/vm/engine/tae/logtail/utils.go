@@ -709,10 +709,12 @@ type BaseCollector struct {
 	// for storage usage
 	Usage struct {
 		// db, tbl deletes
-		Deletes    []interface{}
-		SegInserts []*catalog.ObjectEntry
-		SegDeletes []*catalog.ObjectEntry
+		Deletes        []interface{}
+		SegInserts     []*catalog.ObjectEntry
+		SegDeletes     []*catalog.ObjectEntry
+		ReservedAccIds map[uint32]struct{}
 	}
+
 	UsageMemo *TNUsageMemo
 }
 
@@ -2691,6 +2693,10 @@ func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
 		return nil
 	}
+
+	currAccId := uint32(entry.GetTenantID())
+	collector.Usage.ReservedAccIds[currAccId] = struct{}{}
+
 	return collector.BaseCollector.VisitDB(entry)
 }
 
