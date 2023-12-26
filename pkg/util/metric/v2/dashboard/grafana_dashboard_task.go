@@ -17,7 +17,6 @@ package dashboard
 import (
 	"context"
 	"fmt"
-
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
@@ -38,6 +37,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
 			c.initTaskMergeTransferPageRow(),
+			c.initStorageUsageMemUsedRow(),
 		)...)
 
 	if err != nil {
@@ -45,6 +45,17 @@ func (c *DashboardCreator) initTaskDashboard() error {
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initStorageUsageMemUsedRow() dashboard.Option {
+	return dashboard.Row(
+		"Storage Usage Cache Mem Used",
+		c.withGraph(
+			"cache mem used",
+			12,
+			`sum(`+c.getMetricWithFilter("mo_task_storage_usage_cache_size", ``)+`)`,
+			""),
+	)
 }
 
 func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
@@ -148,28 +159,17 @@ func (c *DashboardCreator) initTaskCheckpointRow() dashboard.Option {
 			SpanNulls(true),
 			timeseries.Span(3),
 		),
-		c.getTimeSeries(
-			"Checkpoint Load Object Count",
-			[]string{
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="gckp_load_object"`)),
-
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="ickp_load_object"`)),
-			},
-			[]string{
-				"GCheckpoint",
-				"ICheckpoint",
-			},
-			timeseries.Span(3),
-		),
 		c.getPercentHist(
 			"GCheckpoint Collecting Duration",
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_uage"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+
+		c.getPercentHist(
+			"GCheckpoint Collecting Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="handle_usage_request"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(3),

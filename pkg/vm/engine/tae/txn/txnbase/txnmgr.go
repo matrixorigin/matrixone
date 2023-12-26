@@ -22,7 +22,6 @@ import (
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -510,12 +509,6 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
-		dequeuePreparingDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparingDuration > threshold && op.Txn.GetContext() != nil {
-			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.DequeuePreparing, &common.DurationRecords{Duration: dequeuePreparingDuration}))
-		}
-
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
@@ -605,10 +598,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			mgr.on1PCPrepared(op)
 		}
 		dequeuePreparedDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
-			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
-		}
 		v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
