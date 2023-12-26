@@ -68,9 +68,10 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	tblName := ""
 	//first check the tableID is deleted or not
 	deleted := false
-	db.txn.deletedTableMap.Range(func(k, _ any) bool {
+	db.txn.deletedTableMap.Range(func(k, v any) bool {
 		key := k.(tableKey)
-		if key.databaseId == db.databaseId && key.tableId == id {
+		val := v.(uint64)
+		if key.databaseId == db.databaseId && val == id {
 			deleted = true
 			return false
 		}
@@ -204,7 +205,6 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	k := genTableKey(ctx, name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
-		db.txn.deletedTableMap.Store(k, nil)
 		table := v.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -269,7 +269,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		}
 	}
 
-	db.txn.deletedTableMap.Store(k, nil)
+	db.txn.deletedTableMap.Store(k, id)
 	return nil
 }
 
@@ -425,9 +425,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	//select * from t1; //t1 does not exist.
 	//create table t1(a int); //t1 does not exist. t1 can be created again.
 	//	t1 needs be deleted from deleteTableMap
-	delKey := genTableKey(ctx, name, db.databaseId)
-	delKey.tableId = tbl.tableId
-	db.txn.deletedTableMap.Delete(delKey)
+	db.txn.deletedTableMap.Delete(key)
 	return nil
 }
 
