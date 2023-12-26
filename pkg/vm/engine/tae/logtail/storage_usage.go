@@ -572,11 +572,11 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 	povit := UsageData{accId, 0, 0, 0}
 
 	iter := m.cache.Iter()
-	defer iter.Release()
 
 	iter.Seek(povit)
 
 	if iter.Item().AccId != accId {
+		iter.Release()
 		return 0
 	}
 
@@ -588,6 +588,8 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 
 		trash = append(trash, iter.Item())
 	}
+
+	iter.Release()
 
 	for idx := range trash {
 		m.Delete(trash[idx])
