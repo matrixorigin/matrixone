@@ -2885,11 +2885,15 @@ func (collector *BaseCollector) loadObjectInfo() error {
 			mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
 			obj.RUnlock()
 			for _, node := range mvccNodes {
-				stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
-				if err != nil {
-					return err
+				if node.BaseNode.IsEmpty() {
+					stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
+					if err != nil {
+						return err
+					}
+					obj.Lock()
+					obj.SearchNode(node).BaseNode.ObjectStats = stats
+					obj.Unlock()
 				}
-				obj.SearchNode(node).BaseNode.ObjectStats = stats
 
 			}
 			i++
@@ -2901,12 +2905,15 @@ func (collector *BaseCollector) loadObjectInfo() error {
 		mvccNodes := obj.ClonePreparedInRange(collector.start, collector.end)
 		obj.RUnlock()
 		for _, node := range mvccNodes {
-			stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
-			if err != nil {
-				return err
+			if node.BaseNode.IsEmpty() {
+				stats, err := obj.LoadObjectInfoWithTxnTS(node.Start)
+				if err != nil {
+					return err
+				}
+				obj.Lock()
+				obj.SearchNode(node).BaseNode.ObjectStats = stats
+				obj.Unlock()
 			}
-			obj.SearchNode(node).BaseNode.ObjectStats = stats
-
 		}
 	}
 	logutil.Infof("checkpoint %v->%v, load %d object meta takes %v",
