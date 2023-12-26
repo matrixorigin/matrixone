@@ -476,15 +476,27 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 }
 
 func (ses *Session) CountPayload(length int) {
+	if ses == nil {
+		return
+	}
 	ses.payloadCounter += int64(length)
 }
 func (ses *Session) CountPacket(delta int64) {
+	if ses == nil {
+		return
+	}
 	ses.packetCounter.Add(delta)
 }
 func (ses *Session) GetPacketCnt() int64 {
+	if ses == nil {
+		return 0
+	}
 	return ses.packetCounter.Load()
 }
 func (ses *Session) ResetPacketCounter() {
+	if ses == nil {
+		return
+	}
 	ses.packetCounter.Store(0)
 	ses.payloadCounter = 0
 }
