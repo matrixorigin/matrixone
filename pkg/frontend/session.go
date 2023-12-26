@@ -1396,6 +1396,9 @@ func (ses *Session) GetTxnInfo() string {
 		return ""
 	}
 	_, txnOp := txnH.GetTxnOperator()
+	if txnOp == nil {
+		return ""
+	}
 	meta := txnOp.Txn()
 	return meta.DebugString()
 }
