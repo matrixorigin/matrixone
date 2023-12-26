@@ -133,9 +133,9 @@ func WithNormalStateNoWait(t bool) TxnClientCreateOption {
 	}
 }
 
-func WithEnableCheckPKDupWhenCommit() TxnClientCreateOption {
+func WithPKDedupCount(count int) TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.enableCheckPKDupWhenCommit = true
+		tc.PKDedupCount = count
 	}
 }
 
@@ -160,7 +160,7 @@ type txnClient struct {
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
-	enableCheckPKDupWhenCommit bool
+	PKDedupCount               int
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -277,9 +277,7 @@ func (client *txnClient) New(
 		txnMeta.LockService = client.lockService.GetServiceID()
 	}
 
-	if client.enableCheckPKDupWhenCommit {
-		options = append(options, WithTxnEnableCheckPKDupWhenCommit())
-	}
+	options = append(options, WithTxnPKDedupCount(client.PKDedupCount))
 	options = append(options,
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))

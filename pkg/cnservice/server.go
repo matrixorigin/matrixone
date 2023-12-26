@@ -606,10 +606,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		if s.cfg.Txn.CheckPKDupWhenCommit {
-			opts = append(opts,
-				client.WithEnableCheckPKDupWhenCommit())
-		}
+		opts = append(opts,
+			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),

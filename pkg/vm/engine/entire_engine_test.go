@@ -330,7 +330,7 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
-func (o *testOperator) CheckPKDupWhenCommit() bool {
+func (o *testOperator) PKDedupCount() int {
 	panic("should not call")
 }
 

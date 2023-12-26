@@ -192,6 +192,7 @@ type Transaction struct {
 	startStatementCalled bool
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
+	pkCount              int
 }
 
 type Pos struct {

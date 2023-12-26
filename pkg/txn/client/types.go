@@ -168,7 +168,7 @@ type TxnOperator interface {
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	CheckPKDupWhenCommit() bool
+	PKDedupCount() int
 }
 
 // TxnIDGenerator txn id generator

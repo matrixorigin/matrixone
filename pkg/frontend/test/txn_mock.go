@@ -341,20 +341,6 @@ func (mr *MockTxnOperatorMockRecorder) ApplySnapshot(data interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplySnapshot", reflect.TypeOf((*MockTxnOperator)(nil).ApplySnapshot), data)
 }
 
-// CheckPKDupWhenCommit mocks base method.
-func (m *MockTxnOperator) CheckPKDupWhenCommit() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CheckPKDupWhenCommit")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// CheckPKDupWhenCommit indicates an expected call of CheckPKDupWhenCommit.
-func (mr *MockTxnOperatorMockRecorder) CheckPKDupWhenCommit() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckPKDupWhenCommit", reflect.TypeOf((*MockTxnOperator)(nil).CheckPKDupWhenCommit))
-}
-
 // Commit mocks base method.
 func (m *MockTxnOperator) Commit(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -452,6 +438,20 @@ func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
+}
+
+// PKDedupCount mocks base method.
+func (m *MockTxnOperator) PKDedupCount() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PKDedupCount")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// PKDedupCount indicates an expected call of PKDedupCount.
+func (mr *MockTxnOperatorMockRecorder) PKDedupCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PKDedupCount", reflect.TypeOf((*MockTxnOperator)(nil).PKDedupCount))
 }
 
 // Read mocks base method.

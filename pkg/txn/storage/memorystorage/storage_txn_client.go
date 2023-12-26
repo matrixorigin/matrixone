@@ -217,7 +217,7 @@ func (s *StorageTxnOperator) Status() txn.TxnStatus {
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) CheckPKDupWhenCommit() bool {
+func (s *StorageTxnOperator) PKDedupCount() int {
 	panic("unimplemented")
 }
 

@@ -170,9 +170,9 @@ func WithTxnSkipLock(
 	}
 }
 
-func WithTxnEnableCheckPKDupWhenCommit() TxnOption {
+func WithTxnPKDedupCount(count int) TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.checkPKDupWhenCommit = true
+		tc.option.PKDedupCount = count
 	}
 }
 
@@ -182,16 +182,16 @@ type txnOperator struct {
 	txnID  []byte
 
 	option struct {
-		user                 bool
-		readyOnly            bool
-		enableCacheWrite     bool
-		disable1PCOpt        bool
-		coordinator          bool
-		checkPKDupWhenCommit bool
-		createBy             string
-		lockService          lockservice.LockService
-		skipLocks            []uint64
-		skipLockModes        []lock.LockMode
+		user             bool
+		readyOnly        bool
+		enableCacheWrite bool
+		disable1PCOpt    bool
+		coordinator      bool
+		PKDedupCount     int
+		createBy         string
+		lockService      lockservice.LockService
+		skipLocks        []uint64
+		skipLockModes    []lock.LockMode
 	}
 
 	mu struct {
@@ -589,8 +589,8 @@ func (tc *txnOperator) IsOpenLog() bool {
 	return tc.mu.openlog
 }
 
-func (tc *txnOperator) CheckPKDupWhenCommit() bool {
-	return tc.option.checkPKDupWhenCommit
+func (tc *txnOperator) PKDedupCount() int {
+	return tc.option.PKDedupCount
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {

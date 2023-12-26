@@ -116,6 +116,7 @@ func (txn *Transaction) WriteBatch(
 		truncate:     truncate,
 	}
 	txn.writes = append(txn.writes, e)
+	txn.pkCount += bat.RowCount()
 	return nil
 }
 
@@ -910,11 +911,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
-	//if txn.op.CheckPKDupWhenCommit() {
-	if err := txn.checkDup(); err != nil {
-		return nil, err
+	pkDedupCount := txn.op.PKDedupCount()
+	if pkDedupCount > 0 && txn.pkCount <= pkDedupCount {
+		if err := txn.checkDup(); err != nil {
+			return nil, err
+		}
 	}
-	//}
 	reqs, err := genWriteReqs(ctx, txn.writes, txn.op.Txn().DebugString())
 	if err != nil {
 		return nil, err
