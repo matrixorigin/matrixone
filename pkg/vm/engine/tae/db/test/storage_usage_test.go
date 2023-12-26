@@ -333,12 +333,16 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	gCollector.UsageMemo = memo
 	defer gCollector.Close()
 
+	gCollector.Usage.ReservedAccIds = make(map[uint32]struct{})
+
 	for idx := range usages {
 		memo.Update(usages[idx], false)
+		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
 	}
 
 	// test memo reply to global ckp
 	{
+
 		logtail.FillUsageBatOfGlobal(gCollector)
 
 		ckpData := gCollector.OrphanData()
