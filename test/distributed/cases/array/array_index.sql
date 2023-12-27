@@ -302,6 +302,21 @@ create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_op
 update tbl set embedding="[1,2,3]" where id="8";
 delete from tbl where id="8";
 
+-- 25. create table with index def
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3), key idx18 using ivfflat (embedding) lists=2 op_type "vector_l2_ops");
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+
+-- 26. Update table add new column
+alter table tbl add column id2 VARCHAR(20);
+update tbl set id2 = id;
 
 -- post
 drop database vecdb2;
