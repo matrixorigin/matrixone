@@ -30,6 +30,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -40,8 +41,10 @@ func Test_StorageUsageCache(t *testing.T) {
 	cache := logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	require.True(t, cache.IsExpired())
 
+	allocator := atomic.Uint64{}
+
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 	for idx := range usages {
 		cache.Update(usages[idx])
 	}
@@ -194,8 +197,9 @@ func mockDeletesAndInserts(
 }
 
 func Test_FillUsageBatOfIncremental(t *testing.T) {
+	allocator := atomic.Uint64{}
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
@@ -309,7 +313,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 		delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
 		//insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 
-		accCol := vector.MustFixedCol[uint32](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		accCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		sizeCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
@@ -326,8 +330,9 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 }
 
 func Test_FillUsageBatOfGlobal(t *testing.T) {
+	allocator := atomic.Uint64{}
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
@@ -360,7 +365,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 			return memo.GetCache().LessFunc()(usages[i], usages[j])
 		})
 
-		accCol := vector.MustFixedCol[uint32](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		sizeCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
@@ -388,10 +393,11 @@ func appendUsageToBatch(bat *containers.Batch, usage logtail.UsageData) {
 }
 
 func Test_EstablishFromCheckpoints(t *testing.T) {
-	version8Cnt, version9Cnt, version10Cnt := 3, 4, 5
+	version8Cnt, version9Cnt, version11Cnt := 3, 4, 5
+	allocator := atomic.Uint64{}
 
-	ckps := make([]*logtail.CheckpointData, version8Cnt+version9Cnt+version10Cnt)
-	vers := make([]uint32, version8Cnt+version9Cnt+version10Cnt)
+	ckps := make([]*logtail.CheckpointData, version8Cnt+version9Cnt+version11Cnt)
+	vers := make([]uint32, version8Cnt+version9Cnt+version11Cnt)
 
 	for idx := 0; idx < version8Cnt; idx++ {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion8, common.DebugAllocator)
@@ -405,7 +411,7 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion9, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 
-		usages := logtail.MockUsageData(10, 10, 10)
+		usages := logtail.MockUsageData(10, 10, 10, &allocator)
 		usageIns = append(usageIns, usages...)
 
 		for xx := range usages {
@@ -416,18 +422,18 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		vers = append(vers, logtail.CheckpointVersion9)
 	}
 
-	for idx := 0; idx < version10Cnt; idx++ {
+	for idx := 0; idx < version11Cnt; idx++ {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion11, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		delBat := data.GetBatches()[logtail.StorageUsageDelIDX]
 
-		usages := logtail.MockUsageData(10, 10, 10)
+		usages := logtail.MockUsageData(10, 10, 10, &allocator)
 		usageIns = append(usageIns, usages...)
 		for xx := range usages {
 			appendUsageToBatch(insBat, usages[xx])
 		}
 
-		usages = logtail.MockUsageData(10, 10, 10)
+		usages = logtail.MockUsageData(10, 10, 10, &allocator)
 		usageDel = append(usageDel, usages...)
 		for xx := range usages {
 			appendUsageToBatch(delBat, usages[xx])
@@ -458,6 +464,9 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	for iter.Next() {
 		usage, exist := memo.Get(iter.Item())
 		require.True(t, exist)
+		//fmt.Println(usage)
+		//fmt.Println(iter.Item())
+		//fmt.Println()
 		require.Equal(t, usage, iter.Item())
 	}
 	iter.Release()
@@ -465,8 +474,9 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 
 func Test_RemoveStaleAccounts(t *testing.T) {
 	// clear stale accounts happens in global ckp
+	allocator := atomic.Uint64{}
 	accCnt, dbCnt, tblCnt := 10000, 2, 2
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
 	gCollector.UsageMemo = logtail.NewTNUsageMemo()
@@ -494,10 +504,11 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 }
 
 func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.CheckpointData, usages [][]logtail.UsageData) {
+	allocator := atomic.Uint64{}
 	for i := 0; i < cnt; i++ {
 		data := logtail.NewCheckpointDataWithVersion(version, common.DebugAllocator)
 
-		usage := logtail.MockUsageData(10, 10, 10)
+		usage := logtail.MockUsageData(10, 10, 10, &allocator)
 		for xx := range usage {
 			appendUsageToBatch(data.GetBatches()[logtail.StorageUsageInsIDX], usage[xx])
 		}
@@ -517,7 +528,7 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 
 	ctlog.SetUsageMemo(memo)
 
-	ckpDatas, usages := mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
+	ckpDatas, _ := mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
 
 	// phase 1: all db/tbl have been deleted
 	{
@@ -550,7 +561,7 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 
 		txn, _ := txnMgr.StartTxn(nil)
 
-		ckpDatas, usages = mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
+		ckpDatas, usages := mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
 
 		for xx := range usages {
 			for yy := range usages[xx] {

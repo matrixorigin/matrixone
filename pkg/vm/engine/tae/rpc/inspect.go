@@ -1104,7 +1104,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 }
 
 func storageTransfer(c *storageUsageHistoryArg) (err error) {
-	err, cnt, size := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
+	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
 	if err != nil {
 		return err
 	}
