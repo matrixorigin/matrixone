@@ -388,7 +388,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 				} else {
 					ts := txn.GetStartTS()
 					rt := chain.mvcc.meta.GetBlockData().GetRuntime()
-					tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
+					tsMapping := rt.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(&chain.mvcc.meta.ID, chain.mvcc.blkID)).Mapping
 					if tsMapping == nil {
 						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
 						return true

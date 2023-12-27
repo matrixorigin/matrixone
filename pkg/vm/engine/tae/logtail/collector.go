@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -380,7 +379,6 @@ func (d *dirtyCollector) tryCompactTree(
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
 		obj *catalog.ObjectEntry
-		blk *catalog.BlockEntry
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
@@ -435,41 +433,30 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				return
 			}
-			for id := range dirtyObj.Blks {
-				bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
-				if blk, err = obj.GetBlockEntryByID(bid); err != nil {
-					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtyObj.Shrink(bid)
-						err = nil
-						continue
-					}
-					return
+			if obj.GetBlockData().RunCalibration() == 0 {
+				// TODO: may be put it to post replay process
+				// FIXME
+				if obj.HasPersistedData() {
+					obj.GetBlockData().TryUpgrade()
 				}
-				if blk.GetBlockData().RunCalibration() == 0 {
-					// TODO: may be put it to post replay process
-					// FIXME
-					if blk.HasPersistedData() {
-						blk.GetBlockData().TryUpgrade()
-					}
-					dirtyObj.Shrink(bid)
+				dirtyTable.Shrink(id)
+				continue
+			}
+			if !obj.IsAppendable() {
+				newFrom := from
+				if lastFlush.Greater(newFrom) {
+					newFrom = lastFlush
+				}
+				// sometimes, delchain is no cleared after flushing table tail.
+				// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
+				found, _ := obj.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
+				if !found {
+					dirtyTable.Shrink(id)
 					continue
 				}
-				if !blk.IsAppendable() {
-					newFrom := from
-					if lastFlush.Greater(newFrom) {
-						newFrom = lastFlush
-					}
-					// sometimes, delchain is no cleared after flushing table tail.
-					// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
-					found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
-					if !found {
-						dirtyObj.Shrink(bid)
-						continue
-					}
-				}
-				if err = interceptor.OnBlock(blk); err != nil {
-					return
-				}
+			}
+			if err = interceptor.OnObject(obj); err != nil {
+				return
 			}
 		}
 	}

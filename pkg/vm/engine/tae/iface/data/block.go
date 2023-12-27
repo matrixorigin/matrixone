@@ -56,7 +56,7 @@ type BlockAppender interface {
 }
 
 type BlockReplayer interface {
-	OnReplayDelete(blkID uint16,node txnif.DeleteNode) (err error)
+	OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
@@ -84,14 +84,14 @@ type Block interface {
 	GetMeta() any
 
 	MakeAppender() (BlockAppender, error)
-	RangeDelete(txn txnif.AsyncTxn,blkID uint16, start, end uint32, pk containers.Vector, dt handle.DeleteType) (txnif.DeleteNode, error)
-	TryDeleteByDeltaloc(txn txnif.AsyncTxn,blkID uint16, deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error)
+	RangeDelete(txn txnif.AsyncTxn, blkID uint16, start, end uint32, pk containers.Vector, dt handle.DeleteType) (txnif.DeleteNode, error)
+	TryDeleteByDeltaloc(txn txnif.AsyncTxn, blkID uint16, deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error)
 
 	GetTotalChanges() int
 	CollectChangesInRange(ctx context.Context, blkID uint16, startTs, endTs types.TS, mp *mpool.MPool) (*containers.BlockView, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
-	HasDeleteIntentsPreparedIn(blkID uint16, from, to types.TS) (bool, bool)
+	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
 
 	// check if all rows are committed before ts
 	// NOTE: here we assume that the block is visible to the ts
@@ -134,8 +134,9 @@ type Block interface {
 	Init() error
 	TryUpgrade() error
 	GCInMemeoryDeletesByTS(types.TS)
+	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
-	CollectDeleteInRange(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
+	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

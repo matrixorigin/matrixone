@@ -202,6 +202,7 @@ func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	opts *objectio.CreateObjOpt,
+	dataFactory BlockDataFactory,
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
@@ -211,7 +212,7 @@ func (entry *TableEntry) CreateObject(
 	} else {
 		id = objectio.NewObjectid()
 	}
-	created = NewObjectEntry(entry, id, txn, state)
+	created = NewObjectEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)
 	return
 }

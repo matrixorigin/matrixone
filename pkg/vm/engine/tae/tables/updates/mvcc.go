@@ -15,6 +15,7 @@
 package updates
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -427,6 +428,15 @@ func (n *ObjectMVCCHandle) GetDeleteCnt() uint32 {
 		cnt += deletes.GetDeleteCnt()
 	}
 	return cnt
+}
+func (n *ObjectMVCCHandle) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
+	for _, deletes := range n.deletes {
+		found, isPersist = deletes.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+		if found {
+			return
+		}
+	}
+	return
 }
 
 type DeltalocChain struct {

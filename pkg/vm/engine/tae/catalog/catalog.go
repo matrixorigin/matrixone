@@ -546,9 +546,15 @@ func (catalog *Catalog) onReplayUpdateObject(
 			node.BaseNode.Update(un.BaseNode)
 		}
 	}
+	if obj.blkData == nil {
+		obj.blkData = dataFactory.MakeBlockFactory()(obj)
+	} else {
+		obj.blkData.TryUpgrade()
+		obj.blkData.UpgradeAllDeleteChain()
+	}
 }
 
-func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
+func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
 	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < dbidVec.Length(); i++ {
 		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -562,7 +568,7 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
 		if !state {
 			entryState = ES_NotAppendable
 		}
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState)
+		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
 	}
 }
 
@@ -573,6 +579,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
 	state EntryState,
+	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -607,6 +614,12 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	} else {
 		node.BaseNode.Update(un.BaseNode)
 	}
+	if obj.blkData == nil {
+		obj.blkData = dataFactory.MakeBlockFactory()(obj)
+	} else {
+		obj.blkData.TryUpgrade()
+		obj.blkData.UpgradeAllDeleteChain()
+	}
 }
 
 // Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
@@ -630,7 +643,7 @@ func (catalog *Catalog) replayObjectByBlock(
 			obj = NewObjectEntryByMetaLocation(
 				tbl,
 				ObjectID,
-				start, end, state, metaLocation)
+				start, end, state, metaLocation, dataFactory.MakeBlockFactory())
 			tbl.AddEntryLocked(obj)
 		}
 	}
@@ -654,6 +667,12 @@ func (catalog *Catalog) replayObjectByBlock(
 			obj.Insert(node)
 			node.DeletedAt = end
 		}
+	}
+	if obj.blkData == nil {
+		obj.blkData = dataFactory.MakeBlockFactory()(obj)
+	} else {
+		obj.blkData.TryUpgrade()
+		obj.blkData.UpgradeAllDeleteChain()
 	}
 }
 func (catalog *Catalog) onReplayUpdateBlock(

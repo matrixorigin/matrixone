@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -45,7 +45,7 @@ type ObjectEntry struct {
 	//link.head and tail is nil when new a ObjectEntry object.
 	link *common.GenericSortedDList[*BlockEntry]
 	*ObjectNode
-	pkZM atomic.Pointer[index.ZM]
+	blkData data.Block
 }
 
 type ObjStat struct {
@@ -108,7 +108,13 @@ func (s *ObjStat) String(composeSortKey bool) string {
 	)
 }
 
-func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn, state EntryState) *ObjectEntry {
+func NewObjectEntry(
+	table *TableEntry,
+	id *objectio.ObjectId,
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -123,10 +129,20 @@ func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn
 	}
 	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
 	e.Stat.entry = e
+	if dataFactory != nil {
+		e.blkData = dataFactory(e)
+	}
 	return e
 }
 
-func NewObjectEntryByMetaLocation(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, metalocation objectio.Location) *ObjectEntry {
+func NewObjectEntryByMetaLocation(
+	table *TableEntry,
+	id *objectio.ObjectId,
+	start, end types.TS,
+	state EntryState,
+	metalocation objectio.Location,
+	dataFactory BlockDataFactory,
+) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -142,6 +158,9 @@ func NewObjectEntryByMetaLocation(table *TableEntry, id *objectio.ObjectId, star
 	}
 	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
 	e.Stat.entry = e
+	if dataFactory != nil {
+		e.blkData = dataFactory(e)
+	}
 	return e
 }
 
@@ -204,6 +223,10 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	return e
 }
 
+func (entry *ObjectEntry) HasPersistedData() bool {
+	return entry.ObjectPersisted()
+}
+func (entry *ObjectEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	entry.RLock()
 	defer entry.RUnlock()

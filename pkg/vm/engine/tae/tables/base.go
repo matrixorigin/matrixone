@@ -105,6 +105,10 @@ func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
 	blk.mvcc.UpgradeDeleteChainByTS(ts)
 }
 
+func (blk *baseBlock) UpgradeAllDeleteChain() {
+	blk.mvcc.UpgradeAllDeleteChain()
+}
+
 func (blk *baseBlock) Rows() int {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -647,14 +651,10 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(blkID uint16, from, to types.TS) (found, isPersist bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
-	if mvcc == nil {
-		return
-	}
-	return mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	return blk.mvcc.HasDeleteIntentsPreparedIn(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(
@@ -684,34 +684,41 @@ func (blk *baseBlock) inMemoryCollectDeletesInRange(blkID uint16, start, end typ
 
 func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
-	blkID uint16,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
-		ctx,
-		blkID,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
-	if err != nil {
-		return
+	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
+		deletes, minTS, err := blk.inMemoryCollectDeleteInRange(
+			ctx,
+			blkID,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !minTS.IsEmpty() && end.Greater(minTS) {
+			end = minTS.Prev()
+		}
+		deletes, err = blk.persistedCollectDeleteInRange(
+			ctx,
+			deletes,
+			blkID,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+		if bat == nil {
+			bat = deletes
+		} else {
+			bat.Extend(deletes)
+			deletes.Close()
+		}
 	}
-	if !minTS.IsEmpty() && end.Greater(minTS) {
-		end = minTS.Prev()
-	}
-	bat, err = blk.persistedCollectDeleteInRange(
-		ctx,
-		bat,
-		blkID,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
 	return
 }
 
