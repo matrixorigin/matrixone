@@ -359,5 +359,19 @@ create index idx20 using ivfflat on tbl(data) lists=2 op_type "vector_l2_ops";
 insert into tbl values(6, NULL);
 insert into tbl values(7, "[130,40,90]");
 
+-- 30. create index with totalCnt < k
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+create index idx21 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+
+-- 31. create index with totalCnt = 0
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+create index idx22 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+
 -- post
 drop database vecdb2;
