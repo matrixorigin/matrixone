@@ -332,3 +332,11 @@ select * from fk_02;
 update fk_01 set col2='d' where col1=6.0;
 select * from fk_01;
 select * from fk_02;
+
+set autocommit=0;
+create table t1(a int primary key);
+insert into t1 values (1);
+create table t2(id int primary key, a int, CONSTRAINT `t1_a` FOREIGN KEY (`a`) REFERENCES `t1` (`a`) ON DELETE CASCADE ON UPDATE RESTRICT);
+insert into t2 values (1,1);
+commit;
+set autocommit=1;
