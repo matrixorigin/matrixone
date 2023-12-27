@@ -14,3 +14,4 @@ select * from reference;
 reference
 1
 2
+create table tt2(BINDINGS int, IVFFLAT int, JSONTYPE int, DISCARD int, LOCKS int, PREV int, SLIDING int, MODUMP int, PRECEDING int, FOLLOWING int, FILL int, HANDLER int, SAMPLE int, PERCENT int);
