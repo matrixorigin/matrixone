@@ -2559,7 +2559,7 @@ func (data *CheckpointData) readAll(
 }
 
 func (data *CheckpointData) ExportStats(prefix string) []zap.Field {
-	var fields []zap.Field
+	fields := make([]zap.Field, 0, len(data.bats)+2)
 	totalSize := 0
 	totalRow := 0
 	for idx := range data.bats {
