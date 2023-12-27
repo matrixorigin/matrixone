@@ -1115,20 +1115,27 @@ func makeInsertPlan(
 					return err
 				}
 
-				originTableMessageForFuzzy := &OriginTableMessageForFuzzy{
-					ParentTableName: tableDef.Name,
-				}
-				partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
-				set := make(map[string]int)
-				for i, n := range indexdef.Parts {
-					set[n] = i
-				}
-				for _, c := range tableDef.Cols { // sort
-					if i, ok := set[c.Name]; ok {
-						partialUniqueCols[i] = c
+				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
+
+				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
+				// with the primary key of the hidden table as the unique key.
+				// package contains some information needed by the fuzzy filter to run background SQL.
+				if indexdef.GetUnique() == true {
+					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
+						ParentTableName: tableDef.Name,
 					}
+					partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
+					set := make(map[string]int)
+					for i, n := range indexdef.Parts {
+						set[n] = i
+					}
+					for _, c := range tableDef.Cols { // sort
+						if i, ok := set[c.Name]; ok {
+							partialUniqueCols[i] = c
+						}
+					}
+					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 				}
-				originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
