@@ -157,6 +157,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		errPhase string
 		start    types.TS
 		fatal    bool
+		fields   []zap.Field
 	)
 
 	if prev != nil {
@@ -183,10 +184,11 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 				zap.Duration("cost", time.Since(now)),
 			)
 		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
 				"Checkpoint-End-Force",
-				zap.String("entry", entry.String()),
-				zap.Duration("cost", time.Since(now)),
+				fields...,
 			)
 		}
 	}()
@@ -195,7 +197,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	r.storage.entries.Set(entry)
 	r.storage.Unlock()
 
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
+	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return err
 	}
@@ -248,7 +250,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.storage.entries.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
+	if _, err = r.doIncrementalCheckpoint(entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64

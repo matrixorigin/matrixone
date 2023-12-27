@@ -391,6 +391,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		lsnToTruncate uint64
 		lsn           uint64
 		fatal         bool
+		fields        []zap.Field
 	)
 	now = time.Now()
 
@@ -415,18 +416,19 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 				zap.Duration("cost", time.Since(now)),
 			)
 		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
+			fields = append(fields, zap.Uint64("lsn", lsn))
+			fields = append(fields, zap.Uint64("reserve", r.options.reservedWALEntryCount))
+			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
 				"Checkpoint-End",
-				zap.String("entry", entry.String()),
-				zap.Duration("cost", time.Since(now)),
-				zap.Uint64("truncate", lsnToTruncate),
-				zap.Uint64("lsn", lsn),
-				zap.Uint64("reserve", r.options.reservedWALEntryCount),
+				fields...,
 			)
 		}
 	}()
 
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
+	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
 		return
 	}
@@ -542,12 +544,13 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
 	}
+	fields = data.ExportStats("")
 	defer data.Close()
 	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
@@ -583,7 +586,10 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string,
 func (r *runner) doGlobalCheckpoint(
 	end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration,
 ) (entry *CheckpointEntry, err error) {
-	var errPhase string
+	var (
+		errPhase string
+		fields   []zap.Field
+	)
 	now := time.Now()
 
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
@@ -605,10 +611,11 @@ func (r *runner) doGlobalCheckpoint(
 				zap.Duration("cost", time.Since(now)),
 			)
 		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.String("entry", entry.String()))
 			logutil.Info(
 				"Checkpoint-End",
-				zap.String("entry", entry.String()),
-				zap.Duration("cost", time.Since(now)),
+				fields...,
 			)
 		}
 	}()
@@ -619,6 +626,7 @@ func (r *runner) doGlobalCheckpoint(
 		errPhase = "collect"
 		return
 	}
+	fields = data.ExportStats("")
 	defer data.Close()
 
 	cnLocation, tnLocation, _, err := data.WriteTo(
