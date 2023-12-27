@@ -474,7 +474,8 @@ func BackupCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (
 
 func GlobalCheckpointDataFactory(
 	end types.TS,
-	versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+	versionInterval time.Duration,
+) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
