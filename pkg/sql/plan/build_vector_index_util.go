@@ -208,7 +208,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	return crossJoinTblAndCentroidsId
 }
 
-func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32, err error) (int32, error) {
+func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32) (int32, error) {
 	// 5. partition by tbl.pk
 	projections := getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
 	lastTag := builder.genNewTag()

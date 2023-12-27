@@ -2469,7 +2469,7 @@ func appendPreInsertSkVectorPlan(
 	// 5. partition by tbl.pk
 	// 6. Window operation
 	// 7. Filter records where row_number() = 1
-	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID, err)
+	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID)
 	if err != nil {
 		return -1, err
 	}
