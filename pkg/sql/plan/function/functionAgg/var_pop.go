@@ -257,7 +257,7 @@ func (s *VarianceDecimal) FillD64(groupNumber int64, v types.Decimal64, lastResu
 		return lastResult, false, nil
 	}
 	if s.ErrOne[groupNumber] {
-		err = moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+		err = moerr.NewInternalErrorNoCtx("Decimal64 overflowed")
 	}
 	return lastResult, false, err
 }
@@ -285,7 +285,7 @@ func (s *VarianceDecimal) FillD128(groupNumber int64, v types.Decimal128, lastRe
 		return lastResult, false, nil
 	}
 	if s.ErrOne[groupNumber] {
-		err = moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+		err = moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	}
 	return lastResult, false, err
 }
@@ -307,7 +307,7 @@ func (s *VarianceDecimal) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 
 	if s.Counts[groupNumber1] > 1 {
 		if s.ErrOne[groupNumber1] || s2.ErrOne[groupNumber2] {
-			return result1, false, moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+			return result1, false, moerr.NewInternalErrorNoCtx("Decimal overflowed during merge")
 		}
 	}
 
