@@ -34,6 +34,10 @@ var (
 	defaultRebalanceInterval = 30 * time.Second
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
+	// The default value of connect timeout.
+	defaultConnectTimeout = time.Second * 3
+	// The default value of handshake auth timeout.
+	defaultAuthTimeout = time.Second * 10
 )
 
 // Config is the configuration of proxy server.
@@ -48,6 +52,14 @@ type Config struct {
 	// Connections above the avg*(1+tolerance) will be migrated to
 	// other CN servers. This value should be less than 1.
 	RebalanceToerance float64 `toml:"rebalance-tolerance"`
+	// ConnectTimeout is the timeout duration when proxy connects to backend
+	// CN servers. If proxy connects to cn timeout, it will return a retryable
+	// error and try to connect to other cn servers.
+	ConnectTimeout toml.Duration `toml:"connect-timeout" user_setting:"advanced"`
+	// AuthTimeout is the timeout duration when proxy handshakes with backend
+	// CN servers. If proxy handshakes with cn timeout, it will return a retryable
+	// error and try to connect to other cn servers.
+	AuthTimeout toml.Duration `toml:"auth-timeout" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
@@ -134,6 +146,12 @@ func WithTLSKeyFile(f string) Option {
 func (c *Config) FillDefault() {
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
+	}
+	if c.ConnectTimeout.Duration == 0 {
+		c.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.AuthTimeout.Duration == 0 {
+		c.AuthTimeout.Duration = defaultAuthTimeout
 	}
 	if c.RebalanceInterval.Duration == 0 {
 		c.RebalanceInterval.Duration = defaultRebalanceInterval
