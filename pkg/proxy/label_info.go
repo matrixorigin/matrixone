@@ -106,9 +106,9 @@ func (l *labelInfo) isSuperTenant() bool {
 }
 
 // genSelector generates the label selector according to labels in labelInfo.
-func (l *labelInfo) genSelector() clusterservice.Selector {
+func (l *labelInfo) genSelector(op clusterservice.Op) clusterservice.Selector {
 	return clusterservice.NewSelector().SelectByLabel(
-		l.allLabels(), clusterservice.EQ,
+		l.allLabels(), op,
 	)
 }
 
