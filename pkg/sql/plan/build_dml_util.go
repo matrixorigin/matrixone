@@ -2419,7 +2419,7 @@ func appendPreInsertSkVectorPlan(
 	-----------------------------------------------------------------------------------------------------------------------------
 	*/
 
-	//1. get vector & pk column details
+	//1.a get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn *Type
 	{
@@ -2440,6 +2440,9 @@ func appendPreInsertSkVectorPlan(
 
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
+
+	//1.b Handle mo_cp_key
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
 
 	// 2. scan meta table to find the `current version` number
 	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
@@ -2490,33 +2493,7 @@ func appendPreInsertSkVectorPlan(
 	return sourceStep, nil
 }
 
-// appendPreInsertUkPlan  build preinsert plan.
-// sink_scan -> preinsert_uk -> sink
-func appendPreInsertUkPlan(
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	tableDef *TableDef,
-	lastNodeId int32,
-	indexIdx int,
-	isUpddate bool,
-	uniqueTableDef *TableDef,
-	isUK bool) (int32, error) {
-	var useColumns []int32
-	idxDef := tableDef.Indexes[indexIdx]
-	colsMap := make(map[string]int)
-
-	for i, col := range tableDef.Cols {
-		colsMap[col.Name] = i
-	}
-	for _, part := range idxDef.Parts {
-		part = catalog.ResolveAlias(part)
-		if i, ok := colsMap[part]; ok {
-			useColumns = append(useColumns, int32(i))
-		}
-	}
-
-	pkColumn, originPkType := getPkPos(tableDef, false)
-	//------------------------------------------------------------------------------------------
+func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -2561,7 +2538,7 @@ func appendPreInsertUkPlan(
 				}
 			}
 			compkey, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-			projectProjection[pkColumn] = compkey
+			projectProjection[posOriginPk] = compkey
 		} else {
 			pkPos := -1
 			for i, coldef := range tableDef.Cols {
@@ -2571,7 +2548,7 @@ func appendPreInsertUkPlan(
 				}
 			}
 			if pkPos != -1 {
-				projectProjection[pkColumn] = &plan.Expr{
+				projectProjection[posOriginPk] = &plan.Expr{
 					Typ: lastProject[pkPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -2590,7 +2567,41 @@ func appendPreInsertUkPlan(
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
-	//------------------------------------------------------------------------------------------
+	return lastNodeId
+}
+
+// appendPreInsertUkPlan  build preinsert plan.
+// sink_scan -> preinsert_uk -> sink
+func appendPreInsertUkPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	indexIdx int,
+	isUpddate bool,
+	uniqueTableDef *TableDef,
+	isUK bool) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
+
+	var useColumns []int32
+	idxDef := tableDef.Indexes[indexIdx]
+	colsMap := make(map[string]int)
+
+	for i, col := range tableDef.Cols {
+		colsMap[col.Name] = i
+	}
+	for _, part := range idxDef.Parts {
+		part = catalog.ResolveAlias(part)
+		if i, ok := colsMap[part]; ok {
+			useColumns = append(useColumns, int32(i))
+		}
+	}
+
+	pkColumn, originPkType := getPkPos(tableDef, false)
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {
@@ -2703,6 +2714,10 @@ func appendDeleteUniqueTablePlan(
 	baseNodeId int32,
 	isUK bool,
 ) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNode(builder, lastNodeId)
