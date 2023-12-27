@@ -116,8 +116,8 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	} else {
 		panic("not supported")
 	}
-	Object := NewSysObjectEntry(e, sid)
-	e.AddEntryLocked(Object)
+	objectEntry := NewSysObjectEntry(e, sid)
+	e.AddEntryLocked(objectEntry)
 	return e
 }
 
@@ -229,17 +229,17 @@ func (entry *TableEntry) Set1PC() {
 func (entry *TableEntry) Is1PC() bool {
 	return entry.GetLatestNodeLocked().Is1PC()
 }
-func (entry *TableEntry) AddEntryLocked(Object *ObjectEntry) {
-	n := entry.link.Insert(Object)
-	entry.entries[Object.ID] = n
+func (entry *TableEntry) AddEntryLocked(objectEntry *ObjectEntry) {
+	n := entry.link.Insert(objectEntry)
+	entry.entries[objectEntry.ID] = n
 }
 
-func (entry *TableEntry) deleteEntryLocked(Object *ObjectEntry) error {
-	if n, ok := entry.entries[Object.ID]; !ok {
+func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
+	if n, ok := entry.entries[objectEntry.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
-		delete(entry.entries, Object.ID)
+		delete(entry.entries, objectEntry.ID)
 	}
 	return nil
 }
@@ -299,9 +299,9 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	}
 	it := entry.MakeObjectIt(true)
 	for it.Valid() {
-		Object := it.Get().GetPayload()
+		objectEntry := it.Get().GetPayload()
 		_ = w.WriteByte('\n')
-		_, _ = w.WriteString(Object.PPString(level, depth+1, prefix))
+		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
 		it.Next()
 	}
 	return w.String()
@@ -324,23 +324,23 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w by
 	}
 
 	for ; it.Valid(); it.Next() {
-		Object := it.Get().GetPayload()
-		if !Object.IsActive() {
+		objectEntry := it.Get().GetPayload()
+		if !objectEntry.IsActive() {
 			continue
 		}
 		stat.ObjectCnt += 1
-		if Object.Stat.GetLoaded() {
+		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
-			stat.Rows += int(Object.Stat.GetRows())
-			stat.OSize += int(Object.Stat.GetOriginSize())
-			stat.Csize += int(Object.Stat.GetCompSize())
+			stat.Rows += int(objectEntry.GetRows())
+			stat.OSize += int(objectEntry.GetOriginSize())
+			stat.Csize += int(objectEntry.GetCompSize())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(Object.ID.String())
+			_, _ = w.WriteString(objectEntry.ID.String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
-			_, _ = w.WriteString(Object.Stat.String(composeSortKey))
+			_, _ = w.WriteString(objectEntry.StatsString(composeSortKey))
 		}
 		if w.Len() > 8*common.Const1MBytes {
 			w.WriteString("\n...(truncated for too long, more than 8 MB)")
@@ -428,15 +428,15 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	}()
 	objIt := entry.MakeObjectIt(true)
 	for objIt.Valid() {
-		Object := objIt.Get().GetPayload()
-		if err := processor.OnObject(Object); err != nil {
+		objectEntry := objIt.Get().GetPayload()
+		if err := processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				objIt.Next()
 				continue
 			}
 			return err
 		}
-		blkIt := Object.MakeBlockIt(true)
+		blkIt := objectEntry.MakeBlockIt(true)
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
 			if err := processor.OnBlock(block); err != nil {
@@ -448,7 +448,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			blkIt.Next()
 		}
-		if err := processor.OnPostObject(Object); err != nil {
+		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 		objIt.Next()
@@ -477,13 +477,13 @@ func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn)
 	return
 }
 
-func (entry *TableEntry) RemoveEntry(Object *ObjectEntry) (err error) {
+func (entry *TableEntry) RemoveEntry(objectEntry *ObjectEntry) (err error) {
 	logutil.Debug("[Catalog]", common.OperationField("remove"),
-		common.OperandField(Object.String()))
-	// Object.Close()
+		common.OperandField(objectEntry.String()))
+	// objectEntry.Close()
 	entry.Lock()
 	defer entry.Unlock()
-	return entry.deleteEntryLocked(Object)
+	return entry.deleteEntryLocked(objectEntry)
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {

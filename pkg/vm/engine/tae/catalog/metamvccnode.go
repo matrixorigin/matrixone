@@ -189,6 +189,8 @@ type ObjectNode struct {
 	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
+
+	remainingRows int
 }
 
 const (
