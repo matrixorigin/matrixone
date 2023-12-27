@@ -95,7 +95,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "hashbuild.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

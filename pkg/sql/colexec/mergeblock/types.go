@@ -66,7 +66,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "mergeblock.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

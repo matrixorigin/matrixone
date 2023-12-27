@@ -32,6 +32,8 @@ const (
 	rowIdColPos
 )
 
+const argName = "pre_insert_unique"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert unique key")
 }

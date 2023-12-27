@@ -68,6 +68,8 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
+const argName = "external"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("external output")
 }

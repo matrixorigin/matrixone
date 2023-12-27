@@ -95,7 +95,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "semi.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

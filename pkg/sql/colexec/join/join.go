@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" inner join ")
 }

@@ -63,7 +63,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "mergetop.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

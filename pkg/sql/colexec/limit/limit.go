@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "limit"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("limit(%v)", arg.Limit))
 }

@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "fill"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("fill")
 }

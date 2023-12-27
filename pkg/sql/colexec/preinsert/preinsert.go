@@ -29,6 +29,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const argName = "preinsert"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert")
 }

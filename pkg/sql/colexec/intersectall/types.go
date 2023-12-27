@@ -72,7 +72,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "intersectall.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

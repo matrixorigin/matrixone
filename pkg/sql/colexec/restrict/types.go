@@ -49,7 +49,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "restrict.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

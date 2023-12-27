@@ -52,7 +52,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "group_concat.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

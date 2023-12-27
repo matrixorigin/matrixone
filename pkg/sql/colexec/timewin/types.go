@@ -126,7 +126,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "timewin.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {
