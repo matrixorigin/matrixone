@@ -2396,27 +2396,63 @@ func appendPreInsertSkVectorPlan(
 	idxRefs []*ObjectRef,
 	indexTableDefs []*TableDef) (int32, error) {
 
-	/* 	The overall plan
-	----------------------------------------------------------------------------------------------------------------------------
-	| Insert on db.entries												                                                        |
-	|   ->  Lock                                                                                                                |
-	|         ->  Sort                                                                                                          |
-	|               Sort Key: l2_distance(__mo_index_centroid, embedding) ASC                                                   |
-	|               Limit: 1                                                                                                    |
-	|               ->  Join                                                                                                    |
-	|                     Join Type: INNER                                                                                      |
-	|                     ->  Sink Scan                                                                                         |
-	|                           DataSource: Plan 0                                                                              |
-	|                     ->  Filter                                                                                            |
-	|                           Filter Cond: (centroids.__mo_index_centroid_version = cast(meta.'__mo_index_value' as bigint))  |
-	|                           ->  Join                                                                                        |
-	|                                 Join Type: SINGLE                                                                         |
-	|                                 ->  Table Scan on db.centroids											                |
-	|                                 ->  Project                                                                               |
-	|                                       ->  Filter                                                                          |
-	|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
-	|                                             ->  Table Scan on db.meta													    |
-	-----------------------------------------------------------------------------------------------------------------------------
+	/*
+		### Sample SQL:
+		create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id));
+		insert into tbl values("1", "10", "[1,2,3]");
+		insert into tbl values("2", "20", "[1,2,4]");
+		insert into tbl values("3", "30", "[1,2.4,4]");
+		insert into tbl values("4", "40", "[1,2,5]");
+		insert into tbl values("5", "50", "[1,3,5]");
+		insert into tbl values("6", "60", "[100,44,50]");
+		insert into tbl values("7", "70", "[120,50,70]");
+		insert into tbl values("8", "80", "[130,40,90]");
+
+		create table centroids (`__mo_index_centroid_version` BIGINT NOT NULL, `__mo_index_centroid_id` BIGINT NOT NULL, `__mo_index_centroid` VECF32(3) DEFAULT NULL, PRIMARY KEY (`__mo_index_centroid_version`,`__mo_index_centroid_id`));
+		insert into centroids values(0,1,"[1,2,3]");
+		insert into centroids values(0,2,"[130,40,90]");
+
+		select
+		`__mo_index_centroid_version`,
+		`__mo_index_centroid_id`,
+		`id`
+		from
+		(select
+		`centroids`.`__mo_index_centroid_version`,
+		`centroids`.`__mo_index_centroid_id`,
+		`tbl`.`id`,
+		ROW_NUMBER() OVER (PARTITION BY `tbl`.`id` ORDER BY l2_distance(`centroids`.`__mo_index_centroid`, tbl.embedding) ) as `__mo_index_rn`
+		from
+		tbl cross join (select * from `centroids` where `__mo_index_centroid_version` = 0) as `centroids`)
+		where `__mo_index_rn` =1;
+
+		### Corresponding Plan
+		----------------------------------------------------------------------------------------------------------------------------------------------
+		| Plan 2:                                                                                                                                     |
+		| Insert on a.entries												                                                                          |
+		|   ->  Lock                                                                                                                                  |
+		|         ->  Project                                                                                                                         |
+		|               ->  Filter                                                                                                                    |
+		|                     Filter Cond: (#[0,3] = 1)                                                                                               |
+		|                     ->  Window                                                                                                              |
+		|                           Window Function: row_number(); Partition By: id; Order By: l2_distance(__mo_index_centroid, data)                 |
+		|                           ->  Partition                                                                                                     |
+		|                                 Sort Key: id INTERNAL                                                                                       |
+		|                                 ->  Join                                                                                                    |
+		|                                       Join Type: INNER                                                                                      |
+		|                                       ->  Project                                                                                           |
+		|                                             ->  Sink Scan                                                                                   |
+		|                                                   DataSource: Plan 0                                                                        |
+		|                                       ->  Filter                                                                                            |
+		|                                             Filter Cond: (__mo_index_centroid_version = #[0,3])                                             |
+		|                                             ->  Join                                                                                        |
+		|                                                   Join Type: SINGLE                                                                         |
+		|                                                   ->  Table Scan on a.centroids             												  |
+		|                                                   ->  Project                                                                               |
+		|                                                         ->  Filter                                                                          |
+		|                                                               Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
+		|                                                               ->  Table Scan on a.meta 													  |
+			------------------------------------------------------------------------------------------------------------------------------------------
 	*/
 
 	//1.a get vector & pk column details
