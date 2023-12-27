@@ -6,7 +6,6 @@ package mock_frontend
 
 import (
 	context "context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
