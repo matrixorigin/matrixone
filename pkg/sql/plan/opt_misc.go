@@ -985,12 +985,12 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	}
 
 	if len(hashCols) == 0 {
-		return 0
+		return 0.0001
 	}
 
 	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
 	if tableDef == nil {
-		return 0
+		return 0.0001
 	}
 	hashColPos := make([]int32, len(hashCols))
 	for i := range hashCols {
