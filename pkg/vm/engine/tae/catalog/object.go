@@ -117,12 +117,12 @@ func NewObjectEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}
-	e.CreateWithTxn(txn, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
 	e.Stat.entry = e
 	return e
 }
 
-func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState) *ObjectEntry {
+func NewObjectEntryByMetaLocation(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, metalocation objectio.Location) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -136,7 +136,7 @@ func NewObjectEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end
 			SortHint: table.GetDB().catalog.NextObject(),
 		},
 	}
-	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{*objectio.NewObjectStats()})
+	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
 	e.Stat.entry = e
 	return e
 }
@@ -234,7 +234,7 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 			lastNode = n
 		}
 	}
-	if !lastNode.BaseNode.ObjectStats.IsZero() {
+	if !lastNode.BaseNode.IsEmpty() {
 		return
 	}
 	blk = entry.GetFirstBlkEntry()
@@ -258,7 +258,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	blk := entry.GetFirstBlkEntry()
 	// for gc in test
 	if blk == nil {
-		return *objectio.NewObjectStats(), nil
+		return stats, nil
 	}
 	blk.RLock()
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
@@ -273,7 +273,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 
 	entry.RLock()
 	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
-		if !n.BaseNode.ObjectStats.IsZero() {
+		if !n.BaseNode.IsEmpty() {
 			stats = *n.BaseNode.ObjectStats.Clone()
 			return false
 		}
@@ -723,4 +723,23 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	terminated, ts = tableEntry.TryGetTerminatedTS(true)
 	tableEntry.RUnlock()
 	return
+}
+
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsSize(stats, uint32(size))
+	// to make sure pass the stats empty check
+	objectio.SetObjectStatsRowCnt(stats, uint32(1))
+
+	e := &ObjectEntry{
+		BaseEntryImpl: NewBaseEntry(
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
+		table:      tbl,
+		link:       common.NewGenericSortedDList((*BlockEntry).Less),
+		entries:    make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		ObjectNode: &ObjectNode{},
+	}
+	e.CreateWithTS(types.BuildTS(time.Now().UnixNano(), 0), &ObjectMVCCNode{*stats})
+	e.Stat.entry = e
+	return e
 }

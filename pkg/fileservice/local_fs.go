@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -725,7 +726,27 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 			return err
 		}
 	}
-	return nil
+
+	return errors.Join(
+		func() error {
+			if l.memCache == nil {
+				return nil
+			}
+			return l.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if l.diskCache == nil {
+				return nil
+			}
+			return l.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if l.remoteCache == nil {
+				return nil
+			}
+			return l.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
