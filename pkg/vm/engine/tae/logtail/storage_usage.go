@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -29,6 +30,7 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -89,7 +91,7 @@ const (
 const StorageUsageMagic uint64 = 0x1A2B3C4D5E6F
 
 type UsageData struct {
-	AccId uint32
+	AccId uint64
 	DbId  uint64
 	TblId uint64
 	Size  uint64
@@ -98,20 +100,21 @@ type UsageData struct {
 var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.MaxUint64, math.MaxInt64}
 
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
-// the accIds, dbIds and tblIds are random produced
-func MockUsageData(accCnt, dbCnt, tblCnt int) (result []UsageData) {
+// the accIds, dbIds and tblIds are random produced.
+// this func ensure that all ids are different.
+func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result []UsageData) {
 	for x := 0; x < accCnt; x++ {
-		accId := rand.Uint32()
+		accId := allocator.Add(1)
 
 		for y := 0; y < dbCnt; y++ {
-			dbId := rand.Uint64()
+			dbId := allocator.Add(1)
 
 			for z := 0; z < tblCnt; z++ {
 				result = append(result, UsageData{
 					AccId: accId,
 					DbId:  dbId,
-					TblId: rand.Uint64(),
-					Size:  uint64(rand.Int63() % 0x3ffff),
+					TblId: allocator.Add(1),
+					Size:  uint64(rand.Int63() % 0x3fff),
 				})
 			}
 		}
@@ -234,8 +237,8 @@ func (c *StorageUsageCache) ClearForUpdate() {
 	c.data.Clear()
 }
 
-func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint32]uint64) {
-	usages = make(map[uint32]uint64)
+func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint64]uint64) {
+	usages = make(map[uint64]uint64)
 	c.data.Scan(func(item UsageData) bool {
 		usages[item.AccId] += item.Size
 		return true
@@ -244,7 +247,7 @@ func (c *StorageUsageCache) GatherAllAccSize() (usages map[uint32]uint64) {
 	return
 }
 
-func (c *StorageUsageCache) GatherAccountSize(id uint32) (size uint64, exist bool) {
+func (c *StorageUsageCache) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	iter := c.data.Iter()
 	defer iter.Release()
 
@@ -278,12 +281,13 @@ func (c *StorageUsageCache) Delete(usage UsageData) {
 
 type TNUsageMemo struct {
 	sync.Mutex
-	cache    *StorageUsageCache
+	cache *StorageUsageCache
+	// has update
 	pending  bool
 	reqTrace []struct {
 		hint      string
 		timeStamp time.Time
-		accountId uint32
+		accountId uint64
 		totalSize uint64
 	}
 
@@ -308,6 +312,10 @@ func (m *TNUsageMemo) PrepareReplay(datas []*CheckpointData, vers []uint32) {
 	m.pendingReplay.vers = vers
 }
 
+func (m *TNUsageMemo) GetDelayed() map[uint64]UsageData {
+	return m.pendingReplay.delayed
+}
+
 func (m *TNUsageMemo) GetNewAccCacheLatestUpdate() types.TS {
 	return types.BuildTS(m.newAccCache.lastUpdate.UnixNano(), 0)
 }
@@ -320,12 +328,12 @@ func (m *TNUsageMemo) ClearNewAccCache() {
 	m.newAccCache.ClearForUpdate()
 }
 
-func (m *TNUsageMemo) AddReqTrace(accountId uint32, tSize uint64, t time.Time, hint string) {
+func (m *TNUsageMemo) AddReqTrace(accountId uint64, tSize uint64, t time.Time, hint string) {
 	m.reqTrace = append(m.reqTrace,
 		struct {
 			hint      string
 			timeStamp time.Time
-			accountId uint32
+			accountId uint64
 			totalSize uint64
 		}{
 			hint:      hint,
@@ -335,7 +343,7 @@ func (m *TNUsageMemo) AddReqTrace(accountId uint32, tSize uint64, t time.Time, h
 		})
 }
 
-func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint32, timestamps []time.Time, sizes []uint64, hints []string) {
+func (m *TNUsageMemo) GetAllReqTrace() (accountIds []uint64, timestamps []time.Time, sizes []uint64, hints []string) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 
@@ -389,19 +397,19 @@ func (m *TNUsageMemo) HasUpdate() bool {
 	return m.pending
 }
 
-func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint32) (size uint64, exist bool) {
+func (m *TNUsageMemo) gatherAccountSizeHelper(cache *StorageUsageCache, id uint64) (size uint64, exist bool) {
 	return cache.GatherAccountSize(id)
 }
 
-func (m *TNUsageMemo) GatherAccountSize(id uint32) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.cache, id)
 }
 
-func (m *TNUsageMemo) GatherNewAccountSize(id uint32) (size uint64, exist bool) {
+func (m *TNUsageMemo) GatherNewAccountSize(id uint64) (size uint64, exist bool) {
 	return m.gatherAccountSizeHelper(m.newAccCache, id)
 }
 
-func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint32]uint64) {
+func (m *TNUsageMemo) GatherAllAccSize() (usages map[uint64]uint64) {
 	return m.cache.GatherAllAccSize()
 }
 
@@ -452,31 +460,36 @@ func (m *TNUsageMemo) applyDeletes(
 			dbs = append(dbs, e)
 		case *catalog.TableEntry:
 			piovt := UsageData{
-				e.GetDB().GetTenantID(),
+				uint64(e.GetDB().GetTenantID()),
 				e.GetDB().GetID(), e.GetID(), 0}
 			if usage, exist := m.cache.Get(piovt); exist {
 				appendToStorageUsageBat(ckpData, usage, true, mp)
 				m.Delete(usage)
-				buf.WriteString(fmt.Sprintf("[tbl]%s_%d_%d_%d_%d; ",
+				buf.WriteString(fmt.Sprintf("[d-tbl]%s_%d_%d_%d_%d; ",
 					e.GetFullName(), usage.AccId, usage.DbId, usage.TblId, usage.Size))
 			}
 		}
 	}
 
+	isSameDBFunc := func(a UsageData, db *catalog.DBEntry) bool {
+		return a.AccId == uint64(db.GetTenantID()) && a.DbId == db.ID
+	}
+
 	usages := make([]UsageData, 0)
 	for _, db := range dbs {
 		iter := m.cache.Iter()
-		iter.Seek(UsageData{db.GetTenantID(), db.ID, 0, 0})
+		iter.Seek(UsageData{uint64(db.GetTenantID()), db.ID, 0, 0})
 
-		if iter.Item().DbId != db.ID || iter.Item().AccId != db.GetTenantID() {
+		if !isSameDBFunc(iter.Item(), db) {
 			iter.Release()
-			buf.WriteString(fmt.Sprintf("[db]%s_%d_%d_%d; ",
+			// db not found in cache
+			buf.WriteString(fmt.Sprintf("[n-db]%s_%d_%d_%d; ",
 				db.GetFullName(), db.GetTenantID(), db.GetID(), 0))
 			continue
 		}
 
 		usages = append(usages, iter.Item())
-		for iter.Next() && iter.Item().DbId == db.ID && iter.Item().AccId == db.GetTenantID() {
+		for iter.Next() && isSameDBFunc(iter.Item(), db) {
 			usages = append(usages, iter.Item())
 		}
 
@@ -489,7 +502,7 @@ func (m *TNUsageMemo) applyDeletes(
 			totalSize += usages[idx].Size
 		}
 
-		buf.WriteString(fmt.Sprintf("[db]%s_%d_%d_%d; ",
+		buf.WriteString(fmt.Sprintf("[d-db]%s_%d_%d_%d; ",
 			db.GetFullName(), db.GetTenantID(), db.GetID(), totalSize))
 
 		usages = usages[:0]
@@ -524,9 +537,9 @@ func (m *TNUsageMemo) replayIntoGCKP(collector *GlobalCollector) {
 	iter.Release()
 }
 
-func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) {
+func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string, bool) {
 	if c == nil {
-		return usage, false
+		return usage, "", false
 	}
 
 	var err error
@@ -536,19 +549,29 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 	dbEntry, err = c.GetDatabaseByID(usage.DbId)
 	if err != nil || dbEntry.HasDropCommitted() {
 		// the db has been deleted
-		return usage, true
+		name := "deleted"
+		if dbEntry != nil {
+			name = dbEntry.GetName()
+		}
+		log := fmt.Sprintf("[d-db]%s_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.Size)
+		return usage, log, true
 	}
 
 	tblEntry, err = dbEntry.GetTableEntryByID(usage.TblId)
 	if err != nil || tblEntry.HasDropCommitted() {
 		// the tbl has been deleted
-		return usage, true
+		name := "deleted"
+		if tblEntry != nil {
+			name = tblEntry.GetFullName()
+		}
+		log := fmt.Sprintf("[d-tbl]%s_%d_%d_%d_%d; ", name, usage.AccId, usage.DbId, usage.TblId, usage.Size)
+		return usage, log, true
 	}
 
-	return usage, false
+	return usage, "", false
 }
 
-func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
+func (m *TNUsageMemo) deleteAccount(accId uint64) {
 	trash := make([]UsageData, 0)
 	povit := UsageData{accId, 0, 0, 0}
 
@@ -558,7 +581,7 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 
 	if iter.Item().AccId != accId {
 		iter.Release()
-		return 0
+		return
 	}
 
 	trash = append(trash, iter.Item())
@@ -575,23 +598,24 @@ func (m *TNUsageMemo) deleteAccount(accId uint32) (cleaned int) {
 	for idx := range trash {
 		m.Delete(trash[idx])
 	}
-
-	return len(trash)
 }
 
-func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint32]struct{}) (cleaned int) {
+func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint64]struct{}) string {
 	if reserved == nil {
-		return
+		return ""
 	}
+
+	var buf bytes.Buffer
 
 	usages := m.GatherAllAccSize()
 	for accId := range usages {
 		if _, ok := reserved[accId]; !ok {
 			// this account has been deleted
-			cleaned += m.deleteAccount(accId)
+			m.deleteAccount(accId)
+			buf.WriteString(fmt.Sprintf("%d; ", accId))
 		}
 	}
-	return
+	return buf.String()
 }
 
 // EstablishFromCKPs replays usage info which stored in ckps into the tn cache
@@ -599,12 +623,18 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 	m.EnterProcessing()
 	defer m.LeaveProcessing()
 
+	var buf bytes.Buffer
+
 	defer func() {
-		for _, data := range m.pendingReplay.datas {
-			if data != nil {
-				data.Close()
+		for idx := range m.pendingReplay.datas {
+			if m.pendingReplay.datas[idx] != nil {
+				m.pendingReplay.datas[idx].Close()
 			}
+			m.pendingReplay.datas[idx] = nil
 		}
+		logutil.Info("[storage usage] replay:",
+			zap.String("remove old deleted db/tbl", buf.String()),
+			zap.Int("delayed %d tbl", len(m.pendingReplay.delayed)))
 	}()
 
 	for x := range m.pendingReplay.datas {
@@ -618,7 +648,8 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		accCol, dbCol, tblCol, sizeCol := getStorageUsageVectorCols(insVecs)
 
 		var skip bool
-		for y := 0; y < insVecs[UsageAccID].Length(); y++ {
+		var log string
+		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
 
 			// these ckps, older than version 11, haven't del bat, we need clear the
@@ -629,8 +660,9 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 			if m.pendingReplay.vers[x] < CheckpointVersion11 {
 				// here only remove the deleted db and table.
 				// if table has deletes, we update it in gckp
-				usage, skip = try2RemoveStaleData(usage, c)
+				usage, log, skip = try2RemoveStaleData(usage, c)
 				if skip {
+					buf.WriteString(log)
 					continue
 				}
 				if m.pendingReplay.delayed == nil {
@@ -650,7 +682,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		delVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageDelIDX])
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
-		for y := 0; y < delVecs[UsageAccID].Length(); y++ {
+		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
 			m.Update(usage, true)
 		}
@@ -672,10 +704,10 @@ func getStorageUsageBatVectors(bat *containers.Batch) []*vector.Vector {
 }
 
 func getStorageUsageVectorCols(vecs []*vector.Vector) (
-	accCol []uint32, dbCol []uint64, tblCol []uint64, sizeCol []uint64) {
+	accCol []uint64, dbCol []uint64, tblCol []uint64, sizeCol []uint64) {
 
 	dbCol = vector.MustFixedCol[uint64](vecs[UsageDBID])
-	accCol = vector.MustFixedCol[uint32](vecs[UsageAccID])
+	accCol = vector.MustFixedCol[uint64](vecs[UsageAccID])
 	tblCol = vector.MustFixedCol[uint64](vecs[UsageTblID])
 	sizeCol = vector.MustFixedCol[uint64](vecs[UsageSize])
 
@@ -694,7 +726,7 @@ var lastDelUsage UsageData = zeroUsageData
 func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp *mpool.MPool) {
 	appendFunc := func(vecs []*vector.Vector) {
 		vector.AppendFixed[uint64](vecs[UsageSize], usage.Size, false, mp)
-		vector.AppendFixed[uint32](vecs[UsageAccID], usage.AccId, false, mp)
+		vector.AppendFixed[uint64](vecs[UsageAccID], usage.AccId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageDBID], usage.DbId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageTblID], usage.TblId, false, mp)
 	}
@@ -739,7 +771,7 @@ func objects2Usages(objs []*catalog.ObjectEntry) (usages []UsageData) {
 			DbId:  obj.GetTable().GetDB().GetID(),
 			Size:  uint64(obj.Stat.GetCompSize()),
 			TblId: obj.GetTable().GetID(),
-			AccId: obj.GetTable().GetDB().GetTenantID(),
+			AccId: uint64(obj.GetTable().GetDB().GetTenantID()),
 		}
 	}
 
@@ -759,7 +791,7 @@ func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, 
 	}
 }
 
-func tryClearDataFromOldVersion(collector *GlobalCollector) string {
+func tryUpdateDataFromOldVersion(collector *GlobalCollector) string {
 	memo := collector.UsageMemo
 	if len(memo.pendingReplay.delayed) == 0 {
 		return ""
@@ -784,7 +816,7 @@ func tryClearDataFromOldVersion(collector *GlobalCollector) string {
 			size = 0
 		}
 		if usage, ok := memo.pendingReplay.delayed[id]; ok {
-			memo.Delete(usage)
+			memo.Update(usage, true)
 			usage.Size = uint64(size)
 			memo.Update(usage, false)
 			delete(memo.pendingReplay.delayed, id)
@@ -814,6 +846,26 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	return log
 }
 
+//func applyTransfer(collector *BaseCollector, memo *TNUsageMemo) string {
+//	var buf bytes.Buffer
+//	if len(memo.pendingTransfer.deletes) != 0 {
+//		memo.applySegDeletes(memo.pendingTransfer.deletes, collector.data, collector.Allocator())
+//		for _, usage := range memo.pendingTransfer.deletes {
+//			buf.WriteString(fmt.Sprintf("[td-tbl]%d_%d_%d_%d; ",
+//				usage.AccId, usage.DbId, usage.TblId, usage.Size))
+//		}
+//	}
+//	if len(memo.pendingTransfer.inserts) != 0 {
+//		memo.applySegInserts(memo.pendingTransfer.inserts, collector.data, collector.Allocator())
+//		for _, usage := range memo.pendingTransfer.inserts {
+//			buf.WriteString(fmt.Sprintf("[ti-tbl]%d_%d_%d_%d; ",
+//				usage.AccId, usage.DbId, usage.TblId, usage.Size))
+//		}
+//	}
+//
+//	return buf.String()
+//}
+
 func FillUsageBatOfGlobal(collector *GlobalCollector) {
 	start := time.Now()
 
@@ -823,13 +875,13 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	log := tryClearDataFromOldVersion(collector)
-	cleaned := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
+	log1 := tryUpdateDataFromOldVersion(collector)
+	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
 	collector.UsageMemo.replayIntoGCKP(collector)
 
 	logutil.Info("[storage usage] CKP[G]",
-		zap.Int("accounts cleaned", cleaned),
-		zap.String("update old data", log))
+		zap.String("update old data", log1),
+		zap.String("accounts cleaned", log2))
 }
 
 func FillUsageBatOfIncremental(collector *IncrementalCollector) {
@@ -842,11 +894,12 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	log := applyChanges(collector.BaseCollector, collector.UsageMemo)
+	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
+	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
 
 	logutil.Info("[storage usage] CKP[I]",
 		zap.Float64("cache mem used", collector.UsageMemo.MemoryUsed()),
-		zap.String("applied deletes", log))
+		zap.String("applied deletes", log1))
 }
 
 // GetStorageUsageHistory is for debug to show these storage usage changes.
@@ -926,7 +979,7 @@ func GetStorageUsageHistory(
 }
 
 func cnBatchToUsageDatas(bat *batch.Batch) []UsageData {
-	accCol := vector.MustFixedCol[uint32](bat.GetVector(2))
+	accCol := vector.MustFixedCol[uint64](bat.GetVector(2))
 	dbCol := vector.MustFixedCol[uint64](bat.GetVector(3))
 	tblCol := vector.MustFixedCol[uint64](bat.GetVector(4))
 	sizeCol := vector.MustFixedCol[uint64](bat.GetVector(6))
@@ -1012,4 +1065,59 @@ func loadStorageUsageBatch(
 		}
 	}
 	return bats, nil
+}
+
+func PairAccountVsDB(c *catalog.Catalog) map[uint64]uint64 {
+	pairs := make(map[uint64]uint64)
+
+	processor := new(catalog.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog.DBEntry) error {
+		pairs[entry.GetID()] = uint64(entry.GetTenantID())
+		return nil
+	}
+
+	c.RecurLoop(processor)
+	return pairs
+}
+
+func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
+	memo := c.GetUsageMemo().(*TNUsageMemo)
+	if memo == nil {
+		return 0, 0, moerr.NewInternalErrorNoCtx("tn usage cache is nil")
+	}
+
+	var buf bytes.Buffer
+
+	pairs := PairAccountVsDB(c)
+
+	memo.EnterProcessing()
+	defer memo.LeaveProcessing()
+
+	usages := memo.cache.data.Items()
+
+	anyTransferred := int(0)
+	transferredSize := float64(0)
+	for idx := range usages {
+		if pairs[usages[idx].DbId] != usages[idx].AccId {
+			anyTransferred++
+			transferredSize += float64(usages[idx].Size)
+
+			memo.Update(usages[idx], true)
+			buf.WriteString(fmt.Sprintf("[td-tbl]%d_%d_%d_%d; ",
+				usages[idx].AccId, usages[idx].DbId, usages[idx].TblId, usages[idx].Size))
+			//memo.pendingTransfer.deletes = append(memo.pendingTransfer.deletes, usages[idx])
+
+			usages[idx].AccId = pairs[usages[idx].DbId]
+			memo.Update(usages[idx], false)
+			buf.WriteString(fmt.Sprintf("[ti-tbl]%d_%d_%d_%d; ",
+				usages[idx].AccId, usages[idx].DbId, usages[idx].TblId, usages[idx].Size))
+			//memo.pendingTransfer.inserts = append(memo.pendingTransfer.inserts, usages[idx])
+		}
+	}
+
+	transferredSize /= 1024 * 1024
+	logutil.Info("[storage usage] apply transfer: ",
+		zap.String(fmt.Sprintf("transferred %d tbl, %f mb", anyTransferred, transferredSize), buf.String()))
+
+	return anyTransferred, transferredSize, nil
 }
