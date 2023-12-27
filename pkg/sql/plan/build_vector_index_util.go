@@ -208,44 +208,6 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	return crossJoinTblAndCentroidsId
 }
 
-func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *BindContext,
-	crossJoinTblAndCentroidsID int32, lastNodeId int32, isUpdate bool) (int32, error) {
-
-	// 0: centroids.version,
-	// 1: centroids.centroid_id,
-	// 2: tbl.pk,
-	// 3: entries.row_id (if update)
-	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
-	if isUpdate {
-		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
-		originRowIdIdx := len(lastProjection) - 1
-		joinProjections = append(joinProjections, &plan.Expr{
-			Typ: lastProjection[originRowIdIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(originRowIdIdx),
-					Name:   catalog.Row_ID,
-				},
-			},
-		})
-	}
-
-	cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{joinProjections[0], joinProjections[2]})
-	if err != nil {
-		return -1, err
-	}
-
-	finalProjectId := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_PROJECT,
-		Children: []int32{crossJoinTblAndCentroidsID},
-		// version, centroid_id, pk, serial(version,pk)
-		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
-	}, bindCtx)
-
-	return finalProjectId, nil
-}
-
 func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32, err error) (int32, error) {
 	// 5. partition by tbl.pk
 	projections := getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
@@ -340,4 +302,42 @@ func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindCont
 		ProjectList: []*Expr{projections[0], projections[1], projections[2]},
 	}, bindCtx)
 	return filterId, nil
+}
+
+func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *BindContext,
+	crossJoinTblAndCentroidsID int32, lastNodeId int32, isUpdate bool) (int32, error) {
+
+	// 0: centroids.version,
+	// 1: centroids.centroid_id,
+	// 2: tbl.pk,
+	// 3: entries.row_id (if update)
+	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
+	if isUpdate {
+		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
+		originRowIdIdx := len(lastProjection) - 1
+		joinProjections = append(joinProjections, &plan.Expr{
+			Typ: lastProjection[originRowIdIdx].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(originRowIdIdx),
+					Name:   catalog.Row_ID,
+				},
+			},
+		})
+	}
+
+	cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{joinProjections[0], joinProjections[2]})
+	if err != nil {
+		return -1, err
+	}
+
+	finalProjectId := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{crossJoinTblAndCentroidsID},
+		// version, centroid_id, pk, serial(version,pk)
+		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
+	}, bindCtx)
+
+	return finalProjectId, nil
 }
