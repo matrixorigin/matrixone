@@ -103,8 +103,7 @@ var zeroUsageData UsageData = UsageData{math.MaxUint32, math.MaxUint64, math.Max
 // MockUsageData generates accCnt * dbCnt * tblCnt UsageDatas.
 // the accIds, dbIds and tblIds are random produced.
 // this func ensure that all ids are different.
-func MockUsageData(accCnt, dbCnt, tblCnt int) (result []UsageData) {
-	allocator := atomic.Uint64{}
+func MockUsageData(accCnt, dbCnt, tblCnt int, allocator *atomic.Uint64) (result []UsageData) {
 	for x := 0; x < accCnt; x++ {
 		accId := allocator.Add(1)
 
@@ -116,7 +115,7 @@ func MockUsageData(accCnt, dbCnt, tblCnt int) (result []UsageData) {
 					AccId: accId,
 					DbId:  dbId,
 					TblId: allocator.Add(1),
-					Size:  uint64(rand.Int63() % 0x3ffff),
+					Size:  uint64(rand.Int63() % 0x3fff),
 				})
 			}
 		}
@@ -299,10 +298,6 @@ type TNUsageMemo struct {
 		datas   []*CheckpointData
 		vers    []uint32
 		delayed map[uint64]UsageData
-	}
-
-	pendingTransfer struct {
-		inserts, deletes []UsageData
 	}
 }
 
@@ -688,7 +683,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		delVecs := getStorageUsageBatVectors(m.pendingReplay.datas[x].bats[StorageUsageDelIDX])
 		accCol, dbCol, tblCol, sizeCol = getStorageUsageVectorCols(delVecs)
 
-		for y := 0; y < delVecs[UsageAccID].Length(); y++ {
+		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
 			m.Update(usage, true)
 		}
@@ -716,10 +711,6 @@ func getStorageUsageVectorCols(vecs []*vector.Vector) (
 	accCol = vector.MustFixedCol[uint64](vecs[UsageAccID])
 	tblCol = vector.MustFixedCol[uint64](vecs[UsageTblID])
 	sizeCol = vector.MustFixedCol[uint64](vecs[UsageSize])
-
-	//for idx := range accCol1 {
-	//	accCol = append(accCol, uint64(accCol1[idx]))
-	//}
 
 	return
 }
@@ -1090,10 +1081,10 @@ func PairAccountVsDB(c *catalog.Catalog) map[uint64]uint64 {
 	return pairs
 }
 
-func CorrectUsageWrongPlacement(c *catalog.Catalog) (error, int, float64) {
+func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
 	memo := c.GetUsageMemo().(*TNUsageMemo)
 	if memo == nil {
-		return moerr.NewInternalErrorNoCtx("tn usage cache is nil"), 0, 0
+		return 0, 0, moerr.NewInternalErrorNoCtx("tn usage cache is nil")
 	}
 
 	var buf bytes.Buffer
@@ -1129,5 +1120,5 @@ func CorrectUsageWrongPlacement(c *catalog.Catalog) (error, int, float64) {
 	logutil.Info("[storage usage] apply transfer: ",
 		zap.String(fmt.Sprintf("transferred %d tbl, %f mb", anyTransferred, transferredSize), buf.String()))
 
-	return nil, anyTransferred, transferredSize
+	return anyTransferred, transferredSize, nil
 }
