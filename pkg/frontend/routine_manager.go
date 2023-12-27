@@ -261,7 +261,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.timestampMap[TSCreatedStart] = time.Now()
 	defer func() {
 		ses.timestampMap[TSCreatedEnd] = time.Now()
-		v2.CreatedDurationHistogram.Observe(float64(ses.timestampMap[TSCreatedEnd].Sub(ses.timestampMap[TSCreatedStart]).Milliseconds()))
+		v2.CreatedDurationHistogram.Observe(ses.timestampMap[TSCreatedEnd].Sub(ses.timestampMap[TSCreatedStart]).Seconds())
 	}()
 
 	routine.setSession(ses)
@@ -466,7 +466,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
 				ses.timestampMap[TSUpgradeTLSEnd] = time.Now()
-				v2.UpgradeTLSDurationHistogram.Observe(float64(ses.timestampMap[TSUpgradeTLSEnd].Sub(ses.timestampMap[TSUpgradeTLSStart]).Milliseconds()))
+				v2.UpgradeTLSDurationHistogram.Observe(ses.timestampMap[TSUpgradeTLSEnd].Sub(ses.timestampMap[TSUpgradeTLSStart]).Seconds())
 			} else {
 				// client don't ask server to upgrade TLS
 				if err := protocol.Authenticate(ctx); err != nil {
@@ -490,7 +490,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			protocol.SetEstablished()
 		}
 		ses.timestampMap[TSEstablishEnd] = time.Now()
-		v2.EstablishDurationHistogram.Observe(float64(ses.timestampMap[TSEstablishEnd].Sub(ses.timestampMap[TSEstablishStart]).Milliseconds()))
+		v2.EstablishDurationHistogram.Observe(ses.timestampMap[TSEstablishEnd].Sub(ses.timestampMap[TSEstablishStart]).Seconds())
 
 		dbName := protocol.GetDatabaseName()
 		if dbName != "" {
