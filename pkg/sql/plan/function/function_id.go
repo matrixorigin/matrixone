@@ -390,6 +390,7 @@ var functionIdRegister = map[string]int32{
 	"unary_plus":  UNARY_PLUS,
 	"unary_minus": UNARY_MINUS,
 	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,

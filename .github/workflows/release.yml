@@ -1,5 +1,3 @@
-# This is a basic workflow to help you get started with Actions
-
 name: release
 
 on:
@@ -12,16 +10,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-      - name: Get tags
-        run: git fetch --tags origin
-      - name: Use Golang
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.20"
-      - name: Build normal
-        run: |
-          make build
-          zip -r mo-linux-x86_64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -31,13 +19,36 @@ jobs:
         run: |
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
+      - name: Use Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20.11"
+          cache: false
+      - name: Build normal
+        run: |
+          make build
+
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/etc
+          mv mo-service mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/
+
+          # copy toml configure file
+          mv ./etc/launch mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/etc/
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/etc/
+          fi
+
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64/pkg/udf/pythonservice/
+          fi
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64.zip mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64
       - name: Upload Release normal linux x86_64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-linux-x86_64.zip
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64.zip
           asset_content_type: application/zip
   
@@ -45,17 +56,7 @@ jobs:
     runs-on: aws-arm64-runner
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3     
-      - name: Get tags
-        run: git fetch --tags origin
-      - name: Use Golang
-        uses: actions/setup-go@v4
-        with:
-          go-version: "1.20"
-      - name: Build normal
-        run: |
-          make build
-          zip -r mo-linux-arm64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
+        uses: actions/checkout@v3
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -65,13 +66,38 @@ jobs:
         run: |
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
+      - name: Use Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20.11"
+          cache: false
+      - name: Build normal
+        run: |
+          make build
+          
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/etc
+          mv mo-service mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/
+
+          # copy toml configure file
+          mv ./etc/launch mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/etc/
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/etc/
+          fi
+
+          # copy udf python server
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64/pkg/udf/pythonservice
+          fi
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64.zip mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64
+
       - name: Upload Release normal linux arm64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-linux-arm64.zip
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64.zip
           asset_content_type: application/zip
 
@@ -90,13 +116,21 @@ jobs:
           done
           exit 1;
       - name: Checkout source
-        uses: actions/checkout@v3     
-      - name: Get tags
-        run: git fetch --tags origin
+        uses: actions/checkout@v3
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
-          go-version: "1.20"
+          go-version: "1.20.11"
+          cache: false
       - name: Build normal
         run: |
           make build
@@ -108,7 +142,7 @@ jobs:
           # The password used to import the PKCS12 file.
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
-      - name: Install gon
+      - name: Clone gon
         uses: actions/checkout@v3
         with:
           fetch-depth: '1'
@@ -128,27 +162,39 @@ jobs:
           AC_PROVIDER: ${{ secrets.AC_PROVIDER }}
         run: |
           cd $GITHUB_WORKSPACE
+          # sign mo-service
           cp ./optools/sign/gon.json ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
-          mkdir -p ./mo-macos11/etc
-          cp -r ./etc/launch ./mo-macos11/etc/
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
-      - name: Get release
-        id: get_release
-        uses: bruceadams/get-release@v1.3.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        
+          # rename filepath
+          cd .. && mv ./mo-macos11 mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64/etc
+          
+          # copy toml configure file
+          mv etc/launch mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64/etc/
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64/etc/
+          fi
+
+          # copy udf python server
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64/pkg/udf/pythonservice/
+          fi
+
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64.zip mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64
+
       - name: Upload Release normal darwin x86_64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-macos11/mo-darwin-x86_64.zip
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64.zip
           asset_content_type: application/zip
 
@@ -168,17 +214,32 @@ jobs:
           exit 1;
       - name: Checkout source
         uses: actions/checkout@v3
-      - name: Get tags
-        run: git fetch --tags origin
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
       - name: Check go version
         run: |
           go version
       - name: Build normal
         run: |
           make build
-      - name: Unlock Code-Signing Certificates
+      - name: Remove Code-Signing Certificates
         run: |
-          security unlock-keychain -p ${{ secrets.SIGN_KEYCHAIN_PASSWORD }} mo_sign.keychain
+          security list-keychains | grep sign | awk 'system("security delete-keychain "$1)'
+          security find-identity -p codesigning | grep ID | awk 'NR=1{system("security delete-identity -Z "$2)}'
+      - name: Import Code-Signing Certificates
+        uses: Apple-Actions/import-codesign-certs@v1
+        with:
+          # The certificates in a PKCS12 file encoded as a base64 string
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          # The password used to import the PKCS12 file.
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
       - name: Code signing and app notarization
         env:
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
@@ -188,27 +249,38 @@ jobs:
           cat ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
-          mkdir -p ./mo-macos11/etc
-          cp -r ./etc/launch ./mo-macos11/etc/
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-arm64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
-      - name: Get release
-        id: get_release
-        uses: bruceadams/get-release@v1.3.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+
+          # rename filepath
+          cd .. && mv ./mo-macos11 mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64/etc
+          
+          # copy toml configure file
+          mv etc/launch mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64/etc
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64/etc/
+          fi
+
+          # copy udf python server
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64/pkg/udf/pythonservice/
+          fi
+
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64.zip mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64
       - name: Upload Release normal darwin arm64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-macos11/mo-darwin-arm64.zip
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64.zip
           asset_content_type: application/zip
-      - name: Lock Code-Signing Certificates
+      - name: Remove Code-Signing Certificates
         if: ${{ always() }}
         run: |
-          security lock-keychain mo_sign.keychain
+          security list-keychains | grep sign | awk 'system("security delete-keychain "$1)'
+          security find-identity -p codesigning | grep ID | awk 'NR=1{system("security delete-identity -Z "$2)}'
