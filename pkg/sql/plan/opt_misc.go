@@ -948,6 +948,57 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
+func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_JOIN {
+		return 1
+	}
+	result := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+
+	leftTags := make(map[int32]emptyType)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = emptyStruct
+	}
+
+	rightTags := make(map[int32]emptyType)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = emptyStruct
+	}
+
+	exprs := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			exprs = append(exprs, expr)
+		}
+	}
+
+	hashCols := make([]*plan.ColRef, 0)
+	for _, cond := range exprs {
+		switch condImpl := cond.Expr.(type) {
+		case *plan.Expr_F:
+			expr := condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				hashCols = append(hashCols, exprImpl.Col)
+			}
+		}
+	}
+
+	if len(hashCols) == 0 {
+		return 0.0001
+	}
+
+	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
+	if tableDef == nil {
+		return 0.0001
+	}
+	hashColPos := make([]int32, len(hashCols))
+	for i := range hashCols {
+		hashColPos[i] = hashCols[i].ColPos
+	}
+	return getColNDVRatio(hashColPos, tableDef, builder) * result
+}
+
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
