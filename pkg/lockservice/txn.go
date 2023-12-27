@@ -31,9 +31,9 @@ var (
 	parallelUnlockTables = 2
 )
 
-type holder struct {
-	keys  map[uint64]*cowSlice
-	binds map[uint64]pb.LockTable
+type tableLockHolder struct {
+	tableKeys  map[uint64]*cowSlice
+	tableBinds map[uint64]pb.LockTable
 }
 
 // activeTxn one goroutine write, multi goroutine read
@@ -43,7 +43,7 @@ type activeTxn struct {
 	txnKey         string
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
-	holdLocks      map[string]holder
+	lockHolders    map[string]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
 }
@@ -73,7 +73,7 @@ func (txn *activeTxn) lockRemoved(
 	table uint64,
 	removedLocks map[string]struct{}) {
 	h := txn.getHoldLocksLocked(group)
-	v, ok := h.keys[table]
+	v, ok := h.tableKeys[table]
 	if !ok {
 		return
 	}
@@ -87,7 +87,7 @@ func (txn *activeTxn) lockRemoved(
 		return true
 	})
 	v.close()
-	h.keys[table] = newV
+	h.tableKeys[table] = newV
 }
 
 func (txn *activeTxn) lockAdded(
@@ -113,13 +113,13 @@ func (txn *activeTxn) lockAdded(
 
 	defer logTxnLockAdded(txn, locks)
 	h := txn.getHoldLocksLocked(group)
-	v, ok := h.keys[bind.Table]
+	v, ok := h.tableKeys[bind.Table]
 	if ok {
 		v.append(locks)
 		return
 	}
-	h.keys[bind.Table] = newCowSlice(txn.fsp, locks)
-	h.binds[bind.Table] = bind
+	h.tableKeys[bind.Table] = newCowSlice(txn.fsp, locks)
+	h.tableBinds[bind.Table] = bind
 }
 
 func (txn *activeTxn) close(
@@ -133,11 +133,11 @@ func (txn *activeTxn) close(
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
-	n := len(txn.holdLocks)
+	n := len(txn.lockHolders)
 	var wg sync.WaitGroup
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
-	for group, m := range txn.holdLocks {
-		for table, cs := range m.keys {
+	for group, h := range txn.lockHolders {
+		for table, cs := range h.tableKeys {
 			l, err := lockTableFunc(group, table)
 			if err != nil {
 				// if a remote transaction, then the corresponding locktable should be local
@@ -187,12 +187,13 @@ func (txn *activeTxn) close(
 }
 
 func (txn *activeTxn) reset() {
-	for _, m := range txn.holdLocks {
-		for table, cs := range m.keys {
+	for g, h := range txn.lockHolders {
+		for table, cs := range h.tableKeys {
 			cs.close()
-			delete(m.keys, table)
-			delete(m.binds, table)
+			delete(h.tableKeys, table)
+			delete(h.tableBinds, table)
 		}
+		delete(txn.lockHolders, g)
 	}
 
 	txn.txnID = nil
@@ -284,11 +285,11 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		panic("can not fetch waiting txn on remote txn")
 	}
 
-	groups := make([]string, 0, len(txn.holdLocks))
-	tables := make([]uint64, 0, len(txn.holdLocks))
-	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
-	for g, m := range txn.holdLocks {
-		for table, cs := range m.keys {
+	groups := make([]string, 0, len(txn.lockHolders))
+	tables := make([]uint64, 0, len(txn.lockHolders))
+	lockKeys := make([]*fixedSlice, 0, len(txn.lockHolders))
+	for g, m := range txn.lockHolders {
+		for table, cs := range m.tableKeys {
 			tables = append(tables, table)
 			lockKeys = append(lockKeys, cs.slice())
 			groups = append(groups, g)
@@ -359,15 +360,15 @@ func (txn *activeTxn) getID() []byte {
 	return txn.txnID
 }
 
-func (txn *activeTxn) getHoldLocksLocked(group string) holder {
-	h, ok := txn.holdLocks[group]
+func (txn *activeTxn) getHoldLocksLocked(group string) *tableLockHolder {
+	h, ok := txn.lockHolders[group]
 	if ok {
 		return h
 	}
-	h = holder{
-		keys:  make(map[uint64]*cowSlice),
-		binds: make(map[uint64]pb.LockTable),
+	h = &tableLockHolder{
+		tableKeys:  make(map[uint64]*cowSlice),
+		tableBinds: make(map[uint64]pb.LockTable),
 	}
-	txn.holdLocks[group] = h
+	txn.lockHolders[group] = h
 	return h
 }

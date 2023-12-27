@@ -422,7 +422,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					})
 					return values
 				}
-				assert.Equal(t, fn(c.mergedLocks), fn(txn.getHoldLocksLocked("").keys[table].slice().all()))
+				assert.Equal(t, fn(c.mergedLocks), fn(txn.getHoldLocksLocked("").tableKeys[table].slice().all()))
 
 				assert.NoError(t, l.Unlock(ctx, []byte(c.txnID), timestamp.Timestamp{}))
 				stopper.Stop()

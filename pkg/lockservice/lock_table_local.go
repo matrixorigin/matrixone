@@ -209,7 +209,7 @@ func (l *localLockTable) unlock(
 		return
 	}
 
-	b, ok := txn.getHoldLocksLocked(l.bind.Group).binds[l.bind.Table]
+	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
 	if !ok {
 		panic("BUG: missing bind")
 	}

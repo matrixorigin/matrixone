@@ -37,14 +37,14 @@ func TestLockAdded(t *testing.T) {
 		txn.lockAdded("", pb.LockTable{Table: 1}, [][]byte{[]byte("k11")})
 		txn.lockAdded("", pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")})
 
-		assert.Equal(t, 2, len(txn.getHoldLocksLocked("").keys))
+		assert.Equal(t, 2, len(txn.getHoldLocksLocked("").tableKeys))
 
-		sp := txn.getHoldLocksLocked("").keys[1]
+		sp := txn.getHoldLocksLocked("").tableKeys[1]
 		s := sp.slice()
 		defer s.unref()
 		assert.Equal(t, 2, s.len())
 
-		sp2 := txn.getHoldLocksLocked("").keys[2]
+		sp2 := txn.getHoldLocksLocked("").tableKeys[2]
 		s2 := sp2.slice()
 		defer s2.unref()
 		assert.Equal(t, 2, s2.len())
@@ -84,8 +84,8 @@ func TestClose(t *testing.T) {
 		assert.Empty(t, txn.txnID)
 		assert.Empty(t, txn.txnKey)
 		assert.Empty(t, txn.blockedWaiters)
-		assert.Empty(t, txn.getHoldLocksLocked("").keys)
-		assert.Empty(t, txn.getHoldLocksLocked("").binds)
+		assert.Empty(t, txn.getHoldLocksLocked("").tableKeys)
+		assert.Empty(t, txn.getHoldLocksLocked("").tableBinds)
 		assert.Equal(t, 0, tables[1].(*localLockTable).mu.store.Len())
 		assert.Equal(t, 0, tables[2].(*localLockTable).mu.store.Len())
 	})
