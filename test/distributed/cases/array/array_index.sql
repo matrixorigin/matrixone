@@ -314,6 +314,29 @@ insert into tbl values(8, "[130,40,90]");
 
 -- 26. Update table add new column
 alter table tbl add column id2 VARCHAR(20);
+--mysql> select * from `__mo_index_secondary_8ff07b6e-a483-11ee-b461-723e89f7b974`;
+-- alter table --> create table --> insert into select * --> reindex
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              1 |                         1 |                  1 |
+--|                              1 |                         1 |                  2 |
+--|                              1 |                         1 |                  3 |
+--|                              1 |                         1 |                  4 |
+--|                              1 |                         1 |                  5 |
+--|                              1 |                         2 |                  6 |
+--|                              1 |                         2 |                  7 |
+--|                              1 |                         2 |                  8 |
+--+--------------------------------+---------------------------+--------------------+
+
 update tbl set id2 = id;
 
 -- 27. Insert into table select (internally uses window row_number)
@@ -333,6 +356,22 @@ insert into tbl1 values(9, "[130,40,90]");
 drop table if exists tbl2;
 create table tbl2(id int primary key, data vecf32(3), key idx20 using ivfflat (data) lists=2 op_type "vector_l2_ops");
 insert into tbl2 select * from tbl1;
+--mysql> select * from `__mo_index_secondary_0b0c1e94-a483-11ee-b45f-723e89f7b974`;
+-- assigned all the rows to 1 giant null centroid
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              0 |                         1 |                  9 |
+--+--------------------------------+---------------------------+--------------------+
+
 
 -- 28. Create Index with no rows
 drop table if exists tbl1;
@@ -346,6 +385,22 @@ insert into tbl1 values(5, "[1,3,5]");
 insert into tbl1 values(6, "[100,44,50]");
 insert into tbl1 values(7, "[120,50,70]");
 insert into tbl1 values(8, "[130,40,90]");
+--mysql> select * from `__mo_index_secondary_0b0c1e94-a483-11ee-b45f-723e89f7b974`;
+-- assigned all the rows to 1 giant null centroid
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              0 |                         1 |                  9 |
+--+--------------------------------+---------------------------+--------------------+
+--9 rows in set (0.00 sec)
 
 -- 29. Handle Null embeddings
 drop table if exists tbl;
@@ -358,6 +413,20 @@ insert into tbl values(5, "[1,3,5]");
 create index idx20 using ivfflat on tbl(data) lists=2 op_type "vector_l2_ops";
 insert into tbl values(6, NULL);
 insert into tbl values(7, "[130,40,90]");
+--mysql> select * from `__mo_index_secondary_56ab082e-a483-11ee-b461-723e89f7b974`;
+-- null are randomly assigned to clusters
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         2 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         2 |                  7 |
+--+--------------------------------+---------------------------+--------------------+
+
 
 -- 30. create index with totalCnt < k
 drop table if exists tbl;
@@ -365,6 +434,13 @@ create table tbl(id int primary key, data vecf32(3));
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
 create index idx21 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+--mysql> select * from `__mo_index_secondary_ca68dc64-a483-11ee-b461-723e89f7b974`;
+--+-----------------------------+------------------------+---------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid |
+--+-----------------------------+------------------------+---------------------+
+--|                           0 |                      1 | NULL                |
+--+-----------------------------+------------------------+---------------------+
+
 
 -- 31. create index with totalCnt = 0
 drop table if exists tbl;
@@ -372,6 +448,12 @@ create table tbl(id int primary key, data vecf32(3));
 create index idx22 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
+--mysql> select * from `__mo_index_secondary_ef84b932-a483-11ee-b462-723e89f7b974`;
+--+-----------------------------+------------------------+---------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid |
+--+-----------------------------+------------------------+---------------------+
+--|                           0 |                      1 | NULL                |
+--+-----------------------------+------------------------+---------------------+
 
 -- post
 drop database vecdb2;
