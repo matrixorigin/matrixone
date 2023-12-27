@@ -549,3 +549,27 @@ func (d *DiskCache) SetFile(
 	}
 	return nil
 }
+
+func (d *DiskCache) DeletePaths(
+	ctx context.Context,
+	paths []string,
+) error {
+
+	for _, path := range paths {
+		diskPath := d.pathForFile(path)
+		//TODO also delete IOEntry files
+
+		doneUpdate := d.startUpdate(diskPath)
+		defer doneUpdate()
+
+		d.fileExists.Delete(diskPath)
+
+		if err := os.Remove(diskPath); err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
