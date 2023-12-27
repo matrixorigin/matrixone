@@ -106,6 +106,7 @@ type HistorySampler[T Number] interface {
 	String() string
 }
 
+// general sampler
 type SampleIII[T Number] struct {
 	new, sample, v1, v2, v3 T
 
@@ -118,8 +119,109 @@ type SampleIII[T Number] struct {
 	d1, d2, d3 time.Duration
 }
 
-func NewSmapler35m[T Number]() HistorySampler[T] {
-	return NewSampleIII[T](30*time.Second, 2*time.Minute, 5*time.Minute)
+var F2 = 0.7
+var F3 = 0.4
+var D1 = 30 * time.Second
+var D2 = 2 * time.Minute
+var D3 = 5 * time.Minute
+
+// optimize for saving space
+type FixedSampleIII[T Number] struct {
+	new, sample, v1, v2, v3 T
+	lastSampleT             time.Time
+}
+
+func (s *FixedSampleIII[T]) tick(x T) {
+	s.new = x
+	// init
+	if s.lastSampleT.IsZero() {
+		s.lastSampleT = time.Now()
+		s.sample = x
+		s.v1 = x
+		s.v2 = x
+		s.v3 = x
+		return
+	}
+	now := time.Now()
+	span := now.Sub(s.lastSampleT)
+	if span < D1 {
+		return
+	}
+	// rotate and sample this point
+
+	// cnt history values need to be pushed back
+	// cnt := int(span / s.samplePeriod)
+	if span > D3 {
+		s.v3 = s.sample
+		s.v2 = s.sample
+		s.v1 = s.sample
+	} else if span > D2 {
+		s.v3 = moveAvg(s.v3, s.v2, F2)
+		s.v2 = s.sample
+		s.v1 = s.sample
+	} else {
+		s.v3 = moveAvg(s.v3, s.v2, F3)
+		s.v2 = moveAvg(s.v2, s.v1, F2)
+		s.v1 = s.sample
+	}
+
+	s.lastSampleT = now
+	s.sample = x
+}
+
+func (s *FixedSampleIII[T]) Append(x T) {
+	s.tick(x)
+}
+
+func (s *FixedSampleIII[T]) V() T {
+	return s.new
+}
+
+func (s *FixedSampleIII[T]) QueryTrend() (TrendKind, TrendKind, TrendKind) {
+	judgeTrend := func(vprev, vnow T) TrendKind {
+		if roundZero(vprev) {
+			if vnow > 0 {
+				return TrendIncI
+			} else if vnow < 0 {
+				return TrendDecI
+			} else {
+				return TrendStable
+			}
+		}
+		delta := float64(vnow - vprev)
+		deltaPercent := math.Abs(delta / float64(vprev))
+		if math.Signbit(delta) {
+			deltaPercent = -deltaPercent
+		}
+
+		if deltaPercent < -0.4 {
+			return TrendDecII
+		} else if deltaPercent < -0.01 {
+			return TrendDecI
+		} else if deltaPercent < 0.01 {
+			return TrendStable
+		} else if deltaPercent < 0.4 {
+			return TrendIncI
+		} else {
+			return TrendIncII
+		}
+	}
+	s.tick(s.new)
+	return judgeTrend(s.v1, s.new), judgeTrend(s.v2, s.new), judgeTrend(s.v3, s.new)
+}
+
+func (s *FixedSampleIII[T]) String() string {
+	x, m, l := s.QueryTrend()
+	return fmt.Sprintf(
+		"Sample(%v/%v/{%v,%v,%v}/%v,%v,%v)",
+		s.new, s.lastSampleT.Format("2006-01-02_15:04:05"),
+		s.v1, s.v2, s.v3,
+		x, m, l,
+	)
+}
+
+func NewSmapler35m[T Number]() FixedSampleIII[T] {
+	return FixedSampleIII[T]{}
 }
 
 func selectFactor(cnt int) float64 {
@@ -287,15 +389,15 @@ type TableCompactStat struct {
 
 	WorkloadGuess  WorkloadKind
 	WorkloadStreak int
-	RowCnt         HistorySampler[int]
-	RowDel         HistorySampler[int]
+	RowCnt         FixedSampleIII[int]
+	RowDel         FixedSampleIII[int]
 	MergeHist      MergeHistory
 }
 
 func NewTableCompactStat() *TableCompactStat {
 	return &TableCompactStat{
-		RowCnt: NewSmapler35m[int](),
-		RowDel: NewSmapler35m[int](),
+		RowCnt: FixedSampleIII[int]{},
+		RowDel: FixedSampleIII[int]{},
 	}
 }
 

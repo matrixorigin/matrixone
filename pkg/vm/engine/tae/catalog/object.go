@@ -54,11 +54,11 @@ func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
 }
 
 func (entry *ObjectEntry) SetRemainingRows(rows int) {
-	entry.remainingRows = rows
+	entry.remainingRows.Append(rows)
 }
 
 func (entry *ObjectEntry) GetRemainingRows() int {
-	return entry.remainingRows
+	return entry.remainingRows.V()
 }
 
 func (entry *ObjectEntry) GetRows() int {
