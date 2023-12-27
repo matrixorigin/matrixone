@@ -25,6 +25,7 @@ import (
 const argName = "connector"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("pipe connector")
 }
 

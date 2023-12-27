@@ -30,6 +30,7 @@ import (
 const argName = "merge_top"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	ap := arg
 	buf.WriteString("mergetop([")
 	for i, f := range ap.Fs {

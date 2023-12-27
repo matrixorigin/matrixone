@@ -24,6 +24,7 @@ import (
 const argName = "output"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("sql output")
 }
 

@@ -26,6 +26,7 @@ import (
 const argName = "limit"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString(fmt.Sprintf("limit(%v)", arg.Limit))
 }
 

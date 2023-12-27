@@ -33,6 +33,7 @@ import (
 const argName = "dispatch"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("dispatch")
 }
 

@@ -31,6 +31,7 @@ import (
 const argName = "insert"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("insert")
 }
 

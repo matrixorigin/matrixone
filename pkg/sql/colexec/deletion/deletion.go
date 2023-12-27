@@ -49,6 +49,7 @@ const (
 const argName = "deletion"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("delete rows")
 }
 

@@ -33,6 +33,7 @@ import (
 const argName = "sample"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	switch arg.Type {
 	case mergeSampleByRow:
 		buf.WriteString(fmt.Sprintf("merge sample %d rows ", arg.Rows))
