@@ -426,10 +426,10 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyV
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) (objectio.Ranges, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) (engine.Ranges, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
-	ret0, _ := ret[0].(objectio.Ranges)
+	ret0, _ := ret[0].(engine.Ranges)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
