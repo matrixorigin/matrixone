@@ -20,21 +20,6 @@ import (
 	"testing"
 )
 
-func TestObjectLocationMarshalAndUnmarshal(t *testing.T) {
-	var loc ObjectLocation
-	for i := 0; i < len(loc); i++ {
-		loc[i] = byte(i)
-	}
-
-	data, err := loc.Marshal()
-	require.NoError(t, err)
-
-	var ret ObjectLocation
-	err = ret.Unmarshal(data)
-	require.NoError(t, err)
-	require.Equal(t, loc, ret)
-}
-
 func TestEncodeInfoHeader(t *testing.T) {
 	h := InfoHeader{
 		Type:    BlockInfoType,

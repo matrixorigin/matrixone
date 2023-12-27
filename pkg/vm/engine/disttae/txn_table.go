@@ -582,8 +582,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges []b
 		return
 	}
 
-	ranges = make(objectio.BlockInfoSlice, 0, objectio.BlockInfoSize)
-	ranges = append(ranges, objectio.EmptyBlockInfoBytes...)
+	var blocks objectio.BlockInfoSlice
+	blocks.Append(objectio.EmptyBlockInfo)
 
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
 	// temporary solution, will fix it in the future
@@ -597,14 +597,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges []b
 		}
 	}
 
-	err = tbl.rangesOnePart(
+	if err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.GetTableDef(ctx),
 		newExprs,
-		&ranges,
+		&blocks,
 		tbl.proc.Load(),
-	)
+	); err != nil {
+		return
+	}
+	ranges = blocks[:]
 	return
 }
 
@@ -631,7 +634,7 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	ranges *[]byte, // output marshaled block list after filtering
+	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
@@ -657,7 +660,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err := tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, ranges, tbl.db.txn.engine.fs,
+		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -820,13 +823,13 @@ func (tbl *txnTable) rangesOnePart(
 						blk.CanRemote = true
 					}
 					blk.PartitionNum = -1
-					*ranges = append(*ranges, objectio.EncodeBlockInfo(*blk)...)
+					blocks.Append(*blk)
 					return true
 				}
 				// store the block in ranges
 				blk.CanRemote = true
 				blk.PartitionNum = -1
-				*ranges = append(*ranges, objectio.EncodeBlockInfo(*blk)...)
+				blocks.Append(*blk)
 
 				return true
 
@@ -841,8 +844,7 @@ func (tbl *txnTable) rangesOnePart(
 		return
 	}
 
-	slice := objectio.BlockInfoSlice(*ranges)
-	bhit, btotal := slice.Len()-1, int(s3BlkCnt)
+	bhit, btotal := blocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
@@ -859,7 +861,7 @@ func (tbl *txnTable) tryFastRanges(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	ranges *[]byte,
+	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
 	if tbl.primaryIdx == -1 {
@@ -961,7 +963,7 @@ func (tbl *txnTable) tryFastRanges(
 					}
 				}
 				blk.PartitionNum = -1
-				*ranges = append(*ranges, objectio.EncodeBlockInfo(*blk)...)
+				blocks.Append(*blk)
 				return true
 			}, obj.ObjectStats)
 
@@ -974,8 +976,7 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	slice := objectio.BlockInfoSlice(*ranges)
-	bhit, btotal := slice.Len()-1, int(blockCnt)
+	bhit, btotal := blocks.Len()-1, int(blockCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
