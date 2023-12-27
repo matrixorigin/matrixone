@@ -25,14 +25,12 @@ type Processor interface {
 	OnPostTable(table *TableEntry) error
 	OnPostObject(Object *ObjectEntry) error
 	OnObject(Object *ObjectEntry) error
-	OnBlock(block *BlockEntry) error
 }
 
 type LoopProcessor struct {
 	DatabaseFn     func(*DBEntry) error
 	TableFn        func(*TableEntry) error
 	ObjectFn       func(*ObjectEntry) error
-	BlockFn        func(*BlockEntry) error
 	PostDatabaseFn func(*DBEntry) error
 	PostTableFn    func(*TableEntry) error
 	PostObjectFn   func(*ObjectEntry) error
@@ -76,13 +74,6 @@ func (p *LoopProcessor) OnPostObject(Object *ObjectEntry) error {
 func (p *LoopProcessor) OnObject(Object *ObjectEntry) error {
 	if p.ObjectFn != nil {
 		return p.ObjectFn(Object)
-	}
-	return nil
-}
-
-func (p *LoopProcessor) OnBlock(block *BlockEntry) error {
-	if p.BlockFn != nil {
-		return p.BlockFn(block)
 	}
 	return nil
 }

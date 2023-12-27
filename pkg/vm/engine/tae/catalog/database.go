@@ -262,18 +262,14 @@ func (e *DBEntry) AsCommonID() *common.ID {
 		DbID: e.ID,
 	}
 }
-func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
+func (e *DBEntry) GetObjectEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
 	e.RLock()
 	table, err := e.GetTableEntryByID(id.TableID)
 	e.RUnlock()
 	if err != nil {
 		return
 	}
-	obj, err := table.GetObjectByID(id.ObjectID())
-	if err != nil {
-		return
-	}
-	blk, err = obj.GetBlockEntryByID(&id.BlockID)
+	obj, err = table.GetObjectByID(id.ObjectID())
 	return
 }
 

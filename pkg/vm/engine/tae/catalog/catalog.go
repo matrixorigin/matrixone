@@ -166,16 +166,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		}
 		return nil
 	}
-	processor.BlockFn = func(be *BlockEntry) error {
-		be.RLock()
-		needGC := be.DeleteBefore(ts)
-		be.RUnlock()
-		if needGC {
-			obj := be.object
-			obj.RemoveEntry(be)
-		}
-		return nil
-	}
 	err := catalog.RecurLoop(&processor)
 	if err != nil {
 		panic(err)
@@ -680,7 +670,6 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	dataFactory DataFactory,
 	observer wal.ReplayObserver) {
 	// catalog.OnReplayBlockID(cmd.ID.BlockID)
-	prepareTS := cmd.GetTs()
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
@@ -701,51 +690,6 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
-	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
-	if err != nil {
-		panic(err)
-	}
-	obj.tryUpdateBlockCnt(int(cmd.mvccNode.BaseNode.MetaLoc.ID() + 1))
-	blk, err := obj.GetBlockEntryByID(&cmd.ID.BlockID)
-	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
-			panic(err)
-		}
-	}
-	if !un.BaseNode.DeltaLoc.IsEmpty() {
-		name := un.BaseNode.DeltaLoc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	if err == nil {
-		blkun := blk.SearchNode(un)
-		if blkun != nil {
-			blkun.Update(un)
-		} else {
-			blk.Insert(un)
-			blk.location = un.BaseNode.MetaLoc
-		}
-		blk.blkData.TryUpgrade()
-		blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
-		return
-	}
-	blk = NewReplayBlockEntry()
-	blk.ID = cmd.ID.BlockID
-	blk.BlockNode = cmd.node
-	blk.BaseEntryImpl.Insert(un)
-	blk.location = un.BaseNode.MetaLoc
-	blk.object = obj
-	if blk.blkData == nil {
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
-	} else {
-		blk.blkData.TryUpgrade()
-	}
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
-	if observer != nil {
-		observer.OnTimeStamp(prepareTS)
-	}
-	obj.ReplayAddEntryLocked(blk)
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
@@ -807,60 +751,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		nil,
 		dataFactory)
-	obj, err := rel.GetObjectByID(objid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	if !deltaloc.IsEmpty() {
-		name := deltaloc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	blk, _ := obj.GetBlockEntryByID(blkid)
-	var un *MVCCNode[*MetadataMVCCNode]
-	if blk == nil {
-		blk = NewReplayBlockEntry()
-		blk.BlockNode = &BlockNode{}
-		blk.object = obj
-		blk.ID = *blkid
-		blk.state = state
-		obj.ReplayAddEntryLocked(blk)
-		un = &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
-				CreatedAt: txnNode.End,
-			},
-			TxnMVCCNode: txnNode,
-			BaseNode: &MetadataMVCCNode{
-				MetaLoc:  metaloc,
-				DeltaLoc: deltaloc,
-			},
-		}
-	} else {
-		prevUn := blk.MVCCChain.GetLatestNodeLocked()
-		un = &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
-				CreatedAt: prevUn.CreatedAt,
-			},
-			TxnMVCCNode: txnNode,
-			BaseNode: &MetadataMVCCNode{
-				MetaLoc:  metaloc,
-				DeltaLoc: deltaloc,
-			},
-		}
-		node := blk.MVCCChain.SearchNode(un)
-		if node != nil {
-			return
-		}
-	}
-	blk.Insert(un)
-	blk.location = un.BaseNode.MetaLoc
-	if blk.blkData == nil {
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
-	} else {
-		blk.blkData.TryUpgrade()
-	}
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
 
 func (catalog *Catalog) onReplayDeleteBlock(
@@ -894,43 +784,11 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		true,
 		nil,
 		nil)
-	obj, err := rel.GetObjectByID(objid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	if !deltaloc.IsEmpty() {
-		name := deltaloc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	blk, err := obj.GetBlockEntryByID(blkid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-
-	prevUn := blk.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*MetadataMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: prevUn.CreatedAt,
-			DeletedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode: &MetadataMVCCNode{
-			MetaLoc:  metaloc,
-			DeltaLoc: deltaloc,
-		},
-	}
-	blk.Insert(un)
-	blk.location = un.BaseNode.MetaLoc
-	blk.blkData.TryUpgrade()
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)
-	tableProcessor.BlockFn = func(be *BlockEntry) error {
+	tableProcessor.ObjectFn = func(be *ObjectEntry) error {
 		if !be.IsActive() {
 			return nil
 		}

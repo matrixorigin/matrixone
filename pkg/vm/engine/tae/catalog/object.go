@@ -35,15 +35,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+type BlockDataFactory = func(meta *ObjectEntry) data.Block
 type ObjectEntry struct {
 	ID     types.Objectid
 	Stat   ObjStat
 	blkCnt int
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
-	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
-	//link.head and tail is nil when new a ObjectEntry object.
-	link *common.GenericSortedDList[*BlockEntry]
 	*ObjectNode
 	blkData data.Block
 }
@@ -148,8 +146,6 @@ func NewObjectEntryByMetaLocation(
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table:   table,
-		link:    common.NewGenericSortedDList((*BlockEntry).Less),
-		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		ObjectNode: &ObjectNode{
 			state:    state,
 			sorted:   state == ES_NotAppendable,
@@ -168,8 +164,6 @@ func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		link:    common.NewGenericSortedDList((*BlockEntry).Less),
-		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	e.Stat.entry = e
 	return e
@@ -181,8 +175,6 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table:   table,
-		link:    common.NewGenericSortedDList((*BlockEntry).Less),
-		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		ObjectNode: &ObjectNode{
 			state:   ES_Appendable,
 			IsLocal: true,
@@ -198,8 +190,6 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 		table:   table,
-		link:    common.NewGenericSortedDList((*BlockEntry).Less),
-		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		ObjectNode: &ObjectNode{
 			state: ES_Appendable,
 		},
@@ -217,12 +207,16 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 		panic("not supported")
 	}
 	e.ID = *bid.Object()
-	block := NewSysBlockEntry(e, bid)
-	e.AddEntryLocked(block)
 	e.Stat.entry = e
 	return e
 }
-
+func (entry *ObjectEntry) InitData(factory DataFactory) {
+	if factory == nil {
+		return
+	}
+	dataFactory := factory.MakeBlockFactory()
+	entry.blkData = dataFactory(entry)
+}
 func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }

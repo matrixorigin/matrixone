@@ -65,10 +65,6 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS, lsn 
 
 func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
-	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
-		entry.InitData(replayer.DataFactory)
-		return
-	}
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if entry.GetTable().IsVirtual() {
 			return moerr.GetOkStopCurrRecur()
@@ -77,6 +73,7 @@ func (replayer *Replayer) PreReplayWal() {
 		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
+		entry.InitData(replayer.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
