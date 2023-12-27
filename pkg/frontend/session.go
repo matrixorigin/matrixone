@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -1559,7 +1560,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	tenant.SetTenantID(uint32(tenantID))
 	ses.timestampMap[TSCheckTenantEnd] = time.Now()
-	v2.CheckTenantDurationHistogram.Observe(float64(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Milliseconds()))
+	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
 
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
@@ -1606,7 +1607,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	tenant.SetUserID(uint32(userID))
 	tenant.SetDefaultRoleID(uint32(defaultRoleID))
 	ses.timestampMap[TSCheckUserEnd] = time.Now()
-	v2.CheckUserDurationHistogram.Observe(float64(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Milliseconds()))
+	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
@@ -1667,7 +1668,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
-		v2.CheckRoleDurationHistogram.Observe(float64(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Milliseconds()))
+		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
@@ -1692,7 +1693,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		}
 		tenant.SetDefaultRole(defaultRole)
 		ses.timestampMap[TSCheckRoleEnd] = time.Now()
-		v2.CheckRoleDurationHistogram.Observe(float64(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Milliseconds()))
+		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	psw, err := GetPassWord(pwd)
@@ -1717,7 +1718,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		}
 		logDebugf(sessionInfo, "check database name succeeded")
 		ses.timestampMap[TSCheckDbNameEnd] = time.Now()
-		v2.CheckDbNameDurationHistogram.Observe(float64(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Milliseconds()))
+		v2.CheckDbNameDurationHistogram.Observe(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
@@ -1733,7 +1734,7 @@ func (ses *Session) InitGlobalSystemVariables() error {
 	ses.timestampMap[TSInitGlobalSysVarStart] = time.Now()
 	defer func() {
 		ses.timestampMap[TSInitGlobalSysVarEnd] = time.Now()
-		v2.InitGlobalSysVarDurationHistogram.Observe(float64(ses.timestampMap[TSInitGlobalSysVarEnd].Sub(ses.timestampMap[TSInitGlobalSysVarStart]).Milliseconds()))
+		v2.InitGlobalSysVarDurationHistogram.Observe(ses.timestampMap[TSInitGlobalSysVarEnd].Sub(ses.timestampMap[TSInitGlobalSysVarStart]).Seconds())
 	}()
 
 	tenantInfo := ses.GetTenantInfo()
