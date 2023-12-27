@@ -435,7 +435,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		switch s.NodeInfo.Rel.GetEngineType() {
+		switch rel.GetEngineType() {
 		case engine.Disttae:
 			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
 			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
@@ -461,8 +461,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
 			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
 			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
-			var ranges objectio.BlockInfoSlice
-			ranges = blkArray.Slice(1, blkArray.Len())
+			ranges := objectio.BlockInfoSlice(blkArray.Slice(1, blkArray.Len()))
 			for i := 0; i < ranges.Len(); i++ {
 				blkInfo := ranges.Get(i)
 				if !blkInfo.CanRemote {
