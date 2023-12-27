@@ -658,6 +658,8 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.DeletedAt = end
 		}
 	}
+	_, blkOffset := blkID.Offsets()
+	obj.tryUpdateBlockCnt(int(blkOffset)+1)
 	if obj.blkData == nil {
 		obj.blkData = dataFactory.MakeBlockFactory()(obj)
 	} else {

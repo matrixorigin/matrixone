@@ -33,7 +33,7 @@ type flushBlkTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
 	delta     *containers.Batch
-	meta      *catalog.BlockEntry
+	meta      *catalog.ObjectEntry
 	fs        *objectio.ObjectFS
 	name      objectio.ObjectName
 	blocks    []objectio.BlockObject
@@ -50,7 +50,7 @@ func NewFlushBlkTask(
 	schemaVer uint32,
 	seqnums []uint16,
 	fs *objectio.ObjectFS,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	data *containers.Batch,
 	delta *containers.Batch,
 	isABlk bool,

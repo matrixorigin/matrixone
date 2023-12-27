@@ -42,7 +42,7 @@ import (
 )
 
 var CompactBlockTaskFactory = func(
-	meta *catalog.BlockEntry, rt *dbutils.Runtime,
+	meta *catalog.ObjectEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return NewCompactBlockTask(ctx, txn, meta, rt)
@@ -56,7 +56,7 @@ type compactBlockTask struct {
 	compacted handle.Block
 	created   handle.Block
 	schema    *catalog.Schema
-	meta      *catalog.BlockEntry
+	meta      *catalog.ObjectEntry
 	scopes    []common.ID
 	mapping   []int32
 	deletes   *nulls.Bitmap
@@ -182,7 +182,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	obj := task.compacted.GetObject()
 	defer obj.Close()
 	// Prepare a block placeholder
-	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
+	oldBMeta := task.compacted.GetMeta().(*catalog.ObjectEntry)
 	phaseNumber = 1
 	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {

@@ -18,21 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type BlockDataFactory = func(meta *ObjectEntry) data.Block
@@ -41,7 +37,7 @@ type ObjectEntry struct {
 	Stat   ObjStat
 	blkCnt int
 	*BaseEntryImpl[*ObjectMVCCNode]
-	table   *TableEntry
+	table *TableEntry
 	*ObjectNode
 	blkData data.Block
 }
@@ -117,9 +113,7 @@ func NewObjectEntry(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table:   table,
-		link:    common.NewGenericSortedDList((*BlockEntry).Less),
-		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		table: table,
 		ObjectNode: &ObjectNode{
 			state:    state,
 			SortHint: table.GetDB().catalog.NextObject(),
@@ -145,7 +139,7 @@ func NewObjectEntryByMetaLocation(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table:   table,
+		table: table,
 		ObjectNode: &ObjectNode{
 			state:    state,
 			sorted:   state == ES_NotAppendable,
@@ -174,7 +168,7 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		ID: *objectio.NewObjectid(),
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table:   table,
+		table: table,
 		ObjectNode: &ObjectNode{
 			state:   ES_Appendable,
 			IsLocal: true,
@@ -189,7 +183,7 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	e := &ObjectEntry{
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
-		table:   table,
+		table: table,
 		ObjectNode: &ObjectNode{
 			state: ES_Appendable,
 		},
@@ -248,7 +242,7 @@ func (entry *ObjectEntry) CheckAndLoad() error {
 	return nil
 }
 
-func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool, blk *BlockEntry) {
+func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool) {
 	lastNode := nodes[0]
 	for _, n := range nodes {
 		if n.Start.Greater(lastNode.Start) {
@@ -258,39 +252,14 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 	if !lastNode.BaseNode.IsEmpty() {
 		return
 	}
-	blk = entry.GetFirstBlkEntry()
-	// for gc in test
-	if blk == nil {
-		return false, nil
-	}
-	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
-		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
-	})
-	// in some unit tests, node doesn't exist
-	if node == nil || node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
-		return
+	if entry.HasPersistedData() {
+		needPrefetch = true
 	}
 
-	needPrefetch = true
 	return
 }
 func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
 	stats := *objectio.NewObjectStats()
-	blk := entry.GetFirstBlkEntry()
-	// for gc in test
-	if blk == nil {
-		return stats, nil
-	}
-	blk.RLock()
-	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
-		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: startTS},
-	})
-	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
-		blk.RUnlock()
-		objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
-		return stats, nil
-	}
-	blk.RUnlock()
 
 	entry.RLock()
 	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
@@ -304,9 +273,9 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	if stats.Rows() != 0 {
 		return stats, nil
 	}
-	metaLoc := node.BaseNode.MetaLoc
+	metaLoc := entry.GetLatestCommittedNode().BaseNode.ObjectStats.ObjectLocation()
 
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, blk.blkData.GetFs().Service)
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.blkData.GetFs().Service)
 	if err != nil {
 		return *objectio.NewObjectStats(), err
 	}
@@ -351,18 +320,6 @@ func (entry *ObjectEntry) LoadObjectInfoForLastNode() (stats objectio.ObjectStat
 func (entry *ObjectEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
 	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
 }
-func (entry *ObjectEntry) GetFirstBlkEntry() *BlockEntry {
-	entry.RLock()
-	defer entry.RUnlock()
-
-	// head may be nil
-	head := entry.link.GetHead()
-	if head == nil {
-		return nil
-	}
-
-	return head.GetPayload()
-}
 
 func (entry *ObjectEntry) Less(b *ObjectEntry) int {
 	if entry.SortHint < b.SortHint {
@@ -371,12 +328,6 @@ func (entry *ObjectEntry) Less(b *ObjectEntry) int {
 		return 1
 	}
 	return 0
-}
-
-func (entry *ObjectEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
-	entry.RLock()
-	defer entry.RUnlock()
-	return entry.GetBlockEntryByIDLocked(id)
 }
 
 func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
@@ -399,17 +350,6 @@ func (entry *ObjectEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.
 	return
 }
 
-// XXX API like this, why do we need the error?   Isn't blk is nil enough?
-func (entry *ObjectEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *BlockEntry, err error) {
-	node := entry.entries[*id]
-	if node == nil {
-		err = moerr.GetOkExpectedEOB()
-		return
-	}
-	blk = node.GetPayload()
-	return
-}
-
 func (entry *ObjectEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmdType := IOET_WALTxnCommand_Object
 	entry.RLock()
@@ -428,15 +368,6 @@ func (entry *ObjectEntry) PPString(level common.PPLevel, depth int, prefix strin
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
-	}
-	it := entry.MakeBlockIt(true)
-	for it.Valid() {
-		block := it.Get().GetPayload()
-		block.RLock()
-		_ = w.WriteByte('\n')
-		_, _ = w.WriteString(block.PPString(level, depth+1, prefix))
-		block.RUnlock()
-		it.Next()
 	}
 	return w.String()
 }
@@ -502,136 +433,10 @@ func (entry *ObjectEntry) GetTable() *TableEntry {
 	return entry.table
 }
 
-func (entry *ObjectEntry) GetAppendableBlockCnt() int {
-	cnt := 0
-	it := entry.MakeBlockIt(true)
-	for it.Valid() {
-		if it.Get().GetPayload().IsAppendable() {
-			cnt++
-		}
-		it.Next()
-	}
-	return cnt
-}
-
 // GetNonAppendableBlockCnt Non-appendable Object only can contain non-appendable blocks;
 // Appendable Object can contain both of appendable blocks and non-appendable blocks
 func (entry *ObjectEntry) GetNonAppendableBlockCnt() int {
-	cnt := 0
-	it := entry.MakeBlockIt(true)
-	for it.Valid() {
-		if !it.Get().GetPayload().IsAppendable() {
-			cnt++
-		}
-		it.Next()
-	}
-	return cnt
-}
-
-func (entry *ObjectEntry) GetAppendableBlock() (blk *BlockEntry) {
-	it := entry.MakeBlockIt(false)
-	for it.Valid() {
-		itBlk := it.Get().GetPayload()
-		if itBlk.IsAppendable() {
-			blk = itBlk
-			break
-		}
-		it.Next()
-	}
-	return
-}
-func (entry *ObjectEntry) LastAppendableBlock() (blk *BlockEntry) {
-	it := entry.MakeBlockIt(false)
-	for it.Valid() {
-		itBlk := it.Get().GetPayload()
-		dropped := itBlk.HasDropCommitted()
-		if itBlk.IsAppendable() && !dropped {
-			blk = itBlk
-			break
-		}
-		it.Next()
-	}
-	return
-}
-
-func (entry *ObjectEntry) GetNextObjectIndex() uint16 {
-	entry.RLock()
-	defer entry.RUnlock()
-	return entry.nextObjectIdx
-}
-
-func (entry *ObjectEntry) CreateBlock(
-	txn txnif.AsyncTxn,
-	state EntryState,
-	dataFactory BlockDataFactory,
-	opts *objectio.CreateBlockOpt) (created *BlockEntry, err error) {
-	entry.Lock()
-	defer entry.Unlock()
-	var id *objectio.Blockid
-	if entry.IsAppendable() && len(entry.entries) >= 1 {
-		panic("Logic error. Appendable Object has as most one block.")
-	}
-	if opts != nil && opts.Id != nil {
-		id = objectio.NewBlockidWithObjectID(&entry.ID, opts.Id.Blkn)
-		if entry.nextObjectIdx <= opts.Id.Filen {
-			entry.nextObjectIdx = opts.Id.Filen + 1
-		}
-	} else {
-		id = objectio.NewBlockidWithObjectID(&entry.ID, 0)
-		entry.nextObjectIdx += 1
-	}
-	if entry.nextObjectIdx == math.MaxUint16 {
-		panic("bad logic: full object offset")
-	}
-	if _, ok := entry.entries[*id]; ok {
-		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))
-	}
-	if opts != nil && opts.Loc != nil {
-		created = NewBlockEntryWithMeta(entry, id, txn, state, dataFactory, opts.Loc.Metaloc, opts.Loc.Deltaloc)
-	} else {
-		created = NewBlockEntry(entry, id, txn, state, dataFactory)
-	}
-	entry.AddEntryLocked(created)
-	return
-}
-
-func (entry *ObjectEntry) DropBlockEntry(id *objectio.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
-	blk, err := entry.GetBlockEntryByID(id)
-	if err != nil {
-		return
-	}
-	blk.Lock()
-	defer blk.Unlock()
-	needWait, waitTxn := blk.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		blk.Unlock()
-		waitTxn.GetTxnState(true)
-		blk.Lock()
-	}
-	var isNewNode bool
-	isNewNode, err = blk.DropEntryLocked(txn)
-	if err == nil && isNewNode {
-		deleted = blk
-	}
-	return
-}
-
-func (entry *ObjectEntry) MakeBlockIt(reverse bool) *common.GenericSortedDListIt[*BlockEntry] {
-	entry.RLock()
-	defer entry.RUnlock()
-	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
-}
-
-func (entry *ObjectEntry) AddEntryLocked(block *BlockEntry) {
-	n := entry.link.Insert(block)
-	entry.entries[block.ID] = n
-}
-
-func (entry *ObjectEntry) ReplayAddEntryLocked(block *BlockEntry) {
-	// bump object idx during replaying.
-	objn, _ := block.ID.Offsets()
-	entry.replayNextObjectIdx(objn)
-	entry.AddEntryLocked(block)
+	return entry.blkCnt
 }
 
 func (entry *ObjectEntry) replayNextObjectIdx(objn uint16) {
@@ -651,26 +456,6 @@ func (entry *ObjectEntry) AsCommonID() *common.ID {
 
 func (entry *ObjectEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
-func (entry *ObjectEntry) deleteEntryLocked(block *BlockEntry) error {
-	if n, ok := entry.entries[block.ID]; !ok {
-		return moerr.GetOkExpectedEOB()
-	} else {
-		entry.link.Delete(n)
-		delete(entry.entries, block.ID)
-	}
-	// block.blkData.Close()
-	// block.blkData = nil
-	return nil
-}
-
-func (entry *ObjectEntry) RemoveEntry(block *BlockEntry) (err error) {
-	logutil.Debug("[Catalog]", common.OperationField("remove"),
-		common.OperandField(block.String()))
-	entry.Lock()
-	defer entry.Unlock()
-	return entry.deleteEntryLocked(block)
-}
-
 func (entry *ObjectEntry) PrepareRollback() (err error) {
 	var isEmpty bool
 	if isEmpty, err = entry.BaseEntryImpl.PrepareRollback(); err != nil {
@@ -682,31 +467,6 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		}
 	}
 	return
-}
-
-func (entry *ObjectEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImpl[*MetadataMVCCNode]) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
-	blks := make([]*BlockEntry, 0)
-	blkIt := entry.MakeBlockIt(true)
-	for blkIt.Valid() {
-		blk := blkIt.Get().GetPayload()
-		blk.RLock()
-		if commitFilter != nil && blockFilter != nil {
-			if commitFilter(blk.BaseEntryImpl) && blockFilter(blk) {
-				blks = append(blks, blk)
-			}
-		} else if blockFilter != nil {
-			if blockFilter(blk) {
-				blks = append(blks, blk)
-			}
-		} else if commitFilter != nil {
-			if commitFilter(blk.BaseEntryImpl) {
-				blks = append(blks, blk)
-			}
-		}
-		blk.RUnlock()
-		blkIt.Next()
-	}
-	return blks
 }
 
 // IsActive is coarse API: no consistency check

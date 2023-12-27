@@ -53,7 +53,7 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 	// used for the next flush table tail.
-	DeletedDirties []*BlockEntry
+	DeletedDirties []*ObjectEntry
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 }
@@ -437,18 +437,6 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			return err
 		}
-		blkIt := Object.MakeBlockIt(true)
-		for blkIt.Valid() {
-			block := blkIt.Get().GetPayload()
-			if err := processor.OnBlock(block); err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-					blkIt.Next()
-					continue
-				}
-				return err
-			}
-			blkIt.Next()
-		}
 		if err := processor.OnPostObject(Object); err != nil {
 			return err
 		}
@@ -557,12 +545,7 @@ func (entry *TableEntry) FreezeAppend() {
 		// nothing to freeze
 		return
 	}
-	blk := obj.LastAppendableBlock()
-	if blk == nil {
-		// nothing to freeze
-		return
-	}
-	blk.GetBlockData().FreezeAppend()
+	obj.GetBlockData().FreezeAppend()
 }
 
 // IsActive is coarse API: no consistency check
