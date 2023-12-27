@@ -1219,9 +1219,6 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 	if err != nil {
 		return err
 	}
-	if totalCnt == 0 {
-		return nil
-	}
 
 	// 4.a populate meta table
 	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
@@ -1229,16 +1226,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.b delete old entries in "centroids" and "entries" table for the current version
-	err = s.handleIvfIndexDeleteOldEntries(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-	if err != nil {
-		return err
-	}
-
-	// 4.c populate centroids table
+	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
@@ -1246,7 +1234,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.d populate entries table
+	// 4.c populate entries table
 	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)

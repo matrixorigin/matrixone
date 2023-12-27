@@ -89,7 +89,7 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx7";
 
--- 9. Null & duplicate rows
+-- 9. duplicate rows
 drop table if exists tbl;
 create table tbl(a int primary key, b vecf32(3));
 insert into tbl values(1, "[1,2,3]");
@@ -97,11 +97,9 @@ insert into tbl values(2, "[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]");
 insert into tbl values(4, "[1,2,5]");
 insert into tbl values(5, "[1,3,5]");
-insert into tbl values(6, "[100,44,50]");
+insert into tbl values(6, "[100,44,50]"); -- dup
 insert into tbl values(7, "[100,44,50]");
 insert into tbl values(8, "[130,40,90]");
-insert into tbl values(9, null);
-insert into tbl values(10, null);
 create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 show create table tbl;
@@ -317,6 +315,49 @@ insert into tbl values(8, "[130,40,90]");
 -- 26. Update table add new column
 alter table tbl add column id2 VARCHAR(20);
 update tbl set id2 = id;
+
+-- 27. Insert into table select (internally uses window row_number)
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(9, "[130,40,90]");
+
+drop table if exists tbl2;
+create table tbl2(id int primary key, data vecf32(3), key idx20 using ivfflat (data) lists=2 op_type "vector_l2_ops");
+insert into tbl2 select * from tbl1;
+
+-- 28. Create Index with no rows
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+
+-- 29. Handle Null embeddings
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, NULL);
+insert into tbl values(2, NULL);
+insert into tbl values(3, NULL);
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+create index idx20 using ivfflat on tbl(data) lists=2 op_type "vector_l2_ops";
+insert into tbl values(6, NULL);
+insert into tbl values(7, "[130,40,90]");
 
 -- post
 drop database vecdb2;

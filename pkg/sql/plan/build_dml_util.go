@@ -2458,6 +2458,7 @@ func appendPreInsertSkVectorPlan(
 	}
 
 	// 4. create a cross join node for tbl and centroids
+	// Projections: centroids.version, centroids.centroid_id, tbl.pk, centroids.centroid, tbl.embedding
 	var leftChildTblId = lastNodeId
 	var rightChildCentroidsId = currVersionCentroidsTblScanId
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
@@ -2465,13 +2466,21 @@ func appendPreInsertSkVectorPlan(
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 
-	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
-	// project version, centroid_id, pk, serial(version,pk)
-	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID, lastNodeId, isUpdate)
+	// 5. partition by tbl.pk
+	// 6. Window operation
+	// 7. Filter records where row_number() = 1
+	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID, err)
 	if err != nil {
 		return -1, err
 	}
-	lastNodeId = sortByL2DistanceId
+
+	// 8. Final project: centroids.version, centroids.centroid_id, tbl.pk, cp_col
+	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId, lastNodeId, isUpdate)
+	if err != nil {
+		return -1, err
+	}
+
+	lastNodeId = projectId
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
