@@ -43,42 +43,42 @@ type ObjectEntry struct {
 	*ObjectNode
 }
 
-func (e *ObjectEntry) GetLoaded() bool {
-	stats := e.GetObjectStats()
+func (entry *ObjectEntry) GetLoaded() bool {
+	stats := entry.GetObjectStats()
 	return stats.Rows() != 0
 }
 
-func (e *ObjectEntry) GetSortKeyZonemap() index.ZM {
-	stats := e.GetObjectStats()
+func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
+	stats := entry.GetObjectStats()
 	return stats.SortKeyZoneMap()
 }
 
-func (e *ObjectEntry) SetRemainingRows(rows int) {
-	e.remainingRows = rows
+func (entry *ObjectEntry) SetRemainingRows(rows int) {
+	entry.remainingRows = rows
 }
 
-func (e *ObjectEntry) GetRemainingRows() int {
-	return e.remainingRows
+func (entry *ObjectEntry) GetRemainingRows() int {
+	return entry.remainingRows
 }
 
-func (e *ObjectEntry) GetRows() int {
-	stats := e.GetObjectStats()
+func (entry *ObjectEntry) GetRows() int {
+	stats := entry.GetObjectStats()
 	return int(stats.Rows())
 }
 
-func (e *ObjectEntry) GetOriginSize() int {
-	stats := e.GetObjectStats()
+func (entry *ObjectEntry) GetOriginSize() int {
+	stats := entry.GetObjectStats()
 	return int(stats.OriginSize())
 }
 
-func (e *ObjectEntry) GetCompSize() int {
-	stats := e.GetObjectStats()
+func (entry *ObjectEntry) GetCompSize() int {
+	stats := entry.GetObjectStats()
 	return int(stats.Size())
 }
 
-func (e *ObjectEntry) StatsString(composeSortKey bool) string {
+func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
 	zonemapStr := "nil"
-	if z := e.GetSortKeyZonemap(); z != nil {
+	if z := entry.GetSortKeyZonemap(); z != nil {
 		if composeSortKey {
 			zonemapStr = z.StringForCompose()
 		} else {
@@ -87,11 +87,11 @@ func (e *ObjectEntry) StatsString(composeSortKey bool) string {
 	}
 	return fmt.Sprintf(
 		"loaded:%t, oSize:%s, cSzie:%s rows:%d, remainingRows:%d, zm: %s",
-		e.GetLoaded(),
-		common.HumanReadableBytes(e.GetOriginSize()),
-		common.HumanReadableBytes(e.GetCompSize()),
-		e.GetRows(),
-		e.remainingRows,
+		entry.GetLoaded(),
+		common.HumanReadableBytes(entry.GetOriginSize()),
+		common.HumanReadableBytes(entry.GetCompSize()),
+		entry.GetRows(),
+		entry.remainingRows,
 		zonemapStr,
 	)
 }
