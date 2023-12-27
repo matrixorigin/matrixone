@@ -284,7 +284,7 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	defer entry.RUnlock()
 
 	// Skip uncommitted entries and appendable block
-	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) {
+	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
 		// txn appending metalocs
 		s.ObjectHelper.isCreating = true
 		return
