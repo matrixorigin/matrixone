@@ -174,6 +174,10 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 	case v := <-w.c:
 		apply(v)
 		return v
+	case <-time.After(time.Second * 70):
+		getLogger().Fatal("+++ wait too long",
+			zap.String("waiter", w.String()),
+			bytesArrayField("wait for", w.waitFor))
 	case <-ctx.Done():
 		select {
 		case v := <-w.c:
