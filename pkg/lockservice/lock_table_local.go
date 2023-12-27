@@ -273,14 +273,6 @@ func (l *localLockTable) unlock(
 					buf.WriteString(" ")
 					return true
 				})
-
-				getLogger().Info("+++ txn unlock",
-					bytesField("txnID", txn.txnID),
-					bytesField("key", key),
-					zap.String("bind", l.bind.DebugString()),
-					zap.String("holders", lock.holders.String()),
-					zap.String("waiters", buf.String()),
-					zap.Bool("lockCanRemoved", lockCanRemoved))
 			}
 			if lockCanRemoved {
 				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())

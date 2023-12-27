@@ -151,7 +151,7 @@ func (txn *activeTxn) close(
 				continue
 			}
 
-			fn := func(table uint64, cs *cowSlice) func() {
+			fn := func(table uint64, cs *cowSlice, l lockTable) func() {
 				return func() {
 					logTxnUnlockTable(
 						serviceID,
@@ -171,9 +171,9 @@ func (txn *activeTxn) close(
 
 			if n > parallelUnlockTables {
 				wg.Add(1)
-				ants.Submit(fn(table, cs))
+				ants.Submit(fn(table, cs, l))
 			} else {
-				fn(table, cs)()
+				fn(table, cs, l)()
 			}
 		}
 	}
