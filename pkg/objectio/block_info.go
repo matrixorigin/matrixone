@@ -96,6 +96,42 @@ func DecodeBlockInfo(buf []byte) *BlockInfo {
 	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
 }
 
+type RangeSlice struct {
+	Bytes       []byte
+	elementSize int
+}
+
+func (s *RangeSlice) GetBytes(i int) []byte {
+	return s.Bytes[i*s.elementSize : (i+1)*s.elementSize]
+}
+
+func (s *RangeSlice) Len() int {
+	return len(s.Bytes) / s.elementSize
+}
+
+func (s *RangeSlice) Append(bs []byte) {
+	s.Bytes = append(s.Bytes, bs...)
+}
+
+func (s *RangeSlice) Size() int {
+	return len(s.Bytes)
+}
+
+func (s *RangeSlice) SetBytes(bs []byte) {
+	s.Bytes = bs
+}
+
+func (s *RangeSlice) GetAllBytes() []byte {
+	return s.Bytes
+}
+
+func (s *RangeSlice) Slice(i, j int) RangeSlice {
+	return RangeSlice{
+		Bytes:       s.Bytes[i*s.elementSize : j*s.elementSize],
+		elementSize: s.elementSize,
+	}
+}
+
 type BlockInfoSlice []byte
 
 func (s *BlockInfoSlice) Get(i int) *BlockInfo {
@@ -114,16 +150,32 @@ func (s *BlockInfoSlice) Len() int {
 	return len(*s) / BlockInfoSize
 }
 
-func (s *BlockInfoSlice) Slice(i, j int) BlockInfoSlice {
+func (s *BlockInfoSlice) Size() int {
+	return len(*s)
+}
+
+func (s *BlockInfoSlice) Slice(i, j int) []byte {
 	return (*s)[i*BlockInfoSize : j*BlockInfoSize]
 }
 
-func (s *BlockInfoSlice) Append(info BlockInfo) {
+func (s *BlockInfoSlice) Append(bs []byte) {
+	*s = append(*s, bs...)
+}
+
+func (s *BlockInfoSlice) AppendBlockInfo(info BlockInfo) {
 	*s = append(*s, EncodeBlockInfo(info)...)
+}
+
+func (s *BlockInfoSlice) SetBytes(bs []byte) {
+	*s = bs
 }
 
 func (s *BlockInfoSlice) Clear() {
 	for i := range *s {
 		(*s)[i] = 0
 	}
+}
+
+func (s *BlockInfoSlice) GetAllBytes() []byte {
+	return *s
 }

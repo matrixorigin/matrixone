@@ -40,7 +40,7 @@ func FuzzEncodeInfoHeader(f *testing.F) {
 
 func TestBlockInfoSlice_Append(t *testing.T) {
 	var s BlockInfoSlice
-	s.Append(BlockInfo{BlockID: types.Blockid{1}})
+	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
 	require.Equal(t, 1, s.Len())
 	require.Equal(t, BlockInfoSize, len(s))
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s.Get(0))
@@ -48,8 +48,8 @@ func TestBlockInfoSlice_Append(t *testing.T) {
 
 func TestBlockInfoSlice_Append2(t *testing.T) {
 	var s BlockInfoSlice
-	s.Append(BlockInfo{BlockID: types.Blockid{1}})
-	s.Append(BlockInfo{BlockID: types.Blockid{2}})
+	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
+	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{2}})
 	require.Equal(t, 2, s.Len())
 	require.Equal(t, BlockInfoSize*2, len(s))
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s.Get(0))
@@ -68,7 +68,7 @@ func intToBlockid(i int32) types.Blockid {
 func TestBlockInfoSliceTraverse(t *testing.T) {
 	var s BlockInfoSlice
 	for i := int32(0); i < 1000; i++ {
-		s.Append(BlockInfo{BlockID: intToBlockid(i)})
+		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(i)})
 	}
 	require.Equal(t, 1000, s.Len())
 
@@ -83,7 +83,7 @@ func TestBlockInfoSliceTraverse(t *testing.T) {
 		require.Equal(t, true, s.Get(i).CanRemote)
 	}
 
-	s.Append(BlockInfo{BlockID: intToBlockid(1000), CanRemote: true})
+	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1000), CanRemote: true})
 
 	for i := 0; i < s.Len(); i++ {
 		require.Equal(t, true, s.Get(i).CanRemote)
@@ -106,7 +106,7 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 		blkInfo.CanRemote = true
 	}
 
-	s.Append(BlockInfo{BlockID: intToBlockid(1000), CanRemote: true})
+	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1000), CanRemote: true})
 
 	for i := 0; i < s.Len(); i++ {
 		require.Equal(t, true, s.Get(i).CanRemote)
@@ -124,7 +124,7 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 
 func TestBlockInfoSlice_Slice(t *testing.T) {
 	s := make(BlockInfoSlice, 0)
-	s.Append(BlockInfo{BlockID: intToBlockid(0)})
+	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(0)})
 	// Get BlockInfoSlice[:1]
 	require.Equal(t, s.GetBytes(0), []byte(s.Slice(0, 1)))
 	// Get BlockInfoSlice[1:]
@@ -134,8 +134,8 @@ func TestBlockInfoSlice_Slice(t *testing.T) {
 	require.Equal(t, 0, len(s))
 	require.Equal(t, 0, s.Len())
 
-	s.Append(BlockInfo{BlockID: intToBlockid(1)})
-	s.Append(BlockInfo{BlockID: intToBlockid(2)})
+	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(1)})
+	s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(2)})
 	require.Equal(t, s.GetBytes(0), []byte(s.Slice(0, 1)))
 	require.Equal(t, s.GetBytes(1), []byte(s.Slice(1, s.Len())))
 }
@@ -143,7 +143,7 @@ func TestBlockInfoSlice_Slice(t *testing.T) {
 func TestBlockInfoSlice_GetBytes(t *testing.T) {
 	s := make(BlockInfoSlice, 0, 10)
 	for i := 0; i < 10; i++ {
-		s.Append(BlockInfo{BlockID: intToBlockid(int32(i))})
+		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))})
 	}
 
 	for i := 0; i < 10; i++ {
@@ -157,7 +157,7 @@ func TestBlockInfoSlice_GetBytes(t *testing.T) {
 func TestBlockInfoSlice_Remove(t *testing.T) {
 	s := make(BlockInfoSlice, 0, 10)
 	for i := 0; i < 10; i++ {
-		s.Append(BlockInfo{BlockID: intToBlockid(int32(i))})
+		s.AppendBlockInfo(BlockInfo{BlockID: intToBlockid(int32(i))})
 	}
 
 	curr := 0

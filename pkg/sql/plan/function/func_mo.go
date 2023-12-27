@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strconv"
 	"strings"
 
@@ -307,7 +306,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			var ranges objectio.BlockInfoSlice
+			var ranges engine.Ranges
 			ranges, err = rel.Ranges(ctx, nil)
 			if err != nil {
 				return err

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -372,7 +373,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 	}
 
-	mcpu := DeterminRuntimeDOP(goruntime.NumCPU(), len(s.NodeInfo.Data))
+	numCpu := goruntime.NumCPU()
+	var mcpu int
 
 	switch {
 	case remote:
@@ -383,6 +385,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if s.DataSource.AccountId != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
+		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+		mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
@@ -391,6 +395,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
+		switch s.NodeInfo.Rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
+		default:
+			mcpu = 1
+		}
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
@@ -421,6 +435,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
+		switch s.NodeInfo.Rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
+		default:
+			mcpu = 1
+		}
 		if rel.GetEngineType() == engine.Memory ||
 			s.DataSource.PartitionRelationNames == nil {
 			mainRds, err := rel.NewReader(
@@ -434,10 +458,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			rds = append(rds, mainRds...)
 		} else {
 			//handle partition table.
-			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
-			cleanRanges := make(objectio.BlockInfoSlice, 0, len(s.NodeInfo.Data))
 			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
-			ranges := blkArray.Slice(1, blkArray.Len())
+			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
+			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
+			var ranges objectio.BlockInfoSlice
+			ranges = blkArray.Slice(1, blkArray.Len())
 			for i := 0; i < ranges.Len(); i++ {
 				blkInfo := ranges.Get(i)
 				if !blkInfo.CanRemote {

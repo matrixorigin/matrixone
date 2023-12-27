@@ -569,12 +569,28 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 	}
 }
 
+type Ranges interface {
+	GetBytes(i int) []byte
+
+	Len() int
+
+	Append([]byte)
+
+	Size() int
+
+	SetBytes([]byte)
+
+	GetAllBytes() []byte
+
+	Slice(i, j int) []byte
+}
+
 type Relation interface {
 	Statistics
 
 	UpdateObjectInfos(context.Context) error
 
-	Ranges(context.Context, []*plan.Expr) ([]byte, error)
+	Ranges(context.Context, []*plan.Expr) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

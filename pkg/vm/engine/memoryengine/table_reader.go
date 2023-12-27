@@ -17,7 +17,6 @@ package memoryengine
 import (
 	"context"
 	"encoding/binary"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,8 +40,9 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, shardIDs []byte) (readers []engine.Reader, err error) {
+func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte) (readers []engine.Reader, err error) {
 	readers = make([]engine.Reader, parallel)
+	shardIDs := ShardIdSlice(bytes)
 
 	var shards []Shard
 	if len(shardIDs) == 0 {
@@ -70,8 +70,8 @@ func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, sh
 	} else {
 		// some
 		idSet := make(map[uint64]bool)
-		for i := 0; i < len(shardIDs); i += 8 {
-			id := binary.LittleEndian.Uint64(shardIDs[i : i+8])
+		for i := 0; i < shardIDs.Len(); i++ {
+			id := binary.LittleEndian.Uint64(shardIDs.GetBytes(i))
 			idSet[id] = true
 		}
 		for _, store := range getTNServices(t.engine.cluster) {
@@ -200,10 +200,10 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([]byte, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) (engine.Ranges, error) {
 	// return encoded shard ids
 	nodes := getTNServices(t.engine.cluster)
-	shards := make([]byte, 0, len(nodes)*8)
+	shards := make(ShardIdSlice, 0, len(nodes)*8)
 	for _, node := range nodes {
 		for _, shard := range node.Shards {
 			id := make([]byte, 8)
@@ -211,7 +211,37 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([]byte, error) {
 			shards = append(shards, id...)
 		}
 	}
-	return shards, nil
+	return &shards, nil
+}
+
+type ShardIdSlice []byte
+
+func (s *ShardIdSlice) GetBytes(i int) []byte {
+	return (*s)[i*8 : (i+1)*8]
+}
+
+func (s *ShardIdSlice) Len() int {
+	return len(*s) / 8
+}
+
+func (s *ShardIdSlice) Append(bs []byte) {
+	*s = append(*s, bs...)
+}
+
+func (s *ShardIdSlice) Size() int {
+	return len(*s)
+}
+
+func (s *ShardIdSlice) SetBytes(bs []byte) {
+	*s = bs
+}
+
+func (s *ShardIdSlice) GetAllBytes() []byte {
+	return *s
+}
+
+func (s *ShardIdSlice) Slice(i, j int) []byte {
+	return (*s)[i*8 : j*8]
 }
 
 func (t *Table) UpdateObjectInfos(_ context.Context) error {

@@ -560,7 +560,7 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges []byte, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -583,7 +583,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges []b
 	}
 
 	var blocks objectio.BlockInfoSlice
-	blocks.Append(objectio.EmptyBlockInfo)
+	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
 	// temporary solution, will fix it in the future
@@ -607,7 +607,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges []b
 	); err != nil {
 		return
 	}
-	ranges = blocks[:]
+	ranges = &blocks
 	return
 }
 
@@ -823,13 +823,13 @@ func (tbl *txnTable) rangesOnePart(
 						blk.CanRemote = true
 					}
 					blk.PartitionNum = -1
-					blocks.Append(*blk)
+					blocks.AppendBlockInfo(*blk)
 					return true
 				}
 				// store the block in ranges
 				blk.CanRemote = true
 				blk.PartitionNum = -1
-				blocks.Append(*blk)
+				blocks.AppendBlockInfo(*blk)
 
 				return true
 
@@ -963,7 +963,7 @@ func (tbl *txnTable) tryFastRanges(
 					}
 				}
 				blk.PartitionNum = -1
-				blocks.Append(*blk)
+				blocks.AppendBlockInfo(*blk)
 				return true
 			}, obj.ObjectStats)
 

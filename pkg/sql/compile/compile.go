@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"math"
 	"net"
 	"runtime"
@@ -3430,7 +3431,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	var ranges objectio.BlockInfoSlice
+	var ranges engine.Ranges
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
@@ -3486,16 +3487,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				var subranges objectio.BlockInfoSlice
+				var subranges engine.Ranges
 				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
 				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := subranges.Get(j)
+					blkInfo := objectio.DecodeBlockInfo(subranges.GetBytes(j))
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, subranges.GetBytes(j)...)
+					ranges.Append(subranges.GetBytes(j))
 				}
 			}
 		} else {
@@ -3508,23 +3509,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				var subranges objectio.BlockInfoSlice
+				var subranges engine.Ranges
 				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 				//add partition number into catalog.BlockInfo.
 				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := subranges.Get(j)
+					blkInfo := objectio.DecodeBlockInfo(subranges.GetBytes(j))
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, subranges.GetBytes(j)...)
+					ranges.Append(subranges.GetBytes(j))
 				}
 			}
 		}
 	}
 
-	if len(n.AggList) > 0 && len(ranges) > 1 {
-		newranges := make([]byte, 0, len(ranges))
+	if len(n.AggList) > 0 && ranges.Len() > 1 {
+		newranges := make([]byte, 0, ranges.Size())
 		newranges = append(newranges, ranges.GetBytes(0)...)
 		partialResults = make([]any, 0, len(n.AggList))
 		partialResultTypes = make([]types.T, len(n.AggList))
@@ -3571,7 +3572,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if partialResults == nil {
 					break
 				}
-				blk := ranges.Get(i)
+				blk := objectio.DecodeBlockInfo(ranges.GetBytes(i))
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, ranges.GetBytes(i)...)
 					continue
@@ -3854,10 +3855,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if len(ranges) == len(newranges) {
+			if ranges.Len() == len(newranges) {
 				partialResults = nil
 			} else if partialResults != nil {
-				ranges = newranges
+				ranges.SetBytes(newranges)
 			}
 		}
 		if partialResults == nil {
@@ -3868,11 +3869,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
-	expectedLen := len(ranges)
+	expectedLen := ranges.Len()
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	//if len(ranges) == 0 indicates that it's a temporary table.
-	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
+	if ranges.Len() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			if isPartitionTable {
@@ -3900,18 +3901,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		return putBlocksInCurrentCN(c, ranges, rel, n), partialResults, partialResultTypes, nil
+		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSlice), rel, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
+	return putBlocksInAverage(c, ranges.(*memoryengine.ShardIdSlice), rel, n), partialResults, partialResultTypes, nil
 }
 
-func putBlocksInAverage(c *Compile, ranges objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInAverage(c *Compile, ranges *memoryengine.ShardIdSlice, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	step := (ranges.Len() + len(c.cnList) - 1) / len(c.cnList)
 	for i := 0; i < ranges.Len(); i += step {
@@ -3959,7 +3960,7 @@ func putBlocksInAverage(c *Compile, ranges objectio.BlockInfoSlice, rel engine.R
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{
@@ -3969,20 +3970,20 @@ func shuffleBlocksToMultiCN(c *Compile, ranges objectio.BlockInfoSlice, rel engi
 	})
 	//add memory table block
 	nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
-	ranges = ranges.Slice(1, ranges.Len())
+	*ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
 	if ranges.Len() == 0 {
 		return nodes, nil
 	}
 	//only one cn
 	if len(c.cnList) == 1 {
-		nodes[0].Data = append(nodes[0].Data, ranges...)
+		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		return nodes, nil
 	}
 	// put dirty blocks which can't be distributed remotely in current CN.
-	newRanges := make(objectio.BlockInfoSlice, 0, len(ranges))
+	newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
 	for i := 0; i < ranges.Len(); i++ {
-		if ranges.Get(i).CanRemote {
+		if objectio.DecodeBlockInfo(ranges.GetBytes(i)).CanRemote {
 			newRanges = append(newRanges, ranges.GetBytes(i)...)
 		} else {
 			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
