@@ -171,6 +171,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 }
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	ap := arg
 	buf.WriteString("τ([")
 	for i, f := range ap.OrderBySpec {

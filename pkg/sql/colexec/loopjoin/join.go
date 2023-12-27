@@ -27,6 +27,7 @@ import (
 const argName = "loop_join"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString(" loop join ")
 }
 

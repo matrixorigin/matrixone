@@ -35,6 +35,7 @@ import (
 const argName = "window"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("window")
 }
 

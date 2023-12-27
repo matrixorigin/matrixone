@@ -34,6 +34,7 @@ import (
 const argName = "on_duplicate_key"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("processing on duplicate key before insert")
 }
 

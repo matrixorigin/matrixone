@@ -26,6 +26,7 @@ import (
 const argName = "merge_group"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString("mergeroup()")
 }
 

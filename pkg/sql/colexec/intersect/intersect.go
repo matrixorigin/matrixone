@@ -26,6 +26,7 @@ import (
 const argName = "intersect"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName + ": ")
 	buf.WriteString(" intersect ")
 }
 
