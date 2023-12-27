@@ -664,7 +664,7 @@ func (entry *ObjectEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImp
 		blk := blkIt.Get().GetPayload()
 		blk.RLock()
 		if commitFilter != nil && blockFilter != nil {
-			if commitFilter(blk.BaseEntryImpl) && blockFilter(blk) {
+			if commitFilter(&blk.BaseEntryImpl) && blockFilter(blk) {
 				blks = append(blks, blk)
 			}
 		} else if blockFilter != nil {
@@ -672,7 +672,7 @@ func (entry *ObjectEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImp
 				blks = append(blks, blk)
 			}
 		} else if commitFilter != nil {
-			if commitFilter(blk.BaseEntryImpl) {
+			if commitFilter(&blk.BaseEntryImpl) {
 				blks = append(blks, blk)
 			}
 		}

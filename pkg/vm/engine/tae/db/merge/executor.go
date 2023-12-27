@@ -202,7 +202,7 @@ func expandObjectList(objs []*catalog.ObjectEntry) (
 			}
 			entry.RLock()
 			if entry.IsCommitted() &&
-				catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) {
+				catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
 				mblks = append(mblks, entry)
 			}
 			entry.RUnlock()

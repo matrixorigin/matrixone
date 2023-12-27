@@ -3426,7 +3426,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 }
 
 func (collector *GlobalCollector) VisitBlk(entry *catalog.BlockEntry) error {
-	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+	if collector.isEntryDeletedBeforeThreshold(&entry.BaseEntryImpl) {
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetObject().BaseEntryImpl) {
