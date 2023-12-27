@@ -230,11 +230,13 @@ func TestLabelSelector(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	tenant := Tenant("t1")
 	labels := map[string]string{
-		"k1": "v1",
-		"k2": "v2",
+		tenantLabelKey: "t1",
+		"k1":           "v1",
+		"k2":           "v2",
+		"k3":           "v3",
 	}
 	info := newLabelInfo(tenant, labels)
-	se := info.genSelector()
+	se := info.genSelector(clusterservice.EQ_Globbing)
 
 	hc := &mockHAKeeperClient{}
 	cnLabels1 := map[string]metadata.LabelList{
