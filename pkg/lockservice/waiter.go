@@ -66,15 +66,13 @@ func (w waiter) Name() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn        pb.WaitTxn
-	waitOnBind pb.LockTable
-	waitOnKey  []byte
-	waitFor    [][]byte
-	status     *atomic.Int32
-	refCount   *atomic.Int32
-	c          chan notifyValue
-	event      event
-	waitAt     atomic.Value
+	txn      pb.WaitTxn
+	waitFor  [][]byte
+	status   *atomic.Int32
+	refCount *atomic.Int32
+	c        chan notifyValue
+	event    event
+	waitAt   atomic.Value
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()

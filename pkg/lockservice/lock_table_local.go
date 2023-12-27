@@ -443,8 +443,6 @@ func (l *localLockTable) handleLockConflictLocked(
 	key []byte,
 	conflictWith Lock) {
 	c.w.waitFor = c.w.waitFor[:0]
-	c.w.waitOnBind = l.bind
-	c.w.waitOnKey = key
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
