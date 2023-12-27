@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -590,7 +591,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.uuid, _ = uuid.NewUUID()
+	ses.uuid, _ = uuid.NewV7()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)

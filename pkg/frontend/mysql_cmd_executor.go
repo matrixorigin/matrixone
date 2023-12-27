@@ -246,7 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 		}
 	} else {
-		stmID = uuid.New()
+		stmID, _ = uuid.NewV7()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
