@@ -41,7 +41,7 @@ func NewOverlapPolicy() *Overlap {
 
 // impl Policy for Basic
 func (o *Overlap) OnObject(obj *catalog.ObjectEntry) {
-	sortKeyZonemap := obj.Stat.GetSortKeyZonemap()
+	sortKeyZonemap := obj.GetSortKeyZonemap()
 	if sortKeyZonemap != nil {
 		o.analyzer.push(sortKeyZonemap.GetMin(), true, obj)
 		o.analyzer.push(sortKeyZonemap.GetMax(), false, obj)

@@ -258,8 +258,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 		return nil
 	}
 	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
-	obj.Stat.SetRows(s.ObjectHelper.objRowCnt)
-	obj.Stat.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
+	obj.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
 
 	obj.CheckAndLoad()
 

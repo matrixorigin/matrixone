@@ -219,7 +219,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
-		r := obj.Stat.GetRemainingRows()
+		r := obj.GetRemainingRows()
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
 	}
