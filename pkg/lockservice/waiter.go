@@ -66,13 +66,15 @@ func (w waiter) Name() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn      pb.WaitTxn
-	waitFor  [][]byte
-	status   *atomic.Int32
-	refCount *atomic.Int32
-	c        chan notifyValue
-	event    event
-	waitAt   atomic.Value
+	txn        pb.WaitTxn
+	waitOnBind pb.LockTable
+	waitOnKey  []byte
+	waitFor    [][]byte
+	status     *atomic.Int32
+	refCount   *atomic.Int32
+	c          chan notifyValue
+	event      event
+	waitAt     atomic.Value
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -177,6 +179,8 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 	case <-time.After(time.Second * 70):
 		getLogger().Fatal("+++ wait too long",
 			zap.String("waiter", w.String()),
+			zap.String("bind", w.waitOnBind.String()),
+			bytesField("key", w.waitOnKey),
 			bytesArrayField("wait for", w.waitFor))
 	case <-ctx.Done():
 		select {

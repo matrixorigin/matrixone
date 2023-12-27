@@ -22,7 +22,6 @@ import (
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"go.uber.org/zap"
 )
 
 var (
@@ -133,9 +132,6 @@ func (l Lock) closeTxn(
 	txn *activeTxn,
 	notify notifyValue) (lockCanRemoved bool) {
 	l.holders.remove(txn.txnID)
-	getLogger().Info("+++ txn unlock",
-		bytesField("txnID", txn.txnID),
-		zap.String("holders", l.holders.String()))
 
 	// has another holders
 	if l.holders.size() > 0 {
