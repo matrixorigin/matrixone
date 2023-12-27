@@ -58,7 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -4322,15 +4322,15 @@ func postDropSuspendAccount(
 	currTenant := ses.GetTenantInfo().Tenant
 	currUser := ses.GetTenantInfo().User
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.EQ)
+		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
 	} else {
-		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
@@ -9363,15 +9363,15 @@ func postAlterSessionStatus(
 	currUser := ses.GetTenantInfo().User
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.EQ)
+		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
 	} else {
-		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
