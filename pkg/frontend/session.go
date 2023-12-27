@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime"
 	"strings"
 	"sync"
