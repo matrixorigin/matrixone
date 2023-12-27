@@ -70,6 +70,71 @@ drop database if exists test;
 create database test;
 use test;
 
+-- decimal 128
+drop table if exists decimal01;
+create table decimal01(col1 decimal(10,1));
+insert into decimal01 values(1234124.2134324321);
+insert into decimal01 values(23413432.32423);
+insert into decimal01 values(0);
+insert into decimal01 values(-13421.34234);
+select var_pop(col1) from decimal01;
+drop table decimal01;
+
+drop table if exists decimal02;
+create table decimal02(col1 decimal(38,0));
+insert into decimal02 values(12312312312314565789874569874512456879);
+insert into decimal02 values(99999999999999999999999999999999999999);
+insert into decimal02 values(10000000000000000000000000000000000000);
+insert into decimal02 values(32482438247328742831193201993219039203);
+insert into decimal02 values(99999999999999999999999999999999999999.73289342);
+insert into decimal02 values(-298432432433242412313123321231321313);
+insert into decimal02 values(-34243214324324342321313321321342342343.123143);
+insert into decimal02 values(-0.12813218391321939921391929391293912);
+select * from decimal02;
+select var_pop(col1) from decimal02;
+drop table decimal02;
+
+drop table if exists test02;
+create table test02(col1 decimal(37));
+insert into test02 values(9999999999999999999999999999999999999.123141);
+insert into test02 values(1122312131421321313131314356569876544.9);
+insert into test02 values(-2121313214325334213213257654323234324.90);
+insert into test02 values(-123.2314123412321);
+insert into test02 values(9932129321093029302930290439029432423.5);
+select * from test02;
+select var_pop(col1) from test02;
+drop table test02;
+
+drop table if exists test03;
+create table test03(a decimal(38,2));
+insert into test03 values(9999999999999999999999999999999.1);
+insert into test03 values(-0.00001);
+insert into test03 values(NULL);
+select var_pop(a) from test03;
+drop table test03;
+
+-- decimal 64
+drop table if exists test04;
+create table test04(a decimal(38,20));
+insert into test04 values(123123242399999900.22231134568909999999);
+insert into test04 values(999999999999999999.11111111111112222222);
+insert into test04 values(100000000000000000.00000000000000000001);
+insert into test04 values(-999999999999999999.9);
+insert into test04 values(-0.00000000000000000001);
+select * from test04;
+select var_pop(a) from test04;
+drop table test04;
+
+drop table if exists test05;
+create table test05(a decimal(20,10));
+insert into test05 values(-9999999999.192012);
+insert into test05 values(9999999999.9102938129);
+insert into test05 values(7382184932.3892039843);
+insert into test05 values(0.3029302394);
+select * from test05;
+select var_pop(a) from test05;
+drop table test05;
+
 drop table if exists test06;
 create table test06(a decimal(20,10));
 insert into test06 values(-9999999999.192012);
