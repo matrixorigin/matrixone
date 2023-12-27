@@ -30,6 +30,8 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+const argName = "time window"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("time window")
 }

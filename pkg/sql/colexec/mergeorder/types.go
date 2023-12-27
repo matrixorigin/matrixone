@@ -59,7 +59,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "mergeorder.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

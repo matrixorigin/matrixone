@@ -84,7 +84,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "window.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

@@ -95,7 +95,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "left.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

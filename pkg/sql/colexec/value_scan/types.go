@@ -45,7 +45,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "value_scan.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

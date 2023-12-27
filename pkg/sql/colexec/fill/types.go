@@ -92,7 +92,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "fill.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

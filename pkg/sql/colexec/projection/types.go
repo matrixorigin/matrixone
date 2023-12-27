@@ -49,7 +49,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "projection.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

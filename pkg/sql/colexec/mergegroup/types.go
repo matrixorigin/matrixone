@@ -78,7 +78,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return "mergegroup.Argument"
+	return argName + ".Argument"
 }
 
 func NewArgument() *Argument {

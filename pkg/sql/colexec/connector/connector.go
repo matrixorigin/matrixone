@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "connector"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }

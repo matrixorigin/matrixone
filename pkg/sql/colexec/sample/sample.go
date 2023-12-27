@@ -30,6 +30,8 @@ import (
 	"math/rand"
 )
 
+const argName = "sample"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	switch arg.Type {
 	case mergeSampleByRow:
