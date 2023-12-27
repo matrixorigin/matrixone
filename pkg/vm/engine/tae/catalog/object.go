@@ -19,10 +19,12 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -34,14 +36,16 @@ import (
 )
 
 type ObjectEntry struct {
-	ID   types.Objectid
-	Stat ObjStat
+	ID     types.Objectid
+	Stat   ObjStat
+	blkCnt int
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a ObjectEntry object.
 	link *common.GenericSortedDList[*BlockEntry]
 	*ObjectNode
+	pkZM atomic.Pointer[index.ZM]
 }
 
 type ObjStat struct {
@@ -450,7 +454,13 @@ func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 }
 
 func (entry *ObjectEntry) BlockCnt() int {
-	return len(entry.entries)
+	return entry.blkCnt
+}
+
+func (entry *ObjectEntry) tryUpdateBlockCnt(cnt int) {
+	if entry.blkCnt < cnt {
+		entry.blkCnt = cnt
+	}
 }
 
 func (entry *ObjectEntry) IsAppendable() bool {
@@ -723,4 +733,55 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	terminated, ts = tableEntry.TryGetTerminatedTS(true)
 	tableEntry.RUnlock()
 	return
+}
+
+func (entry *ObjectEntry) GetSchema() *Schema {
+	return entry.table.GetLastestSchema()
+}
+
+// PrepareCompact is performance insensitive
+// a block can be compacted:
+// 1. no uncommited node
+// 2. at least one committed node
+// 3. not compacted
+func (entry *ObjectEntry) PrepareCompact() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.HasUncommittedNode() {
+		return false
+	}
+	if !entry.HasCommittedNode() {
+		return false
+	}
+	if entry.HasDropCommittedLocked() {
+		return false
+	}
+	return true
+}
+
+// for old flushed objects, stats may be empty
+func (entry *ObjectEntry) ObjectPersisted() bool {
+	if entry.IsAppendable() {
+		return entry.HasDropCommitted()
+	} else {
+		return entry.HasCommittedNode()
+	}
+}
+func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
+	baseNode := entry.GetLatestCommittedNode().BaseNode
+	if baseNode.IsEmpty() {
+		return entry.LoadObjectInfoForLastNode()
+	}
+	return baseNode.ObjectStats, nil
+}
+
+func (entry *ObjectEntry) GetPKZoneMap(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (zm index.ZM, err error) {
+	stats, err := entry.MustGetObjectStats()
+	if err != nil {
+		return
+	}
+	return stats.SortKeyZoneMap(), nil
 }

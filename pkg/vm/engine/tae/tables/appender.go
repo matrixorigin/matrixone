@@ -71,7 +71,7 @@ func (appender *blockAppender) PrepareAppend(
 	}
 	appender.blk.Lock()
 	defer appender.blk.Unlock()
-	node, created = appender.blk.mvcc.AddAppendNodeLocked(
+	node, created = appender.blk.appendMVCC.AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
@@ -85,7 +85,7 @@ func (appender *blockAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.blk.meta.GetObject().GetTable().AddRows(uint64(bat.Length()))
+	appender.blk.meta.GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *blockAppender) ApplyAppend(

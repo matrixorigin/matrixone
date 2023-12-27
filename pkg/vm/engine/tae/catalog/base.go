@@ -155,7 +155,6 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	}
 	return
 }
-
 func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn) {

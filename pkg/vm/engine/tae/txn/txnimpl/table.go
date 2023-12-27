@@ -959,6 +959,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
+	meta.Is1PC()
 	return
 }
 

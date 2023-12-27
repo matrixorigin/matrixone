@@ -78,7 +78,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 
 	// Instead in ThrowAppenderAndErr, check object index here because
 	// it is better to create new appendable early in some busy update workload case
-	if obj := h.block.meta.GetObject(); obj.GetNextObjectIndex() >= options.DefaultObjectPerSegment {
+	if obj := h.block.meta; obj.GetNextObjectIndex() >= options.DefaultObjectPerSegment {
 		logutil.Infof("%s create new obj due to large object index %d",
 			obj.ID.String(), obj.GetNextObjectIndex())
 		return nil, data.ErrAppendableObjectNotFound

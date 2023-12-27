@@ -49,8 +49,9 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 func (node *persistedNode) close() {}
 
 func (node *persistedNode) Rows() uint32 {
-	location := node.block.meta.GetMetaLoc()
-	return uint32(ReadPersistedBlockRow(location))
+	panic("not support")
+	// location := node.block.meta.GetMetaLoc()
+	// return uint32(ReadPersistedBlockRow(location))
 }
 
 func (node *persistedNode) BatchDedup(
@@ -81,31 +82,10 @@ func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, e
 	return
 }
 
-func (node *persistedNode) GetColumnDataWindow(
-	readSchema *catalog.Schema,
-	from uint32,
-	to uint32,
-	col int,
-	mp *mpool.MPool,
-) (vec containers.Vector, err error) {
-	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(
-		context.Background(), readSchema, col, mp,
-	); err != nil {
-		return
-	}
-	if to-from == uint32(data.Length()) {
-		vec = data
-	} else {
-		vec = data.CloneWindow(int(from), int(to-from), mp)
-		data.Close()
-	}
-	return
-}
-
 func (node *persistedNode) Foreach(
 	ctx context.Context,
 	readSchema *catalog.Schema,
+	blkID uint16,
 	colIdx int,
 	op func(v any, isNull bool, row int) error,
 	sel []uint32,
@@ -117,6 +97,7 @@ func (node *persistedNode) Foreach(
 		readSchema,
 		colIdx,
 		mp,
+		blkID,
 	); err != nil {
 		return
 	}
@@ -165,7 +146,7 @@ func (node *persistedNode) GetRowByFilter(
 	txn txnif.TxnReader,
 	filter *handle.Filter,
 	mp *mpool.MPool,
-) (row uint32, err error) {
+) (blkID uint16, row uint32, err error) {
 	ok, err := node.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
@@ -174,60 +155,64 @@ func (node *persistedNode) GetRowByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	// Note: sort key do not change
-	schema := node.block.meta.GetSchema()
-	sortKey, err := node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp)
-	if err != nil {
-		return
-	}
-	defer sortKey.Close()
-	rows := make([]uint32, 0)
-	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
-		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
-			row := uint32(offset)
-			rows = append(rows, row)
+	for blkID = uint16(0); blkID < uint16(node.block.meta.BlockCnt()); blkID++ {
+		// Note: sort key do not change
+		schema := node.block.meta.GetSchema()
+		var sortKey containers.Vector
+		sortKey, err = node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp, blkID)
+		if err != nil {
+			return
+		}
+		defer sortKey.Close()
+		rows := make([]uint32, 0)
+		err = sortKey.Foreach(func(v any, _ bool, offset int) error {
+			if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
+				row := uint32(offset)
+				rows = append(rows, row)
+				return nil
+			}
 			return nil
+		}, nil)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			return
 		}
-		return nil
-	}, nil)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-		return
-	}
-	if len(rows) == 0 {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-
-	// Load persisted commit ts
-	commitTSVec, err := node.block.LoadPersistedCommitTS()
-	if err != nil {
-		return
-	}
-	defer commitTSVec.Close()
-
-	// Load persisted deletes
-	view := containers.NewColumnView(0)
-	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
-		return
-	}
-
-	exist := false
-	var deleted bool
-	for _, offset := range rows {
-		commitTS := commitTSVec.Get(int(offset)).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
-			break
+		if len(rows) == 0 {
+			continue
 		}
-		deleted = view.IsDeleted(int(offset))
-		if !deleted {
-			exist = true
-			row = offset
-			break
+
+		// Load persisted commit ts
+		var commitTSVec containers.Vector
+		commitTSVec, err = node.block.LoadPersistedCommitTS(blkID)
+		if err != nil {
+			return
+		}
+		defer commitTSVec.Close()
+
+		// Load persisted deletes
+		view := containers.NewColumnView(0)
+		if err = node.block.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+			return
+		}
+
+		exist := false
+		var deleted bool
+		for _, offset := range rows {
+			commitTS := commitTSVec.Get(int(offset)).(types.TS)
+			if commitTS.Greater(txn.GetStartTS()) {
+				break
+			}
+			deleted = view.IsDeleted(int(offset))
+			if !deleted {
+				exist = true
+				row = offset
+				break
+			}
+		}
+		if exist {
+			return
 		}
 	}
-	if !exist {
-		err = moerr.NewNotFoundNoCtx()
-	}
+	err = moerr.NewNotFoundNoCtx()
 	return
 }
 

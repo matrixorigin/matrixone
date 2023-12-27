@@ -125,7 +125,7 @@ func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.Load().mvcc.meta }
+func (node *DeleteNode) GetMeta() *catalog.ObjectEntry { return node.chain.Load().mvcc.meta }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -484,7 +484,7 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
-	return node.chain.Load().mvcc.meta.MakeKey()
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)[:]
 }
 func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
 func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }

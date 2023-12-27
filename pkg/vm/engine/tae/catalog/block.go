@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-type BlockDataFactory = func(meta *BlockEntry) data.Block
+type BlockDataFactory = func(meta *ObjectEntry) data.Block
 
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]

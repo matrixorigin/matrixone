@@ -32,13 +32,13 @@ func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	ts2 := types.BuildTS(2, 0)
-	mvcc := updates.NewMVCCHandle(nil)
+	mvcc := updates.NewAppendMVCCHandle(nil)
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,
 	// }
 	b := &baseBlock{
 		RWMutex: mvcc.RWMutex,
-		mvcc:    mvcc,
+		mvcc:    updates.NewObjectMVCCHandle(nil),
 	}
 	mnode := &memoryNode{
 		block: b,

@@ -17,9 +17,10 @@ package tables
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,17 +52,18 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	rt   *dbutils.Runtime
-	meta *catalog.BlockEntry
-	mvcc *updates.MVCCHandle
-	impl data.Block
+	rt         *dbutils.Runtime
+	meta       *catalog.ObjectEntry
+	mvcc       *updates.ObjectMVCCHandle
+	appendMVCC *updates.AppendMVCCHandle
+	impl       data.Block
 
 	node atomic.Pointer[Node]
 }
 
 func newBaseBlock(
 	impl data.Block,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) *baseBlock {
 	blk := &baseBlock{
@@ -69,29 +71,25 @@ func newBaseBlock(
 		rt:   rt,
 		meta: meta,
 	}
-	blk.mvcc = updates.NewMVCCHandle(meta)
-	blk.RWMutex = blk.mvcc.RWMutex
+	blk.mvcc = updates.NewObjectMVCCHandle(meta)
+	blk.mvcc.UpgradeAllDeleteChain()
+	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
+	blk.RWMutex = meta.RWMutex
 	return blk
 }
 
+func (blk *baseBlock) OnApplyAppend(n txnif.AppendNode) (err error) {
+	blk.meta.GetTable().AddRows(
+		uint64(n.GetMaxRow() - n.GetStartRow()),
+	)
+	return
+}
 func (blk *baseBlock) Close() {
 	// TODO
 }
 
 func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
 	return blk.rt
-}
-
-func (blk *baseBlock) EstimateMemSize() (int, int) {
-	node := blk.PinNode()
-	defer node.Unref()
-	blk.RLock()
-	defer blk.RUnlock()
-	asize, dsize := blk.mvcc.EstimateMemSizeLocked()
-	if !node.IsPersisted() {
-		asize += node.MustMNode().EstimateMemSize()
-	}
-	return asize, dsize
 }
 
 func (blk *baseBlock) PinNode() *Node {
@@ -121,6 +119,7 @@ func (blk *baseBlock) Rows() int {
 func (blk *baseBlock) Foreach(
 	ctx context.Context,
 	readSchema any,
+	blkID uint16,
 	colIdx int,
 	op func(v any, isNull bool, row int) error,
 	sels []uint32,
@@ -132,9 +131,9 @@ func (blk *baseBlock) Foreach(
 	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return node.MustMNode().Foreach(schema, colIdx, op, sels, mp)
+		return node.MustMNode().Foreach(schema, blkID, colIdx, op, sels, mp)
 	} else {
-		return node.MustPNode().Foreach(ctx, schema, colIdx, op, sels, mp)
+		return node.MustPNode().Foreach(ctx, schema, blkID, colIdx, op, sels, mp)
 	}
 }
 
@@ -159,12 +158,17 @@ func (blk *baseBlock) GetMeta() any              { return blk.meta }
 func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
-func (blk *baseBlock) FillInMemoryDeletesLocked(
+func (blk *baseBlock) fillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
+	blkID uint16,
 	view *containers.BaseView,
 	rwlocker *sync.RWMutex,
 ) (err error) {
-	chain := blk.mvcc.GetDeleteChain()
+	deleteHandle := blk.mvcc.TryGetDeleteChain(blkID)
+	if deleteHandle == nil {
+		return
+	}
+	chain := deleteHandle.GetDeleteChain()
 	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
 	if err != nil || deletes.IsEmpty() {
 		return
@@ -177,11 +181,31 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	return
 }
 
-func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error) {
+func (blk *baseBlock) buildMetalocation(bid uint16) (objectio.Location, error) {
+	if !blk.meta.ObjectPersisted() {
+		return nil, nil
+	}
+	stats, err := blk.meta.MustGetObjectStats()
+	if err != nil {
+		return nil, err
+	}
+	blkMaxRows := blk.meta.GetSchema().BlockMaxRows
+	blkRow := blkMaxRows
+	if bid == uint16(blk.meta.BlockCnt())-1 {
+		blkRow = stats.Rows() - uint32(bid)*blkMaxRows
+	}
+	metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, bid)
+	return metaloc, nil
+}
+
+func (blk *baseBlock) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	location := blk.meta.GetMetaLoc()
+	location, err := blk.buildMetalocation(bid)
+	if err != nil {
+		return
+	}
 	if location.IsEmpty() {
 		return
 	}
@@ -205,10 +229,13 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 }
 
 func (blk *baseBlock) LoadPersistedColumnData(
-	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool,
+	ctx context.Context, schema *catalog.Schema, colIdx int, mp *mpool.MPool, blkID uint16,
 ) (vec containers.Vector, err error) {
 	def := schema.ColDefs[colIdx]
-	location := blk.meta.GetMetaLoc()
+	location, err := blk.buildMetalocation(blkID)
+	if err != nil {
+		return nil, err
+	}
 	return LoadPersistedColumnData(
 		ctx,
 		blk.rt,
@@ -221,9 +248,10 @@ func (blk *baseBlock) LoadPersistedColumnData(
 
 func (blk *baseBlock) loadPersistedDeletes(
 	ctx context.Context,
+	blkID uint16,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
-	location, deltalocCommitTS := blk.meta.GetDeltaLocAndCommitTS()
+	location, deltalocCommitTS := blk.mvcc.GetDeltaLocAndCommitTS(blkID)
 	if location.IsEmpty() {
 		return
 	}
@@ -240,12 +268,14 @@ func (blk *baseBlock) loadPersistedDeletes(
 
 func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
+	blkID uint16,
 	txn txnif.TxnReader,
 	view *containers.BaseView,
 	mp *mpool.MPool,
 ) (err error) {
 	blk.fillPersistedDeletesInRange(
 		ctx,
+		blkID,
 		types.TS{},
 		txn.GetStartTS(),
 		view,
@@ -256,6 +286,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 
 func (blk *baseBlock) fillPersistedDeletesInRange(
 	ctx context.Context,
+	blkID uint16,
 	start, end types.TS,
 	view *containers.BaseView,
 	mp *mpool.MPool,
@@ -264,6 +295,7 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 		ctx,
 		start,
 		end,
+		blkID,
 		true,
 		func(i int, rowIdVec *vector.Vector) {
 			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
@@ -281,6 +313,7 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 
 func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	ctx context.Context,
+	blkID uint16,
 	start, end types.TS,
 	mp *mpool.MPool,
 ) (deletes *nulls.Nulls, err error) {
@@ -288,6 +321,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 		ctx,
 		start,
 		end,
+		blkID,
 		true,
 		func(i int, rowIdVec *vector.Vector) {
 			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
@@ -307,13 +341,14 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
+	blkID uint16,
 	skipAbort bool,
 	loopOp func(int, *vector.Vector),
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
 	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-	deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx, mp)
+	deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx, blkID, mp)
 	if deletes == nil || err != nil {
 		return
 	}
@@ -337,7 +372,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 
-		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), &blk.meta.ID)
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), objectio.NewBlockidWithObjectID(&blk.meta.ID, blkID))
 		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
@@ -357,13 +392,16 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	return
 }
 
-func (blk *baseBlock) Prefetch(idxes []uint16) error {
+func (blk *baseBlock) Prefetch(idxes []uint16, blkID uint16) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return nil
 	} else {
-		key := blk.meta.GetMetaLoc()
+		key, err := blk.buildMetalocation(blkID)
+		if err != nil {
+			return err
+		}
 		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
@@ -372,14 +410,19 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
+	blkID uint16,
 	colIdxs []int,
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 
 	view = containers.NewBlockView()
+	location, err := blk.buildMetalocation(blkID)
+	if err != nil {
+		return nil, err
+	}
 	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, blk.meta.GetMetaLoc(), mp,
+		ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, location, mp,
 	)
 	if err != nil {
 		return nil, err
@@ -399,10 +442,10 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	}()
 
 	blk.RLock()
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
+	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
 	blk.RUnlock()
 
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
 		return
 	}
 	return
@@ -412,12 +455,13 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
+	blkID uint16,
 	colIdx int,
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	view = containers.NewColumnView(colIdx)
-	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx, mp)
+	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx, mp, blkID)
 	if err != nil {
 		return
 	}
@@ -433,12 +477,12 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
 		return
 	}
 
 	blk.RLock()
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
+	err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
 	blk.RUnlock()
 	return
 }
@@ -452,38 +496,41 @@ func (blk *baseBlock) dedupWithLoad(
 	isAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
-	schema := blk.meta.GetSchema()
-	def := schema.GetSingleSortKey()
-	view, err := blk.ResolvePersistedColumnData(
-		ctx,
-		txn,
-		schema,
-		def.Idx,
-		false,
-		mp,
-	)
-	if err != nil {
-		return
-	}
-	if rowmask != nil {
-		if view.DeleteMask == nil {
-			view.DeleteMask = common.RoaringToMOBitmap(rowmask)
-		} else {
-			common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
+	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
+		schema := blk.meta.GetSchema()
+		def := schema.GetSingleSortKey()
+		view, err := blk.ResolvePersistedColumnData(
+			ctx,
+			txn,
+			schema,
+			blkID,
+			def.Idx,
+			false,
+			mp,
+		)
+		if err != nil {
+			return err
 		}
+		if rowmask != nil {
+			if view.DeleteMask == nil {
+				view.DeleteMask = common.RoaringToMOBitmap(rowmask)
+			} else {
+				common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
+			}
+		}
+		defer view.Close()
+		var dedupFn any
+		if isAblk {
+			dedupFn = containers.MakeForeachVectorOp(
+				keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
+			)
+		} else {
+			dedupFn = containers.MakeForeachVectorOp(
+				keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
+			)
+		}
+		err = containers.ForeachVector(keys, dedupFn, sels)
 	}
-	defer view.Close()
-	var dedupFn any
-	if isAblk {
-		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
-		)
-	} else {
-		dedupFn = containers.MakeForeachVectorOp(
-			keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
-		)
-	}
-	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 
@@ -523,17 +570,18 @@ func (blk *baseBlock) getPersistedValue(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	schema *catalog.Schema,
+	blkID uint16,
 	row, col int,
 	skipMemory bool,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
 	view := containers.NewColumnView(col)
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
 		return
 	}
 	if !skipMemory {
 		blk.RLock()
-		err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
+		err = blk.fillInMemoryDeletesLocked(txn, blkID, view.BaseView, blk.RWMutex)
 		blk.RUnlock()
 		if err != nil {
 			return
@@ -543,7 +591,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(ctx, txn, schema, col, true, mp)
+	view2, err := blk.ResolvePersistedColumnData(ctx, txn, schema, blkID, col, true, mp)
 	if err != nil {
 		return
 	}
@@ -555,45 +603,35 @@ func (blk *baseBlock) getPersistedValue(
 func (blk *baseBlock) DeletesInfo() string {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.mvcc.GetDeleteChain().StringLocked()
+	return blk.mvcc.StringLocked()
 }
 
 func (blk *baseBlock) RangeDelete(
 	txn txnif.AsyncTxn,
+	blkID uint16,
 	start, end uint32,
 	pk containers.Vector,
 	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
-	if err = blk.mvcc.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
+	blkMVCC := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	if err = blkMVCC.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
 		return
 	}
-	node = blk.mvcc.CreateDeleteNode(txn, dt)
+	node = blkMVCC.CreateDeleteNode(txn, dt)
 	node.RangeDeleteLocked(start, end, pk, common.MutMemAllocator)
 	return
 }
 
 func (blk *baseBlock) TryDeleteByDeltaloc(
 	txn txnif.AsyncTxn,
-	deltaLoc objectio.Location) (node txnif.DeleteNode, ok bool, err error) {
+	blkID uint16,
+	deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error) {
 	if blk.meta.IsAppendable() {
 		return
 	}
-	err2 := blk.meta.CheckConflict(txn)
-	if err2 != nil {
-		return
-	}
-	if !blk.meta.GetDeltaLoc().IsEmpty() {
-		return
-	}
-	blk.Lock()
-	defer blk.Unlock()
-	if !blk.mvcc.GetDeleteChain().IsEmpty() {
-		return
-	}
-	node = blk.mvcc.CreatePersistedDeleteNode(txn, deltaLoc)
-	ok = true
-	return
+	blkMVCC := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc)
 }
 
 func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) string {
@@ -609,27 +647,36 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(blkID uint16, from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
+	if mvcc == nil {
+		return
+	}
+	return mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(
 	ctx context.Context,
+	blkID uint16,
 	startTs, endTs types.TS,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	view = containers.NewBlockView()
-	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
-	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView, mp)
+	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(blkID, startTs, endTs)
+	blk.fillPersistedDeletesInRange(ctx, blkID, startTs, endTs, view.BaseView, mp)
 	return
 }
 
-func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (deletes *nulls.Bitmap, err error) {
+func (blk *baseBlock) inMemoryCollectDeletesInRange(blkID uint16, start, end types.TS) (deletes *nulls.Bitmap, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
-	deleteChain := blk.mvcc.GetDeleteChain()
+	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
+	if mvcc == nil {
+		return
+	}
+	deleteChain := mvcc.GetDeleteChain()
 	deletes, err =
 		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
 	return
@@ -637,12 +684,14 @@ func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (delete
 
 func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
+	blkID uint16,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
 	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
+		blkID,
 		start,
 		end,
 		withAborted,
@@ -657,6 +706,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
 		bat,
+		blkID,
 		start,
 		end,
 		withAborted,
@@ -667,14 +717,20 @@ func (blk *baseBlock) CollectDeleteInRange(
 
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
+	blkID uint16,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
+	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
+	if mvcc == nil {
+		blk.RUnlock()
+		return
+	}
 	schema := blk.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS := mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
 	blk.RUnlock()
 	if rowID == nil {
 		return
@@ -683,7 +739,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
 		pkIdx := pkDef.Idx
-		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
+		blk.Foreach(ctx, schema, blkID, pkIdx, func(v any, isNull bool, row int) error {
 			pk.Append(v, false)
 			return nil
 		}, deletes, mp)
@@ -707,6 +763,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 func (blk *baseBlock) persistedCollectDeleteInRange(
 	ctx context.Context,
 	b *containers.Batch,
+	blkID uint16,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
@@ -721,6 +778,7 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start, end,
+		blkID,
 		!withAborted,
 		func(row int, rowIdVec *vector.Vector) {
 			_ = vector.AppendFixed[int32](selsVec, int32(row), false, mp)
@@ -757,8 +815,8 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	return bat, nil
 }
 
-func (blk *baseBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
-	blk.mvcc.OnReplayDeleteNode(node)
+func (blk *baseBlock) OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error) {
+	blk.mvcc.GetOrCreateDeleteChain(blkID).OnReplayDeleteNode(node)
 	err = node.OnApply()
 	return
 }
@@ -773,19 +831,6 @@ func (blk *baseBlock) OnReplayAppendPayload(_ *containers.Batch) (err error) {
 
 func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	panic("not supported")
-}
-
-func (blk *baseBlock) GetRowsOnReplay() uint64 {
-	rows := uint64(blk.mvcc.GetTotalRow())
-	metaLoc := blk.meta.GetMetaLoc()
-	if metaLoc.IsEmpty() {
-		return rows
-	}
-	fileRows := uint64(metaLoc.Rows())
-	if rows > fileRows {
-		return rows
-	}
-	return fileRows
 }
 
 func (blk *baseBlock) GetTotalChanges() int {

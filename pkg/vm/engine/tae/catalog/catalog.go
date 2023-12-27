@@ -686,6 +686,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
+	obj.tryUpdateBlockCnt(int(cmd.mvccNode.BaseNode.MetaLoc.ID() + 1))
 	blk, err := obj.GetBlockEntryByID(&cmd.ID.BlockID)
 	un := cmd.mvccNode
 	if un.Is1PC() {

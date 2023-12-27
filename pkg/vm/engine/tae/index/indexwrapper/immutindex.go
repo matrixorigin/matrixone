@@ -67,7 +67,7 @@ func (idx ImmutIndex) BatchDedup(
 
 	var buf []byte
 	if len(idx.bf) > 0 {
-		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = idx.bf.GetObjectBloomFilter()
 	} else {
 		var bf objectio.BloomFilter
 		if bf, err = objectio.FastLoadBF(
@@ -78,7 +78,7 @@ func (idx ImmutIndex) BatchDedup(
 		); err != nil {
 			return
 		}
-		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = bf.GetObjectBloomFilter()
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()
@@ -109,7 +109,7 @@ func (idx ImmutIndex) Dedup(
 	}
 	var buf []byte
 	if len(idx.bf) > 0 {
-		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = idx.bf.GetObjectBloomFilter()
 	} else {
 		var bf objectio.BloomFilter
 		if bf, err = objectio.FastLoadBF(
@@ -120,7 +120,7 @@ func (idx ImmutIndex) Dedup(
 		); err != nil {
 			return
 		}
-		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
+		buf = bf.GetObjectBloomFilter()
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()
