@@ -778,7 +778,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 						}
 					}
 				}
-				uniqueColName = nil
 			}
 			keyStr += " else '' END as `Key`"
 		} else {
