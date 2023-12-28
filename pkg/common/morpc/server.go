@@ -281,6 +281,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		defer s.closeClientSession(cs)
 
 		responses := make([]*Future, 0, s.options.batchSendSize)
+		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() {
 			defer func() {
 				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
@@ -289,7 +290,11 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
+			for i := 0; i < len(needClose); i++ {
+				needClose[i] = nil
+			}
 			responses = responses[:0]
+			needClose = needClose[:0]
 
 			for i := 0; i < s.options.batchSendSize; i++ {
 				if len(responses) == 0 {
@@ -346,6 +351,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+						if f.oneWay {
+							needClose = append(needClose, f)
+						}
 
 						if !s.options.filter(f.send.Message) {
 							f.messageSent(messageSkipped)
@@ -409,6 +417,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 					for _, f := range responses {
 						f.messageSent(nil)
+					}
+					for _, f := range needClose {
+						f.Close()
 					}
 
 					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -519,7 +530,7 @@ func newClientSession(
 		metrics:                 metrics,
 		closedC:                 make(chan struct{}),
 		codec:                   codec,
-		c:                       make(chan *Future, 32),
+		c:                       make(chan *Future, 1024),
 		receivedStreamSequences: make(map[uint64]uint32),
 		conn:                    conn,
 		ctx:                     ctx,
@@ -589,6 +600,15 @@ func (cs *clientSession) Write(
 	})
 }
 
+func (cs *clientSession) AsyncWrite(response Message) error {
+	_, err := cs.send(RPCMessage{
+		Ctx:     context.Background(),
+		Message: response,
+		oneWay:  true,
+	})
+	return err
+}
+
 func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	cs.metrics.sendCounter.Inc()
 
@@ -613,8 +633,10 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 
 	f := cs.newFutureFunc()
-	f.ref()
 	f.init(msg)
+	if !f.oneWay {
+		f.ref()
+	}
 	cs.c <- f
 	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil

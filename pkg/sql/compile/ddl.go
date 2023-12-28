@@ -1219,9 +1219,6 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 	if err != nil {
 		return err
 	}
-	if totalCnt == 0 {
-		return nil
-	}
 
 	// 4.a populate meta table
 	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
@@ -1229,16 +1226,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.b delete old entries in "centroids" and "entries" table for the current version
-	err = s.handleIvfIndexDeleteOldEntries(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-	if err != nil {
-		return err
-	}
-
-	// 4.c populate centroids table
+	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
@@ -1246,7 +1234,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.d populate entries table
+	// 4.c populate entries table
 	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
@@ -2616,8 +2604,9 @@ func lockRows(
 	proc *process.Process,
 	rel engine.Relation,
 	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2631,7 +2620,9 @@ func lockRows(
 		id,
 		vec,
 		*vec.GetType(),
-		lockMode)
+		lockMode,
+		sharding,
+		group)
 	return err
 }
 
@@ -2720,13 +2711,17 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
+func lockMoTable(
+	c *Compile,
+	dbName string,
+	tblName string,
+	lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -2736,7 +2731,8 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
+
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil

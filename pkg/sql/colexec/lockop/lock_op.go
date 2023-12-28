@@ -326,6 +326,8 @@ func LockRows(
 	vec *vector.Vector,
 	pkType types.Type,
 	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -336,7 +338,9 @@ func LockRows(
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
+		WithLockSharding(sharding).
 		WithLockMode(lockMode).
+		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
@@ -419,6 +423,8 @@ func doLock(
 		Policy:          lock.WaitPolicy_Wait,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		Sharding:        opts.sharding,
+		Group:           opts.group,
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -525,6 +531,18 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 		maxCountPerLock: 0,
 		parker:          parker,
 	}
+}
+
+// WithLockSharding set lock sharding
+func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
+	opts.sharding = sharding
+	return opts
+}
+
+// WithLockGroup set lock group
+func (opts LockOptions) WithLockGroup(group uint32) LockOptions {
+	opts.group = group
+	return opts
 }
 
 // WithLockMode set lock mode, Exclusive or Shared
