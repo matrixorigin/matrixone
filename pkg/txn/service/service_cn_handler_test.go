@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -642,7 +643,7 @@ func TestCommitWithLockTables(t *testing.T) {
 	}()
 	sender.AddTxnService(s)
 
-	bind := allocator.Get("s1", 10)
+	bind := allocator.Get("s1", 0, 10, 0, lock.Sharding_None)
 	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.LockTables = append(wTxn.LockTables, bind)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
@@ -685,7 +686,7 @@ func TestCommitWithLockTablesBindChanged(t *testing.T) {
 	}()
 	sender.AddTxnService(s)
 
-	bind := allocator.Get("s1", 10)
+	bind := allocator.Get("s1", 0, 10, 0, lock.Sharding_None)
 	wTxn := NewTestTxn(1, 1, 1)
 	bind.ServiceID = "s2"
 	wTxn.LockTables = append(wTxn.LockTables, bind)

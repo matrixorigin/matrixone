@@ -89,11 +89,12 @@ func RunLockServicesForTest(
 // WaitWaiters wait waiters
 func WaitWaiters(
 	ls LockService,
+	group uint32,
 	table uint64,
 	key []byte,
 	waitersCount int) error {
 	s := ls.(*service)
-	v, err := s.getLockTable(table)
+	v, err := s.getLockTable(group, table)
 	if err != nil {
 		return err
 	}
