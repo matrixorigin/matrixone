@@ -68,7 +68,7 @@ const (
 	Replace
 )
 
-// Source contains information of a relation which will be used in execution,
+// Source contains information of a relation which will be used in execution.
 type Source struct {
 	PushdownId             uint64
 	PushdownAddr           string
