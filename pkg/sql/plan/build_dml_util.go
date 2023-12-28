@@ -1120,7 +1120,7 @@ func makeInsertPlan(
 				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
 				// with the primary key of the hidden table as the unique key.
 				// package contains some information needed by the fuzzy filter to run background SQL.
-				if indexdef.GetUnique() == true {
+				if indexdef.GetUnique() {
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
