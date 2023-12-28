@@ -2604,8 +2604,9 @@ func lockRows(
 	proc *process.Process,
 	rel engine.Relation,
 	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2619,7 +2620,9 @@ func lockRows(
 		id,
 		vec,
 		*vec.GetType(),
-		lockMode)
+		lockMode,
+		sharding,
+		group)
 	return err
 }
 
@@ -2708,13 +2711,17 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
+func lockMoTable(
+	c *Compile,
+	dbName string,
+	tblName string,
+	lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -2724,7 +2731,8 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
+
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil
