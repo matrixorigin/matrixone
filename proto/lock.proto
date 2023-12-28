@@ -41,25 +41,35 @@ enum WaitPolicy {
   FastFail = 1;
 }
 
+enum Sharding {
+  None   = 0;
+  ByRow  = 1;
+}
+
 // LockOptions lock options
 message LockOptions {
-  Granularity Granularity     = 1;
-  LockMode    Mode            = 2;
-  WaitPolicy  Policy          = 3;
-  string      ForwardTo       = 4;
-  bool        TableDefChanged = 5;
+  Granularity Granularity       = 1;
+  LockMode    Mode              = 2;
+  WaitPolicy  Policy            = 3;
+  string      ForwardTo         = 4;
+  bool        TableDefChanged   = 5;
+  uint32      Group             = 6;
+  Sharding    Sharding          = 7;
 }
 
 // LockTable describes which CN manages a Table's Locks.
 message LockTable {
   // Table table id
-  uint64 Table     = 1;
+  uint64   Table       = 1;
   // ServiceID lock service id, a cn node will only run one instance of LockService
-  string ServiceID = 2;
+  string   ServiceID   = 2;
   // Version will incr if CN-Table bind changed.
-  uint64 Version   = 3;
+  uint64   Version     = 3;
   // Valid false if the service is disabled, and no new service bind this table
-  bool   Valid     = 4;
+  bool     Valid       = 4;
+  uint32   Group       = 5;
+  Sharding Sharding    = 6;
+  uint64   OriginTable = 7;
 }
 
 // Method lock table operations
@@ -164,10 +174,11 @@ message WaitTxn {
 
 // UnlockRequest unlock lock on remote lock service request. CN -> CN
 message UnlockRequest {
-  bytes               TxnID     = 1;
+  bytes                  TxnID     = 1;
   // CommitTS is the commit timestamp of the current txn. Empty if txn is
   // roll backed
-  timestamp.Timestamp CommitTS  = 2 [(gogoproto.nullable) = false];
+  timestamp.Timestamp    CommitTS  = 2 [(gogoproto.nullable) = false];
+  repeated ExtraMutation Mutations = 3 [(gogoproto.nullable) = false];
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
@@ -177,8 +188,11 @@ message UnlockResponse {
 
 // GetBindRequest get bind request from allocator request. CN -> TN
 message GetBindRequest {
-  string ServiceID = 1;
-  uint64 Table     = 2;
+  string   ServiceID   = 1;
+  uint64   Table       = 2;
+  uint32   Group       = 3;
+  Sharding Sharding    = 4;
+  uint64   OriginTable = 5;
 }
 
 // GetBindResponse get bind request from allocator response. TN -> CN
@@ -221,4 +235,10 @@ message Result {
   timestamp.Timestamp Timestamp       = 4 [(gogoproto.nullable) = false];
   // TableDefChanged conflict with ddl lock, need rebuild plan to get new table def
   bool                TableDefChanged = 5;
+}
+
+message ExtraMutation {
+  bytes key       = 1;
+  bool  skip      = 2;
+  bytes replaceTo = 3;
 }
