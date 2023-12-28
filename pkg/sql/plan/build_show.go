@@ -767,8 +767,8 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 					}
 				}
 				for _, indexdef := range tableDef.Indexes {
-					for _, name := range indexdef.Parts {
-						if !indexdef.Unique {
+					if !indexdef.Unique {
+						for _, name := range indexdef.Parts {
 							if uniqueColName[name] {
 								continue
 							}
