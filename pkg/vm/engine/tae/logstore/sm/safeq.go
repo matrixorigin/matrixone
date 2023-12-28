@@ -180,6 +180,10 @@ func (q *safeQueue) waitStop() {
 		return
 	}
 	if q.state.CompareAndSwap(ReceiverStopped, PrepareStop) {
+		// what if the pending is negative ?
+		// if a queue processes item faster than the pending self-increment,
+		// there could be a short moment that the pending is negative.
+		// may be moving the pending.Add to the front of en-channel is a solution.
 		for q.pending.Load() != 0 {
 			runtime.Gosched()
 		}
@@ -195,6 +199,7 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 
 	select {
 	case q.queue <- item:
+		q.pending.Add(1)
 		return item, nil
 
 	// if queue is full
@@ -202,9 +207,10 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 		if q.blocking {
 			start := time.Now()
 			q.queue <- item
+			q.pending.Add(1)
+
 			// observe the blocking duration
 			v2.TxnTNSideQueueBlockingHistograms[q.name].Observe(time.Since(start).Seconds())
-			q.pending.Add(1)
 
 			return item, nil
 		} else {
