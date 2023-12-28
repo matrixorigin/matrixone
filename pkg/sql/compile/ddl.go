@@ -399,8 +399,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterReindex:
-			// NOTE: We hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-			// We need to see how to reduce the critical section.
+			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
+			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
