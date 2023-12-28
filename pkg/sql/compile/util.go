@@ -130,6 +130,9 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
+		if planCol.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
 		if i >= 1 {
 			sql += ","
 		}

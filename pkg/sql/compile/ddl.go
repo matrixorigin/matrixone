@@ -399,6 +399,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterReindex:
+			// NOTE: We hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
+			// We need to see how to reduce the critical section.
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
@@ -901,6 +903,31 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
+		var initSQL string
+		switch def.TableType {
+		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
+				qry.Database,
+				def.Name,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			)
+
+		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+				qry.Database,
+				def.Name,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			)
+		}
+		err = c.runSql(initSQL)
+		if err != nil {
+			return err
+		}
+
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
@@ -950,6 +977,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
 	}
 
 	return maybeCreateAutoIncrement(
@@ -1191,9 +1219,6 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 	if err != nil {
 		return err
 	}
-	if totalCnt == 0 {
-		return nil
-	}
 
 	// 4.a populate meta table
 	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
@@ -1201,16 +1226,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.b delete old entries in "centroids" and "entries" table for the current version
-	err = s.handleIvfIndexDeleteOldEntries(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-	if err != nil {
-		return err
-	}
-
-	// 4.c populate centroids table
+	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
@@ -1218,7 +1234,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return err
 	}
 
-	// 4.d populate entries table
+	// 4.c populate entries table
 	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
