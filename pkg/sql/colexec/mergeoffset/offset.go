@@ -25,7 +25,6 @@ import (
 const argName = "merge_offset"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", arg.Offset))
 }
 

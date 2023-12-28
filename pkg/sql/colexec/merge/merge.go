@@ -25,7 +25,6 @@ import (
 const argName = "merge"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" union all ")
 }
 

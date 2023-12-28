@@ -31,7 +31,6 @@ import (
 const argName = "top"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	ap := arg
 	buf.WriteString("top([")
 	for i, f := range ap.Fs {

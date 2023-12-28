@@ -36,7 +36,6 @@ const (
 const argName = "pre_insert_secondary_index"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString("pre processing insert secondary key")
 }
 

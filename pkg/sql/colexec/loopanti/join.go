@@ -28,7 +28,6 @@ import (
 const argName = "loop_anti"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" loop anti join ")
 }
 

@@ -27,7 +27,6 @@ import (
 const argName = "merge_cte"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" merge cte ")
 }
 

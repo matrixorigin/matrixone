@@ -32,7 +32,6 @@ import (
 const argName = "preinsert"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString("pre processing insert")
 }
 

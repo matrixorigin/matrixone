@@ -26,7 +26,6 @@ import (
 const argName = "minus"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" minus ")
 }
 

@@ -24,7 +24,6 @@ import (
 const argName = "merge_block"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" MergeS3BlocksMetaLoc ")
 }
 

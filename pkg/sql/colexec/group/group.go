@@ -32,7 +32,6 @@ import (
 const argName = "group"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	ap := arg
 	buf.WriteString("group([")
 	for i, expr := range ap.Exprs {

@@ -28,7 +28,6 @@ import (
 const argName = "left"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" left join ")
 }
 

@@ -29,7 +29,6 @@ import (
 const argName = "loop_mark"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" loop mark join ")
 }
 

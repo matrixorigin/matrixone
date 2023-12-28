@@ -34,7 +34,6 @@ const batchSize = 8192
 const argName = "hash_build"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
 	buf.WriteString(" hash build ")
 }
 
