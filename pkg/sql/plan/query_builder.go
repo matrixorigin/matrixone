@@ -1491,6 +1491,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
+		builder.handleMessgaes(rootID)
+
 		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
