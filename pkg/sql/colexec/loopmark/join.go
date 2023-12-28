@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_mark"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" loop mark join ")
 }

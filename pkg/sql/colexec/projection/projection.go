@@ -25,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "projection"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	n := arg
 	buf.WriteString("projection(")

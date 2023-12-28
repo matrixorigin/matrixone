@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "group"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	ap := arg
 	buf.WriteString("group([")

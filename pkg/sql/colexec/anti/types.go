@@ -90,7 +90,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "anti.Argument"
 }
 
 func NewArgument() *Argument {

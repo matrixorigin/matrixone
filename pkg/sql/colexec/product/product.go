@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "product"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" cross join ")
 }

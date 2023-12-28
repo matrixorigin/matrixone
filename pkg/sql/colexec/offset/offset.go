@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "offset"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	n := arg
 	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))

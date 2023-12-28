@@ -41,8 +41,6 @@ var (
 	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
-const argName = "lock_op"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("lock-op(")
 	n := len(arg.targets) - 1

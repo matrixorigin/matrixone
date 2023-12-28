@@ -53,7 +53,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "mergeecursive.Argument"
 }
 
 func NewArgument() *Argument {

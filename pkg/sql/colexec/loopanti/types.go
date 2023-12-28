@@ -68,7 +68,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "loopanti.Argument"
 }
 
 func NewArgument() *Argument {

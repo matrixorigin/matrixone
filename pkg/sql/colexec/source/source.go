@@ -25,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "source"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("Source scan")
 }

@@ -86,7 +86,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "lockop.Argument"
 }
 
 func NewArgument() *Argument {

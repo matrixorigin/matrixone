@@ -76,7 +76,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "onduplicatekey.Argument"
 }
 
 func NewArgument() *Argument {

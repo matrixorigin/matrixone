@@ -48,7 +48,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "mergedelete.Argument"
 }
 
 func NewArgument() *Argument {

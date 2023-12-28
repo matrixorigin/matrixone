@@ -60,8 +60,6 @@ type EncodeGroupConcat struct {
 	Groups         int
 }
 
-const argName = "group_concat"
-
 func (m *EncodeGroupConcat) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }

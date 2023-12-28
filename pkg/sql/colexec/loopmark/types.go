@@ -69,7 +69,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "loopmark.Argument"
 }
 
 func NewArgument() *Argument {

@@ -31,8 +31,6 @@ import (
 
 const batchSize = 8192
 
-const argName = "hash_build"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" hash build ")
 }

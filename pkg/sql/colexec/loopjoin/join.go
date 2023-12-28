@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "loop_join"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" loop join ")
 }

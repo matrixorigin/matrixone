@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "right"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" right join ")
 }

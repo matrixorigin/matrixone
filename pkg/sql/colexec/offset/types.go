@@ -44,7 +44,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "offset.Argument"
 }
 
 func NewArgument() *Argument {

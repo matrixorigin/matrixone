@@ -28,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "partition"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	ap := arg
 	buf.WriteString("partition([")

@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "merge"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" union all ")
 }

@@ -60,7 +60,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "mergecte.Argument"
 }
 
 func NewArgument() *Argument {

@@ -103,7 +103,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "deletion.Argument"
 }
 
 func NewArgument() *Argument {

@@ -52,7 +52,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "shuffle.Argument"
 }
 
 func NewArgument() *Argument {

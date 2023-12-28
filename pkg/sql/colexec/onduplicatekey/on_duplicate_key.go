@@ -31,8 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "on_duplicate_key"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }

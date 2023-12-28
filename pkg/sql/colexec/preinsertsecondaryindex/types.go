@@ -47,7 +47,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "preinsertsecondaryindex.Argument"
 }
 
 func NewArgument() *Argument {

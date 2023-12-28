@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "minus"
-
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" minus ")
 }

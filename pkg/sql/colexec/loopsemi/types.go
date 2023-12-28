@@ -69,7 +69,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return "loopsemi.Argument"
 }
 
 func NewArgument() *Argument {
