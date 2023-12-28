@@ -16,7 +16,6 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
@@ -1051,17 +1050,9 @@ func (builder *QueryBuilder) pushTopDownToLeftJoin(nodeID int32) {
 	nodePushDown = DeepCopyNode(node)
 
 	if nodePushDown.Offset != nil {
-		newExpr := &plan.Expr{
-			Typ: nodePushDown.Limit.Typ,
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						Obj:     function.PlusFunctionEncodedID,
-						ObjName: function.PlusFunctionName,
-					},
-					Args: []*plan.Expr{nodePushDown.Offset, nodePushDown.Limit},
-				},
-			},
+		newExpr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{nodePushDown.Limit, nodePushDown.Offset})
+		if err != nil {
+			goto END
 		}
 		nodePushDown.Offset = nil
 		nodePushDown.Limit = newExpr
