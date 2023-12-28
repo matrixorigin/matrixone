@@ -17,7 +17,6 @@ package process
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -338,7 +337,7 @@ type Process struct {
 
 	UdfService udf.Service
 
-	MessageBoard *plan2.MessageBoard
+	MessageBoard *MessageBoard
 }
 
 type vectorPool struct {

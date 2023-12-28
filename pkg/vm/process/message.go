@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package process
 
 import "sync"
 
@@ -37,9 +37,12 @@ type Message struct {
 
 type MessageBoard struct {
 	Messages []*Message
-	Mutex    sync.RWMutex
+	Mutex    *sync.RWMutex
 }
 
 func NewMessageBoard() *MessageBoard {
-	return &MessageBoard{}
+	return &MessageBoard{
+		Messages: make([]*Message, 0, 8),
+		Mutex:    &sync.RWMutex{},
+	}
 }

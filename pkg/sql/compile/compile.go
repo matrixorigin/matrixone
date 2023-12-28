@@ -114,6 +114,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -144,6 +145,8 @@ func (c *Compile) reset() {
 	for i := range c.createdFuzzy {
 		c.createdFuzzy[i].release()
 	}
+
+	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.createdFuzzy = c.createdFuzzy[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
