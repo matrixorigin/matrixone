@@ -14,6 +14,8 @@
 
 package function
 
+var PlusFunctionEncodedID = encodeOverloadID(PLUS, 0)
+var PlusFunctionName = "+"
 var AndFunctionEncodedID = encodeOverloadID(AND, 0)
 var AndFunctionName = "and"
 var EqualFunctionName = "="
