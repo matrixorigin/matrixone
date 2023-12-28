@@ -94,6 +94,10 @@ func (l *LRU[K, V]) Flush() {
 	}
 }
 
+func (l *LRU[K, V]) DeletePaths(ctx context.Context, paths []string) {
+	//TODO
+}
+
 func (l *LRU[K, V]) Capacity() int64 {
 	return l.capacity
 }

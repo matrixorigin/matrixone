@@ -258,8 +258,7 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 		return nil
 	}
 	// for sorted Objects, we have to feed it to policy to see if it is qualified to be merged
-	obj.Stat.SetRows(s.ObjectHelper.objRowCnt)
-	obj.Stat.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
+	obj.SetRemainingRows(s.ObjectHelper.objRowCnt - s.ObjectHelper.objRowDel)
 
 	obj.CheckAndLoad()
 
@@ -285,7 +284,7 @@ func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
 	defer entry.RUnlock()
 
 	// Skip uncommitted entries and appendable block
-	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) {
+	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
 		// txn appending metalocs
 		s.ObjectHelper.isCreating = true
 		return

@@ -188,3 +188,11 @@ func (m *MemCache) Update(
 func (m *MemCache) Flush() {
 	m.cache.Flush()
 }
+
+func (m *MemCache) DeletePaths(
+	ctx context.Context,
+	paths []string,
+) error {
+	m.cache.DeletePaths(ctx, paths)
+	return nil
+}

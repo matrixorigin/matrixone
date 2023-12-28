@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"math"
 	"net/http/httptrace"
@@ -763,7 +764,27 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		keys = append(keys, s.pathToKey(path.File))
 	}
 
-	return s.storage.Delete(ctx, keys...)
+	return errors.Join(
+		s.storage.Delete(ctx, keys...),
+		func() error {
+			if s.memCache == nil {
+				return nil
+			}
+			return s.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.diskCache == nil {
+				return nil
+			}
+			return s.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.remoteCache == nil {
+				return nil
+			}
+			return s.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 var _ ETLFileService = new(S3FS)

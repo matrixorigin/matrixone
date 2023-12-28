@@ -114,7 +114,7 @@ type Handler interface {
 	HandleStorageUsage(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req *db.StorageUsage,
+		req *db.StorageUsageReq,
 		resp *db.StorageUsageResp,
 	) (func(), error)
 }

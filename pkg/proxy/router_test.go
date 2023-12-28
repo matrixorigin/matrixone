@@ -117,6 +117,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 		Tenant: "t1",
 		Labels: map[string]string{
 			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
@@ -330,6 +331,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		Tenant: "t1",
 		Labels: map[string]string{
 			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
@@ -346,6 +348,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		Tenant: "t1",
 		Labels: map[string]string{
 			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
@@ -362,6 +365,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		Tenant: "t1",
 		Labels: map[string]string{
 			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
@@ -436,7 +440,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	li1 := labelInfo{
 		Tenant: "t1",
 		Labels: map[string]string{
-			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
@@ -452,7 +456,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	li2 := labelInfo{
 		Tenant: "t1",
 		Labels: map[string]string{
-			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
@@ -468,7 +472,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	li3 := labelInfo{
 		Tenant: "t1",
 		Labels: map[string]string{
-			"k1": "v1",
+			"k2": "v2",
 		},
 	}
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
@@ -481,7 +485,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
 
-	require.Equal(t, 1, len(connResult))
+	require.Equal(t, 2, len(connResult))
 }
 
 func TestRouter_Filter(t *testing.T) {

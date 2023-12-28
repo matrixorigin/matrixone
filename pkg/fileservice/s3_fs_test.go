@@ -785,6 +785,7 @@ func TestSequentialS3Read(t *testing.T) {
 }
 
 func TestS3RestoreFromCache(t *testing.T) {
+	t.Skip("no longer valid since we delete cache files when calling Delete")
 	ctx := context.Background()
 
 	config, err := loadS3TestConfig()
@@ -859,8 +860,8 @@ func TestS3RestoreFromCache(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, counterSet)
 	fs.restoreFromDiskCache(ctx)
 
-	if counterSet.FileService.S3.Put.Load() != 1 {
-		t.Fatal()
+	if n := counterSet.FileService.S3.Put.Load(); n != 1 {
+		t.Fatalf("got %v", n)
 	}
 
 	vec := &IOVector{
