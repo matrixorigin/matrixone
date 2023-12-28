@@ -469,6 +469,15 @@ insert into tbl values(8, "[130,40,90]");
 create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 alter table tbl alter reindex idx23 ivfflat lists=2;
 truncate table tbl;
+--mysql> select * from `__mo_index_secondary_c18d6262-a56a-11ee-8301-723e89f7b974`;
+--+-----------------------------+------------------------+-----------------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid         |
+--+-----------------------------+------------------------+-----------------------------+
+--|                           0 |                      1 | [1, 2.28, 4.2]              |
+--|                           0 |                      2 | [116.666664, 44.666668, 70] |
+--|                           1 |                      1 | [1, 2.28, 4.2]              |
+--|                           1 |                      2 | [116.666664, 44.666668, 70] |
+--+-----------------------------+------------------------+-----------------------------+
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]");
@@ -492,6 +501,15 @@ insert into tbl values(8, "[130,40,90]");
 create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 alter table tbl alter reindex idx23 ivfflat lists=2;
 delete from tbl;
+--mysql> select * from `__mo_index_secondary_9aaa720c-a56a-11ee-8301-723e89f7b974`;
+--+-----------------------------+------------------------+-----------------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid         |
+--+-----------------------------+------------------------+-----------------------------+
+--|                           0 |                      1 | [1, 2.28, 4.2]              |
+--|                           0 |                      2 | [116.666664, 44.666668, 70] |
+--|                           1 |                      1 | [1, 2.28, 4.2]              |
+--|                           1 |                      2 | [116.666664, 44.666668, 70] |
+--+-----------------------------+------------------------+-----------------------------+
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]");
