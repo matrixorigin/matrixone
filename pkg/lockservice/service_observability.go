@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
@@ -62,18 +63,24 @@ func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
 		return false
 	}
 
-	s.tables.Range(func(key, value any) bool {
-		id := key.(uint64)
-		if contains(id) {
-			value.(lockTable).close()
-			s.tables.Delete(key)
-		}
+	s.tableGroups.Range(func(_, v any) bool {
+		m := v.(*sync.Map)
+		m.Range(func(key, value any) bool {
+			id := key.(uint64)
+			if contains(id) {
+				value.(lockTable).close()
+				m.Delete(key)
+			}
+			return true
+		})
 		return true
 	})
 }
 
-func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
-	l, err := s.getLockTable(tableID)
+func (s *service) GetLockTableBind(
+	group uint32,
+	tableID uint64) (pb.LockTable, error) {
+	l, err := s.getLockTable(group, tableID)
 	if err != nil {
 		return pb.LockTable{}, err
 	}
@@ -84,27 +91,30 @@ func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
-	s.tables.Range(func(key, value any) bool {
-		tableID := key.(uint64)
-		l, ok := value.(lockTable).(*localLockTable)
-		if !ok {
-			return true
-		}
-		keys := make([][]byte, 0, 2)
-		return func() bool {
-			stop := false
-			l.mu.Lock()
-			defer l.mu.Unlock()
-			l.mu.store.Iter(func(key []byte, lock Lock) bool {
-				keys = append(keys, key)
-				if lock.isLockRangeStart() {
-					return true
-				}
-				stop = !fn(tableID, keys, lock)
-				keys = keys[:0]
+	s.tableGroups.Range(func(_, v any) bool {
+		m := v.(*sync.Map)
+		m.Range(func(key, value any) bool {
+			l, ok := value.(lockTable).(*localLockTable)
+			if !ok {
+				return true
+			}
+			keys := make([][]byte, 0, 2)
+			return func() bool {
+				stop := false
+				l.mu.Lock()
+				defer l.mu.Unlock()
+				l.mu.store.Iter(func(key []byte, lock Lock) bool {
+					keys = append(keys, key)
+					if lock.isLockRangeStart() {
+						return true
+					}
+					stop = !fn(l.bind.OriginTable, keys, lock)
+					keys = keys[:0]
+					return !stop
+				})
 				return !stop
-			})
-			return !stop
-		}()
+			}()
+		})
+		return true
 	})
 }

@@ -62,6 +62,9 @@ type Config struct {
 	// continuously hold the bind, and if no hold request is received after the configured time,
 	// then all bindings for the service will fail.
 	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+	// EnableRemoteLocalProxy enable remote local proxy. The proxy used to reduce remote shared
+	// lock and unlock request.
+	EnableRemoteLocalProxy bool `toml:"enable-remote-local-proxy"`
 }
 
 // Validate validate
