@@ -130,7 +130,6 @@ func initTxnMetrics() {
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
-	
 	registry.MustRegister(txnTNSideQueueSizeGauge)
 	registry.MustRegister(txnTNSideQueueBlockingHistogram)
 }
