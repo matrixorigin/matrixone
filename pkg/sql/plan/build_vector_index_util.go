@@ -208,15 +208,109 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	return crossJoinTblAndCentroidsId
 }
 
-func makeSortByL2DistAndLimit1AndProject4(builder *QueryBuilder, bindCtx *BindContext,
+func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32) (int32, error) {
+	// 5. partition by tbl.pk
+	projections := getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
+	lastTag := builder.genNewTag()
+	partitionBySortKeyId := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PARTITION,
+		Children:    []int32{crossJoinTblAndCentroidsID},
+		ProjectList: projections,
+		OrderBy: []*OrderBySpec{
+			{
+				Flag: plan.OrderBySpec_INTERNAL,
+				Expr: projections[2], // tbl.pk
+			},
+		},
+		BindingTags: []int32{lastTag},
+	}, bindCtx)
+
+	// 6. Window operation
+	// Window Function: row_number();
+	// Partition By: tbl.pk;
+	// Order By: l2_distance(tbl.embedding, centroids.centroid)
+	projections = getProjectionByLastNode(builder, partitionBySortKeyId)
+	l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*Expr{projections[3], projections[4]})
+	if err != nil {
+		return -1, err
+	}
+	rowNumber, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", []*Expr{})
+	if err != nil {
+		return -1, err
+	}
+	winSpec := &plan.Expr{
+		Typ: makePlan2Type(&bigIntType),
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				WindowFunc:  rowNumber,
+				PartitionBy: []*Expr{projections[2]}, // tbl.pk
+				OrderBy: []*OrderBySpec{
+					{
+						Flag: plan.OrderBySpec_ASC,
+						Expr: l2Distance,
+					},
+				},
+				Frame: &plan.FrameClause{
+					Type: plan.FrameClause_RANGE,
+					Start: &plan.FrameBound{
+						Type:      plan.FrameBound_PRECEDING,
+						UnBounded: true,
+					},
+					End: &plan.FrameBound{
+						Type:      plan.FrameBound_CURRENT_ROW,
+						UnBounded: false,
+					},
+				},
+				Name: "row_number",
+			},
+		},
+	}
+	rowNumberCol := &Expr{
+		Typ: makePlan2Type(&bigIntType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				// For WindowNode：
+				// Rel = -1 means this column from window partition
+				RelPos: -1,
+				ColPos: 5, // {version, centroid_id, org_pk, cp_col, row_id, row_number}
+			},
+		},
+	}
+	windowId := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_WINDOW,
+		Children:    []int32{partitionBySortKeyId},
+		BindingTags: []int32{lastTag},
+		WindowIdx:   int32(0),
+		WinSpecList: []*Expr{winSpec},
+		ProjectList: []*Expr{projections[0], projections[1], projections[2], rowNumberCol},
+	}, bindCtx)
+
+	// 7. Filter records where row_number() = 1
+	projections = getProjectionByLastNode(builder, windowId)
+	whereRowNumberEqOne, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		projections[3],
+		MakePlan2Int64ConstExprWithType(1),
+	})
+	if err != nil {
+		return -1, err
+	}
+
+	filterId := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{windowId},
+		FilterList:  []*Expr{whereRowNumberEqOne},
+		ProjectList: []*Expr{projections[0], projections[1], projections[2]},
+	}, bindCtx)
+	return filterId, nil
+}
+
+func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *BindContext,
 	crossJoinTblAndCentroidsID int32, lastNodeId int32, isUpdate bool) (int32, error) {
 
 	// 0: centroids.version,
 	// 1: centroids.centroid_id,
 	// 2: tbl.pk,
-	// 3: centroids.centroid,
-	// 4: tbl.embedding
-	// 5: entries.row_id (if update)
+	// 3: entries.row_id (if update)
 	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
 	if isUpdate {
 		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
@@ -238,24 +332,12 @@ func makeSortByL2DistAndLimit1AndProject4(builder *QueryBuilder, bindCtx *BindCo
 		return -1, err
 	}
 
-	l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*Expr{joinProjections[3], joinProjections[4]})
-	if err != nil {
-		return -1, err
-	}
-
-	sortByL2DistId := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_SORT,
+	finalProjectId := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
 		Children: []int32{crossJoinTblAndCentroidsID},
 		// version, centroid_id, pk, serial(version,pk)
 		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
-		OrderBy: []*plan.OrderBySpec{
-			{
-				Flag: plan.OrderBySpec_ASC,
-				Expr: l2Distance,
-			},
-		},
-		Limit: makePlan2Int64ConstExprWithType(1),
 	}, bindCtx)
 
-	return sortByL2DistId, nil
+	return finalProjectId, nil
 }

@@ -127,6 +127,11 @@ func (m *MockClientSession) Write(arg0 context.Context, arg1 morpc.Message) erro
 	return ret0
 }
 
+// AsyncWrite mocks base method.
+func (m *MockClientSession) AsyncWrite(arg1 morpc.Message) error {
+	panic("not supported")
+}
+
 // Write indicates an expected call of Write.
 func (mr *MockClientSessionMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
