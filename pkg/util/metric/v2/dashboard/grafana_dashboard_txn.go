@@ -441,6 +441,7 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
+				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="worker-handle"`),
 			},
 			[]string{
 				"lock-total",
@@ -448,6 +449,7 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				"unlock-total",
 				"unlock-btree-get-lock",
 				"unlock-btree-total",
+				"worker-handle",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

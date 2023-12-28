@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"golang.org/x/exp/slices"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -140,7 +141,6 @@ func (h *Handle) HandleCommit(
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
-	s := ""
 	defer func() {
 		if ok {
 			//delete the txn's context.
@@ -153,9 +153,6 @@ func (h *Handle) HandleCommit(
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
-		if s != "" {
-			logutil.Info("trace span", zap.String("lantency", s))
-		}
 	}()
 	var txn txnif.AsyncTxn
 	if ok {
@@ -170,11 +167,6 @@ func (h *Handle) HandleCommit(
 			return
 		}
 	}
-	activeDuration := time.Since(start)
-	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && activeDuration > threshold && txn.GetContext() != nil {
-		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
-	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
@@ -188,66 +180,6 @@ func (h *Handle) HandleCommit(
 
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
-
-	if enable {
-		vDuration := txn.GetContext().Value(common.ActiveHandleCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[active: %v]", s, duration.Duration)
-		}
-		vHandleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests)
-		if vHandleRequestDuration != nil {
-			handleRequestDuration := vHandleRequestDuration.(*handleRequestsTraceValue)
-			s = fmt.Sprintf("%s[handle request: %v, createDB %d, createTbl %d, dropDB %d, dropTbl %d, alterTable %d, write %d]", s,
-				handleRequestDuration.Duration,
-				handleRequestDuration.CreateDB,
-				handleRequestDuration.CreateRelation,
-				handleRequestDuration.DropDB,
-				handleRequestDuration.DropOrTruncateRelation,
-				handleRequestDuration.AlterTable,
-				handleRequestDuration.Write)
-		}
-		vDuration = txn.GetContext().Value(common.DequeuePreparing)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[dequeue preparing: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePrePrepare)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[pre prepare: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePrepareCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare commit: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePreApplyCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[pre apply commit: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.PrepareWAL)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare wal: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.PrepareLogtail)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare logtail: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.DequeuePrepared)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[dequeue prepared: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StoreApplyCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
-		}
-	}
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
@@ -273,41 +205,12 @@ func (h *Handle) HandleCommit(
 	return
 }
 
-type handleRequestsTraceValue struct {
-	Duration               time.Duration
-	CreateDB               int
-	CreateRelation         int
-	DropDB                 int
-	DropOrTruncateRelation int
-	AlterTable             int
-	Write                  int
-}
-
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
 ) (err error) {
-	t0 := time.Now()
 	var createDB, createRelation, dropDB, dropRelation, alterTable, write int
-	defer func() {
-		handleRequestDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && handleRequestDuration > threshold && txn.GetContext() != nil {
-			txn.GetStore().SetContext(context.WithValue(
-				txn.GetContext(),
-				common.ActiveHandleRequests,
-				&handleRequestsTraceValue{
-					Duration:               handleRequestDuration,
-					CreateDB:               createDB,
-					CreateRelation:         createRelation,
-					DropDB:                 dropDB,
-					DropOrTruncateRelation: dropRelation,
-					AlterTable:             alterTable,
-					Write:                  write,
-				}))
-		}
-	}()
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *db.CreateDatabaseReq:
@@ -1248,7 +1151,7 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 			for objIt.Valid() {
 				objEntry := objIt.Get().GetPayload()
 				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
-					insUsage.Size += uint64(objEntry.Stat.GetCompSize())
+					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
 				objIt.Next()
 			}

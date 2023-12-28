@@ -106,7 +106,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				require.Equal(t, ErrLockTableNotFound, err)
 			}()
 
-			v, err := l.getLockTable(tableID)
+			v, err := l.getLockTable(0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			for {
@@ -347,7 +347,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 			table := uint64(10)
 			for _, c := range cases {
 				stopper := stopper.NewStopper("")
-				v, err := l.getLockTableWithCreate(table, true)
+				v, err := l.getLockTableWithCreate(0, table, nil, pb.Sharding_None)
 				require.NoError(t, err)
 				lt := v.(*localLockTable)
 
@@ -422,7 +422,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					})
 					return values
 				}
-				assert.Equal(t, fn(c.mergedLocks), fn(txn.holdLocks[table].slice().all()))
+				assert.Equal(t, fn(c.mergedLocks), fn(txn.getHoldLocksLocked(0).tableKeys[table].slice().all()))
 
 				assert.NoError(t, l.Unlock(ctx, []byte(c.txnID), timestamp.Timestamp{}))
 				stopper.Stop()
@@ -481,7 +481,7 @@ func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 			require.NoError(t, l.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
 
 			wg.Wait()
-			v, err := l.getLockTable(tableID)
+			v, err := l.getLockTable(0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -555,7 +555,7 @@ func TestIssue9856(t *testing.T) {
 				json.MustUnmarshal([]byte(r), v)
 				_, err := l.Lock(ctx, tableID, [][]byte{[]byte(v.Start), []byte(v.End)}, []byte("txn1"), option)
 				require.NoError(t, err)
-				vv, err := l.getLockTable(tableID)
+				vv, err := l.getLockTable(0, tableID)
 				require.NoError(t, err)
 				lt := vv.(*localLockTable)
 				lt.mu.Lock()
@@ -722,7 +722,7 @@ func TestLockedTSIsLastCommittedTS(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate(tableID, true)
+			v, err := l.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -793,7 +793,7 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate(tableID, true)
+			v, err := l.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
