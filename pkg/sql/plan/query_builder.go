@@ -3678,6 +3678,11 @@ func (builder *QueryBuilder) genNewTag() int32 {
 	return builder.nextTag
 }
 
+func (builder *QueryBuilder) genNewMsgTag() int32 {
+	builder.nextMsgTag++
+	return builder.nextMsgTag
+}
+
 func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ctx *BindContext) error {
 	node := builder.qry.Nodes[nodeID]
 
