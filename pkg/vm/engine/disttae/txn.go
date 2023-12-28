@@ -345,6 +345,7 @@ func (txn *Transaction) checkDup() error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
+	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
@@ -370,12 +371,8 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 			bat := txn.writes[i].bat
 			size += uint64(bat.Size())
+			pkCount += bat.RowCount()
 			// skip rowid
-			//it's dangerous.
-			//bat.Attrs = bat.Attrs[1:]
-			//bat.Vecs = bat.Vecs[1:]
-			//mp[key] = append(mp[key], bat)
-
 			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
 			newBat.SetAttributes(bat.Attrs[1:])
 			newBat.Vecs = bat.Vecs[1:]
@@ -445,6 +442,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	}
 	if offset == 0 {
 		txn.workspaceSize = 0
+		txn.pkCount -= pkCount
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
@@ -455,6 +453,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		txn.statements[txn.statementID-1] = len(txn.writes)
 	} else {
 		txn.workspaceSize -= size
+		txn.pkCount -= pkCount
 	}
 	return nil
 }
