@@ -997,6 +997,15 @@ func (builder *QueryBuilder) pushTopDownToLeftJoin(nodeID int32) {
 	}
 
 	nodePushDown = DeepCopyNode(node)
+
+	if nodePushDown.Offset != nil {
+		offset := nodePushDown.Offset.GetLit().GetI64Val()
+		limit := nodePushDown.Limit.GetLit().GetI64Val()
+		lit := nodePushDown.Limit.GetLit()
+		x, _ := lit.GetValue().(*plan.Literal_I64Val)
+		x.I64Val = offset + limit
+		nodePushDown.Offset = nil
+	}
 	newNodeID = builder.appendNode(nodePushDown, nil)
 	nodePushDown.Children[0] = joinnode.Children[0]
 	joinnode.Children[0] = newNodeID
