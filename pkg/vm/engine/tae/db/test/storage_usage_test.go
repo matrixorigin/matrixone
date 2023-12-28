@@ -15,18 +15,22 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 	"math"
 	"math/rand"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -37,8 +41,10 @@ func Test_StorageUsageCache(t *testing.T) {
 	cache := logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	require.True(t, cache.IsExpired())
 
+	allocator := atomic.Uint64{}
+
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 	for idx := range usages {
 		cache.Update(usages[idx])
 	}
@@ -191,8 +197,9 @@ func mockDeletesAndInserts(
 }
 
 func Test_FillUsageBatOfIncremental(t *testing.T) {
+	allocator := atomic.Uint64{}
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
@@ -306,7 +313,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 		delBat := ckpData.GetBatches()[logtail.StorageUsageDelIDX]
 		//insBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
 
-		accCol := vector.MustFixedCol[uint32](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		accCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		sizeCol := vector.MustFixedCol[uint64](delBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
@@ -323,8 +330,9 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 }
 
 func Test_FillUsageBatOfGlobal(t *testing.T) {
+	allocator := atomic.Uint64{}
 	accCnt, dbCnt, tblCnt := 10, 10, 10
-	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt)
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
 	memo := logtail.NewTNUsageMemo()
 	memo.Clear()
@@ -332,8 +340,6 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
 	gCollector.UsageMemo = memo
 	defer gCollector.Close()
-
-	gCollector.Usage.ReservedAccIds = make(map[uint32]struct{})
 
 	for idx := range usages {
 		memo.Update(usages[idx], false)
@@ -359,7 +365,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 			return memo.GetCache().LessFunc()(usages[i], usages[j])
 		})
 
-		accCol := vector.MustFixedCol[uint32](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
+		accCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector())
 		dbCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector())
 		tblCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
 		sizeCol := vector.MustFixedCol[uint64](insBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector())
@@ -373,29 +379,30 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	}
 }
 
-func Test_EstablishFromCheckpoints(t *testing.T) {
-	version8Cnt, version9Cnt, version10Cnt := 3, 4, 5
+func appendUsageToBatch(bat *containers.Batch, usage logtail.UsageData) {
+	accVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
+	dbVec := bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
+	tblVec := bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+	sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
-	ckps := make([]*logtail.CheckpointData, version8Cnt+version9Cnt+version10Cnt)
-	vers := make([]uint32, version8Cnt+version9Cnt+version10Cnt)
+	vector.AppendFixed(accVec, usage.AccId, false, common.DebugAllocator)
+	vector.AppendFixed(dbVec, usage.DbId, false, common.DebugAllocator)
+	vector.AppendFixed(tblVec, usage.TblId, false, common.DebugAllocator)
+	vector.AppendFixed(sizeVec, usage.Size, false, common.DebugAllocator)
+
+}
+
+func Test_EstablishFromCheckpoints(t *testing.T) {
+	version8Cnt, version9Cnt, version11Cnt := 3, 4, 5
+	allocator := atomic.Uint64{}
+
+	ckps := make([]*logtail.CheckpointData, version8Cnt+version9Cnt+version11Cnt)
+	vers := make([]uint32, version8Cnt+version9Cnt+version11Cnt)
 
 	for idx := 0; idx < version8Cnt; idx++ {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion8, common.DebugAllocator)
 		ckps = append(ckps, data)
 		vers = append(vers, logtail.CheckpointVersion8)
-	}
-
-	append2BatFunc := func(bat *containers.Batch, usage logtail.UsageData) {
-		accVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-		dbVec := bat.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-		tblVec := bat.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-		sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
-
-		vector.AppendFixed(accVec, usage.AccId, false, common.DebugAllocator)
-		vector.AppendFixed(dbVec, usage.DbId, false, common.DebugAllocator)
-		vector.AppendFixed(tblVec, usage.TblId, false, common.DebugAllocator)
-		vector.AppendFixed(sizeVec, usage.Size, false, common.DebugAllocator)
-
 	}
 
 	var usageIns, usageDel []logtail.UsageData
@@ -404,32 +411,32 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion9, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 
-		usages := logtail.MockUsageData(10, 10, 10)
+		usages := logtail.MockUsageData(10, 10, 10, &allocator)
 		usageIns = append(usageIns, usages...)
 
 		for xx := range usages {
-			append2BatFunc(insBat, usages[xx])
+			appendUsageToBatch(insBat, usages[xx])
 		}
 
 		ckps = append(ckps, data)
 		vers = append(vers, logtail.CheckpointVersion9)
 	}
 
-	for idx := 0; idx < version10Cnt; idx++ {
+	for idx := 0; idx < version11Cnt; idx++ {
 		data := logtail.NewCheckpointDataWithVersion(logtail.CheckpointVersion11, common.DebugAllocator)
 		insBat := data.GetBatches()[logtail.StorageUsageInsIDX]
 		delBat := data.GetBatches()[logtail.StorageUsageDelIDX]
 
-		usages := logtail.MockUsageData(10, 10, 10)
+		usages := logtail.MockUsageData(10, 10, 10, &allocator)
 		usageIns = append(usageIns, usages...)
 		for xx := range usages {
-			append2BatFunc(insBat, usages[xx])
+			appendUsageToBatch(insBat, usages[xx])
 		}
 
-		usages = logtail.MockUsageData(10, 10, 10)
+		usages = logtail.MockUsageData(10, 10, 10, &allocator)
 		usageDel = append(usageDel, usages...)
 		for xx := range usages {
-			append2BatFunc(delBat, usages[xx])
+			appendUsageToBatch(delBat, usages[xx])
 		}
 
 		ckps = append(ckps, data)
@@ -457,7 +464,187 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 	for iter.Next() {
 		usage, exist := memo.Get(iter.Item())
 		require.True(t, exist)
+		//fmt.Println(usage)
+		//fmt.Println(iter.Item())
+		//fmt.Println()
 		require.Equal(t, usage, iter.Item())
 	}
 	iter.Release()
+}
+
+func Test_RemoveStaleAccounts(t *testing.T) {
+	// clear stale accounts happens in global ckp
+	allocator := atomic.Uint64{}
+	accCnt, dbCnt, tblCnt := 10000, 2, 2
+	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
+
+	gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
+	gCollector.UsageMemo = logtail.NewTNUsageMemo()
+	defer gCollector.Close()
+
+	for idx := range usages {
+		gCollector.UsageMemo.Update(usages[idx], false)
+		if rand.Int()%3 == 0 {
+			// mock the accounts deletion
+			continue
+		}
+		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
+	}
+
+	logtail.FillUsageBatOfGlobal(gCollector)
+
+	sizes := gCollector.UsageMemo.GatherAllAccSize()
+
+	require.Equal(t, len(gCollector.Usage.ReservedAccIds), len(sizes))
+
+	for accId := range sizes {
+		_, ok := gCollector.Usage.ReservedAccIds[accId]
+		require.True(t, ok)
+	}
+}
+
+func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.CheckpointData, usages [][]logtail.UsageData) {
+	allocator := atomic.Uint64{}
+	for i := 0; i < cnt; i++ {
+		data := logtail.NewCheckpointDataWithVersion(version, common.DebugAllocator)
+
+		usage := logtail.MockUsageData(10, 10, 10, &allocator)
+		for xx := range usage {
+			appendUsageToBatch(data.GetBatches()[logtail.StorageUsageInsIDX], usage[xx])
+		}
+
+		ckpDats = append(ckpDats, data)
+		usages = append(usages, usage)
+	}
+
+	return
+}
+
+func Test_UpdateDataFromOldVersion(t *testing.T) {
+
+	memo := logtail.NewTNUsageMemo()
+	ctlog := catalog.MockCatalog()
+	defer ctlog.Close()
+
+	ctlog.SetUsageMemo(memo)
+
+	ckpDatas, _ := mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
+
+	// phase 1: all db/tbl have been deleted
+	{
+		memo.PrepareReplay(ckpDatas, []uint32{logtail.CheckpointVersion9})
+		memo.EstablishFromCKPs(ctlog)
+
+		require.Equal(t, 0, len(memo.GetDelayed()))
+		require.Equal(t, 0, memo.CacheLen())
+
+		for idx := range ckpDatas {
+			require.Nil(t, ckpDatas[idx])
+		}
+	}
+
+	createdTbl := make([]logtail.UsageData, 0)
+
+	// phase 2: part of them have been deleted
+	{
+
+		txnMgr := txnbase.NewTxnManager(
+			catalog.MockTxnStoreFactory(ctlog),
+			catalog.MockTxnFactory(ctlog),
+			types.NewMockHLCClock(1))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+
+		txnMgr.Start(ctx)
+		defer txnMgr.Stop()
+
+		txn, _ := txnMgr.StartTxn(nil)
+
+		ckpDatas, usages := mockCkpDataWithVersion(logtail.CheckpointVersion9, 1)
+
+		for xx := range usages {
+			for yy := range usages[xx] {
+				db, err := ctlog.GetDatabaseByID(usages[xx][yy].DbId)
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) || db == nil {
+					db, err = ctlog.CreateDBEntryWithID(usages[xx][yy].String(), "", "", usages[xx][yy].DbId, txn)
+				}
+
+				require.Nil(t, err)
+				require.NotNil(t, db)
+
+				if rand.Int()%3 == 0 {
+					continue
+				}
+
+				tbl, err := db.CreateTableEntryWithTableId(
+					catalog.MockSchema(1, 1), txn, nil, usages[xx][yy].TblId)
+				require.Nil(t, err)
+				require.NotNil(t, tbl)
+
+				createdTbl = append(createdTbl, usages[xx][yy])
+			}
+		}
+
+		require.Nil(t, txn.Commit(ctx))
+
+		memo.PrepareReplay(ckpDatas, []uint32{logtail.CheckpointVersion9})
+		memo.EstablishFromCKPs(ctlog)
+
+		for idx := range ckpDatas {
+			require.Nil(t, ckpDatas[idx])
+		}
+
+		require.Equal(t, len(createdTbl), len(memo.GetDelayed()))
+
+		sizes := memo.GatherAllAccSize()
+		for idx := range createdTbl {
+			_, ok := sizes[createdTbl[idx].AccId]
+			require.True(t, ok)
+
+			sizes[createdTbl[idx].AccId] -= createdTbl[idx].Size
+		}
+
+		for _, size := range sizes {
+			require.Equal(t, uint64(0), size)
+		}
+	}
+
+	{
+		// test update old data when global ckp
+		gCollector := logtail.NewGlobalCollector(types.TS{}, time.Second)
+		gCollector.UsageMemo = memo
+		defer gCollector.Close()
+
+		for _, usage := range createdTbl {
+			gCollector.Usage.ReservedAccIds[usage.AccId] = struct{}{}
+
+			db, err := ctlog.GetDatabaseByID(usage.DbId)
+			require.Nil(t, err)
+			require.NotNil(t, db)
+
+			tbl, err := db.GetTableEntryByID(usage.TblId)
+			require.Nil(t, err)
+			require.NotNil(t, tbl)
+
+			// double the size
+			obj := catalog.MockObjEntryWithTbl(tbl, usage.Size*2)
+			gCollector.Usage.SegInserts = append(gCollector.Usage.SegInserts, obj)
+		}
+
+		logtail.FillUsageBatOfGlobal(gCollector)
+		sizes := memo.GatherAllAccSize()
+
+		for idx := range createdTbl {
+			_, ok := sizes[createdTbl[idx].AccId]
+			require.True(t, ok)
+
+			sizes[createdTbl[idx].AccId] -= createdTbl[idx].Size * 2
+		}
+
+		for _, size := range sizes {
+			require.Equal(t, uint64(0), size)
+		}
+	}
+
 }
