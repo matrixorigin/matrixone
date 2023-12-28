@@ -722,7 +722,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	}
 	blk = NewReplayBlockEntry()
 	blk.ID = cmd.ID.BlockID
-	blk.BlockNode = cmd.node
+	blk.BlockNode = *cmd.node
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.object = obj
@@ -811,7 +811,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
-		blk.BlockNode = &BlockNode{}
 		blk.object = obj
 		blk.ID = *blkid
 		blk.state = state

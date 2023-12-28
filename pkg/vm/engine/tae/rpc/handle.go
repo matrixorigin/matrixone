@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"golang.org/x/exp/slices"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1150,7 +1151,7 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 			for objIt.Valid() {
 				objEntry := objIt.Get().GetPayload()
 				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
-					insUsage.Size += uint64(objEntry.Stat.GetCompSize())
+					insUsage.Size += uint64(objEntry.GetCompSize())
 				}
 				objIt.Next()
 			}
