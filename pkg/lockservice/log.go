@@ -343,14 +343,8 @@ func logTxnReadyToClose(
 	txn *activeTxn) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		var tables []uint64
-		for t := range txn.holdLocks {
-			tables = append(tables, t)
-		}
-
 		logger.Debug("ready to unlock txn",
-			txnField(txn),
-			uint64ArrayField("tables", tables))
+			txnField(txn))
 	}
 }
 
@@ -540,19 +534,6 @@ func waitTxnArrayField(name string, values []pb.WaitTxn) zap.Field {
 	buffer.WriteString("[")
 	for idx, w := range values {
 		buffer.WriteString(w.DebugString())
-		if idx != len(values)-1 {
-			buffer.WriteString(",")
-		}
-	}
-	buffer.WriteString("]")
-	return zap.String(name, buffer.String())
-}
-
-func uint64ArrayField(name string, values []uint64) zap.Field {
-	var buffer bytes.Buffer
-	buffer.WriteString("[")
-	for idx, v := range values {
-		buffer.WriteString(fmt.Sprintf("%d", v))
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}
