@@ -587,7 +587,7 @@ func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 		if l.Group == value.Group &&
 			l.Table == value.Table {
 			if l.Changed(value) {
-				return moerr.NewDeadLockDetectedNoCtx()
+				return moerr.NewLockTableBindChangedNoCtx()
 			}
 			return nil
 		}
