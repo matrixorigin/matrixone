@@ -18,6 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
+	"sync"
+	"time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,11 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
-	"math"
-	"math/rand"
-	"sync"
-	"time"
-	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -549,9 +550,9 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, bool) 
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) error {
 		if !entry.IsAppendable() {
 			if entry.HasDropCommitted() {
-				size -= int64(entry.Stat.GetCompSize())
+				size -= int64(entry.GetCompSize())
 			} else if entry.IsCommitted() {
-				size += int64(entry.Stat.GetCompSize())
+				size += int64(entry.GetCompSize())
 			}
 		}
 		return nil
@@ -746,7 +747,7 @@ func objects2Usages(objs []*catalog.ObjectEntry) (usages []UsageData) {
 	toUsage := func(obj *catalog.ObjectEntry) UsageData {
 		return UsageData{
 			DbId:  obj.GetTable().GetDB().GetID(),
-			Size:  uint64(obj.Stat.GetCompSize()),
+			Size:  uint64(obj.GetCompSize()),
 			TblId: obj.GetTable().GetID(),
 			AccId: obj.GetTable().GetDB().GetTenantID(),
 		}

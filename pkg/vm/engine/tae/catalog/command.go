@@ -192,7 +192,7 @@ func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*Me
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     entry.BlockNode,
+		node:     &entry.BlockNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

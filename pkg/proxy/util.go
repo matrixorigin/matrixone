@@ -49,6 +49,20 @@ func isCmdInitDB(p []byte) bool {
 	return false
 }
 
+func isCmdStmtPrepare(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdStmtPrepare) {
+		return true
+	}
+	return false
+}
+
+func isCmdStmtExecute(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdStmtExecute) {
+		return true
+	}
+	return false
+}
+
 // isOKPacket returns true if []byte is a MySQL OK packet.
 func isOKPacket(p []byte) bool {
 	if len(p) > 4 && p[4] == 0 {
