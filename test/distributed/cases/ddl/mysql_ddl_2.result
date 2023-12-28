@@ -191,10 +191,8 @@ is_deleted    INT(32)    YES        null
 deleted_by    VARCHAR(64)    YES        null        
 deleted_time    DATETIME(0)    YES        null        
 drop database if exists mysql_ddl_test_db;
-create database if exists mysql_ddl_test_db;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " exists mysql_ddl_test_db;";
+create database  mysql_ddl_test_db;
 use mysql_ddl_test_db;
-invalid database mysql_ddl_test_db
 CREATE TABLE table_basic_for_alter_100m (
 col1 TINYINT DEFAULT NULL,
 col2 SMALLINT DEFAULT NULL,

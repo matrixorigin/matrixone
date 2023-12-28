@@ -131,7 +131,7 @@ desc `projects`;
 
 drop database if exists mysql_ddl_test_db;
 
-create database if exists mysql_ddl_test_db;
+create database  mysql_ddl_test_db;
 use mysql_ddl_test_db;
 CREATE TABLE table_basic_for_alter_100m (
  col1 TINYINT DEFAULT NULL,
