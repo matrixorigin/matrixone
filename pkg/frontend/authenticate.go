@@ -8445,7 +8445,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 
 	// read from pipe and upload
 	ioVector := fileservice.IOVector{
-		FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		FilePath: fileservice.JoinPath(defines.SharedFileServiceName, path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:])),
 		Entries: []fileservice.IOEntry{
 			{
 				Size:           -1,
