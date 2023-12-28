@@ -76,7 +76,7 @@ func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
 		sampleCnt = lists * KmeansSamplePerList
 	}
 	if totalCnt > 10_000 && sampleCnt < 10_000 {
-		sampleCnt = 10000
+		sampleCnt = 10_000
 	}
 	return sampleCnt
 }
