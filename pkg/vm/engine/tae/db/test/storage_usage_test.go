@@ -17,6 +17,14 @@ package test
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
+	"sort"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,13 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
-	"math"
-	"math/rand"
-	"sort"
-	"sync/atomic"
-	"testing"
-	"time"
-	"unsafe"
 )
 
 func Test_StorageUsageCache(t *testing.T) {
@@ -198,6 +199,8 @@ func mockDeletesAndInserts(
 
 func Test_FillUsageBatOfIncremental(t *testing.T) {
 	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
+
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
@@ -331,6 +334,8 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 
 func Test_FillUsageBatOfGlobal(t *testing.T) {
 	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
+
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
@@ -395,6 +400,7 @@ func appendUsageToBatch(bat *containers.Batch, usage logtail.UsageData) {
 func Test_EstablishFromCheckpoints(t *testing.T) {
 	version8Cnt, version9Cnt, version11Cnt := 3, 4, 5
 	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
 
 	ckps := make([]*logtail.CheckpointData, version8Cnt+version9Cnt+version11Cnt)
 	vers := make([]uint32, version8Cnt+version9Cnt+version11Cnt)
@@ -475,6 +481,8 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 func Test_RemoveStaleAccounts(t *testing.T) {
 	// clear stale accounts happens in global ckp
 	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
+
 	accCnt, dbCnt, tblCnt := 10000, 2, 2
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 
@@ -505,6 +513,8 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 
 func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.CheckpointData, usages [][]logtail.UsageData) {
 	allocator := atomic.Uint64{}
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX + 1)
+
 	for i := 0; i < cnt; i++ {
 		data := logtail.NewCheckpointDataWithVersion(version, common.DebugAllocator)
 
