@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -702,23 +703,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_VALUE_SCAN:
-		//do nothing and just return default stats, fix this in the future
-		/*
-			if node.RowsetData == nil {
-				node.Stats = DefaultStats()
-			} else {
-				colsData := node.RowsetData.Cols
-				rowCount := float64(len(colsData[0].Data))
-				blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
-				node.Stats = &plan.Stats{
-					TableCnt:    (rowCount),
-					BlockNum:    int32(blockNumber),
-					Outcnt:      rowCount,
-					Cost:        rowCount,
-					Selectivity: 1,
-				}
-			}
-		*/
+		if node.RowsetData != nil {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			node.Stats.TableCnt = rowCount
+			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
+			node.Stats.Cost = rowCount
+			node.Stats.Outcnt = rowCount
+			node.Stats.Selectivity = 1
+		}
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats
