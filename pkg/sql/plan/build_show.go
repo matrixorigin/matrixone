@@ -752,21 +752,33 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if tableDef.Indexes != nil {
+				uniqueColName := make(map[string]bool)
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
 						for _, name := range indexdef.Parts {
+							if uniqueColName[name] {
+								continue
+							}
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'UNI'"
+							uniqueColName[name] = true
 						}
-					} else {
-						for _, name := range indexdef.Parts {
+					}
+				}
+				for _, indexdef := range tableDef.Indexes {
+					for _, name := range indexdef.Parts {
+						if !indexdef.Unique {
+							if uniqueColName[name] {
+								continue
+							}
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
 						}
 					}
 				}
+				uniqueColName = nil
 			}
 			keyStr += " else '' END as `Key`"
 		} else {
