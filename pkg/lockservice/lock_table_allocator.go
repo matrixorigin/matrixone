@@ -37,7 +37,7 @@ type lockTableAllocator struct {
 	mu struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
-		lockTables map[string]map[uint64]pb.LockTable
+		lockTables map[uint32]map[uint64]pb.LockTable
 	}
 }
 
@@ -59,7 +59,7 @@ func NewLockTableAllocator(
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
 	}
-	la.mu.lockTables = make(map[string]map[uint64]pb.LockTable)
+	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
 	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
 		panic(err)
@@ -71,7 +71,7 @@ func NewLockTableAllocator(
 
 func (l *lockTableAllocator) Get(
 	serviceID string,
-	group string,
+	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -184,7 +184,7 @@ func (l *lockTableAllocator) registerService(
 
 func (l *lockTableAllocator) registerBind(
 	binds *serviceBinds,
-	group string,
+	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -199,7 +199,7 @@ func (l *lockTableAllocator) registerBind(
 
 func (l *lockTableAllocator) tryRebindLocked(
 	binds *serviceBinds,
-	group string,
+	group uint32,
 	old pb.LockTable,
 	tableID uint64) pb.LockTable {
 	// find a valid table and service bind
@@ -224,7 +224,7 @@ func (l *lockTableAllocator) tryRebindLocked(
 
 func (l *lockTableAllocator) createBindLocked(
 	binds *serviceBinds,
-	group string,
+	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	sharding pb.Sharding) pb.LockTable {
@@ -281,7 +281,7 @@ type serviceBinds struct {
 	sync.RWMutex
 	logger            *log.MOLogger
 	serviceID         string
-	groupTables       map[string]map[uint64]struct{}
+	groupTables       map[uint32]map[uint64]struct{}
 	lastKeepaliveTime time.Time
 	disabled          bool
 }
@@ -292,7 +292,7 @@ func newServiceBinds(
 	return &serviceBinds{
 		serviceID:         serviceID,
 		logger:            logger,
-		groupTables:       make(map[string]map[uint64]struct{}),
+		groupTables:       make(map[uint32]map[uint64]struct{}),
 		lastKeepaliveTime: time.Now(),
 	}
 }
@@ -309,7 +309,7 @@ func (b *serviceBinds) active() bool {
 }
 
 func (b *serviceBinds) bind(
-	group string,
+	group uint32,
 	tableID uint64) bool {
 	b.Lock()
 	defer b.Unlock()
@@ -338,7 +338,7 @@ func (b *serviceBinds) disable() {
 	b.logger.Debug("lock service binds disabled")
 }
 
-func (b *serviceBinds) getTablesLocked(group string) map[uint64]struct{} {
+func (b *serviceBinds) getTablesLocked(group uint32) map[uint64]struct{} {
 	m, ok := b.groupTables[group]
 	if ok {
 		return m
@@ -397,7 +397,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
-func (l *lockTableAllocator) getLockTablesLocked(group string) map[uint64]pb.LockTable {
+func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.LockTable {
 	m, ok := l.mu.lockTables[group]
 	if ok {
 		return m

@@ -55,7 +55,7 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		allocating map[string]map[uint64]chan struct{}
+		allocating map[uint32]map[uint64]chan struct{}
 	}
 }
 
@@ -75,7 +75,7 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
-	s.mu.allocating = make(map[string]map[uint64]chan struct{})
+	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
@@ -262,7 +262,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 }
 
 func (s *service) getLockTable(
-	group string,
+	group uint32,
 	tableID uint64) (lockTable, error) {
 	if v := s.loadLockTable(group, tableID); v != nil {
 		return v, nil
@@ -274,7 +274,7 @@ func (s *service) getLockTable(
 }
 
 func (s *service) getAllocatingC(
-	group string,
+	group uint32,
 	tableID uint64,
 	locked bool) chan struct{} {
 	if !locked {
@@ -288,7 +288,7 @@ func (s *service) getAllocatingC(
 }
 
 func (s *service) waitLockTableBind(
-	group string,
+	group uint32,
 	tableID uint64,
 	locked bool) lockTable {
 	c := s.getAllocatingC(group, tableID, locked)
@@ -299,7 +299,7 @@ func (s *service) waitLockTableBind(
 }
 
 func (s *service) getLockTableWithCreate(
-	group string,
+	group uint32,
 	tableID uint64,
 	rows [][]byte,
 	sharding pb.Sharding) (lockTable, error) {
@@ -414,7 +414,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 }
 
 func (s *service) loadLockTable(
-	group string,
+	group uint32,
 	tableID uint64) lockTable {
 	if v, ok := s.getTables(group).Load(tableID); ok {
 		return v.(lockTable)
@@ -422,7 +422,7 @@ func (s *service) loadLockTable(
 	return nil
 }
 
-func (s *service) getTables(group string) *sync.Map {
+func (s *service) getTables(group uint32) *sync.Map {
 	v, ok := s.tableGroups.Load(group)
 	if ok {
 		return v.(*sync.Map)

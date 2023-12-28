@@ -43,7 +43,7 @@ func init() {
 	reuse.CreatePool[activeTxn](
 		func() *activeTxn {
 			txn := &activeTxn{
-				lockHolders: make(map[string]*tableLockHolder),
+				lockHolders: make(map[uint32]*tableLockHolder),
 			}
 			txn.RWMutex = &sync.RWMutex{}
 			return txn

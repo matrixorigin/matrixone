@@ -327,7 +327,7 @@ func LockRows(
 	pkType types.Type,
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
-	group string,
+	group uint32,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -540,7 +540,7 @@ func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
 }
 
 // WithLockGroup set lock group
-func (opts LockOptions) WithLockGroup(group string) LockOptions {
+func (opts LockOptions) WithLockGroup(group uint32) LockOptions {
 	opts.group = group
 	return opts
 }

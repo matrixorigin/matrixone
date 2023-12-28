@@ -112,7 +112,7 @@ type LockService interface {
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets ...uint64)
 	// GetLockTableBind returns lock table bind
-	GetLockTableBind(group string, tableID uint64) (pb.LockTable, error)
+	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
@@ -162,7 +162,7 @@ type lockTable interface {
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
-	Get(serviceID string, group string, tableID, originTableID uint64, sharding pb.Sharding) pb.LockTable
+	Get(serviceID string, group uint32, tableID, originTableID uint64, sharding pb.Sharding) pb.LockTable
 	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.

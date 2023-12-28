@@ -53,7 +53,7 @@ message LockOptions {
   WaitPolicy  Policy            = 3;
   string      ForwardTo         = 4;
   bool        TableDefChanged   = 5;
-  string      Group             = 6;
+  uint32      Group             = 6;
   Sharding    Sharding          = 7;
 }
 
@@ -67,7 +67,7 @@ message LockTable {
   uint64   Version     = 3;
   // Valid false if the service is disabled, and no new service bind this table
   bool     Valid       = 4;
-  string   Group       = 5;
+  uint32   Group       = 5;
   Sharding Sharding    = 6;
   uint64   OriginTable = 7;
 }
@@ -190,7 +190,7 @@ message UnlockResponse {
 message GetBindRequest {
   string   ServiceID   = 1;
   uint64   Table       = 2;
-  string   Group       = 3;
+  uint32   Group       = 3;
   Sharding Sharding    = 4;
   uint64   OriginTable = 5;
 }

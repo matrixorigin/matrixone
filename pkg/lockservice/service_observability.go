@@ -78,7 +78,7 @@ func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
 }
 
 func (s *service) GetLockTableBind(
-	group string,
+	group uint32,
 	tableID uint64) (pb.LockTable, error) {
 	l, err := s.getLockTable(group, tableID)
 	if err != nil {

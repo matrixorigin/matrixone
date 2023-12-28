@@ -2590,7 +2590,7 @@ func lockRows(
 	vec *vector.Vector,
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
-	group string) error {
+	group uint32) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2695,7 +2695,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, vec.GetStringAt(0)); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil
@@ -2716,7 +2716,7 @@ func lockMoTable(
 	}
 	defer vec.Free(c.proc.Mp())
 
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, vec.GetStringAt(0)); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil

@@ -643,7 +643,7 @@ func TestCommitWithLockTables(t *testing.T) {
 	}()
 	sender.AddTxnService(s)
 
-	bind := allocator.Get("s1", "", 10, 0, lock.Sharding_None)
+	bind := allocator.Get("s1", 0, 10, 0, lock.Sharding_None)
 	wTxn := NewTestTxn(1, 1, 1)
 	wTxn.LockTables = append(wTxn.LockTables, bind)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
@@ -686,7 +686,7 @@ func TestCommitWithLockTablesBindChanged(t *testing.T) {
 	}()
 	sender.AddTxnService(s)
 
-	bind := allocator.Get("s1", "", 10, 0, lock.Sharding_None)
+	bind := allocator.Get("s1", 0, 10, 0, lock.Sharding_None)
 	wTxn := NewTestTxn(1, 1, 1)
 	bind.ServiceID = "s2"
 	wTxn.LockTables = append(wTxn.LockTables, bind)

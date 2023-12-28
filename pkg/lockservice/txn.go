@@ -43,7 +43,7 @@ type activeTxn struct {
 	txnKey         string
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
-	lockHolders    map[string]*tableLockHolder
+	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
 }
@@ -69,7 +69,7 @@ func (txn activeTxn) Name() string {
 
 func (txn *activeTxn) lockRemoved(
 	serviceID string,
-	group string,
+	group uint32,
 	table uint64,
 	removedLocks map[string]struct{}) {
 	h := txn.getHoldLocksLocked(group)
@@ -91,7 +91,7 @@ func (txn *activeTxn) lockRemoved(
 }
 
 func (txn *activeTxn) lockAdded(
-	group string,
+	group uint32,
 	bind pb.LockTable,
 	locks [][]byte) {
 
@@ -126,7 +126,7 @@ func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	lockTableFunc func(string, uint64) (lockTable, error),
+	lockTableFunc func(uint32, uint64) (lockTable, error),
 	mutations ...pb.ExtraMutation) error {
 	logTxnReadyToClose(serviceID, txn)
 
@@ -271,7 +271,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
 	holder activeTxnHolder,
 	waiters func(pb.WaitTxn) bool,
-	lockTableFunc func(string, uint64) (lockTable, error)) bool {
+	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
@@ -285,7 +285,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		panic("can not fetch waiting txn on remote txn")
 	}
 
-	groups := make([]string, 0, len(txn.lockHolders))
+	groups := make([]uint32, 0, len(txn.lockHolders))
 	tables := make([]uint64, 0, len(txn.lockHolders))
 	lockKeys := make([]*fixedSlice, 0, len(txn.lockHolders))
 	for g, m := range txn.lockHolders {
@@ -360,7 +360,7 @@ func (txn *activeTxn) getID() []byte {
 	return txn.txnID
 }
 
-func (txn *activeTxn) getHoldLocksLocked(group string) *tableLockHolder {
+func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
 	h, ok := txn.lockHolders[group]
 	if ok {
 		return h

@@ -345,7 +345,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 
 func getLockTableBind(
 	c Client,
-	group string,
+	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	serviceID string,

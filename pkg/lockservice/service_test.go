@@ -61,7 +61,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 				require.NoError(t, err, err)
 				require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-				lt, err := s1.getLockTable("", table)
+				lt, err := s1.getLockTable(0, table)
 				require.NoError(t, err)
 				require.Equal(t, table, lt.getBind().Table)
 				require.Equal(t, table, lt.getBind().OriginTable)
@@ -1078,7 +1078,7 @@ func TestLockResultWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, res.Timestamp.IsEmpty())
 
-			lb, err := l.getLockTable("", 0)
+			lb, err := l.getLockTable(0, 0)
 			require.NoError(t, err)
 			assert.Equal(t, lb.getBind(), res.LockedOn)
 		},
@@ -1352,7 +1352,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					bind := lt.getBind()
 					bind.Version = bind.Version + 1
 					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
-					s.getTables("").Store(table, new)
+					s.getTables(0).Store(table, new)
 					lt.close()
 
 					// txn2 get lock, shared
@@ -1371,8 +1371,8 @@ func TestMultiGroupWithSameTableID(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
 			table := uint64(10)
-			g1 := "g1"
-			g2 := "g2"
+			g1 := uint32(1)
+			g2 := uint32(2)
 			runner(
 				t,
 				table,
@@ -1426,7 +1426,7 @@ func TestShardingByRowWithSameTableID(t *testing.T) {
 
 					option := newTestRowSharedOptions()
 					option.Sharding = pb.Sharding_ByRow
-					option.Group = "g1"
+					option.Group = 1
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 					rows1 := newTestRows(1)
@@ -1435,14 +1435,14 @@ func TestShardingByRowWithSameTableID(t *testing.T) {
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows1, txn1, option)
 					require.NoError(t, err)
-					l := s.loadLockTable("g1", shardingByRow(rows1[0]))
+					l := s.loadLockTable(1, shardingByRow(rows1[0]))
 					assert.Equal(t, table, l.getBind().OriginTable)
 					checkLock(t, l.(*localLockTable), rows1[0], [][]byte{txn1}, nil, nil)
 
 					// txn2 get lock, shared
 					_, err = s.Lock(ctx, table, rows2, txn2, option)
 					require.NoError(t, err)
-					l = s.loadLockTable("g1", shardingByRow(rows2[0]))
+					l = s.loadLockTable(1, shardingByRow(rows2[0]))
 					assert.Equal(t, table, l.getBind().OriginTable)
 					checkLock(t, l.(*localLockTable), rows2[0], [][]byte{txn2}, nil, nil)
 
@@ -1627,7 +1627,7 @@ func waitWaiters(
 	table uint64,
 	key []byte,
 	waitersCount int) {
-	require.NoError(t, WaitWaiters(s, "", table, key, waitersCount))
+	require.NoError(t, WaitWaiters(s, 0, table, key, waitersCount))
 }
 
 func newTestRowExclusiveOptions() pb.LockOptions {

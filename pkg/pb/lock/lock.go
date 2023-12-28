@@ -268,10 +268,6 @@ func (m LockOptions) Validate(rows [][]byte) {
 		return
 	}
 
-	if m.Group == "" {
-		panic("cannot lock with sharding without group")
-	}
-
 	if m.Granularity != Granularity_Row {
 		panic("cannot lock with sharding without row granularity")
 	}

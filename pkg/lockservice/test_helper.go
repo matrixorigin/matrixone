@@ -89,7 +89,7 @@ func RunLockServicesForTest(
 // WaitWaiters wait waiters
 func WaitWaiters(
 	ls LockService,
-	group string,
+	group uint32,
 	table uint64,
 	key []byte,
 	waitersCount int) error {

@@ -33,18 +33,18 @@ func TestLockAdded(t *testing.T) {
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
-		txn.lockAdded("", pb.LockTable{Table: 1}, [][]byte{[]byte("k1")})
-		txn.lockAdded("", pb.LockTable{Table: 1}, [][]byte{[]byte("k11")})
-		txn.lockAdded("", pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")})
+		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")})
+		txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")})
+		txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")})
 
-		assert.Equal(t, 2, len(txn.getHoldLocksLocked("").tableKeys))
+		assert.Equal(t, 2, len(txn.getHoldLocksLocked(0).tableKeys))
 
-		sp := txn.getHoldLocksLocked("").tableKeys[1]
+		sp := txn.getHoldLocksLocked(0).tableKeys[1]
 		s := sp.slice()
 		defer s.unref()
 		assert.Equal(t, 2, s.len())
 
-		sp2 := txn.getHoldLocksLocked("").tableKeys[2]
+		sp2 := txn.getHoldLocksLocked(0).tableKeys[2]
 		s2 := sp2.slice()
 		defer s2.unref()
 		assert.Equal(t, 2, s2.len())
@@ -78,14 +78,14 @@ func TestClose(t *testing.T) {
 			"s1",
 			txn.txnID,
 			timestamp.Timestamp{},
-			func(group string, table uint64) (lockTable, error) {
+			func(group uint32, table uint64) (lockTable, error) {
 				return tables[table], nil
 			})
 		assert.Empty(t, txn.txnID)
 		assert.Empty(t, txn.txnKey)
 		assert.Empty(t, txn.blockedWaiters)
-		assert.Empty(t, txn.getHoldLocksLocked("").tableKeys)
-		assert.Empty(t, txn.getHoldLocksLocked("").tableBinds)
+		assert.Empty(t, txn.getHoldLocksLocked(0).tableKeys)
+		assert.Empty(t, txn.getHoldLocksLocked(0).tableBinds)
 		assert.Equal(t, 0, tables[1].(*localLockTable).mu.store.Len())
 		assert.Equal(t, 0, tables[2].(*localLockTable).mu.store.Len())
 	})
