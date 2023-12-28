@@ -127,7 +127,7 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 		cs, err := cacheservice.NewCacheServer(selfAddr, morpc.Config{})
 		assert.NoError(t, err)
 		cs.AddHandleFunc(cache.CmdMethod_RemoteRead,
-			func(ctx context.Context, req *cache.Request, resp *cache.Response) error {
+			func(ctx context.Context, req *cache.Request, resp *cache.CacheResponse) error {
 				return HandleRemoteRead(ctx, fs, req, resp)
 			},
 			false,

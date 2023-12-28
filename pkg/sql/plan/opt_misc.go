@@ -948,6 +948,57 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
+func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_JOIN {
+		return 1
+	}
+	result := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
+
+	leftTags := make(map[int32]emptyType)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = emptyStruct
+	}
+
+	rightTags := make(map[int32]emptyType)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = emptyStruct
+	}
+
+	exprs := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			exprs = append(exprs, expr)
+		}
+	}
+
+	hashCols := make([]*plan.ColRef, 0)
+	for _, cond := range exprs {
+		switch condImpl := cond.Expr.(type) {
+		case *plan.Expr_F:
+			expr := condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				hashCols = append(hashCols, exprImpl.Col)
+			}
+		}
+	}
+
+	if len(hashCols) == 0 {
+		return 0.0001
+	}
+
+	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
+	if tableDef == nil {
+		return 0.0001
+	}
+	hashColPos := make([]int32, len(hashCols))
+	for i := range hashCols {
+		hashColPos[i] = hashCols[i].ColPos
+	}
+	return getColNDVRatio(hashColPos, tableDef, builder) * result
+}
+
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -1007,4 +1058,66 @@ END:
 			builder.pushTopDownToLeftJoin(child)
 		}
 	}
+}
+
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteDistinctToAGG(child)
+		}
+	}
+	if node.NodeType != plan.Node_DISTINCT {
+		return
+	}
+	project := builder.qry.Nodes[node.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return
+	}
+	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+		return
+	}
+
+	node.NodeType = plan.Node_AGG
+	node.GroupBy = project.ProjectList
+	node.BindingTags = project.BindingTags
+	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.Children[0] = project.Children[0]
+}
+
+// reuse removeSimpleProjections to delete this plan node
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteEffectlessAggToProject(child)
+		}
+	}
+	if node.NodeType != plan.Node_AGG {
+		return
+	}
+	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+		return
+	}
+	scan := builder.qry.Nodes[node.Children[0]]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	if scan.TableDef.Pkey == nil {
+		return
+	}
+	groupCol := make([]int32, 0)
+	for _, expr := range node.GroupBy {
+		col, ok := expr.Expr.(*plan.Expr_Col)
+		if ok {
+			groupCol = append(groupCol, col.Col.ColPos)
+		}
+	}
+	if !containsAllPKs(groupCol, scan.TableDef) {
+		return
+	}
+	node.NodeType = plan.Node_PROJECT
+	node.BindingTags = node.BindingTags[:1]
+	node.ProjectList = node.GroupBy
+	node.GroupBy = nil
 }

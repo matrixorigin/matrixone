@@ -120,10 +120,8 @@ insert into int02 values ('2023-10-27 23:33:15.110', 321421.42314, 38021.3241432
 insert into int02 values ('2023-10-27 22:33:15.110', 321421.42314, null, null);
 select * from int02;
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts >= '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 1, hour) fill(none);
--- @bvt:issue#12440
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 10, minute) fill(next);
 select _wstart, _wend, sum(col2), sum(col3), sum(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 60, minute) fill(next);
--- @bvt:issue
 select _wstart, _wend, avg(col2), avg(col3), avg(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 20, minute);
 select _wstart, _wend, count(col2), count(col3), count(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 30, minute) fill(prev);
 drop table int02;

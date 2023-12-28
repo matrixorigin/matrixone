@@ -60,16 +60,8 @@ func (ncw *NullComputationWrapper) GetAst() tree.Statement {
 	return ncw.stmt
 }
 
-func (ncw *NullComputationWrapper) SetDatabaseName(db string) error {
-	return nil
-}
-
 func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
-}
-
-func (ncw *NullComputationWrapper) GetAffectedRows() uint64 {
-	return 0
 }
 
 func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
@@ -117,12 +109,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
 }
 
-func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
-	return cwft.proc
+func (cwft *TxnComputationWrapper) Free() {
+	cwft.plan = nil
+	cwft.proc = nil
+	cwft.ses = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+	cwft.stmt = nil
 }
 
-func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
-	return nil
+func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
+	return cwft.proc
 }
 
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
@@ -186,10 +183,6 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 	rt := runtime.ProcessLevelRuntime()
 	return rt.Clock()
-}
-
-func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.runResult.AffectRows
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {

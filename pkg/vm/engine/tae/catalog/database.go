@@ -269,11 +269,11 @@ func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) 
 	if err != nil {
 		return
 	}
-	seg, err := table.GetSegmentByID(id.SegmentID())
+	obj, err := table.GetObjectByID(id.ObjectID())
 	if err != nil {
 		return
 	}
-	blk, err = seg.GetBlockEntryByID(&id.BlockID)
+	blk, err = obj.GetBlockEntryByID(&id.BlockID)
 	return
 }
 
@@ -381,22 +381,25 @@ func (e *DBEntry) DropTableEntryByID(id uint64, txn txnif.AsyncTxn) (newEntry bo
 
 func (e *DBEntry) CreateTableEntry(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
+	defer e.Unlock()
 	created = NewTableEntry(e, schema, txn, dataFactory)
 	err = e.AddEntryLocked(created, txn, false)
-	e.Unlock()
 
 	return created, err
 }
 
 func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn, dataFactory TableDataFactory, tableId uint64) (created *TableEntry, err error) {
 	e.Lock()
+	defer e.Unlock()
+	if tableId < pkgcatalog.MO_RESERVED_MAX {
+		return nil, moerr.NewInternalErrorNoCtx("reserved table ID %d", tableId)
+	}
 	//Deduplicate for tableId
 	if _, exist := e.entries[tableId]; exist {
 		return nil, moerr.GetOkExpectedDup()
 	}
 	created = NewTableEntryWithTableId(e, schema, txn, dataFactory, tableId)
 	err = e.AddEntryLocked(created, txn, false)
-	e.Unlock()
 
 	return created, err
 }
@@ -631,4 +634,16 @@ func (e *DBEntry) PrepareRollback() (err error) {
 // IsActive is coarse API: no consistency check
 func (e *DBEntry) IsActive() bool {
 	return !e.HasDropCommitted()
+}
+
+// only for test
+func MockDBEntryWithAccInfo(accId uint32, dbId uint64) *DBEntry {
+	entry := &DBEntry{
+		ID: dbId,
+	}
+
+	entry.DBNode = &DBNode{}
+	entry.DBNode.acInfo.TenantID = accId
+
+	return entry
 }

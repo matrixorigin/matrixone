@@ -128,6 +128,48 @@ func TestIsCmdQuery(t *testing.T) {
 	require.True(t, ret)
 }
 
+func TestIsCmdInitDB(t *testing.T) {
+	var data []byte
+	ret := isCmdInitDB(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdInitDB(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isCmdInitDB(data)
+	require.True(t, ret)
+}
+
+func TestIsCmdStmtPrepare(t *testing.T) {
+	var data []byte
+	ret := isCmdStmtPrepare(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdStmtPrepare(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, byte(cmdStmtPrepare), 0}
+	ret = isCmdStmtPrepare(data)
+	require.True(t, ret)
+}
+
+func TestIsCmdStmtExecute(t *testing.T) {
+	var data []byte
+	ret := isCmdStmtExecute(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdStmtExecute(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, byte(cmdStmtExecute), 0}
+	ret = isCmdStmtExecute(data)
+	require.True(t, ret)
+}
+
 func TestIsOKPacket(t *testing.T) {
 	var data []byte
 	ret := isOKPacket(data)

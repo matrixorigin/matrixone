@@ -47,9 +47,9 @@ type TableEntry struct {
 	Stats   common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
-	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
+	entries map[types.Objectid]*common.GenericDLNode[*ObjectEntry]
 	//link.head and link.tail is nil when create tableEntry object.
-	link      *common.GenericSortedDList[*SegmentEntry]
+	link      *common.GenericSortedDList[*ObjectEntry]
 	tableData data.Table
 	rows      atomic.Uint64
 	// used for the next flush table tail.
@@ -83,8 +83,8 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:        db,
 		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -101,23 +101,23 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:        db,
 		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
-		sid = SystemSegment_Table_ID
+		sid = SystemObject_Table_ID
 	} else if schema.Name == SystemDBSchema.Name {
-		sid = SystemSegment_DB_ID
+		sid = SystemObject_DB_ID
 	} else if schema.Name == SystemColumnSchema.Name {
-		sid = SystemSegment_Columns_ID
+		sid = SystemObject_Columns_ID
 	} else {
 		panic("not supported")
 	}
-	segment := NewSysSegmentEntry(e, sid)
-	e.AddEntryLocked(segment)
+	objectEntry := NewSysObjectEntry(e, sid)
+	e.AddEntryLocked(objectEntry)
 	return e
 }
 
@@ -125,8 +125,8 @@ func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		link:    common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries: make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
 	}
 	return e
 }
@@ -139,8 +139,8 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		TableNode: node,
-		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
 	}
 }
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -166,7 +166,7 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetSegmentByID(id *types.Segmentid) (seg *SegmentEntry, err error) {
+func (entry *TableEntry) GetObjectByID(id *types.Objectid) (obj *ObjectEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.entries[*id]
@@ -175,27 +175,43 @@ func (entry *TableEntry) GetSegmentByID(id *types.Segmentid) (seg *SegmentEntry,
 	}
 	return node.GetPayload(), nil
 }
+func (entry *TableEntry) GetObjectsByID(id *types.Segmentid) (obj []*ObjectEntry, err error) {
+	entry.RLock()
+	defer entry.RUnlock()
+	for nodeID, node := range entry.entries {
+		if nodeID.Segment().Eq(*id) {
+			if obj == nil {
+				obj = make([]*ObjectEntry, 0)
+			}
+			obj = append(obj, node.GetPayload())
+		}
+	}
+	if obj == nil {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	return obj, nil
+}
 
-func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListIt[*SegmentEntry] {
+func (entry *TableEntry) MakeObjectIt(reverse bool) *common.GenericSortedDListIt[*ObjectEntry] {
 	entry.RLock()
 	defer entry.RUnlock()
 	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
-func (entry *TableEntry) CreateSegment(
+func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	state EntryState,
-	opts *objectio.CreateSegOpt,
-) (created *SegmentEntry, err error) {
+	opts *objectio.CreateObjOpt,
+) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id *objectio.Segmentid
+	var id *objectio.ObjectId
 	if opts != nil && opts.Id != nil {
 		id = opts.Id
 	} else {
-		id = objectio.NewSegmentid()
+		id = objectio.NewObjectid()
 	}
-	created = NewSegmentEntry(entry, id, txn, state)
+	created = NewObjectEntry(entry, id, txn, state)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -213,17 +229,17 @@ func (entry *TableEntry) Set1PC() {
 func (entry *TableEntry) Is1PC() bool {
 	return entry.GetLatestNodeLocked().Is1PC()
 }
-func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
-	n := entry.link.Insert(segment)
-	entry.entries[segment.ID] = n
+func (entry *TableEntry) AddEntryLocked(objectEntry *ObjectEntry) {
+	n := entry.link.Insert(objectEntry)
+	entry.entries[objectEntry.ID] = n
 }
 
-func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
-	if n, ok := entry.entries[segment.ID]; !ok {
+func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
+	if n, ok := entry.entries[objectEntry.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
 		entry.link.Delete(n)
-		delete(entry.entries, segment.ID)
+		delete(entry.entries, objectEntry.ID)
 	}
 	return nil
 }
@@ -281,11 +297,11 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	if level == common.PPL0 {
 		return w.String()
 	}
-	it := entry.MakeSegmentIt(true)
+	it := entry.MakeObjectIt(true)
 	for it.Valid() {
-		segment := it.Get().GetPayload()
+		objectEntry := it.Get().GetPayload()
 		_ = w.WriteByte('\n')
-		_, _ = w.WriteString(segment.PPString(level, depth+1, prefix))
+		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
 		it.Next()
 	}
 	return w.String()
@@ -301,30 +317,30 @@ type TableStat struct {
 
 func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w bytes.Buffer) {
 
-	it := entry.MakeSegmentIt(true)
+	it := entry.MakeObjectIt(true)
 	composeSortKey := false
 	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
 		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
 	}
 
 	for ; it.Valid(); it.Next() {
-		segment := it.Get().GetPayload()
-		if !segment.IsActive() {
+		objectEntry := it.Get().GetPayload()
+		if !objectEntry.IsActive() {
 			continue
 		}
 		stat.ObjectCnt += 1
-		if segment.Stat.GetLoaded() {
+		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
-			stat.Rows += int(segment.Stat.GetRows())
-			stat.OSize += int(segment.Stat.GetOriginSize())
-			stat.Csize += int(segment.Stat.GetCompSize())
+			stat.Rows += int(objectEntry.GetRows())
+			stat.OSize += int(objectEntry.GetOriginSize())
+			stat.Csize += int(objectEntry.GetCompSize())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(segment.ID.ToString())
+			_, _ = w.WriteString(objectEntry.ID.String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
-			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+			_, _ = w.WriteString(objectEntry.StatsString(composeSortKey))
 		}
 		if w.Len() > 8*common.Const1MBytes {
 			w.WriteString("\n...(truncated for too long, more than 8 MB)")
@@ -383,32 +399,18 @@ func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
 
 func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 
-func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
-	it := entry.MakeSegmentIt(false)
+func (entry *TableEntry) LastAppendableObject() (obj *ObjectEntry) {
+	it := entry.MakeObjectIt(false)
 	for it.Valid() {
-		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropCommitted()
-		if itSeg.IsAppendable() && !dropped {
-			seg = itSeg
+		itObj := it.Get().GetPayload()
+		dropped := itObj.HasDropCommitted()
+		if itObj.IsAppendable() && !dropped {
+			obj = itObj
 			break
 		}
 		it.Next()
 	}
-	return seg
-}
-
-func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
-	it := entry.MakeSegmentIt(false)
-	for it.Valid() {
-		itSeg := it.Get().GetPayload()
-		dropped := itSeg.HasDropCommitted()
-		if !itSeg.IsAppendable() && !dropped {
-			seg = itSeg
-			break
-		}
-		it.Next()
-	}
-	return seg
+	return obj
 }
 
 func (entry *TableEntry) AsCommonID() *common.ID {
@@ -424,17 +426,17 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			err = nil
 		}
 	}()
-	segIt := entry.MakeSegmentIt(true)
-	for segIt.Valid() {
-		segment := segIt.Get().GetPayload()
-		if err := processor.OnSegment(segment); err != nil {
+	objIt := entry.MakeObjectIt(true)
+	for objIt.Valid() {
+		objectEntry := objIt.Get().GetPayload()
+		if err := processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				segIt.Next()
+				objIt.Next()
 				continue
 			}
 			return err
 		}
-		blkIt := segment.MakeBlockIt(true)
+		blkIt := objectEntry.MakeBlockIt(true)
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
 			if err := processor.OnBlock(block); err != nil {
@@ -446,42 +448,42 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			blkIt.Next()
 		}
-		if err := processor.OnPostSegment(segment); err != nil {
+		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	return
 }
 
-func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
-	seg, err := entry.GetSegmentByID(id)
+func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn) (deleted *ObjectEntry, err error) {
+	obj, err := entry.GetObjectByID(id)
 	if err != nil {
 		return
 	}
-	seg.Lock()
-	defer seg.Unlock()
-	needWait, waitTxn := seg.NeedWaitCommitting(txn.GetStartTS())
+	obj.Lock()
+	defer obj.Unlock()
+	needWait, waitTxn := obj.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
-		seg.Unlock()
+		obj.Unlock()
 		waitTxn.GetTxnState(true)
-		seg.Lock()
+		obj.Lock()
 	}
 	var isNewNode bool
-	isNewNode, err = seg.DropEntryLocked(txn)
+	isNewNode, err = obj.DropEntryLocked(txn)
 	if err == nil && isNewNode {
-		deleted = seg
+		deleted = obj
 	}
 	return
 }
 
-func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
+func (entry *TableEntry) RemoveEntry(objectEntry *ObjectEntry) (err error) {
 	logutil.Debug("[Catalog]", common.OperationField("remove"),
-		common.OperandField(segment.String()))
-	// segment.Close()
+		common.OperandField(objectEntry.String()))
+	// objectEntry.Close()
 	entry.Lock()
 	defer entry.Unlock()
-	return entry.deleteEntryLocked(segment)
+	return entry.deleteEntryLocked(objectEntry)
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
@@ -549,12 +551,12 @@ func (entry *TableEntry) isColumnChangedInSchema() bool {
 }
 
 func (entry *TableEntry) FreezeAppend() {
-	seg := entry.LastAppendableSegmemt()
-	if seg == nil {
+	obj := entry.LastAppendableObject()
+	if obj == nil {
 		// nothing to freeze
 		return
 	}
-	blk := seg.LastAppendableBlock()
+	blk := obj.LastAppendableBlock()
 	if blk == nil {
 		// nothing to freeze
 		return
@@ -656,4 +658,14 @@ func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dro
 	}
 	name = un.BaseNode.Schema.Name
 	return
+}
+
+// only for test
+func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
+	entry := NewReplayTableEntry()
+	entry.TableNode = &TableNode{}
+	entry.TableNode.schema.Store(NewEmptySchema("test"))
+	entry.ID = tblId
+	entry.db = dbEntry
+	return entry
 }

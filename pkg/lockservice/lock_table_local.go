@@ -196,6 +196,11 @@ func (l *localLockTable) unlock(
 		return
 	}
 
+	b, ok := txn.holdBinds[l.bind.Table]
+	if !ok {
+		panic("BUG: missing bind")
+	}
+
 	var startKey []byte
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
@@ -205,9 +210,19 @@ func (l *localLockTable) unlock(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
+				// 1. txn1 hold key1 on bind version 0
+				// 2. txn1 commit success
+				// 3. dn restart
+				// 4. txn2 hold key1 on bind version 1
+				// 5. txn1 unlock.
+				if b.Changed(l.bind) {
+					return true
+				}
+
 				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn",
 					zap.Bool("row", lock.isLockRow()),
 					zap.Int("keys-count", locks.len()),
+					zap.String("hold-bind", b.DebugString()),
 					zap.String("bind", l.bind.DebugString()),
 					waitTxnArrayField("holders", lock.holders.txns),
 					txnField(txn))
@@ -313,7 +328,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Table, [][]byte{key})
+					c.txn.lockAdded(l.bind, [][]byte{key})
 				}
 				continue
 			}
@@ -380,7 +395,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	c.txn.lockAdded(l.bind.Table, [][]byte{row})
+	c.txn.lockAdded(l.bind, [][]byte{row})
 	l.mu.store.Add(row, lock)
 }
 
@@ -424,7 +439,7 @@ func (l *localLockTable) addRangeLockLocked(
 				c.w = nil
 			}
 			if newHolder {
-				c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+				c.txn.lockAdded(l.bind, [][]byte{start, end})
 			}
 			return nil, Lock{}, nil
 		}
@@ -497,7 +512,7 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					c.txn.lockAdded(l.bind.Table, [][]byte{conflictKey})
+					c.txn.lockAdded(l.bind, [][]byte{conflictKey})
 				}
 				conflictWith = Lock{}
 				conflictKey = nil
@@ -532,7 +547,7 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiters = wq
 
 	// similar to row lock
-	c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+	c.txn.lockAdded(l.bind, [][]byte{start, end})
 
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)

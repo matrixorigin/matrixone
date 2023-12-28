@@ -79,7 +79,7 @@ func (s *mockServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*
 	return nil, nil
 }
 func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
-	sendResp(makeOKPacket(), resp)
+	sendResp(makeOKPacket(8), resp)
 	return true, nil
 }
 func (s *mockServerConn) Close() error {
@@ -254,7 +254,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := &proxy.ExtraInfo{}
+	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
