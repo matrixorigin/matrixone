@@ -30,9 +30,9 @@ const (
 )
 
 type Message struct {
-	senderTag int32
-	msgType   MsgType
-	data      any
+	SenderTag int32
+	MsgType   MsgType
+	Data      any
 }
 
 type MessageBoard struct {
