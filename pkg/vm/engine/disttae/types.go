@@ -454,7 +454,6 @@ type tableKey struct {
 	accountId  uint32
 	databaseId uint64
 	dbName     string
-	tableId    uint64
 	name       string
 }
 
