@@ -1292,7 +1292,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		rs := c.newMergeScope(ss)
 		rs.Instructions[0].Arg.Release()
-		rs.Instructions[0].Arg = nil
 		rs.Instructions[0] = vm.Instruction{
 			Op:  vm.OnDuplicateKey,
 			Idx: c.anal.curr,
@@ -1516,7 +1515,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			lockOpArg.SetBlock(block)
 			if block {
 				ss[i].Instructions[len(ss[i].Instructions)-1].Arg.Release()
-				ss[i].Instructions[len(ss[i].Instructions)-1].Arg = nil
 				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
 					Op:      vm.LockOp,
 					Idx:     c.anal.curr,
@@ -2153,7 +2151,6 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 	case plan.Node_MINUS:
 		for i := range rs {
 			rs[i].Instructions[0].Arg.Release()
-			rs[i].Instructions[0].Arg = nil
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
@@ -2163,7 +2160,6 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 	case plan.Node_INTERSECT:
 		for i := range rs {
 			rs[i].Instructions[0].Arg.Release()
-			rs[i].Instructions[0].Arg = nil
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
@@ -2173,7 +2169,6 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
 			rs[i].Instructions[0].Arg.Release()
-			rs[i].Instructions[0].Arg = nil
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.IntersectAll,
 				Idx: c.anal.curr,
@@ -2497,7 +2492,6 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Partition,
 		Idx: c.anal.curr,
@@ -2587,7 +2581,6 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
@@ -2614,7 +2607,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
@@ -2626,7 +2618,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Window,
 		Idx: c.anal.curr,
@@ -2638,7 +2629,6 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
@@ -2650,7 +2640,6 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Fill,
 		Idx: c.anal.curr,
@@ -2670,7 +2659,6 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
@@ -2697,7 +2685,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
@@ -2807,7 +2794,6 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 		ss[0].PartialResultTypes = nil
 	}
 	rs.Instructions[0].Arg.Release()
-	rs.Instructions[0].Arg = nil
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeGroup,
 		Idx: c.anal.curr,
