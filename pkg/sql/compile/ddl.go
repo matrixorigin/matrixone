@@ -2425,17 +2425,16 @@ func maybeCreateAutoIncrement(
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
 	nameResolver func() string) error {
-	if def.TblId == 0 {
-		name := def.Name
-		if nameResolver != nil {
-			name = nameResolver()
-		}
-		tb, err := db.Relation(ctx, name, nil)
-		if err != nil {
-			return err
-		}
-		def.TblId = tb.GetTableID(ctx)
+	name := def.Name
+	if nameResolver != nil {
+		name = nameResolver()
 	}
+	tb, err := db.Relation(ctx, name, nil)
+	if err != nil {
+		return err
+	}
+	def.TblId = tb.GetTableID(ctx)
+
 	cols := incrservice.GetAutoColumnFromDef(def)
 	if len(cols) == 0 {
 		return nil
