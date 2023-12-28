@@ -432,7 +432,9 @@ func (s *LogtailServer) sendSubscription(ctx context.Context, sub subscription) 
 	var tail logtail.TableLogtail
 	var closeCB func()
 	moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
+		start := time.Now()
 		tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+		v2.LogTailPullCollectBlockingDurationHistogram.Observe(time.Since(start).Seconds())
 	})
 
 	if subErr != nil {

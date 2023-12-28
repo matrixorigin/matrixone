@@ -34,28 +34,14 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			c.initLogtailQueueRow(),
 			c.initLogtailBytesRow(),
 			c.initLogtailLoadCheckpointRow(),
-			c.initLogtailCollectRow(),
 			c.initLogtailSubscriptionRow(),
-			c.initLogtailQueueBlockingRow(),
+			c.initLogtailBlockingRow(),
 		)...)
 	if err != nil {
 		return err
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
-}
-
-func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
-	return dashboard.Row(
-		"Logtail collect duration",
-		c.getHistogram(
-			"collect duration",
-			c.getMetricWithFilter("mo_logtail_collect_duration_seconds_bucket", ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
 }
 
 func (c *DashboardCreator) initLogtailSubscriptionRow() dashboard.Option {
@@ -118,15 +104,19 @@ func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initLogtailQueueBlockingRow() dashboard.Option {
+func (c *DashboardCreator) initLogtailBlockingRow() dashboard.Option {
 	return dashboard.Row(
-		"Logtail Queue Blocking Duration",
+		"Logtail Blocking Duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`mo_logtail_queue_blocking_duration_seconds_bucket`, `type="notifier"`),
+				c.getMetricWithFilter(`mo_logtail_blocking_duration_seconds_bucket`, `type="notifier"`),
+				c.getMetricWithFilter(`mo_logtail_blocking_duration_seconds_bucket`, `type="pull_collect"`),
+				c.getMetricWithFilter(`mo_logtail_blocking_duration_seconds_bucket`, `type="push_collect"`),
 			},
 			[]string{
 				"notifier",
+				"pull_collect",
+				"push_collect",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

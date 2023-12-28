@@ -56,16 +56,18 @@ var (
 )
 
 var (
-	logTailQueueBlockingDurationHistogram = prometheus.NewHistogramVec(
+	logTailBlockingDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "logtail",
-			Name:      "queue_blocking_duration_seconds",
-			Help:      "Bucketed histogram of queue blocking duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 10),
+			Name:      "blocking_duration_seconds",
+			Help:      "Bucketed histogram of logtail blocking duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 
-	LogTailNotifierBlockingDurationHistogram = logTailQueueBlockingDurationHistogram.WithLabelValues("notifier")
+	LogTailNotifierBlockingDurationHistogram    = logTailBlockingDurationHistogram.WithLabelValues("notifier")
+	LogTailPullCollectBlockingDurationHistogram = logTailBlockingDurationHistogram.WithLabelValues("pull_collect")
+	LogTailPushCollectBlockingDurationHistogram = logTailBlockingDurationHistogram.WithLabelValues("push_collect")
 
 	LogTailBytesHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

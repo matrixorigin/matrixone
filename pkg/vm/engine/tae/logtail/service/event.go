@@ -66,7 +66,7 @@ func (n *Notifier) NotifyLogtail(
 		if hasBlocked {
 			dur := time.Since(start).Seconds()
 			v2.LogTailNotifierBlockingDurationHistogram.Observe(dur)
-			logutil.Infof("logtail notifier blocked %f s\n", dur)
+			logutil.Infof("logtail notifier blocked %f s", dur)
 		}
 	}()
 
