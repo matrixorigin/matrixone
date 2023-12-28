@@ -69,7 +69,7 @@ func (replayer *Replayer) PreReplayWal() {
 		entry.InitData(replayer.DataFactory)
 		return
 	}
-	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
+	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if entry.GetTable().IsVirtual() {
 			return moerr.GetOkStopCurrRecur()
 		}

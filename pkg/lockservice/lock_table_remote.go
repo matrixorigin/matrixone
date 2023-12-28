@@ -105,14 +105,14 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		txn.lockAdded(l.bind.Table, rows)
+		txn.lockAdded(l.bind.Group, l.bind, rows)
 		logRemoteLockAdded(txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, nil)
 		return
 	}
 
 	// encounter any error, we also added lock to txn, because we need unlock on remote
-	txn.lockAdded(l.bind.Table, rows)
+	txn.lockAdded(l.bind.Group, l.bind, rows)
 
 	logRemoteLockFailed(txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
@@ -125,14 +125,15 @@ func (l *remoteLockTable) lock(
 func (l *remoteLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
-	commitTS timestamp.Timestamp) {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) {
 	logUnlockTableOnRemote(
 		l.serviceID,
 		txn,
 		l.bind)
 	st := time.Now()
 	for {
-		err := l.doUnlock(txn, commitTS)
+		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
 			return
 		}
@@ -186,7 +187,8 @@ func (l *remoteLockTable) getLock(
 
 func (l *remoteLockTable) doUnlock(
 	txn *activeTxn,
-	commitTS timestamp.Timestamp) error {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -197,6 +199,7 @@ func (l *remoteLockTable) doUnlock(
 	req.LockTable = l.bind
 	req.Unlock.TxnID = txn.txnID
 	req.Unlock.CommitTS = commitTS
+	req.Unlock.Mutations = mutations
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
@@ -232,7 +235,9 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		}
 		lock.holders.add(txn)
 		for _, v := range resp.GetTxnLock.WaitingList {
-			lock.addWaiter(acquireWaiter(v))
+			w := acquireWaiter(v)
+			lock.addWaiter(w)
+			w.close()
 		}
 		return lock, true, nil
 	}
@@ -260,8 +265,11 @@ func (l *remoteLockTable) handleError(txnID []byte, err error) error {
 	// the bind is valid.
 	new, err := getLockTableBind(
 		l.client,
+		l.bind.Group,
 		l.bind.Table,
-		l.serviceID)
+		l.bind.OriginTable,
+		l.serviceID,
+		l.bind.Sharding)
 	if err != nil {
 		logGetRemoteBindFailed(l.bind.Table, err)
 		return oldError

@@ -621,6 +621,9 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaTyp
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
 	}
+	if w.sortIndex > -1 {
+		w.writer.SetSortKey(uint16(w.sortIndex))
+	}
 	if w.attrs == nil {
 		w.attrs = bat.Attrs
 	}

@@ -110,7 +110,7 @@ jobs:
 
   multi-cn-bvt-race-linux-x86:
     if: ${{ github.event.pull_request.merged == true && always() }}
-    runs-on: amd64-shanghai-4xlarge32
+    runs-on: amd64-mo-guangzhou-2xlarge32
     name: Multi-CN e2e BVT(Race) Test on Linux/x64
     needs: [pessimistic-bvt-darwin-arm64]
     steps:
@@ -209,7 +209,3 @@ jobs:
         with:
           msgtype: markdown
           content: "MO Checkin Regression(Standalone BVT) failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"
-
-      - name: SlEEP FOR CHECK
-        if: ${{ always() && steps.check_mo_status.conclusion != 'success' }}
-        run: sleep 21600

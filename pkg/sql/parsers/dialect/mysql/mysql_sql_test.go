@@ -2311,6 +2311,38 @@ var (
 			input: "alter table t1 drop column a, drop column b",
 		},
 		{
+			input:  "ALTER TABLE employees ADD PARTITION (PARTITION p05 VALUES LESS THAN (500001))",
+			output: "alter table employees add partition (partition p05 values less than (500001))",
+		},
+		{
+			input:  "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
+			output: "alter table t add partition (partition p4 values in (7), partition p5 values in (8, 9))",
+		},
+		{
+			input:  "ALTER TABLE t1 DROP PARTITION p1",
+			output: "alter table t1 drop partition p1",
+		},
+		{
+			input:  "ALTER TABLE t1 DROP PARTITION p0, p1",
+			output: "alter table t1 drop partition p0, p1",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION p0",
+			output: "alter table t1 truncate partition p0",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION p0, p3",
+			output: "alter table t1 truncate partition p0, p3",
+		},
+		{
+			input:  "ALTER TABLE t1 TRUNCATE PARTITION ALL",
+			output: "alter table t1 truncate partition all",
+		},
+		{
+			input:  "ALTER TABLE titles partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
+			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
+		},
+		{
 			input: "create publication pub1 database db1",
 		},
 		{
@@ -2836,6 +2868,9 @@ var (
 		},
 		{
 			input: "create table t (a int, b char, constraint index idx(a, b) )",
+		},
+		{
+			input: "ALTER TABLE t1 TRUNCATE PARTITION ALL, p0",
 		},
 	}
 )

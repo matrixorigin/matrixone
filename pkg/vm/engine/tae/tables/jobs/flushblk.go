@@ -39,6 +39,7 @@ type flushBlkTask struct {
 	blocks    []objectio.BlockObject
 	schemaVer uint32
 	seqnums   []uint16
+	stat      objectio.ObjectStats
 	isABlk    bool
 
 	Stats objectio.ObjectStats
@@ -70,7 +71,7 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
-	if v := ctx.Value(TestFlushBailout{}); v != nil {
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
 	seg := task.meta.ID.Segment()
@@ -86,6 +87,8 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	}
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
+	} else if task.meta.GetSchema().HasSortKey() {
+		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
 	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
@@ -104,5 +107,6 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)
 	})
+	task.stat = writer.Stats()
 	return err
 }

@@ -199,6 +199,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
+	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),
@@ -231,7 +232,10 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		if m, ok := request.Message.(*flagOnlyMessage); ok {
 			switch m.flag {
 			case flagPing:
-				return cs.WriteRPCMessage(RPCMessage{
+				sendAt := time.Now()
+				left, _ := request.GetTimeoutFromContext()
+				n := len(cs.c)
+				err := cs.WriteRPCMessage(RPCMessage{
 					Ctx:      request.Ctx,
 					internal: true,
 					Message: &flagOnlyMessage{
@@ -239,6 +243,16 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 						id:   m.id,
 					},
 				})
+				if err != nil {
+					failedAt := time.Now()
+					s.logger.Error("handle ping failed",
+						zap.Duration("timeout-left", left),
+						zap.Time("sendAt", sendAt),
+						zap.Time("failedAt", failedAt),
+						zap.Int("queue-size", n),
+						zap.Error(err))
+				}
+				return err
 			default:
 				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
@@ -267,11 +281,20 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		defer s.closeClientSession(cs)
 
 		responses := make([]*Future, 0, s.options.batchSendSize)
+		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() {
+			defer func() {
+				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
+			}()
+
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
+			for i := 0; i < len(needClose); i++ {
+				needClose[i] = nil
+			}
 			responses = responses[:0]
+			needClose = needClose[:0]
 
 			for i := 0; i < s.options.batchSendSize; i++ {
 				if len(responses) == 0 {
@@ -328,6 +351,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+						if f.oneWay {
+							needClose = append(needClose, f)
+						}
 
 						if !s.options.filter(f.send.Message) {
 							f.messageSent(messageSkipped)
@@ -365,6 +391,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 
 					if written > 0 {
+						s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
 						err := cs.conn.Flush(timeout)
 						if err != nil {
 							if ce != nil {
@@ -390,6 +417,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 					for _, f := range responses {
 						f.messageSent(nil)
+					}
+					for _, f := range needClose {
+						f.Close()
 					}
 
 					s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -500,7 +530,7 @@ func newClientSession(
 		metrics:                 metrics,
 		closedC:                 make(chan struct{}),
 		codec:                   codec,
-		c:                       make(chan *Future, 32),
+		c:                       make(chan *Future, 1024),
 		receivedStreamSequences: make(map[uint64]uint32),
 		conn:                    conn,
 		ctx:                     ctx,
@@ -570,6 +600,15 @@ func (cs *clientSession) Write(
 	})
 }
 
+func (cs *clientSession) AsyncWrite(response Message) error {
+	_, err := cs.send(RPCMessage{
+		Ctx:     context.Background(),
+		Message: response,
+		oneWay:  true,
+	})
+	return err
+}
+
 func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	cs.metrics.sendCounter.Inc()
 
@@ -594,9 +633,12 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 
 	f := cs.newFutureFunc()
-	f.ref()
 	f.init(msg)
+	if !f.oneWay {
+		f.ref()
+	}
 	cs.c <- f
+	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
 }
 

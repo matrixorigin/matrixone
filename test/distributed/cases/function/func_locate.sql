@@ -113,4 +113,84 @@ FROM
     mixed_language_table;
 
 DROP TABLE IF EXISTS mixed_language_table;
+
+select locate('he','hello',-2);
+select locate('lo','hello',-4294967295);
+select locate('lo','hello',4294967295);
+select locate('lo','hello',-4294967296);
+select locate('lo','hello',4294967296);
+select locate('lo','hello',-4294967297);
+select locate('lo','hello',4294967297);
+select locate('DB', 'ewhDBfjiejwew');
+select locate('db', 'HHUHDNDBDBDBfewoiujfewqf vew');
+select locate("3q", 'fwfwefw3rqfw3fqff3qwfw');
+select locate("&&**", " ekwefw&&&**^^&3928u3f ") as result;
+select locate(1,2);
+select locate(100, 2300100100);
+select locate(-100, 3243211433100);
+
+select locate('foo', null);
+select locate(null, 'o');
+select locate(null, null);
+select locate('foo', null) is null;
+select locate(null, 'o') is null;
+select locate(null, null) is null;
+select isnull(locate('foo', null));
+select isnull(locate(null, 'o'));
+select isnull(locate(null, null));
+
+select locate('lo','hello',3) as result;
+select locate('he','hello',null),locate('he',null,2),locate(null,'hello',2);
+select locate(null,'hello',null),locate('he',null,null);
+
+-- locate function nested with string function
+select locate('abc',ltrim('   ueenjfwabc123'));
+select locate('123',rtrim('  3782dfw23123123123   '));
+select locate('%^',trim('  32431 %^ 3829  3huicn2432g23   '));
+select locate('12',substring('21214avewwe12 ',3,20));
+select locate('kjs', reverse('sjkdakjevenjwvev')) as result;
+
+-- select locate in prepare statement
+drop table if exists locate01;
+create table locate01(col1 char(5), col2 varchar(20));
+insert into locate01 values ('da','database数据库DB数据库管理系统');
+insert into locate01 values (null,null);
+insert into locate01 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
+insert into locate01 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
+insert into locate01 values ('@#$', '^&**(&^$@@#$');
+select * from locate01;
+prepare s1 from 'select locate(col1, col2) from locate01';
+execute s1;
+prepare s2 from 'select isnull(locate(col1, col2)) from locate01';
+execute s2;
+drop table locate01;
+
+drop table if exists locate02;
+create table locate02 (col1 tinytext, col2 text);
+insert into locate02 values ('融合异构分布式','MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。');
+insert into locate02 values (null, 'MatrixOne 具备实时 HTAP，多租户，流式计算，极致扩展性，高性价比，企业级高可用及 MySQL 高度兼容等重要特性，通过为用户提供一站式超融合数据解决方案，可以将过去由多个数据库完成的工作合并到一个数据库里，从而简化开发运维，消减数据碎片，提高开发敏捷度。');
+insert into locate02 values ('分布式', null);
+select *  from locate02;
+select locate(col1, col2) from locate02;
+select locate(col1, col2, 10) from locate02;
+select locate(col1, col2, -10) form locate02;
+drop table locate02;
+
+-- select locate in temporary table
+drop table if exists locate03;
+create temporary table locate03(col1 char(5), col2 mediumtext);
+insert into locate03 values ('DB','database数据库DB数据库管理系统');
+insert into locate03 values (null,null);
+insert into locate03 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
+insert into locate03 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
+insert into locate03 values ('@#$', '^&**(&^$@@#$');
+select * from locate03;
+prepare s1 from 'select locate(col1, col2) from locate03';
+execute s1;
+prepare s2 from 'select isnull(locate(col1, col2)) from locate03';
+execute s2;
+drop table locate03;
 drop database testx;
+
+
+

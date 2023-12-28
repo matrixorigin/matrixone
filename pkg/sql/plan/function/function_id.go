@@ -390,6 +390,7 @@ var functionIdRegister = map[string]int32{
 	"unary_plus":  UNARY_PLUS,
 	"unary_minus": UNARY_MINUS,
 	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,
@@ -619,8 +620,10 @@ var functionIdRegister = map[string]int32{
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
+	"ucase":                          UPPER,
 	"to_lower":                       LOWER,
 	"lower":                          LOWER,
+	"lcase":                          LOWER,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,

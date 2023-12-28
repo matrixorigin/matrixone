@@ -16,10 +16,11 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -88,7 +89,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -209,7 +209,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 
@@ -530,7 +530,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		regs:     nil,
 	}
 	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1, engine.Node{})
+		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -672,7 +672,7 @@ func Test_decodeBatch(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 
