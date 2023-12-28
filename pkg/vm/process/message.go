@@ -29,6 +29,20 @@ const (
 	MsgHashMap          MsgType = 8
 )
 
+func (m MsgType) MessageName() string {
+	switch m {
+	case MsgMinValueSigned:
+		return "MsgMinValueSigned"
+	case MsgMinValueUnsigned:
+		return "MsgMinValueUnsigned"
+	case MsgMaxValueSigned:
+		return "MsgMaxValueSigned"
+	case MsgMaxValueUnsigned:
+		return "MsgMaxValueUnsigned"
+	}
+	return "unknown message type"
+}
+
 type Message struct {
 	SenderTag int32
 	MsgType   MsgType
