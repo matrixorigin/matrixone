@@ -77,7 +77,7 @@ def add(a, b):
   return a + b
 ```
 
-在客户端中输入以下 SQL 来创建函数：
+在客户端中输入以下 SQL 来创建函数（使用 `mysql` 命令行工具连接 matrixone 时，需要添加 `--local-infile` 允许工具读取本地的 Python 文件）：
 
 ```sql
 create or replace function py_add(a int, b int) returns int language python import 

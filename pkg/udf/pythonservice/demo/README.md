@@ -77,7 +77,7 @@ def add(a, b):
   return a + b
 ```
 
-Input the following SQL in the client to create the function:
+Input the following SQL in the client to create the function(if you connect to matrixone via `mysql` cli, `--local-infile` flag is required to allow the cli reading local python files）:
 
 ```sql
 create or replace function py_add(a int, b int) returns int language python import 
