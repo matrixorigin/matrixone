@@ -101,10 +101,21 @@ func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
 	}
 }
 
-func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
-	obj := NewEmptyObjectMVCCNode()
-	objectio.SetObjectStatsObjectName(&obj.ObjectStats, metalocation.Name())
-	return obj
+func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	if metaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+		return node
+	}
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
+	return node
+}
+
+func NewObjectInfoWithObjectID(id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+	return node
 }
 
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
@@ -178,6 +189,8 @@ type ObjectNode struct {
 	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
+
+	remainingRows int
 }
 
 const (

@@ -27,6 +27,13 @@ type Op int
 var (
 	// EQ ==
 	EQ = Op(1)
+
+	// EQ_Globbing means the labels are equal, also support globbing(*)
+	// to match key/value from request.
+	EQ_Globbing = Op(2)
+
+	// Contain means the requested labels are contained in the CN labels.
+	Contain = Op(3)
 )
 
 // Selector is used to choose a service from MOCluster

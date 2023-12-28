@@ -89,9 +89,9 @@ func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize int) 
 	}
 	rows, merged := 0, 0
 	for _, m := range mobjs {
-		rows += m.Stat.GetRows()
-		merged += m.Stat.GetRemainingRows()
-		origSize += m.Stat.GetOriginSize()
+		rows += m.GetRows()
+		merged += m.GetRemainingRows()
+		origSize += m.GetOriginSize()
 	}
 	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
 	// the ExpansionRate will be moderated by the actual row number after applying deletes

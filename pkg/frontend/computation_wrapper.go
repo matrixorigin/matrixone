@@ -109,6 +109,15 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
 }
 
+func (cwft *TxnComputationWrapper) Free() {
+	cwft.plan = nil
+	cwft.proc = nil
+	cwft.ses = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+	cwft.stmt = nil
+}
+
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }

@@ -128,6 +128,11 @@ type IOVectorCache interface {
 		async bool,
 	) error
 	Flush()
+	//TODO file contents may change, so we still need this s.
+	DeletePaths(
+		ctx context.Context,
+		paths []string,
+	) error
 }
 
 func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
@@ -156,6 +161,8 @@ type CacheKey = pb.CacheKey
 type DataCache interface {
 	Set(ctx context.Context, key CacheKey, value CacheData)
 	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
+	//TODO file contents may change, so we still need this s.
+	DeletePaths(ctx context.Context, paths []string)
 	Flush()
 	Capacity() int64
 	Used() int64
