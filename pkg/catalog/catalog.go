@@ -148,20 +148,6 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 }
 
-func GenBlockInfo(rows [][]any) []BlockInfo {
-	infos := make([]BlockInfo, len(rows))
-	for i, row := range rows {
-		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
-		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
-		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
-		infos[i].SetMetaLocation(row[BLOCKMETA_METALOC_IDX].([]byte))
-		infos[i].SetDeltaLocation(row[BLOCKMETA_DELTALOC_IDX].([]byte))
-		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
-		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
-	}
-	return infos
-}
-
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {

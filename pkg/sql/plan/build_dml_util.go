@@ -1115,20 +1115,27 @@ func makeInsertPlan(
 					return err
 				}
 
-				originTableMessageForFuzzy := &OriginTableMessageForFuzzy{
-					ParentTableName: tableDef.Name,
-				}
-				partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
-				set := make(map[string]int)
-				for i, n := range indexdef.Parts {
-					set[n] = i
-				}
-				for _, c := range tableDef.Cols { // sort
-					if i, ok := set[c.Name]; ok {
-						partialUniqueCols[i] = c
+				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
+
+				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
+				// with the primary key of the hidden table as the unique key.
+				// package contains some information needed by the fuzzy filter to run background SQL.
+				if indexdef.GetUnique() {
+					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
+						ParentTableName: tableDef.Name,
 					}
+					partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
+					set := make(map[string]int)
+					for i, n := range indexdef.Parts {
+						set[n] = i
+					}
+					for _, c := range tableDef.Cols { // sort
+						if i, ok := set[c.Name]; ok {
+							partialUniqueCols[i] = c
+						}
+					}
+					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 				}
-				originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
@@ -2396,30 +2403,66 @@ func appendPreInsertSkVectorPlan(
 	idxRefs []*ObjectRef,
 	indexTableDefs []*TableDef) (int32, error) {
 
-	/* 	The overall plan
-	----------------------------------------------------------------------------------------------------------------------------
-	| Insert on db.entries												                                                        |
-	|   ->  Lock                                                                                                                |
-	|         ->  Sort                                                                                                          |
-	|               Sort Key: l2_distance(__mo_index_centroid, embedding) ASC                                                   |
-	|               Limit: 1                                                                                                    |
-	|               ->  Join                                                                                                    |
-	|                     Join Type: INNER                                                                                      |
-	|                     ->  Sink Scan                                                                                         |
-	|                           DataSource: Plan 0                                                                              |
-	|                     ->  Filter                                                                                            |
-	|                           Filter Cond: (centroids.__mo_index_centroid_version = cast(meta.'__mo_index_value' as bigint))  |
-	|                           ->  Join                                                                                        |
-	|                                 Join Type: SINGLE                                                                         |
-	|                                 ->  Table Scan on db.centroids											                |
-	|                                 ->  Project                                                                               |
-	|                                       ->  Filter                                                                          |
-	|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
-	|                                             ->  Table Scan on db.meta													    |
-	-----------------------------------------------------------------------------------------------------------------------------
+	/*
+		### Sample SQL:
+		create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id));
+		insert into tbl values("1", "10", "[1,2,3]");
+		insert into tbl values("2", "20", "[1,2,4]");
+		insert into tbl values("3", "30", "[1,2.4,4]");
+		insert into tbl values("4", "40", "[1,2,5]");
+		insert into tbl values("5", "50", "[1,3,5]");
+		insert into tbl values("6", "60", "[100,44,50]");
+		insert into tbl values("7", "70", "[120,50,70]");
+		insert into tbl values("8", "80", "[130,40,90]");
+
+		create table centroids (`__mo_index_centroid_version` BIGINT NOT NULL, `__mo_index_centroid_id` BIGINT NOT NULL, `__mo_index_centroid` VECF32(3) DEFAULT NULL, PRIMARY KEY (`__mo_index_centroid_version`,`__mo_index_centroid_id`));
+		insert into centroids values(0,1,"[1,2,3]");
+		insert into centroids values(0,2,"[130,40,90]");
+
+		select
+		`__mo_index_centroid_version`,
+		`__mo_index_centroid_id`,
+		`id`
+		from
+		(select
+		`centroids`.`__mo_index_centroid_version`,
+		`centroids`.`__mo_index_centroid_id`,
+		`tbl`.`id`,
+		ROW_NUMBER() OVER (PARTITION BY `tbl`.`id` ORDER BY l2_distance(`centroids`.`__mo_index_centroid`, tbl.embedding) ) as `__mo_index_rn`
+		from
+		tbl cross join (select * from `centroids` where `__mo_index_centroid_version` = 0) as `centroids`)
+		where `__mo_index_rn` =1;
+
+		### Corresponding Plan
+		----------------------------------------------------------------------------------------------------------------------------------------------
+		| Plan 2:                                                                                                                                     |
+		| Insert on a.entries												                                                                          |
+		|   ->  Lock                                                                                                                                  |
+		|         ->  Project                                                                                                                         |
+		|               ->  Filter                                                                                                                    |
+		|                     Filter Cond: (#[0,3] = 1)                                                                                               |
+		|                     ->  Window                                                                                                              |
+		|                           Window Function: row_number(); Partition By: id; Order By: l2_distance(__mo_index_centroid, data)                 |
+		|                           ->  Partition                                                                                                     |
+		|                                 Sort Key: id INTERNAL                                                                                       |
+		|                                 ->  Join                                                                                                    |
+		|                                       Join Type: INNER                                                                                      |
+		|                                       ->  Project                                                                                           |
+		|                                             ->  Sink Scan                                                                                   |
+		|                                                   DataSource: Plan 0                                                                        |
+		|                                       ->  Filter                                                                                            |
+		|                                             Filter Cond: (__mo_index_centroid_version = #[0,3])                                             |
+		|                                             ->  Join                                                                                        |
+		|                                                   Join Type: SINGLE                                                                         |
+		|                                                   ->  Table Scan on a.centroids             												  |
+		|                                                   ->  Project                                                                               |
+		|                                                         ->  Filter                                                                          |
+		|                                                               Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
+		|                                                               ->  Table Scan on a.meta 													  |
+			------------------------------------------------------------------------------------------------------------------------------------------
 	*/
 
-	//1. get vector & pk column details
+	//1.a get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn *Type
 	{
@@ -2441,6 +2484,9 @@ func appendPreInsertSkVectorPlan(
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
 
+	//1.b Handle mo_cp_key
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+
 	// 2. scan meta table to find the `current version` number
 	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
 	if err != nil {
@@ -2455,6 +2501,7 @@ func appendPreInsertSkVectorPlan(
 	}
 
 	// 4. create a cross join node for tbl and centroids
+	// Projections: centroids.version, centroids.centroid_id, tbl.pk, centroids.centroid, tbl.embedding
 	var leftChildTblId = lastNodeId
 	var rightChildCentroidsId = currVersionCentroidsTblScanId
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
@@ -2462,13 +2509,21 @@ func appendPreInsertSkVectorPlan(
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 
-	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
-	// project version, centroid_id, pk, serial(version,pk)
-	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID, lastNodeId, isUpdate)
+	// 5. partition by tbl.pk
+	// 6. Window operation
+	// 7. Filter records where row_number() = 1
+	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID)
 	if err != nil {
 		return -1, err
 	}
-	lastNodeId = sortByL2DistanceId
+
+	// 8. Final project: centroids.version, centroids.centroid_id, tbl.pk, cp_col
+	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId, lastNodeId, isUpdate)
+	if err != nil {
+		return -1, err
+	}
+
+	lastNodeId = projectId
 
 	if lockNodeId, ok := appendLockNode(
 		builder,
@@ -2490,33 +2545,7 @@ func appendPreInsertSkVectorPlan(
 	return sourceStep, nil
 }
 
-// appendPreInsertUkPlan  build preinsert plan.
-// sink_scan -> preinsert_uk -> sink
-func appendPreInsertUkPlan(
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	tableDef *TableDef,
-	lastNodeId int32,
-	indexIdx int,
-	isUpddate bool,
-	uniqueTableDef *TableDef,
-	isUK bool) (int32, error) {
-	var useColumns []int32
-	idxDef := tableDef.Indexes[indexIdx]
-	colsMap := make(map[string]int)
-
-	for i, col := range tableDef.Cols {
-		colsMap[col.Name] = i
-	}
-	for _, part := range idxDef.Parts {
-		part = catalog.ResolveAlias(part)
-		if i, ok := colsMap[part]; ok {
-			useColumns = append(useColumns, int32(i))
-		}
-	}
-
-	pkColumn, originPkType := getPkPos(tableDef, false)
-	//------------------------------------------------------------------------------------------
+func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -2561,7 +2590,7 @@ func appendPreInsertUkPlan(
 				}
 			}
 			compkey, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-			projectProjection[pkColumn] = compkey
+			projectProjection[posOriginPk] = compkey
 		} else {
 			pkPos := -1
 			for i, coldef := range tableDef.Cols {
@@ -2571,7 +2600,7 @@ func appendPreInsertUkPlan(
 				}
 			}
 			if pkPos != -1 {
-				projectProjection[pkColumn] = &plan.Expr{
+				projectProjection[posOriginPk] = &plan.Expr{
 					Typ: lastProject[pkPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -2590,7 +2619,41 @@ func appendPreInsertUkPlan(
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
-	//------------------------------------------------------------------------------------------
+	return lastNodeId
+}
+
+// appendPreInsertUkPlan  build preinsert plan.
+// sink_scan -> preinsert_uk -> sink
+func appendPreInsertUkPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	indexIdx int,
+	isUpddate bool,
+	uniqueTableDef *TableDef,
+	isUK bool) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
+
+	var useColumns []int32
+	idxDef := tableDef.Indexes[indexIdx]
+	colsMap := make(map[string]int)
+
+	for i, col := range tableDef.Cols {
+		colsMap[col.Name] = i
+	}
+	for _, part := range idxDef.Parts {
+		part = catalog.ResolveAlias(part)
+		if i, ok := colsMap[part]; ok {
+			useColumns = append(useColumns, int32(i))
+		}
+	}
+
+	pkColumn, originPkType := getPkPos(tableDef, false)
+	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {
@@ -2703,6 +2766,10 @@ func appendDeleteUniqueTablePlan(
 	baseNodeId int32,
 	isUK bool,
 ) (int32, error) {
+	/********
+	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
+	Else IVFFLAT index would fail
+	********/
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNode(builder, lastNodeId)

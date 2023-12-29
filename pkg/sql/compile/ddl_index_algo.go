@@ -78,9 +78,8 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(`%s`), count(`%s`) from `%s`.`%s`;",
+	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
 		indexColumnName,
-		originalTableDef.Pkey.PkeyColName,
 		qryDatabase,
 		originalTableDef.Name)
 	rs, err := c.runSqlWithResult(countTotalSql)
@@ -89,17 +88,11 @@ func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qr
 	}
 
 	var totalCnt int64
-	var pkeyCnt int64
 	rs.ReadRows(func(cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
-		pkeyCnt = executor.GetFixedRows[int64](cols[1])[0]
 		return false
 	})
 	rs.Close()
-
-	if totalCnt != pkeyCnt {
-		return 0, moerr.NewInvalidInputNoCtx("vecfxx column contains nulls.")
-	}
 
 	return totalCnt, nil
 }
@@ -108,32 +101,17 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 	/*
 		The meta table will contain version number for now. In the future, it can contain `index progress` etc.
-		The version number is rotated and reused after maxVersions. This is to avoid version number overflow.
-		If maxVersion = 3, then versions will be 0,1,2,0,1,2,0,1,2,0,1,2,0,1,2 etc.
-
-		We delete old entries from centroids and entries table for the current version number. This is to ensure that
-		1. we don't keep old/stale entries in the table
-		2. we don't delete entries that are being used by a query.
-
-		- If a query is referencing current version (say 1), then during reindex, we will increment current version to 2 (inside the txn),
-		and then delete old entries of version 2.Then we insert new data for version 2. We commit the txn if everything succeeded.
-		- When a new reindex is issued again, we will delete old entries of version 0 ( (2+1)%3 ), and insert new data for version 0.
-		- When a new reindex is issued again, we reach back to version 1.
-		If the query is still referencing version 1, then bad luck! We will get into an inconsistent state.
-		To ensure that we don't get in this state, we need to have maxVersions based reindex frequency and avg query duration etc.
-		For now, lets keep it as 10.
-
-		NOTE: We still hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-			We need to see how to reduce the critical section.
+		The version number is incremented monotonically for each re-index.
+		NOTE: We don't handle version number overflow as BIGINT has a large upper bound.
 
 		Sample SQL:
 
 		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
-		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1)%10 AS CHAR);
+		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1) AS CHAR);
 	*/
 
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
-		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1)%% %d  AS CHAR);",
+		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -141,7 +119,6 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		catalog.MaxIVFFlatVersion,
 	)
 
 	err := c.runSql(insertSQL)
@@ -152,52 +129,10 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, _ *plan.IndexDef, qryDatabase string, _ *plan.TableDef,
-	metadataTableName string,
-	centroidsTableName string,
-	entriesTableName string) error {
-
-	/*
-		Sample SQL:
-		delete from a.centroids where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-		delete from a.entries   where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-	*/
-
-	deleteCentroidsSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err := c.runSql(deleteCentroidsSQL)
-	if err != nil {
-		return err
-	}
-
-	deleteEntriesSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		entriesTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err = c.runSql(deleteEntriesSQL)
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
 
-	// 1. algo params
+	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
@@ -209,8 +144,25 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	kmeansInitType := "kmeansplusplus"
 
+	// 1.b init centroids table with default centroid, if centroids are not enough.
+	// NOTE: we can run re-index to improve the centroid quality.
+	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+		initSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			qryDatabase,
+			indexDef.IndexTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+		)
+		err := c.runSql(initSQL)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
 	// 2. Sampling SQL Logic
-	var sampleCnt = catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
 	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
 		indexColumnName,
@@ -326,16 +278,6 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
-	// 5. non-null original table rows
-	nonNullOriginalTableRowsSql := fmt.Sprintf("(select %s, %s from `%s`.`%s` where `%s` is not null) `%s`",
-		originalTblPkColsCommaSeperated,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-		indexColumnName,
-		originalTableDef.Name,
-	)
-
 	/*
 		Sample SQL:
 		SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`,
@@ -382,7 +324,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTableDef.Name,
 		indexColumnName,
 
-		nonNullOriginalTableRowsSql,
+		originalTableDef.Name,
 		centroidsTableForCurrentVersionSql,
 	)
 

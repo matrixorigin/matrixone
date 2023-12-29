@@ -219,7 +219,7 @@ func (t *tunnel) canStartTransfer() bool {
 	}
 
 	// We are now in a transaction.
-	if scp.isInTxn() {
+	if scp.isInTxn() || csp.isPrepared() {
 		return false
 	}
 
@@ -499,4 +499,11 @@ func (p *pipe) isInTxn() bool {
 		return false
 	}
 	return p.src.isInTxn()
+}
+
+func (p *pipe) isPrepared() bool {
+	if p.src == nil {
+		return false
+	}
+	return p.src.isPrepared()
 }
