@@ -35,4 +35,72 @@ explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
 -- @separator:table
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
+drop table if exists parameters;
+CREATE TABLE `parameters` (
+`specific_catalog` VARCHAR(64) DEFAULT null,
+`specific_schema` VARCHAR(64) DEFAULT null,
+`specific_name` VARCHAR(64) DEFAULT null,
+`ordinal_position` BIGINT UNSIGNED DEFAULT null,
+`parameter_mode` VARCHAR(5) DEFAULT null,
+`parameter_name` VARCHAR(64) DEFAULT null,
+`data_type` TEXT DEFAULT null,
+`character_maximum_length` BIGINT DEFAULT null,
+`character_octet_length` BIGINT DEFAULT null,
+`numeric_precision` INT UNSIGNED DEFAULT null,
+`numeric_scale` BIGINT DEFAULT null,
+`datetime_precision` INT UNSIGNED DEFAULT null,
+`character_set_name` VARCHAR(64) DEFAULT null,
+`collation_name` VARCHAR(64) DEFAULT null,
+`dtd_identifier` TEXT DEFAULT null,
+`routine_type` VARCHAR(64) DEFAULT null
+);
+drop table if exists routines;
+CREATE TABLE `routines` (
+`specific_name` VARCHAR(64) DEFAULT null,
+`routine_catalog` VARCHAR(64) DEFAULT null,
+`routine_schema` VARCHAR(64) DEFAULT null,
+`routine_name` VARCHAR(64) DEFAULT null,
+`routine_type` VARCHAR(10) DEFAULT null,
+`data_type` TEXT DEFAULT null,
+`character_maximum_length` BIGINT DEFAULT null,
+`character_octet_length` BIGINT DEFAULT null,
+`numeric_precision` INT UNSIGNED DEFAULT null,
+`numeric_scale` INT UNSIGNED DEFAULT null,
+`datetime_precision` INT UNSIGNED DEFAULT null,
+`character_set_name` VARCHAR(64) DEFAULT null,
+`collation_name` VARCHAR(64) DEFAULT null,
+`dtd_identifier` TEXT DEFAULT null,
+`routine_body` VARCHAR(3) DEFAULT null,
+`routine_definition` TEXT DEFAULT null,
+`external_name` BINARY(0) DEFAULT null,
+`external_language` VARCHAR(64) DEFAULT null,
+`parameter_style` VARCHAR(3) DEFAULT null,
+`is_deterministic` VARCHAR(3) DEFAULT null,
+`sql_data_access` VARCHAR(10) DEFAULT null,
+`sql_path` VARCHAR(1000) DEFAULT null,
+`security_type` VARCHAR(10) DEFAULT null,
+`created` TIMESTAMP DEFAULT null,
+`last_altered` TIMESTAMP DEFAULT null,
+`sql_mode` VARCHAR(1000) DEFAULT null,
+`routine_comment` TEXT DEFAULT null,
+`definer` VARCHAR(288) DEFAULT null,
+`character_set_client` VARCHAR(64) DEFAULT null,
+`collation_connection` VARCHAR(64) DEFAULT null,
+`database_collation` VARCHAR(64) DEFAULT null
+);
+insert into parameters values('specific_name01','specific_name01','routine_name02',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name02','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name02','routine_name02',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation_name01','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation_name01','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name02','routine_catalog02','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name02','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+
+SELECT DISTINCT ROUTINE_SCHEMA, ROUTINE_NAME, PARAMS.PARAMETER FROM ROUTINES LEFT JOIN ( SELECT SPECIFIC_SCHEMA, SPECIFIC_NAME, GROUP_CONCAT(CONCAT(DATA_TYPE, ' ', PARAMETER_NAME) ORDER BY ORDINAL_POSITION SEPARATOR ', ') PARAMETER, ROUTINE_TYPE FROM PARAMETERS GROUP BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ROUTINE_TYPE ) PARAMS ON ROUTINES.ROUTINE_SCHEMA = PARAMS.SPECIFIC_SCHEMA AND ROUTINES.ROUTINE_NAME = PARAMS.SPECIFIC_NAME AND ROUTINES.ROUTINE_TYPE = PARAMS.ROUTINE_TYPE WHERE ROUTINE_SCHEMA = 'specific_name01' ORDER BY ROUTINE_SCHEMA;
+drop table routines;
+drop table parameters;
 drop database if exists d1;
