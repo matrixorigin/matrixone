@@ -17,9 +17,10 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -342,14 +343,14 @@ func (s *service) registerExecutorsLocked() {
 				return err
 			}
 			// init metric/log merge task cron rule
-			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-				return err
-			}
-
-			// init metric task
-			if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-				return err
-			}
+			//if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+			//	return err
+			//}
+			//
+			//// init metric task
+			//if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+			//	return err
+			//}
 			return nil
 		})
 

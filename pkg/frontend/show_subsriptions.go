@@ -17,109 +17,289 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"go/constant"
+	"sort"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const (
-	getSubscriptionInfoFormat = `select datname,dat_createsql from mo_catalog.mo_database where dat_type='subscription' and account_id=%d;`
+	getAccountIdNamesSql = "select account_id, account_name from mo_catalog.mo_account"
+	getPubsSql           = "select pub_name, database_name, account_list, created_time from mo_catalog.mo_pubs"
+	getSubsSql           = "select datname, dat_createsql, created_time from mo_catalog.mo_database where dat_type = 'subscription'"
 )
 
 var (
-	showSubscriptionOutputColumns = [2]Column{
+	showSubscriptionOutputColumns = [6]Column{
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "Name",
+				name:       "pub_name",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "From_Account",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-	}
-
-	showPublicationOutputColumns = [2]Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "Name",
+				name:       "pub_account",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "Database",
+				name:       "pub_database",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "sub_name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "sub_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
 			},
 		},
 	}
 )
 
-func getSqlForShowSubscriptions(_ context.Context, accId uint32) (string, error) {
-	return fmt.Sprintf(getSubscriptionInfoFormat, accId), nil
+type published struct {
+	pubName     string
+	pubAccount  string
+	pubDatabase string
+	pubTime     string
+	subName     string
+	subTime     string
 }
 
-func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscriptions) (err error) {
-	var rs = &MysqlResultSet{}
-	var erArray []ExecResult
-	var lower interface{}
-	var lowerInt64 int64
-	var createSql string
-	var ast []tree.Statement
-	var sql string
-	bh := ses.GetBackgroundExec(ctx)
+type subscribed struct {
+	pubName    string
+	pubAccount string
+	subName    string
+	subTime    string
+}
+
+func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec) ([]int32, []string, error) {
+	bh.ClearExecResultBatches()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	if err := bh.Exec(ctx, getAccountIdNamesSql); err != nil {
+		return nil, nil, err
+	}
+
+	var accountIds []int32
+	var accountNames []string
+	for _, batch := range bh.GetExecResultBatches() {
+		for i := 0; i < batch.RowCount(); i++ {
+			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
+			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			// column[0]: account_id
+			accountIds = append(accountIds, row[0].(int32))
+			// column[1]: account_name
+			accountNames = append(accountNames, string(row[1].([]byte)[:]))
+		}
+	}
+	return accountIds, accountNames, nil
+}
+
+func canSub(subAccount, subAccountListStr string) bool {
+	if strings.ToLower(subAccountListStr) == "all" {
+		return true
+	}
+
+	for _, acc := range strings.Split(subAccountListStr, ",") {
+		if acc == subAccount {
+			return true
+		}
+	}
+	return false
+}
+
+func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int32, accountName string, like string, subAccountName string) ([]*published, error) {
+	bh.ClearExecResultBatches()
+	sql := fmt.Sprintf(getPubsSql)
+	if len(like) > 0 {
+		sql += fmt.Sprintf(" where pub_name like '%s';", like)
+	}
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+
+	var pubs []*published
+	for _, batch := range bh.GetExecResultBatches() {
+		for i := 0; i < batch.RowCount(); i++ {
+			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
+			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			if err != nil {
+				return nil, err
+			}
+
+			pubName := string(row[0].([]byte)[:])
+			pubDatabase := string(row[1].([]byte)[:])
+			subAccountListStr := string(row[2].([]byte)[:])
+			pubTime := row[3].(string)
+			if !canSub(subAccountName, subAccountListStr) {
+				continue
+			}
+
+			pub := &published{
+				pubName:     pubName,
+				pubAccount:  accountName,
+				pubDatabase: pubDatabase,
+				pubTime:     pubTime,
+			}
+			pubs = append(pubs, pub)
+		}
+	}
+	return pubs, nil
+}
+
+func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int32, lower int64) ([]*subscribed, error) {
+	bh.ClearExecResultBatches()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+	if err := bh.Exec(ctx, getSubsSql); err != nil {
+		return nil, err
+	}
+
+	var subs []*subscribed
+	for _, batch := range bh.GetExecResultBatches() {
+		for i := 0; i < batch.RowCount(); i++ {
+			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
+			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
+			if err != nil {
+				return nil, err
+			}
+
+			subName := string(row[0].([]byte)[:])
+			createSql := string(row[1].([]byte)[:])
+			subTime := row[2].(string)
+			ast, err := mysql.Parse(ctx, createSql, lower)
+			if err != nil {
+				return nil, err
+			}
+
+			pubName := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
+			pubAccount := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
+			sub := &subscribed{
+				pubName:    pubName,
+				pubAccount: pubAccount,
+				subName:    subName,
+				subTime:    subTime,
+			}
+			subs = append(subs, sub)
+		}
+	}
+	return subs, nil
+}
+
+func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscriptions) (err error) {
+	bh := GetRawBatchBackgroundExec(ctx, ses)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
-	if err != nil {
-		return err
-	}
-	sql, err = getSqlForShowSubscriptions(ctx, ses.GetTenantInfo().TenantID)
-	if err != nil {
-		return err
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
+
+	var like string
+	if ss.Like != nil {
+		right, ok := ss.Like.Right.(*tree.NumVal)
+		if !ok || right.Value.Kind() != constant.String {
+			return moerr.NewInternalError(ctx, "like clause must be a string")
+		}
+		like = constant.StringVal(right.Value)
 	}
 
-	rs.AddColumn(showSubscriptionOutputColumns[0])
-	rs.AddColumn(showSubscriptionOutputColumns[1])
+	var lower interface{}
 	lower, err = ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return err
 	}
-	lowerInt64 = lower.(int64)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			row := make([]interface{}, 2)
-			row[0], err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return err
-			}
-			createSql, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return err
-			}
+	lowerInt64 := lower.(int64)
 
-			ast, err = mysql.Parse(ctx, createSql, lowerInt64)
-			if err != nil {
-				return err
-			}
-			fromAccount := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
-			row[1] = fromAccount
-			rs.AddRow(row)
+	// step 1. get all account
+	var accountIds []int32
+	var accountNames []string
+	if accountIds, accountNames, err = getAccountIdNames(ctx, ses, bh); err != nil {
+		return err
+	}
+
+	// step 2. traversal all accounts, get all published pubs
+	var allPublished []*published
+	for i := 0; i < len(accountIds); i++ {
+		var pubs []*published
+		if pubs, err = getPubs(ctx, ses, bh, accountIds[i], accountNames[i], like, ses.GetTenantName()); err != nil {
+			return err
 		}
+
+		allPublished = append(allPublished, pubs...)
+	}
+
+	// step 3. get current account's subscriptions
+	allSubscribedMap := make(map[string]map[string]*subscribed)
+	subs, err := getSubs(ctx, ses, bh, int32(ses.GetTenantInfo().TenantID), lowerInt64)
+	if err != nil {
+		return err
+	}
+	for _, sub := range subs {
+		if _, ok := allSubscribedMap[sub.pubAccount]; !ok {
+			allSubscribedMap[sub.pubAccount] = make(map[string]*subscribed)
+		}
+		allSubscribedMap[sub.pubAccount][sub.pubName] = sub
+	}
+
+	// step 4. join pubs && subs, and sort
+	for _, pub := range allPublished {
+		if sub := allSubscribedMap[pub.pubAccount][pub.pubName]; sub != nil {
+			pub.subName = sub.subName
+			pub.subTime = sub.subTime
+		}
+	}
+
+	if len(like) > 0 {
+		// sort by pub_name asc
+		sort.SliceStable(allPublished, func(i, j int) bool {
+			return allPublished[i].pubName < allPublished[j].pubName
+		})
+	} else {
+		// sort by sub_time, pub_time desc
+		sort.SliceStable(allPublished, func(i, j int) bool {
+			if allPublished[i].subTime != allPublished[j].subTime {
+				return allPublished[i].subTime > allPublished[j].subTime
+			}
+			return allPublished[i].pubTime > allPublished[j].pubTime
+		})
+	}
+
+	// step 5. generate result set
+	bh.ClearExecResultBatches()
+	var rs = &MysqlResultSet{}
+	for _, column := range showSubscriptionOutputColumns {
+		rs.AddColumn(column)
+	}
+	for _, pub := range allPublished {
+		if !ss.All && len(pub.subName) == 0 {
+			continue
+		}
+
+		rs.AddRow([]interface{}{pub.pubName, pub.pubAccount, pub.pubDatabase, pub.pubTime, pub.subName, pub.subTime})
 	}
 	ses.SetMysqlResultSet(rs)
 	return nil

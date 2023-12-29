@@ -1008,6 +1008,7 @@ var (
     		table_list text,
     		account_list text,
     		created_time timestamp,
+    		update_time timestamp,
     		owner int unsigned,
     		creator int unsigned,
     		comment text

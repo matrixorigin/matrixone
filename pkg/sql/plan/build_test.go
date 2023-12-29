@@ -72,8 +72,8 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "update dept set deptno = 11 where deptno = 10"
 	//sqls := []string{"prepare stmt1 from update nation set n_name = ? where n_nationkey = ?",
 	//	"prepare stmt1 from insert into  nation values (?, ?, ?, ?) ON DUPLICATE KEY UPDATE n_name=?"}
-	sqls := []string{"show publications like '%pxxxu';"}
-	//sqls := []string{"show publications;"}
+	//sqls := []string{"show publications like '%pub';"}
+	sqls := []string{"show subscriptions like '%pub';"}
 	mock := NewMockOptimizer(true)
 
 	for _, sql := range sqls {

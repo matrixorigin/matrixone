@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1137,14 +1138,28 @@ func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 
 func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := "select pub_name as Name, database_name as `Database` from mo_catalog.mo_pubs"
+	sql := "select" +
+		" pub_name as `publication`," +
+		" database_name as `database`," +
+		" created_time as `create_time`," +
+		//" update_time as `update_time`," +
+		" case account_list " +
+		" 	when 'all' then cast('*' as text)" +
+		" 	else account_list" +
+		" end as `sub_account`," +
+		" comment as `comments`" +
+		" from mo_catalog.mo_pubs"
 	like := stmt.Like
 	if like != nil {
-		if val, ok := like.Right.(*tree.NumVal); ok {
-			sql += fmt.Sprintf(" where pub_name like '%s'", val.Value.String())
+		right, ok := like.Right.(*tree.NumVal)
+		if !ok || right.Value.Kind() != constant.String {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "like clause must be a string")
 		}
+		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+	} else {
+		sql += " order by created_time desc;"
+		//sql += " order by update_time, created_time desc;"
 	}
-	sql += " order by pub_name;"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
