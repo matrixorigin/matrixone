@@ -369,13 +369,11 @@ select rpad(col1,100,"fewqf43f3g54") from built01;
 select lpad(col2,10,"xxxxxxxxxxx") from built01;
 drop table built01;
 
--- @bvt:issue#10354
 drop table if exists t;
 create table t (c binary(3));
 insert into t set c = 'a';
 select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
--- @bvt:issue
 
 -- varbinary test
 -- error test:not defined the type of varbinary length
