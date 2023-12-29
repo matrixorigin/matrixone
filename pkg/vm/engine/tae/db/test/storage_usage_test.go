@@ -40,6 +40,9 @@ import (
 func Test_StorageUsageCache(t *testing.T) {
 	// new cache with no option
 	cache := logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cache.Lock()
+	defer cache.Unlock()
+
 	require.True(t, cache.IsExpired())
 
 	allocator := atomic.Uint64{}
@@ -656,5 +659,4 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 			require.Equal(t, uint64(0), size)
 		}
 	}
-
 }
