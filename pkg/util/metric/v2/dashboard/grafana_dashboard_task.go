@@ -172,7 +172,8 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 		"tn storage usage cache mem used",
 		12,
 		`sum(`+c.getMetricWithFilter("mo_task_storage_usage_cache_size", ``)+`)`,
-		"mb"))
+		"cache mem used",
+		axis.Unit("mb")))
 
 	return dashboard.Row(
 		"Storage Usage Overview",
