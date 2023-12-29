@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"math"
 	"strings"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -276,8 +276,14 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var tempBatch *batch.Batch
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
+
 	start := time.Now()
-	defer func() { v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds()) }()
+	getTableStatsDur := time.Duration(0)
+	defer func() {
+		v2.TaskShowAccountsTotalDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(getTableStatsDur.Seconds())
+
+	}()
 
 	mp := ses.GetMemPool()
 
@@ -355,10 +361,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	// step 2
 	// calculating the storage usage size of accounts
 	// the returned value is a map: account_id -> size (in bytes)
+	tt := time.Now()
 	usage, err := getAccountsStorageUsage(ctx, ses, accountIds)
 	if err != nil {
 		return err
 	}
+	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Since(tt).Seconds())
 
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
@@ -366,9 +374,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		for _, id := range ids {
 			//step 3.1: get the admin_name, db_count, table_count for each account
 			newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
+
+			tt = time.Now()
 			if tempBatch, err = getTableStats(newCtx, bh, id); err != nil {
 				return err
 			}
+			getTableStatsDur += time.Since(tt)
 
 			// step 3.2: put size value into batch
 			embeddingSizeToBatch(tempBatch, usage[id], mp)
