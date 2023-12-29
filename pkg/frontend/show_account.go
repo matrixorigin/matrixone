@@ -189,6 +189,9 @@ func handleStorageUsageResponse(
 }
 
 func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed bool) {
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
+
 	if cnUsageCache.IsExpired() {
 		return nil, false
 	}
@@ -214,6 +217,9 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 	if len(accIds) == 0 {
 		return
 	}
+
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
 
 	// step 1: delete stale accounts
 	cnUsageCache.ClearForUpdate()
