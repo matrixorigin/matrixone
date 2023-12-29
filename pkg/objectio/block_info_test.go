@@ -15,9 +15,10 @@
 package objectio
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestEncodeInfoHeader(t *testing.T) {
@@ -42,18 +43,24 @@ func TestBlockInfoSlice_Append(t *testing.T) {
 	var s BlockInfoSlice
 	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
 	require.Equal(t, 1, s.Len())
-	require.Equal(t, BlockInfoSize, len(s))
+	require.Equal(t, BlockInfoSize, s.Size())
 	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s.Get(0))
-}
 
-func TestBlockInfoSlice_Append2(t *testing.T) {
-	var s BlockInfoSlice
-	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
-	s.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{2}})
-	require.Equal(t, 2, s.Len())
-	require.Equal(t, BlockInfoSize*2, len(s))
-	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s.Get(0))
-	require.Equal(t, &BlockInfo{BlockID: types.Blockid{2}}, s.Get(1))
+	var s2 BlockInfoSlice
+	s2.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{1}})
+	s2.AppendBlockInfo(BlockInfo{BlockID: types.Blockid{2}})
+	require.Equal(t, 2, s2.Len())
+	require.Equal(t, BlockInfoSize*2, s2.Size())
+	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s2.Get(0))
+	require.Equal(t, &BlockInfo{BlockID: types.Blockid{2}}, s2.Get(1))
+
+	var s3 BlockInfoSlice
+	s3.Append(EncodeBlockInfo(BlockInfo{BlockID: types.Blockid{1}}))
+	s3.Append(EncodeBlockInfo(BlockInfo{BlockID: types.Blockid{2}}))
+	require.Equal(t, 2, s3.Len())
+	require.Equal(t, BlockInfoSize*2, s3.Size())
+	require.Equal(t, &BlockInfo{BlockID: types.Blockid{1}}, s3.Get(0))
+	require.Equal(t, &BlockInfo{BlockID: types.Blockid{2}}, s3.Get(1))
 }
 
 func intToBlockid(i int32) types.Blockid {
@@ -113,8 +120,10 @@ func TestBytesToBlockInfoSlice(t *testing.T) {
 	}
 
 	require.Equal(t, 1000*BlockInfoSize, len(bs))
+	require.Equal(t, s.Size(), len(bs)+BlockInfoSize)
 	bs = s
 	require.Equal(t, 1001*BlockInfoSize, len(bs))
+	require.Equal(t, s.GetAllBytes(), bs)
 
 	s.Get(999).CanRemote = false
 	require.Equal(t, false, s.Get(999).CanRemote)

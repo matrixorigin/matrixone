@@ -3486,16 +3486,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				var subranges engine.Ranges
-				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into catalog.BlockInfo.
+				//add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
 				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := objectio.DecodeBlockInfo(subranges.GetBytes(j))
+					blkInfo := blkSlice.Get(j)
 					blkInfo.PartitionNum = i
-					ranges.Append(subranges.GetBytes(j))
+					ranges.Append(blkSlice.GetBytes(j))
 				}
 			}
 		} else {
@@ -3508,16 +3508,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				var subranges engine.Ranges
-				subranges, err = subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into catalog.BlockInfo.
+				//add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
 				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := objectio.DecodeBlockInfo(subranges.GetBytes(j))
+					blkInfo := blkSlice.Get(j)
 					blkInfo.PartitionNum = i
-					ranges.Append(subranges.GetBytes(j))
+					ranges.Append(blkSlice.GetBytes(j))
 				}
 			}
 		}
@@ -3571,7 +3571,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if partialResults == nil {
 					break
 				}
-				blk := objectio.DecodeBlockInfo(ranges.GetBytes(i))
+				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, ranges.GetBytes(i)...)
 					continue
@@ -3982,7 +3982,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 	// put dirty blocks which can't be distributed remotely in current CN.
 	newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
 	for i := 0; i < ranges.Len(); i++ {
-		if objectio.DecodeBlockInfo(ranges.GetBytes(i)).CanRemote {
+		if ranges.Get(i).CanRemote {
 			newRanges = append(newRanges, ranges.GetBytes(i)...)
 		} else {
 			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)

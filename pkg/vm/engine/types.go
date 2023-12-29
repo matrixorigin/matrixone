@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type Nodes []Node
@@ -584,6 +585,11 @@ type Ranges interface {
 
 	Slice(i, j int) []byte
 }
+
+var (
+	_ Ranges = (*objectio.BlockInfoSlice)(nil)
+	_ Ranges = (*memoryengine.ShardIdSlice)(nil)
+)
 
 type Relation interface {
 	Statistics

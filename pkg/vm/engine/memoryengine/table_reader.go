@@ -71,8 +71,7 @@ func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, by
 		// some
 		idSet := make(map[uint64]bool)
 		for i := 0; i < shardIDs.Len(); i++ {
-			id := binary.LittleEndian.Uint64(shardIDs.GetBytes(i))
-			idSet[id] = true
+			idSet[shardIDs.Get(i)] = true
 		}
 		for _, store := range getTNServices(t.engine.cluster) {
 			for _, shard := range store.Shards {
@@ -242,6 +241,10 @@ func (s *ShardIdSlice) GetAllBytes() []byte {
 
 func (s *ShardIdSlice) Slice(i, j int) []byte {
 	return (*s)[i*8 : j*8]
+}
+
+func (s *ShardIdSlice) Get(i int) uint64 {
+	return binary.LittleEndian.Uint64(s.GetBytes(i))
 }
 
 func (t *Table) UpdateObjectInfos(_ context.Context) error {
