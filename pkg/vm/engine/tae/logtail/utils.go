@@ -3015,6 +3015,7 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 	blkTNMetaDelTxnBat := collector.data.bats[BLKTNMetaDeleteTxnIDX]
 	blkTNMetaInsBat := collector.data.bats[BLKTNMetaInsertIDX]
 	blkTNMetaInsTxnBat := collector.data.bats[BLKTNMetaInsertTxnIDX]
+	blkMetaDelBat := collector.data.bats[BLKMetaDeleteIDX]
 	blkMetaDelTxnBat := collector.data.bats[BLKMetaDeleteTxnIDX]
 	blkCNMetaInsBat := collector.data.bats[BLKCNMetaInsertIDX]
 	blkMetaInsBat := collector.data.bats[BLKMetaInsertIDX]
@@ -3042,6 +3043,9 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 	blkTNMetaInsTxnTIDVec := blkTNMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	blkTNMetaInsTxnMetaLocVec := blkTNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
 	blkTNMetaInsTxnDeltaLocVec := blkTNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+
+	blkMetaDelRowIDVec := blkMetaDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	blkMetaDelCommitTsVec := blkMetaDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
 
 	blkMetaDelTxnDBIDVec := blkMetaDelTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
 	blkMetaDelTxnTIDVec := blkMetaDelTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
@@ -3211,6 +3215,18 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 			}
 		} else {
 			if metaNode.HasDropCommitted() {
+				vector.AppendFixed(
+					blkMetaDelRowIDVec,
+					objectio.HackBlockid2Rowid(&entry.ID),
+					false,
+					collector.data.allocator,
+				)
+				vector.AppendFixed(
+					blkMetaDelCommitTsVec,
+					metaNode.GetEnd(),
+					false,
+					collector.data.allocator,
+				)
 
 				vector.AppendFixed(
 					blkMetaDelTxnDBIDVec,
