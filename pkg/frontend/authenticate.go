@@ -6965,6 +6965,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
+		//only sys account, moadmin role can exec mo_ctrl
+		if hasMoCtrl(p) {
+			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+				return false, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+			}
+		}
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, nil
