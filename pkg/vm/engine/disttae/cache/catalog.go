@@ -794,7 +794,7 @@ type DebugTableItem struct {
 
 func (dt *DebugTableItem) String() string {
 	return fmt.Sprintf("%d-%d-%d-%s-%v-%s",
-		dt.AccountId, dt.DatabaseId, dt.Id, dt.Name, dt.Deleted, dt.Ts.String())
+		dt.AccountId, dt.DatabaseId, dt.Id, dt.Name, dt.Deleted, types.TimestampToTS(dt.Ts).ToString())
 }
 
 type DebugDatabaseItem struct {
@@ -807,7 +807,7 @@ type DebugDatabaseItem struct {
 
 func (dd *DebugDatabaseItem) String() string {
 	return fmt.Sprintf("%d-%d-%s-%v-%s",
-		dd.AccountId, dd.Id, dd.Name, dd.Deleted, dd.Ts.String())
+		dd.AccountId, dd.Id, dd.Name, dd.Deleted, types.TimestampToTS(dd.Ts).ToString())
 }
 
 func (c *tableCache) TraverseTableCache() (ret []DebugTableItem) {

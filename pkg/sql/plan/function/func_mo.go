@@ -187,6 +187,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					DebugGetDatabaseExpectedEOB("MoTableSize", proc)
+					return moerr.NewBadDBNoCtx(dbStr)
 				}
 				return err
 			}
