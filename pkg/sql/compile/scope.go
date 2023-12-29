@@ -146,7 +146,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	for i := range s.PreScopes {
 		wg.Add(1)
 		scope := s.PreScopes[i]
-		ants.Submit(func() {
+		errSubmit := ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
@@ -168,6 +168,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.ParallelRun(c, scope.IsRemote)
 			}
 		})
+		if errSubmit != nil {
+			errChan <- errSubmit
+			wg.Done()
+		}
 	}
 	defer wg.Wait()
 
