@@ -147,6 +147,7 @@ func usageLess(a UsageData, b UsageData) bool {
 type StorageUsageCache struct {
 	// when two requests happens within [lastUpdate, lastUpdate + lazyThreshold],
 	// it will reuse the cached result, no new query to TN.
+	sync.Mutex
 	lazyThreshold time.Duration
 	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
@@ -386,10 +387,12 @@ func (m *TNUsageMemo) MemoryUsed() float64 {
 }
 
 func (m *TNUsageMemo) EnterProcessing() {
+	m.cache.Lock()
 	m.Lock()
 }
 
 func (m *TNUsageMemo) LeaveProcessing() {
+	m.cache.Unlock()
 	m.Unlock()
 }
 
@@ -571,7 +574,7 @@ func try2RemoveStaleData(usage UsageData, c *catalog.Catalog) (UsageData, string
 	return usage, "", false
 }
 
-func (m *TNUsageMemo) deleteAccount(accId uint64) {
+func (m *TNUsageMemo) deleteAccount(accId uint64) (size uint64) {
 	trash := make([]UsageData, 0)
 	povit := UsageData{accId, 0, 0, 0}
 
@@ -596,8 +599,10 @@ func (m *TNUsageMemo) deleteAccount(accId uint64) {
 	iter.Release()
 
 	for idx := range trash {
+		size += trash[idx].Size
 		m.Delete(trash[idx])
 	}
+	return
 }
 
 func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint64]struct{}) string {
@@ -611,8 +616,8 @@ func (m *TNUsageMemo) ClearDroppedAccounts(reserved map[uint64]struct{}) string 
 	for accId := range usages {
 		if _, ok := reserved[accId]; !ok {
 			// this account has been deleted
-			m.deleteAccount(accId)
-			buf.WriteString(fmt.Sprintf("%d; ", accId))
+			size := m.deleteAccount(accId)
+			buf.WriteString(fmt.Sprintf("%d_%d; ", accId, size))
 		}
 	}
 	return buf.String()
@@ -845,26 +850,6 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 
 	return log
 }
-
-//func applyTransfer(collector *BaseCollector, memo *TNUsageMemo) string {
-//	var buf bytes.Buffer
-//	if len(memo.pendingTransfer.deletes) != 0 {
-//		memo.applySegDeletes(memo.pendingTransfer.deletes, collector.data, collector.Allocator())
-//		for _, usage := range memo.pendingTransfer.deletes {
-//			buf.WriteString(fmt.Sprintf("[td-tbl]%d_%d_%d_%d; ",
-//				usage.AccId, usage.DbId, usage.TblId, usage.Size))
-//		}
-//	}
-//	if len(memo.pendingTransfer.inserts) != 0 {
-//		memo.applySegInserts(memo.pendingTransfer.inserts, collector.data, collector.Allocator())
-//		for _, usage := range memo.pendingTransfer.inserts {
-//			buf.WriteString(fmt.Sprintf("[ti-tbl]%d_%d_%d_%d; ",
-//				usage.AccId, usage.DbId, usage.TblId, usage.Size))
-//		}
-//	}
-//
-//	return buf.String()
-//}
 
 func FillUsageBatOfGlobal(collector *GlobalCollector) {
 	start := time.Now()
