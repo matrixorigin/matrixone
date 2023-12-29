@@ -90,10 +90,21 @@ type subscribed struct {
 	subTime    string
 }
 
-func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec) ([]int32, []string, error) {
+func getAccountIdByName(ctx context.Context, ses *Session, bh BackgroundExec, name string) int32 {
+	if accountIds, _, err := getAccountIdNames(ctx, ses, bh, name); err == nil && len(accountIds) > 0 {
+		return accountIds[0]
+	}
+	return -1
+}
+
+func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, likeName string) ([]int32, []string, error) {
 	bh.ClearExecResultBatches()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-	if err := bh.Exec(ctx, getAccountIdNamesSql); err != nil {
+	sql := getAccountIdNamesSql
+	if len(likeName) > 0 {
+		sql += fmt.Sprintf(" where account_name like '%s'", likeName)
+	}
+	if err := bh.Exec(ctx, sql); err != nil {
 		return nil, nil, err
 	}
 
@@ -131,7 +142,7 @@ func canSub(subAccount, subAccountListStr string) bool {
 
 func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int32, accountName string, like string, subAccountName string) ([]*published, error) {
 	bh.ClearExecResultBatches()
-	sql := fmt.Sprintf(getPubsSql)
+	sql := getPubsSql
 	if len(like) > 0 {
 		sql += fmt.Sprintf(" where pub_name like '%s';", like)
 	}
@@ -169,9 +180,26 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 	return pubs, nil
 }
 
-func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int32, lower int64) ([]*subscribed, error) {
+func getSubInfoFromSql(ctx context.Context, ses *Session, sql string) (subName, pubAccountName, pubName string, err error) {
+	var lowerAny interface{}
+	if lowerAny, err = ses.GetGlobalVar("lower_case_table_names"); err != nil {
+		return
+	}
+
+	var ast []tree.Statement
+	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64)); err != nil {
+		return
+	}
+
+	subName = string(ast[0].(*tree.CreateDatabase).Name)
+	pubAccountName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
+	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
+	return
+}
+
+func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uint32) ([]*subscribed, error) {
 	bh.ClearExecResultBatches()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 	if err := bh.Exec(ctx, getSubsSql); err != nil {
 		return nil, err
 	}
@@ -188,16 +216,14 @@ func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 			subName := string(row[0].([]byte)[:])
 			createSql := string(row[1].([]byte)[:])
 			subTime := row[2].(string)
-			ast, err := mysql.Parse(ctx, createSql, lower)
+			_, pubAccountName, pubName, err := getSubInfoFromSql(ctx, ses, createSql)
 			if err != nil {
 				return nil, err
 			}
 
-			pubName := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
-			pubAccount := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
 			sub := &subscribed{
 				pubName:    pubName,
-				pubAccount: pubAccount,
+				pubAccount: pubAccountName,
 				subName:    subName,
 				subTime:    subTime,
 			}
@@ -227,17 +253,10 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 		like = constant.StringVal(right.Value)
 	}
 
-	var lower interface{}
-	lower, err = ses.GetGlobalVar("lower_case_table_names")
-	if err != nil {
-		return err
-	}
-	lowerInt64 := lower.(int64)
-
 	// step 1. get all account
 	var accountIds []int32
 	var accountNames []string
-	if accountIds, accountNames, err = getAccountIdNames(ctx, ses, bh); err != nil {
+	if accountIds, accountNames, err = getAccountIdNames(ctx, ses, bh, ""); err != nil {
 		return err
 	}
 
@@ -254,7 +273,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 
 	// step 3. get current account's subscriptions
 	allSubscribedMap := make(map[string]map[string]*subscribed)
-	subs, err := getSubs(ctx, ses, bh, int32(ses.GetTenantInfo().TenantID), lowerInt64)
+	subs, err := getSubs(ctx, ses, bh, ses.GetTenantInfo().TenantID)
 	if err != nil {
 		return err
 	}

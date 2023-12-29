@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1008,7 +1007,7 @@ var (
     		table_list text,
     		account_list text,
     		created_time timestamp,
-    		update_time timestamp,
+    		update_time timestamp default NULL,
     		owner int unsigned,
     		creator int unsigned,
     		comment text
@@ -1531,7 +1530,7 @@ const (
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s' where pub_name = '%s';`
+	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', update_time = now() where pub_name = '%s';`
 	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
@@ -3273,13 +3272,6 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn T
 	return nil, nil
 }
 
-func isSubscriptionValid(accountList string, accName string) bool {
-	if accountList == "all" {
-		return true
-	}
-	return strings.Contains(accountList, accName)
-}
-
 func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -3391,14 +3383,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 				if err != nil {
 					return nil, err
 				}
-				if !isSubscriptionValid(accountList, tenantName) {
+				if !canSub(tenantName, accountList) {
 					return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 				}
 			}
 		} else {
 			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
 		}
-	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
+	} else if !canSub(tenantInfo.GetTenant(), accountList) {
 		logError(ses, ses.GetDebugString(),
 			"checkSubscriptionValidCommon",
 			zap.String("subName", subName),
@@ -3424,25 +3416,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string) (*plan.SubscriptionMeta, error) {
 	var (
 		err                       error
-		lowerAny                  any
-		lowerInt64                int64
 		accName, pubName, subName string
-		ast                       []tree.Statement
 	)
-	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
-	if err != nil {
+	if subName, accName, pubName, err = getSubInfoFromSql(ctx, ses, createSql); err != nil {
 		return nil, err
 	}
-	lowerInt64 = lowerAny.(int64)
-	ast, err = mysql.Parse(ctx, createSql, lowerInt64)
-	if err != nil {
-		return nil, err
-	}
-
-	accName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
-	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
-	subName = string(ast[0].(*tree.CreateDatabase).Name)
-
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 

@@ -1142,7 +1142,7 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 		" pub_name as `publication`," +
 		" database_name as `database`," +
 		" created_time as `create_time`," +
-		//" update_time as `update_time`," +
+		" update_time as `update_time`," +
 		" case account_list " +
 		" 	when 'all' then cast('*' as text)" +
 		" 	else account_list" +
