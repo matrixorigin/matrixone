@@ -215,6 +215,8 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) (engine.Ranges, error)
 
 type ShardIdSlice []byte
 
+var _ engine.Ranges = (*ShardIdSlice)(nil)
+
 func (s *ShardIdSlice) GetBytes(i int) []byte {
 	return (*s)[i*8 : (i+1)*8]
 }

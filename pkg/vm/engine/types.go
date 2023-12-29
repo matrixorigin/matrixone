@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type Nodes []Node
@@ -586,10 +585,7 @@ type Ranges interface {
 	Slice(i, j int) []byte
 }
 
-var (
-	_ Ranges = (*objectio.BlockInfoSlice)(nil)
-	_ Ranges = (*memoryengine.ShardIdSlice)(nil)
-)
+var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 
 type Relation interface {
 	Statistics
