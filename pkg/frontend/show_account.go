@@ -182,7 +182,7 @@ func handleStorageUsageResponse(
 	result := make(map[int32]uint64, 0)
 
 	for x := range usage.AccIds {
-		result[usage.AccIds[x]] = usage.Sizes[x]
+		result[usage.AccIds[x]] += usage.Sizes[x]
 	}
 
 	return result, nil
@@ -196,7 +196,7 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed 
 	result = make(map[int32]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
-			size, exist := cnUsageCache.GatherAccountSize(uint32(accIds[x][y]))
+			size, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
 			if !exist {
 				// one missed, update all
 				return nil, false
@@ -220,10 +220,12 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 
 	// step 2: update
 	for x := range accIds {
-		cnUsageCache.Update(logtail.UsageData{
-			AccId: uint32(accIds[x]),
-			Size:  sizes[x],
-		})
+		usage := logtail.UsageData{AccId: uint64(accIds[x]), Size: sizes[x]}
+		if old, exist := cnUsageCache.Get(usage); exist {
+			usage.Size += old.Size
+		}
+
+		cnUsageCache.Update(usage)
 	}
 }
 
