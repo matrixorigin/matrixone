@@ -307,6 +307,11 @@ func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
+func (m *blockStream) AsyncWrite(message morpc.Message) error {
+	<-m.ch
+	return moerr.NewStreamClosedNoCtx()
+}
+
 func (m *blockStream) Close() error {
 	m.once.Do(func() {
 		close(m.ch)
@@ -342,6 +347,10 @@ func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
+func (cs *brokenStream) AsyncWrite(response morpc.Message) error {
+	return nil
+}
+
 func (m *brokenStream) Close() error {
 	return nil
 }
@@ -375,6 +384,12 @@ func (m *normalStream) RemoteAddress() string {
 }
 
 func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
+	response := message.(*LogtailResponseSegment)
+	m.logger.Info("write response segment:", zap.String("segment", response.String()))
+	return nil
+}
+
+func (m *normalStream) AsyncWrite(message morpc.Message) error {
 	response := message.(*LogtailResponseSegment)
 	m.logger.Info("write response segment:", zap.String("segment", response.String()))
 	return nil

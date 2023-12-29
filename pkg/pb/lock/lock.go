@@ -262,3 +262,17 @@ func (m Request) Name() string {
 func (m Response) Name() string {
 	return "lockservice.response"
 }
+
+func (m LockOptions) Validate(rows [][]byte) {
+	if m.Sharding == Sharding_None {
+		return
+	}
+
+	if m.Granularity != Granularity_Row {
+		panic("cannot lock with sharding without row granularity")
+	}
+
+	if len(rows) != 1 {
+		panic("cannot lock with sharding without single row")
+	}
+}
