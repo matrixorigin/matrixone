@@ -1006,7 +1006,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 		size := float64(data.Size) / 1048576
 
-		dst.WriteString(fmt.Sprintf("\t[(acc)-%-8d (%*s)-%-8d (%*s)-%-8d] %s -> %12.6f (mb)\n",
+		dst.WriteString(fmt.Sprintf("\t[(acc)-%-10d (%*s)-%-10d (%*s)-%-10d] %s -> %15.6f (mb)\n",
 			data.AccId, maxDbLen, dbName, data.DbId,
 			maxTblLen, tblName, data.TblId, hint, size))
 
@@ -1092,7 +1092,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 		}
 
 		size := float64(sizes[idx]) / 1048576
-		b.WriteString(fmt.Sprintf("\taccount id: %-8d\tsize: %12.6f\thint: %s\n",
+		b.WriteString(fmt.Sprintf("\taccount id: %-10d\tsize: %15.6f\thint: %s\n",
 			accIds[idx], size, hints[idx]))
 	}
 
