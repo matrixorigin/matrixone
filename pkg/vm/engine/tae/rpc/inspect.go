@@ -479,6 +479,7 @@ type compactPolicyArg struct {
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
 	minRowsQualified int32
+	maxRowsObj       int32
 	notLoadMoreThan  int32
 	hints            []api.MergeHint
 }
@@ -492,6 +493,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 		return err
 	}
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
+	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
 	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
@@ -524,11 +526,13 @@ func (c *compactPolicyArg) Run() error {
 		} else {
 			merge.StopMerge.Store(false)
 		}
+		common.RuntimeMaxRowsObj.Store(c.maxRowsObj)
 	} else {
 		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
-			MergeMaxOneRun: int(c.maxMergeObjN),
-			ObjectMinRows:  int(c.minRowsQualified),
-			MergeHints:     c.hints,
+			MergeMaxOneRun:   int(c.maxMergeObjN),
+			ObjectMinRows:    int(c.minRowsQualified),
+			MaxRowsMergedObj: int(c.maxRowsObj),
+			MergeHints:       c.hints,
 		})
 	}
 	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
