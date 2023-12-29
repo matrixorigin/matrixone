@@ -880,7 +880,10 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			// if context has done, it means other pipeline stop the query normally.
 			closeWithError := func(err error) {
 				if reg != nil {
-					reg.Ch <- nil
+					select {
+					case <-s.Proc.Ctx.Done():
+					case reg.Ch <- nil:
+					}
 					close(reg.Ch)
 				}
 
@@ -980,8 +983,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for delete
 				proc.SetInputBatch(bat)
 			} else {
-				// used for BroadCastJoin
-				forwardCh <- bat
+				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc ctx done during forward")
+					return nil
+				case forwardCh <- bat:
+				}
 			}
 			dataBuffer = nil
 		}
