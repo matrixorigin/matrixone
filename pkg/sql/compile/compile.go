@@ -92,8 +92,7 @@ const (
 )
 
 var (
-	ncpu = runtime.NumCPU()
-
+	ncpu           = runtime.NumCPU()
 	ctxCancelError = context.Canceled.Error()
 )
 

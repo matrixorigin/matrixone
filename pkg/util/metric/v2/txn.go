@@ -215,6 +215,7 @@ var (
 	TxnUnlockDurationHistogram             = txnUnlockDurationHistogram.WithLabelValues("total")
 	TxnUnlockBtreeGetLockDurationHistogram = txnUnlockDurationHistogram.WithLabelValues("btree-get-lock")
 	TxnUnlockBtreeTotalDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("btree-total")
+	TxnLockWorkerHandleDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("worker-handle")
 
 	TxnLockWaitersTotalHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

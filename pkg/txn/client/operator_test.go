@@ -200,12 +200,12 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				assert.Error(t, err)
 
 				// table 1 will be removed
-				bind, err := s.GetLockTableBind(tableID1)
+				bind, err := s.GetLockTableBind(0, tableID1)
 				require.NoError(t, err)
 				require.Equal(t, lock.LockTable{}, bind)
 
 				// table 2 will be kept
-				bind, err = s.GetLockTableBind(tableID2)
+				bind, err = s.GetLockTableBind(0, tableID2)
 				require.NoError(t, err)
 				require.NotEqual(t, lock.LockTable{}, bind)
 			},
