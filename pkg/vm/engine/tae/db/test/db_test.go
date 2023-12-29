@@ -3028,8 +3028,8 @@ func TestSegDelLogtail(t *testing.T) {
 		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
 		require.Nil(t, ins)                             // 0 blk, skip blks without deltaloc
-		require.Nil(t, del)                             // 0 blk, skip deletes
-		require.Nil(t, cnins)                           // 0 blk, skip blks without deltaloc
+		require.Equal(t, uint32(1), del.Vecs[0].Len)    // 1 deltaloc
+		require.Equal(t, uint32(1), cnins.Vecs[0].Len)  // 1 deltaloc
 		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
