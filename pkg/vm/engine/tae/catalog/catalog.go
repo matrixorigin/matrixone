@@ -635,7 +635,10 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				rows = leftRows
 			}
 			leftRows -= rows
-			metaLoc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
+			var metaLoc objectio.Location
+			if state != ES_Appendable {
+				metaLoc = objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
+			}
 			catalog.onReplayCreateBlock(dbid, tbid, objid, blkID, state, metaLoc, nil, txnNode, dataFactory)
 		}
 	} else {
@@ -863,6 +866,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 				DeltaLoc: deltaloc,
 			},
 		}
+		blk.Insert(un)
 	} else {
 		prevUn := blk.MVCCChain.GetLatestNodeLocked()
 		un = &MVCCNode[*MetadataMVCCNode]{
@@ -878,10 +882,10 @@ func (catalog *Catalog) onReplayCreateBlock(
 		node := blk.MVCCChain.SearchNode(un)
 		if node != nil {
 			node.IdempotentUpdate(un)
-			return
+		} else {
+			blk.Insert(un)
 		}
 	}
-	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	if blk.blkData == nil {
 		blk.blkData = dataFactory.MakeBlockFactory()(blk)
@@ -953,7 +957,8 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	node := blk.MVCCChain.SearchNode(un)
 	if node != nil {
 		node.IdempotentUpdate(un)
-		return
+	} else {
+		blk.MVCCChain.Insert(un)
 	}
 	blk.location = un.BaseNode.MetaLoc
 	blk.blkData.TryUpgrade()
