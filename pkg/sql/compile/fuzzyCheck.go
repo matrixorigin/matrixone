@@ -4,13 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package compile
 
 import (
@@ -132,7 +133,9 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 			// the last condition does not need to be followed by "and"
 			one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], pkeys[j][i]))
 			one.WriteByte(')')
-			one.WriteTo(&all)
+			if _, err = one.WriteTo(&all); err != nil {
+				return err
+			}
 
 			// use or join each compound primary keys
 			all.WriteString(" or ")
@@ -144,7 +147,9 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 		}
 
 		one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], pkeys[j][lastRow]))
-		one.WriteTo(&all)
+		if _, err = one.WriteTo(&all); err != nil {
+			return err
+		}
 		f.condition = all.String()
 	}
 
@@ -377,7 +382,7 @@ func (f *fuzzyCheck) formatNonCompound(toCheck *vector.Vector, useInErr bool) ([
 
 // datime time and timestamp type can not split by space directly
 func (f *fuzzyCheck) handletimesType(toCheck *vector.Vector) []string {
-	result := []string{}
+	result := make([]string, 0, toCheck.Length())
 	typ := toCheck.GetType()
 
 	if typ.Oid == types.T_timestamp {
