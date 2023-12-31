@@ -106,7 +106,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	return nil
 }
 
-func StatementInfoUpdate(existing, new Item, ctx context.Context) {
+func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
