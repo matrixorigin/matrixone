@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"math"
 	"strings"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -182,13 +182,16 @@ func handleStorageUsageResponse(
 	result := make(map[int32]uint64, 0)
 
 	for x := range usage.AccIds {
-		result[usage.AccIds[x]] = usage.Sizes[x]
+		result[usage.AccIds[x]] += usage.Sizes[x]
 	}
 
 	return result, nil
 }
 
 func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed bool) {
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
+
 	if cnUsageCache.IsExpired() {
 		return nil, false
 	}
@@ -196,7 +199,7 @@ func checkStorageUsageCache(accIds [][]int32) (result map[int32]uint64, succeed 
 	result = make(map[int32]uint64)
 	for x := range accIds {
 		for y := range accIds[x] {
-			size, exist := cnUsageCache.GatherAccountSize(uint32(accIds[x][y]))
+			size, exist := cnUsageCache.GatherAccountSize(uint64(accIds[x][y]))
 			if !exist {
 				// one missed, update all
 				return nil, false
@@ -215,15 +218,20 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 		return
 	}
 
+	cnUsageCache.Lock()
+	defer cnUsageCache.Unlock()
+
 	// step 1: delete stale accounts
 	cnUsageCache.ClearForUpdate()
 
 	// step 2: update
 	for x := range accIds {
-		cnUsageCache.Update(logtail.UsageData{
-			AccId: uint32(accIds[x]),
-			Size:  sizes[x],
-		})
+		usage := logtail.UsageData{AccId: uint64(accIds[x]), Size: sizes[x]}
+		if old, exist := cnUsageCache.Get(usage); exist {
+			usage.Size += old.Size
+		}
+
+		cnUsageCache.Update(usage)
 	}
 }
 
@@ -268,8 +276,14 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var tempBatch *batch.Batch
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
+
 	start := time.Now()
-	defer func() { v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds()) }()
+	getTableStatsDur := time.Duration(0)
+	defer func() {
+		v2.TaskShowAccountsTotalDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(getTableStatsDur.Seconds())
+
+	}()
 
 	mp := ses.GetMemPool()
 
@@ -347,10 +361,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	// step 2
 	// calculating the storage usage size of accounts
 	// the returned value is a map: account_id -> size (in bytes)
+	tt := time.Now()
 	usage, err := getAccountsStorageUsage(ctx, ses, accountIds)
 	if err != nil {
 		return err
 	}
+	v2.TaskShowAccountsGetUsageDurationHistogram.Observe(time.Since(tt).Seconds())
 
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
@@ -358,9 +374,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		for _, id := range ids {
 			//step 3.1: get the admin_name, db_count, table_count for each account
 			newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
+
+			tt = time.Now()
 			if tempBatch, err = getTableStats(newCtx, bh, id); err != nil {
 				return err
 			}
+			getTableStatsDur += time.Since(tt)
 
 			// step 3.2: put size value into batch
 			embeddingSizeToBatch(tempBatch, usage[id], mp)

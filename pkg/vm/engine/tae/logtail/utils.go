@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -423,6 +424,76 @@ func init() {
 	checkpointDataSchemas_Curr = checkpointDataSchemas_V11
 }
 
+func IDXString(idx uint16) string {
+	switch idx {
+	case MetaIDX:
+		return "MetaIDX"
+	case DBInsertIDX:
+		return "DBInsertIDX"
+	case DBInsertTxnIDX:
+		return "DBInsertTxnIDX"
+	case DBDeleteIDX:
+		return "DBDeleteIDX"
+	case DBDeleteTxnIDX:
+		return "DBDeleteTxnIDX"
+	case TBLInsertIDX:
+		return "TBLInsertIDX"
+	case TBLInsertTxnIDX:
+		return "TBLInsertTxnIDX"
+	case TBLDeleteIDX:
+		return "TBLDeleteIDX"
+	case TBLDeleteTxnIDX:
+		return "TBLDeleteTxnIDX"
+	case TBLColInsertIDX:
+		return "TBLColInsertIDX"
+	case TBLColDeleteIDX:
+		return "TBLColDeleteIDX"
+	case SEGInsertIDX:
+		return "SEGInsertIDX"
+	case SEGInsertTxnIDX:
+		return "SEGInsertTxnIDX"
+	case SEGDeleteIDX:
+		return "SEGDeleteIDX"
+	case SEGDeleteTxnIDX:
+		return "SEGDeleteTxnIDX"
+	case BLKMetaInsertIDX:
+		return "BLKMetaInsertIDX"
+	case BLKMetaInsertTxnIDX:
+		return "BLKMetaInsertTxnIDX"
+	case BLKMetaDeleteIDX:
+		return "BLKMetaDeleteIDX"
+	case BLKMetaDeleteTxnIDX:
+		return "BLKMetaDeleteTxnIDX"
+
+	case BLKTNMetaInsertIDX:
+		return "BLKTNMetaInsertIDX"
+	case BLKTNMetaInsertTxnIDX:
+		return "BLKTNMetaInsertTxnIDX"
+	case BLKTNMetaDeleteIDX:
+		return "BLKTNMetaDeleteIDX"
+	case BLKTNMetaDeleteTxnIDX:
+		return "BLKTNMetaDeleteTxnIDX"
+
+	case BLKCNMetaInsertIDX:
+		return "BLKCNMetaInsertIDX"
+
+	case TNMetaIDX:
+		return "TNMetaIDX"
+
+	case StorageUsageInsIDX:
+		return "StorageUsageInsIDX"
+
+	case ObjectInfoIDX:
+		return "ObjectInfoIDX"
+	case TNObjectInfoIDX:
+		return "TNObjectInfoIDX"
+	case StorageUsageDelIDX:
+		return "StorageUsageDelIDX"
+	default:
+		return fmt.Sprintf("UnknownIDX(%d)", idx)
+	}
+}
+
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
@@ -474,7 +545,8 @@ func BackupCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (
 
 func GlobalCheckpointDataFactory(
 	end types.TS,
-	versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+	versionInterval time.Duration,
+) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
@@ -712,7 +784,7 @@ type BaseCollector struct {
 		Deletes        []interface{}
 		SegInserts     []*catalog.ObjectEntry
 		SegDeletes     []*catalog.ObjectEntry
-		ReservedAccIds map[uint32]struct{}
+		ReservedAccIds map[uint64]struct{}
 	}
 
 	UsageMemo *TNUsageMemo
@@ -773,7 +845,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector.ObjectFn = collector.VisitObj
 	collector.BlockFn = collector.VisitBlk
 
-	collector.Usage.ReservedAccIds = make(map[uint32]struct{})
+	collector.Usage.ReservedAccIds = make(map[uint64]struct{})
 
 	return collector
 }
@@ -2486,6 +2558,26 @@ func (data *CheckpointData) readAll(
 	return
 }
 
+func (data *CheckpointData) ExportStats(prefix string) []zap.Field {
+	fields := make([]zap.Field, 0, len(data.bats)+2)
+	totalSize := 0
+	totalRow := 0
+	for idx := range data.bats {
+		if data.bats[idx] == nil || data.bats[idx].Length() == 0 {
+			continue
+		}
+		size := data.bats[idx].Allocated()
+		rows := data.bats[idx].Length()
+		totalSize += size
+		totalRow += rows
+		fields = append(fields, zap.Int(fmt.Sprintf("%s%s-Size", prefix, IDXString(uint16(idx))), size))
+		fields = append(fields, zap.Int(fmt.Sprintf("%s%s-Row", prefix, IDXString(uint16(idx))), rows))
+	}
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), totalSize))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), totalRow))
+	return fields
+}
+
 func (data *CheckpointData) Close() {
 	for idx := range data.bats {
 		if data.bats[idx] != nil {
@@ -2698,7 +2790,7 @@ func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	}
 
 	currAccId := uint32(entry.GetTenantID())
-	collector.Usage.ReservedAccIds[currAccId] = struct{}{}
+	collector.Usage.ReservedAccIds[uint64(currAccId)] = struct{}{}
 
 	return collector.BaseCollector.VisitDB(entry)
 }
@@ -2991,6 +3083,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
