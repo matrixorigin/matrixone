@@ -464,7 +464,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 	if !originHasIndexDef && addIndex != nil {
 		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
-			Indexes: []*plan.IndexDef(addIndex),
+			Indexes: addIndex,
 		})
 	}
 
@@ -1331,7 +1331,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	for _, name := range tqry.PartitionTableNames {
 		var err error
 		if isTemp {
-			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
 			_, err = dbSource.Truncate(c.ctx, name)
 		}
@@ -2268,8 +2268,8 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	preStartWith := preLastSeqNum
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
-		if startNum < T(preStartWith) {
-			startNum = T(preStartWith)
+		if startNum < preStartWith {
+			startNum = preStartWith
 		}
 	} else {
 		startNum = getInterfaceValue[T](preStartWith)
