@@ -76,7 +76,7 @@ func ApplyRuntimeFilters(
 
 		case pipeline.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
-				Zm: objectio.ZoneMap(filter.Data),
+				Zm: filter.Data,
 			}
 		}
 	}
