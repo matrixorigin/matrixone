@@ -220,8 +220,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		case *engine.IndexDef:
 			for _, indexdef := range def.Indexes {
 				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-				defer cancelFunc()
 				index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				cancelFunc()
 				if err != nil {
 					return "", err
 				}
@@ -298,8 +298,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 			}
 		case *engine.PrimaryKeyDef:
 			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-			defer cancelFunc()
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+			cancelFunc()
 			if err != nil {
 				return "", err
 			}

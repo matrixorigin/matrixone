@@ -557,6 +557,10 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 	if nn == nil {
 		return nil
 	}
+	node := nn.GetNode()
+	if node == nil {
+		return nil
+	}
 	// check ww conflict
 	tbl := nn.GetNode().GetPayload()
 	// skip the same table entry
