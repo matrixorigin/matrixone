@@ -337,10 +337,10 @@ type sqlHelper interface {
 }
 
 type WrapCs struct {
-	MsgId  uint64
-	Uid    uuid.UUID
-	Cs     morpc.ClientSession
-	DoneCh chan struct{}
+	MsgId uint64
+	Uid   uuid.UUID
+	Cs    morpc.ClientSession
+	Err   chan error
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {

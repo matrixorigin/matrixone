@@ -1508,6 +1508,7 @@ func makeOneDeletePlan(
 		Children: []int32{lastNodeId},
 		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{
+			TableDef:            delNodeInfo.tableDef,
 			RowIdIdx:            int32(delNodeInfo.deleteIndex),
 			Ref:                 delNodeInfo.objRef,
 			CanTruncate:         false,
@@ -2094,6 +2095,82 @@ func appendPreInsertUkPlan(
 	}
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
+	//------------------------------------------------------------------------------------------
+	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+
+		projectProjection := make([]*Expr, len(lastProject))
+		for i := 0; i < len(lastProject); i++ {
+			projectProjection[i] = &plan.Expr{
+				Typ: lastProject[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						//Name:   "col" + strconv.FormatInt(int64(i), 10),
+					},
+				},
+			}
+		}
+
+		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			pkNamesMap := make(map[string]int)
+			for _, name := range tableDef.Pkey.Names {
+				pkNamesMap[name] = 1
+			}
+
+			prikeyPos := make([]int, 0)
+			for i, coldef := range tableDef.Cols {
+				if _, ok := pkNamesMap[coldef.Name]; ok {
+					prikeyPos = append(prikeyPos, i)
+				}
+			}
+
+			serialArgs := make([]*plan.Expr, len(prikeyPos))
+			for i, position := range prikeyPos {
+				serialArgs[i] = &plan.Expr{
+					Typ: lastProject[position].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(position),
+							Name:   tableDef.Cols[position].Name,
+						},
+					},
+				}
+			}
+			compkey, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+			projectProjection[pkColumn] = compkey
+		} else {
+			pkPos := -1
+			for i, coldef := range tableDef.Cols {
+				if tableDef.Pkey.PkeyColName == coldef.Name {
+					pkPos = i
+					break
+				}
+			}
+			if pkPos != -1 {
+				projectProjection[pkColumn] = &plan.Expr{
+					Typ: lastProject[pkPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(pkPos),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}
+			}
+		}
+		projectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: projectProjection,
+		}
+		lastNodeId = builder.appendNode(projectNode, bindCtx)
+	}
+	//------------------------------------------------------------------------------------------
+
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {
 		ukType = tableDef.Cols[useColumns[0]].Typ
