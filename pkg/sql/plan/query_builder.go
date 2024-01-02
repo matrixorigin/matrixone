@@ -1479,6 +1479,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
+		builder.pushdownLimit(rootID)
 		rootID = builder.applyIndices(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 

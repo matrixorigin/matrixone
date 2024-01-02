@@ -1130,3 +1130,17 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	node.ProjectList = node.GroupBy
 	node.GroupBy = nil
 }
+
+func (builder *QueryBuilder) pushdownLimit(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.pushdownLimit(childID)
+	}
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN {
+			child.Limit, child.Offset = node.Limit, node.Offset
+			node.Limit, node.Offset = nil, nil
+		}
+	}
+}

@@ -428,6 +428,8 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				return 10 * card / ndv
 			}
 			return 0.5
+		case "between", "prefix_between":
+			return 0.1
 		default:
 			return 0.15
 		}
