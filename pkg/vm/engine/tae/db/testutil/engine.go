@@ -432,7 +432,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	assert.NoError(t, err)
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		if e.TableName == fmt.Sprintf("_%d_seg", tid) {
+		if e.TableName == fmt.Sprintf("_%d_obj", tid) {
 			segDel = e.Bat
 		} else if e.EntryType == api.Entry_Delete {
 			del = e.Bat
