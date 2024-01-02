@@ -724,3 +724,22 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	tableEntry.RUnlock()
 	return
 }
+
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsSize(stats, uint32(size))
+	// to make sure pass the stats empty check
+	objectio.SetObjectStatsRowCnt(stats, uint32(1))
+
+	e := &ObjectEntry{
+		BaseEntryImpl: NewBaseEntry(
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
+		table:      tbl,
+		link:       common.NewGenericSortedDList((*BlockEntry).Less),
+		entries:    make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		ObjectNode: &ObjectNode{},
+	}
+	e.CreateWithTS(types.BuildTS(time.Now().UnixNano(), 0), &ObjectMVCCNode{*stats})
+	e.Stat.entry = e
+	return e
+}

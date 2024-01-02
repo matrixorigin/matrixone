@@ -321,9 +321,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
-						Expr: &plan.Expr_C{
-							C: &plan.Const{
-								Value: &plan.Const_Sval{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{
 									Sval: val.ToString(),
 								},
 							},
@@ -340,8 +340,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					}
 					valExprs[i] = &plan.Expr{
 						Typ: colTyp,
-						Expr: &plan.Expr_C{
-							C: constExpr,
+						Expr: &plan.Expr_Lit{
+							Lit: constExpr,
 						},
 					}
 				}
@@ -351,7 +351,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount > useInExprCount {
+		if rowsCount > 1 {
 			// args in list must be constant
 			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,

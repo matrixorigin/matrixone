@@ -27,6 +27,10 @@ type Op int
 var (
 	// EQ ==
 	EQ = Op(1)
+
+	EQ_Globbing = Op(2)
+
+	Contain = Op(3)
 )
 
 // Selector is used to choose a service from MOCluster

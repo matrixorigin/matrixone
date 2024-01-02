@@ -86,8 +86,8 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 }
 
 func isDefaultValExpr(e *Expr) bool {
-	if ce, ok := e.Expr.(*plan.Expr_C); ok {
-		_, isDefVal := ce.C.Value.(*plan.Const_Defaultval)
+	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
+		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
 		return isDefVal
 	}
 	return false
@@ -283,12 +283,12 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 // 	for colName, colIdx := range upCtx.updateColPosMap {
 // 		if pkIdx, ok := pkNameMap[colName]; ok {
 // 			switch e := node.ProjectList[colIdx].Expr.(type) {
-// 			case *plan.Expr_C:
+// 			case *plan.Expr_Lit:
 // 			case *plan.Expr_F:
 // 				if e.F.Func.ObjName != "cast" {
 // 					return nil
 // 				}
-// 				if _, isConst := e.F.Args[0].Expr.(*plan.Expr_C); !isConst {
+// 				if _, isConst := e.F.Args[0].Expr.(*plan.Expr_Lit); !isConst {
 // 					return nil
 // 				}
 // 			default:

@@ -174,6 +174,9 @@ func (l *LRU[K, V]) Flush() {
 	l.kv = make(map[K]*list.Element)
 }
 
+func (l *LRU[K, V]) DeletePaths(ctx context.Context, paths []string) {
+}
+
 func (l *LRU[K, V]) Capacity() int64 {
 	return l.capacity
 }

@@ -531,10 +531,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		if node.WinSpecList != nil {
-			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
-		}
-
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -543,11 +539,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
-
-		if node.WinSpecList != nil {
-			groupSize = int32(len(builder.qry.Nodes[node.Children[0]].ProjectList))
-			increaseRefCntForExprList(node.WinSpecList, -1, colRefCnt)
-		}
 
 		for _, expr := range node.FilterList {
 			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
@@ -603,18 +594,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
-		}
-
-		if node.WinSpecList != nil {
-
-			node.NodeType = plan.Node_WINDOW
-
-			for _, expr := range node.WinSpecList {
-				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
-				if err != nil {
-					return nil, err
-				}
-			}
 		}
 
 		if len(node.ProjectList) == 0 {
@@ -1227,7 +1206,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ:  &plan.Type{Id: int32(types.T_int64)},
-				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_I64Val{I64Val: 0}}},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 			})
 		} else {
 			internalRemapping := &ColRefRemapping{
@@ -1407,9 +1386,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								NotNullable: true,
 								Width:       int32(len(str)),
 							},
-							Expr: &plan.Expr_C{
-								C: &plan.Const{
-									Value: &plan.Const_Sval{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Sval{
 										Sval: str,
 									},
 								},
@@ -1422,9 +1401,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								NotNullable: true,
 								Width:       int32(len(str)),
 							},
-							Expr: &plan.Expr_C{
-								C: &plan.Const{
-									Value: &plan.Const_Sval{
+							Expr: &plan.Expr_Lit{
+								Lit: &plan.Literal{
+									Value: &plan.Literal_Sval{
 										Sval: str,
 									},
 								},
@@ -1500,8 +1479,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.autoUseIndices(rootID)
-		ReCalcNodeStats(rootID, builder, true, true, true)
+		rootID = builder.applyIndices(rootID)
+		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
@@ -1851,8 +1830,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				return 0, err
 			}
 
-			if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					ctx.hasSingleRow = c.I64Val == 1
 				}
 			}
@@ -1915,6 +1894,7 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 		}
 		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
 		windowExpr.Typ = bc.aggregates[i].Typ
+		windowSpec.Name = bc.aggregates[i].GetF().Func.ObjName
 
 		if windowSpec.Name == NameGroupConcat {
 			if j < len(bc.windows)-1 {
@@ -1926,9 +1906,6 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 		}
 		windowsSpecList = append(windowsSpecList, windowExpr)
 	}
-
-	//clean ctx.windows to avoid adding another windows node
-	bc.windows = nil
 
 	return windowsSpecList, nil
 }
@@ -2553,8 +2530,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, err
 			}
 
-			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					if c.I64Val < 0 {
 						return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
 					}
@@ -2567,8 +2544,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, err
 			}
 
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-				if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					if c.I64Val < 0 {
 						return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
 					}
@@ -2598,6 +2575,26 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
 			}
 		}
+	}
+
+	if ctx.forceWindows {
+		ctx.tmpGroups = ctx.groups
+		ctx.windows, _ = ctx.generateForceWinSpecList()
+		ctx.aggregates = nil
+		ctx.groups = nil
+
+		for i := range ctx.projects {
+			ctx.projects[i] = DeepProcessExprForGroupConcat(ctx.projects[i], ctx)
+		}
+
+		for i := range havingList {
+			havingList[i] = DeepProcessExprForGroupConcat(havingList[i], ctx)
+		}
+
+		for i := range orderBys {
+			orderBys[i].Expr = DeepProcessExprForGroupConcat(orderBys[i].Expr, ctx)
+		}
+
 	}
 
 	// FIXME: delete this when SINGLE join is ready
@@ -2645,21 +2642,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 			}
 			if ctx.forceWindows {
-
-				winSpecList, err := ctx.generateForceWinSpecList()
-				if err != nil {
-					return 0, err
-				}
-
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_AGG,
-					Children:    []int32{nodeID},
-					GroupBy:     ctx.groups,
-					AggList:     ctx.aggregates,
-					BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
-					WinSpecList: winSpecList,
-				}, ctx)
-
 			} else {
 				nodeID = builder.appendNode(&plan.Node{
 					NodeType:    plan.Node_AGG,
@@ -2765,6 +2747,29 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		for name, id := range ctx.windowByAst {
 			builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
 		}
+
+		if ctx.forceWindows {
+			if len(havingList) > 0 {
+				var newFilterList []*plan.Expr
+				var expr *plan.Expr
+
+				for _, cond := range havingList {
+					nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					if err != nil {
+						return 0, err
+					}
+
+					newFilterList = append(newFilterList, expr)
+				}
+
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{nodeID},
+					FilterList: newFilterList,
+				}, ctx)
+			}
+		}
+
 	}
 
 	// append PROJECT node
@@ -2844,6 +2849,50 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	return nodeID, nil
+}
+
+func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
+	if expr == nil {
+		return nil
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col.RelPos == ctx.groupTag {
+			expr = DeepCopyExpr(ctx.tmpGroups[item.Col.ColPos])
+		}
+		if item.Col.RelPos == ctx.aggregateTag {
+			item.Col.RelPos = ctx.windowTag
+		}
+
+	case *plan.Expr_F:
+		for i, arg := range item.F.Args {
+			item.F.Args[i] = DeepProcessExprForGroupConcat(arg, ctx)
+		}
+	case *plan.Expr_W:
+		for i, p := range item.W.PartitionBy {
+			item.W.PartitionBy[i] = DeepProcessExprForGroupConcat(p, ctx)
+		}
+		for i, o := range item.W.OrderBy {
+			item.W.OrderBy[i].Expr = DeepProcessExprForGroupConcat(o.Expr, ctx)
+		}
+
+	case *plan.Expr_Sub:
+		DeepProcessExprForGroupConcat(item.Sub.Child, ctx)
+
+	case *plan.Expr_Corr:
+		if item.Corr.RelPos == ctx.groupTag {
+			expr = DeepCopyExpr(ctx.tmpGroups[item.Corr.ColPos])
+		}
+		if item.Corr.RelPos == ctx.aggregateTag {
+			item.Corr.RelPos = ctx.windowTag
+		}
+	case *plan.Expr_List:
+		for i, ie := range item.List.List {
+			item.List.List[i] = DeepProcessExprForGroupConcat(ie, ctx)
+		}
+	}
+	return expr
+
 }
 
 func appendSelectList(
@@ -3329,8 +3378,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 								return 0, err
 							}
 
-							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
-								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_Lit); ok {
+								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 									if c.I64Val < 0 {
 										return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
 									}
@@ -3343,8 +3392,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 								return 0, err
 							}
 
-							if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
-								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+							if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+								if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 									if c.I64Val < 0 {
 										return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
 									}
