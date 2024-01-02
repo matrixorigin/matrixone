@@ -554,7 +554,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 	if !originHasIndexDef && addIndex != nil {
 		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
-			Indexes: []*plan.IndexDef(addIndex),
+			Indexes: addIndex,
 		})
 	}
 
@@ -1530,7 +1530,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	for _, name := range tqry.PartitionTableNames {
 		var err error
 		if isTemp {
-			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
 			_, err = dbSource.Truncate(c.ctx, name)
 		}
@@ -2471,8 +2471,8 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	preStartWith := preLastSeqNum
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
-		if startNum < T(preStartWith) {
-			startNum = T(preStartWith)
+		if startNum < preStartWith {
+			startNum = preStartWith
 		}
 	} else {
 		startNum = getInterfaceValue[T](preStartWith)
@@ -2604,8 +2604,9 @@ func lockRows(
 	proc *process.Process,
 	rel engine.Relation,
 	vec *vector.Vector,
-	lockMode lock.LockMode) error {
-
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32) error {
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
@@ -2619,7 +2620,9 @@ func lockRows(
 		id,
 		vec,
 		*vec.GetType(),
-		lockMode)
+		lockMode,
+		sharding,
+		group)
 	return err
 }
 
@@ -2629,17 +2632,16 @@ func maybeCreateAutoIncrement(
 	def *plan.TableDef,
 	txnOp client.TxnOperator,
 	nameResolver func() string) error {
-	if def.TblId == 0 {
-		name := def.Name
-		if nameResolver != nil {
-			name = nameResolver()
-		}
-		tb, err := db.Relation(ctx, name, nil)
-		if err != nil {
-			return err
-		}
-		def.TblId = tb.GetTableID(ctx)
+	name := def.Name
+	if nameResolver != nil {
+		name = nameResolver()
 	}
+	tb, err := db.Relation(ctx, name, nil)
+	if err != nil {
+		return err
+	}
+	def.TblId = tb.GetTableID(ctx)
+
 	cols := incrservice.GetAutoColumnFromDef(def)
 	if len(cols) == 0 {
 		return nil
@@ -2708,13 +2710,17 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
+func lockMoTable(
+	c *Compile,
+	dbName string,
+	tblName string,
+	lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -2724,7 +2730,8 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
+
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
 	return nil

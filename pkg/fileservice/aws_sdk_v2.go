@@ -693,63 +693,63 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 
 	// cache
 	defer func() {
-		if ret == nil {
-			return
+		if ret != nil {
+			ret = aws.NewCredentialsCache(ret)
 		}
-		ret = aws.NewCredentialsCache(ret)
 	}()
 
-	// aws role arn
-	if o.AssumeRoleARN != "" {
-		if provider := func() aws.CredentialsProvider {
-			loadConfigOptions := []func(*config.LoadOptions) error{
-				config.WithLogger(logutil.GetS3Logger()),
-				config.WithClientLogMode(
-					aws.LogSigning |
-						aws.LogRetries |
-						aws.LogRequest |
-						aws.LogResponse |
-						aws.LogDeprecatedUsage |
-						aws.LogRequestEventMessage |
-						aws.LogResponseEventMessage,
-				),
-			}
-			awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
-			if err != nil {
-				return nil
-			}
-			stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-				if o.Region == "" {
-					options.Region = "ap-northeast-1"
-				} else {
-					options.Region = o.Region
-				}
-			})
-			provider := stscreds.NewAssumeRoleProvider(
-				stsSvc,
-				o.AssumeRoleARN,
-				func(opts *stscreds.AssumeRoleOptions) {
-					if o.ExternalID != "" {
-						opts.ExternalID = &o.ExternalID
-					}
-				},
-			)
-			_, err = provider.Retrieve(ctx)
-			if err == nil {
-				return provider
-			}
-			logutil.Info("skipping bad role arn credentials provider",
-				zap.Any("error", err),
-			)
-			return nil
-		}(); provider != nil {
-			return provider
+	defer func() {
+		// handle assume role
+		if o.RoleARN == "" {
+			return
 		}
-	}
+
+		logutil.Info("setting assume role provider")
+		// load default options
+		awsConfig, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			panic(err)
+		}
+		if ret != nil {
+			logutil.Info("using upstream credential provider for assume role",
+				zap.Any("type", fmt.Sprintf("%T", ret)),
+			)
+			awsConfig.Credentials = ret
+		}
+
+		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
+			if o.Region == "" {
+				options.Region = "ap-northeast-1"
+			} else {
+				options.Region = o.Region
+			}
+		})
+		provider := stscreds.NewAssumeRoleProvider(
+			stsSvc,
+			o.RoleARN,
+			func(opts *stscreds.AssumeRoleOptions) {
+				if o.ExternalID != "" {
+					opts.ExternalID = &o.ExternalID
+				}
+			},
+		)
+		_, err = provider.Retrieve(ctx)
+		if err != nil {
+			// not good
+			logutil.Info("bad assume role provider",
+				zap.Any("err", err),
+			)
+			return
+		}
+
+		// set to assume role provider
+		ret = provider
+	}()
 
 	// static credential
 	if o.KeyID != "" && o.KeySecret != "" {
 		// static
+		logutil.Info("static credential")
 		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken)
 	}
 
