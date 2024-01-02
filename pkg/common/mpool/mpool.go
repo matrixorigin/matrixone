@@ -157,12 +157,6 @@ func (pHdr *memHdr) CheckGuard() bool {
 	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
 }
 
-func (pHdr *memHdr) ClearGuard() {
-	pHdr.guard[0] = 0
-	pHdr.guard[1] = 0
-	pHdr.guard[2] = 0
-}
-
 func (pHdr *memHdr) ToSlice(sz, cap int) []byte {
 	ptr := unsafe.Add(unsafe.Pointer(pHdr), kMemHdrSz)
 	bs := unsafe.Slice((*byte)(ptr), cap)
