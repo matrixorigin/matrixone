@@ -344,6 +344,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return -1, err
 	}
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		if obj.StatsValid() {
+			ret += int64(obj.Size())
+			return nil
+		}
+
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -402,14 +407,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
-		location := obj.Location()
-		objName := location.Name().String()
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-		if err != nil {
-			return err
-		}
-		meta := objMeta.MustDataMeta()
-		rowCnt := int64(meta.BlockHeader().Rows())
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -418,6 +415,34 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		if err != nil {
 			return err
 		}
+
+		location := obj.Location()
+		objName := location.Name().String()
+
+		if name == AllColumns && obj.StatsValid() {
+			// no need to load object meta
+			for _, col := range needCols {
+				infoList = append(infoList, &plan.MetadataScanInfo{
+					ColName:    col.Name,
+					IsHidden:   col.Hidden,
+					ObjectName: objName,
+					ObjLoc:     location,
+					CreateTs:   createTs,
+					DeleteTs:   deleteTs,
+					RowCnt:     int64(obj.Rows()),
+					ZoneMap:    objectio.EmptyZm[:],
+				})
+			}
+			return nil
+		}
+
+		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
+			return err
+		}
+		meta := objMeta.MustDataMeta()
+		rowCnt := int64(meta.BlockHeader().Rows())
+
 		for _, col := range needCols {
 			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
 			infoList = append(infoList, &plan.MetadataScanInfo{
