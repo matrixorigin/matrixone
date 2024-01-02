@@ -784,7 +784,7 @@ type BaseCollector struct {
 		Deletes        []interface{}
 		SegInserts     []*catalog.ObjectEntry
 		SegDeletes     []*catalog.ObjectEntry
-		ReservedAccIds map[uint32]struct{}
+		ReservedAccIds map[uint64]struct{}
 	}
 
 	UsageMemo *TNUsageMemo
@@ -845,7 +845,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector.ObjectFn = collector.VisitObj
 	collector.BlockFn = collector.VisitBlk
 
-	collector.Usage.ReservedAccIds = make(map[uint32]struct{})
+	collector.Usage.ReservedAccIds = make(map[uint64]struct{})
 
 	return collector
 }
@@ -2778,7 +2778,7 @@ func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	}
 
 	currAccId := uint32(entry.GetTenantID())
-	collector.Usage.ReservedAccIds[currAccId] = struct{}{}
+	collector.Usage.ReservedAccIds[uint64(currAccId)] = struct{}{}
 
 	return collector.BaseCollector.VisitDB(entry)
 }
@@ -3056,6 +3056,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
