@@ -27,6 +27,7 @@ func doWithRetry[T any](
 	maxAttemps int,
 	isRetryable func(error) bool,
 ) (res T, err error) {
+	defer catch(&err)
 	numRetries := 0
 	for {
 		res, err = fn()

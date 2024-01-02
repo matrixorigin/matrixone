@@ -215,6 +215,7 @@ var (
 	TxnUnlockDurationHistogram             = txnUnlockDurationHistogram.WithLabelValues("total")
 	TxnUnlockBtreeGetLockDurationHistogram = txnUnlockDurationHistogram.WithLabelValues("btree-get-lock")
 	TxnUnlockBtreeTotalDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("btree-total")
+	TxnLockWorkerHandleDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("worker-handle")
 
 	TxnLockWaitersTotalHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -263,15 +264,6 @@ var (
 	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
 	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
 	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
-
-	TxnShowAccountsDurationHistogram = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "show_accounts_duration_seconds",
-			Help:      "Bucketed histogram of show accounts duration.",
-			Buckets:   getDurationBuckets(),
-		})
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

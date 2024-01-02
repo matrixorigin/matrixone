@@ -80,9 +80,46 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 	return leftChild.NodeId
 }
 
+// for （A*B)*C, if A.outcnt>C.outcnt and C.sel<B.sel, change this to (A*C)*B
+func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for i, child := range node.Children {
+			node.Children[i] = builder.applyAssociativeLawRule3(child)
+		}
+	}
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+		return nodeID
+	}
+	leftChild := builder.qry.Nodes[node.Children[0]]
+	if leftChild.NodeType != plan.Node_JOIN || leftChild.JoinType != plan.Node_INNER {
+		return nodeID
+	}
+	NodeA := builder.qry.Nodes[leftChild.Children[0]]
+	NodeB := builder.qry.Nodes[leftChild.Children[1]]
+	NodeC := builder.qry.Nodes[node.Children[1]]
+	if NodeA.Stats.Outcnt < NodeC.Stats.Outcnt || NodeC.Stats.Selectivity >= NodeB.Stats.Selectivity {
+		return nodeID
+	}
+
+	node.Children[0] = NodeA.NodeId
+	newSel := NodeC.Stats.Selectivity / getHashColsNDVRatio(node.NodeId, builder)
+	if newSel >= NodeB.Stats.Selectivity {
+		//new selectivity bigger than b.sel, can't do this change
+		node.Children[0] = leftChild.NodeId
+		return node.NodeId
+	}
+	leftChild.Children[0] = node.NodeId
+	ReCalcNodeStats(leftChild.NodeId, builder, true, false, true)
+	return leftChild.NodeId
+}
+
 func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
 	builder.applySwapRuleByStats(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule2(nodeID)
+	builder.applySwapRuleByStats(nodeID, true)
+	nodeID = builder.applyAssociativeLawRule3(nodeID)
+	builder.applySwapRuleByStats(nodeID, true)
 	return nodeID
 }

@@ -68,6 +68,7 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
+	usageMemo any
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
@@ -103,16 +104,25 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog() (*Catalog, error) {
+func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		usageMemo:  usageMemo,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
+}
+
+func (catalog *Catalog) SetUsageMemo(memo any) {
+	catalog.usageMemo = memo
+}
+
+func (catalog *Catalog) GetUsageMemo() any {
+	return catalog.usageMemo
 }
 
 func (catalog *Catalog) InitSystemDB() {
@@ -712,7 +722,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	}
 	blk = NewReplayBlockEntry()
 	blk.ID = cmd.ID.BlockID
-	blk.BlockNode = cmd.node
+	blk.BlockNode = *cmd.node
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.object = obj
@@ -801,7 +811,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
-		blk.BlockNode = &BlockNode{}
 		blk.object = obj
 		blk.ID = *blkid
 		blk.state = state

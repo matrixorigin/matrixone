@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
@@ -45,6 +46,7 @@ type MergeExecutor struct {
 	rt                  *dbutils.Runtime
 	memAvail            int
 	memSpare            int // 15% of total memory
+	cpuPercent          float64
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
 	taskConsume         struct {
@@ -65,6 +67,9 @@ func (e *MergeExecutor) RefreshMemInfo() {
 		if e.memSpare == 0 {
 			e.memSpare = int(float32(stats.Total) * 0.15)
 		}
+	}
+	if percents, err := cpu.Percent(0, false); err == nil {
+		e.cpuPercent = percents[0]
 	}
 }
 
@@ -113,7 +118,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	osize, esize := estimateMergeConsume(objs)
+	osize, esize, _ := estimateMergeConsume(objs)
 	if esize > 2*mem/3 {
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
@@ -145,7 +150,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
-	objectList := policy.Revise(0, int64(e.MemAvailBytes()))
+	objectList := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
 	mergedBlks, mobjs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
 
@@ -169,7 +174,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		return
 	}
 
-	osize, esize := estimateMergeConsume(mobjs)
+	osize, esize, _ := estimateMergeConsume(mobjs)
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
@@ -202,7 +207,7 @@ func expandObjectList(objs []*catalog.ObjectEntry) (
 			}
 			entry.RLock()
 			if entry.IsCommitted() &&
-				catalog.ActiveWithNoTxnFilter(entry.BaseEntryImpl) {
+				catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
 				mblks = append(mblks, entry)
 			}
 			entry.RUnlock()
@@ -219,7 +224,7 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {
-		r := obj.Stat.GetRemainingRows()
+		r := obj.GetRemainingRows()
 		rows += r
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortObjId(obj.ID)))
 	}

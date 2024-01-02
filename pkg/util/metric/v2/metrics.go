@@ -72,6 +72,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+
+	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
 
 func initFileServiceMetrics() {
@@ -101,8 +103,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
-
-	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {

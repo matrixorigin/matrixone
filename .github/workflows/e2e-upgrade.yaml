@@ -7,7 +7,7 @@ jobs:
   upgrade-ci-linux-x86:
     runs-on: ubuntu-latest
     name: Compatibility Test on Linux/x64(LAUNCH)
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: checkout head

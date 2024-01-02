@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -189,6 +190,8 @@ type ObjectNode struct {
 	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
+
+	remainingRows common.FixedSampleIII[int]
 }
 
 const (
