@@ -2668,18 +2668,6 @@ func (data *CheckpointData) GetTblBatchs() (
 		data.bats[TBLDeleteIDX],
 		data.bats[TBLDeleteTxnIDX]
 }
-func (data *CheckpointData) GetSegBatchs() (
-	*containers.Batch,
-	*containers.Batch,
-	*containers.Batch,
-	*containers.Batch,
-	*containers.Batch) {
-	return data.bats[SEGInsertIDX],
-		data.bats[SEGInsertTxnIDX],
-		data.bats[SEGDeleteIDX],
-		data.bats[SEGDeleteTxnIDX],
-		data.bats[ObjectInfoIDX]
-}
 func (data *CheckpointData) GetTNObjectBatchs() *containers.Batch {
 	return data.bats[TNObjectInfoIDX]
 }
@@ -3020,7 +3008,6 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		return nil
 	}
 	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-	segDelBat := collector.data.bats[SEGDeleteIDX]
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
@@ -3032,20 +3019,6 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
 		}
 		objNode := node
-		if objNode.HasDropCommitted() {
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-				objectio.HackObjid2Rowid(&entry.ID),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-				objNode.GetEnd(),
-				false,
-				common.DefaultAllocator,
-			)
-		}
 
 		// collect usage info
 		if objNode.HasDropCommitted() {
