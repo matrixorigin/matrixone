@@ -29,21 +29,12 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'opened'
     runs-on: ubuntu-latest
     steps:
-      - name: Issue Add Projects
-        if: contains(github.event.issue.labels.*.name, 'kind/bug')
-        uses: actions/add-to-project@v0.3.0
-        with:
-          project-url: https://github.com/orgs/matrixorigin/projects/13
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          labeled: kind/bug
-          label-operator: OR
-
       - name: Issue Add  Milestone
         if: contains(github.event.issue.labels.*.name, 'kind/bug')
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "1.1.0"
+          milestone: "1.2.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
