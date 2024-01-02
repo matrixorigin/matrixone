@@ -557,6 +557,10 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 	if nn == nil {
 		return nil
 	}
+	node := nn.GetNode()
+	if node == nil {
+		return nil
+	}
 	// check ww conflict
 	tbl := nn.GetNode().GetPayload()
 	// skip the same table entry
@@ -637,13 +641,13 @@ func (e *DBEntry) IsActive() bool {
 }
 
 // only for test
-func MockDBEntryWithAccInfo(accId uint32, dbId uint64) *DBEntry {
+func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 	entry := &DBEntry{
 		ID: dbId,
 	}
 
 	entry.DBNode = &DBNode{}
-	entry.DBNode.acInfo.TenantID = accId
+	entry.DBNode.acInfo.TenantID = uint32(accId)
 
 	return entry
 }
