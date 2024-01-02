@@ -27,8 +27,8 @@ import (
 const argName = "merge_delete"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" MergeS3DeleteInfo ")
+	buf.WriteString(argName)
+	buf.WriteString(": MergeS3DeleteInfo ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

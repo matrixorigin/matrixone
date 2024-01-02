@@ -165,9 +165,9 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 }
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("mergeorder([")
+	buf.WriteString(": mergeorder([")
 	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")

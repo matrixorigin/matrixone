@@ -63,8 +63,8 @@ Note:
 const argName = "fuzzy_filter"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("fuzzy check duplicate constraint")
+	buf.WriteString(argName)
+	buf.WriteString(": fuzzy check duplicate constraint")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

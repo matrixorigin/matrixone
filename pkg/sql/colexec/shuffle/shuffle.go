@@ -29,8 +29,8 @@ import (
 const argName = "shuffle"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("shuffle")
+	buf.WriteString(argName)
+	buf.WriteString(": shuffle")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

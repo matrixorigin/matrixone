@@ -30,8 +30,8 @@ import (
 const argName = "right_semi"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" right semi join ")
+	buf.WriteString(argName)
+	buf.WriteString(": right semi join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

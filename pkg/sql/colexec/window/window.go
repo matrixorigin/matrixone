@@ -35,8 +35,8 @@ import (
 const argName = "window"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("window")
+	buf.WriteString(argName)
+	buf.WriteString(": window")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

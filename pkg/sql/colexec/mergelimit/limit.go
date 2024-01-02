@@ -26,7 +26,7 @@ import (
 const argName = "merge_limit"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
+	buf.WriteString(argName)
 	ap := arg
 	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
 }

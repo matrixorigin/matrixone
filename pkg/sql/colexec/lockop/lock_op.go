@@ -44,8 +44,8 @@ var (
 const argName = "lock_op"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("lock-op(")
+	buf.WriteString(argName)
+	buf.WriteString(": lock-op(")
 	n := len(arg.targets) - 1
 	for idx, target := range arg.targets {
 		buf.WriteString(fmt.Sprintf("%d-%d-%d",

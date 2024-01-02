@@ -26,8 +26,8 @@ import (
 const argName = "product"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" cross join ")
+	buf.WriteString(argName)
+	buf.WriteString(": cross join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

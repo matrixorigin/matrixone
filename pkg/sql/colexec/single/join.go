@@ -29,8 +29,8 @@ import (
 const argName = "single"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" single join ")
+	buf.WriteString(argName)
+	buf.WriteString(": single join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

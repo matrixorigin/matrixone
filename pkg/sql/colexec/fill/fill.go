@@ -31,8 +31,8 @@ import (
 const argName = "fill"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("fill")
+	buf.WriteString(argName)
+	buf.WriteString(": fill")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

@@ -28,9 +28,9 @@ import (
 const argName = "projection"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
+	buf.WriteString(argName)
 	n := arg
-	buf.WriteString("projection(")
+	buf.WriteString(": projection(")
 	for i, e := range n.Es {
 		if i > 0 {
 			buf.WriteString(",")

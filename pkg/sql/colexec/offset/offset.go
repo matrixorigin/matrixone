@@ -26,7 +26,7 @@ import (
 const argName = "offset"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
+	buf.WriteString(argName)
 	n := arg
 	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
 }

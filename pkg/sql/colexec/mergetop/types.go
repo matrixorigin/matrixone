@@ -63,7 +63,7 @@ func init() {
 }
 
 func (arg Argument) Name() string {
-	return argName + ".Argument"
+	return argName
 }
 
 func NewArgument() *Argument {

@@ -28,8 +28,8 @@ import (
 const argName = "source"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString("Source scan")
+	buf.WriteString(argName)
+	buf.WriteString(": source scan")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

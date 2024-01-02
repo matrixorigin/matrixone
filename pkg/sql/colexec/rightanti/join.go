@@ -29,8 +29,8 @@ import (
 const argName = "right_anti"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" right anti join ")
+	buf.WriteString(argName)
+	buf.WriteString(": right anti join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

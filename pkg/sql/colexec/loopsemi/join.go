@@ -27,8 +27,8 @@ import (
 const argName = "loop_semi"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(argName + ": ")
-	buf.WriteString(" ⨝ ")
+	buf.WriteString(argName)
+	buf.WriteString(": ⨝ ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
