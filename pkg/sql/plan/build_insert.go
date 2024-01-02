@@ -274,15 +274,12 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil
 	}
-	pkPos, pkTyp := getPkPos(tableDef, true)
+	pkPos, _ := getPkPos(tableDef, true)
 	if pkPos == -1 {
 		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 			return nil
 		}
-	} else if pkTyp.AutoIncr {
-		return nil
 	}
-
 	node := builder.qry.Nodes[0]
 
 	proc := ctx.GetProcess()
