@@ -20,6 +20,7 @@ package mpool
 import (
 	"runtime"
 	"runtime/debug"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
