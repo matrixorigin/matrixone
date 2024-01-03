@@ -36,6 +36,20 @@ linters:
     - unused
 
 linters-settings:
+  # https://github.com/golangci/golangci-lint/issues/3877
+  depguard:
+    rules:
+          main:
+            files:
+              - $all
+              - "!$test"
+            allow:
+              - $gostd
+              - github.com/matrixorigin
+              - github.com/prometheus
+              - github.com/spf13/cobra
+              - github.com/fagongzi/util/format
+              - github.com/RoaringBitmap/roaring
   stylecheck:
     checks:
       - ST1001
