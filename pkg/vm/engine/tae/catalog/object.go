@@ -42,49 +42,42 @@ type ObjectEntry struct {
 	blkData data.Block
 }
 
-type ObjStat struct {
-	// min max etc. later
-	entry         *ObjectEntry
-	remainingRows int
+func (entry *ObjectEntry) GetLoaded() bool {
+	stats := entry.GetObjectStats()
+	return stats.Rows() != 0
 }
 
-func (s *ObjStat) GetLoaded() bool {
-	return s.GetRows() != 0
+func (entry *ObjectEntry) GetSortKeyZonemap() index.ZM {
+	stats := entry.GetObjectStats()
+	return stats.SortKeyZoneMap()
 }
 
-func (s *ObjStat) GetSortKeyZonemap() index.ZM {
-	res := s.entry.GetObjectStats()
-	return res.SortKeyZoneMap()
+func (entry *ObjectEntry) SetRemainingRows(rows int) {
+	entry.remainingRows.Append(rows)
 }
 
-func (s *ObjStat) SetRows(rows int) {}
-
-func (s *ObjStat) SetRemainingRows(rows int) {
-	s.remainingRows = rows
+func (entry *ObjectEntry) GetRemainingRows() int {
+	return entry.remainingRows.V()
 }
 
-func (s *ObjStat) GetRemainingRows() int {
-	return s.remainingRows
+func (entry *ObjectEntry) GetRows() int {
+	stats := entry.GetObjectStats()
+	return int(stats.Rows())
 }
 
-func (s *ObjStat) GetRows() int {
-	res := s.entry.GetObjectStats()
-	return int(res.Rows())
+func (entry *ObjectEntry) GetOriginSize() int {
+	stats := entry.GetObjectStats()
+	return int(stats.OriginSize())
 }
 
-func (s *ObjStat) GetOriginSize() int {
-	res := s.entry.GetObjectStats()
-	return int(res.OriginSize())
+func (entry *ObjectEntry) GetCompSize() int {
+	stats := entry.GetObjectStats()
+	return int(stats.Size())
 }
 
-func (s *ObjStat) GetCompSize() int {
-	res := s.entry.GetObjectStats()
-	return int(res.Size())
-}
-
-func (s *ObjStat) String(composeSortKey bool) string {
+func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
 	zonemapStr := "nil"
-	if z := s.GetSortKeyZonemap(); z != nil {
+	if z := entry.GetSortKeyZonemap(); z != nil {
 		if composeSortKey {
 			zonemapStr = z.StringForCompose()
 		} else {
@@ -93,11 +86,11 @@ func (s *ObjStat) String(composeSortKey bool) string {
 	}
 	return fmt.Sprintf(
 		"loaded:%t, oSize:%s, cSzie:%s rows:%d, remainingRows:%d, zm: %s",
-		s.GetLoaded(),
-		common.HumanReadableBytes(s.GetOriginSize()),
-		common.HumanReadableBytes(s.GetCompSize()),
-		s.GetRows(),
-		s.remainingRows,
+		entry.GetLoaded(),
+		common.HumanReadableBytes(entry.GetOriginSize()),
+		common.HumanReadableBytes(entry.GetCompSize()),
+		entry.GetRows(),
+		entry.remainingRows.V(),
 		zonemapStr,
 	)
 }
@@ -159,7 +152,6 @@ func NewReplayObjectEntry() *ObjectEntry {
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
 	}
-	e.Stat.entry = e
 	return e
 }
 
@@ -175,7 +167,6 @@ func NewStandaloneObject(table *TableEntry, ts types.TS) *ObjectEntry {
 		},
 	}
 	e.CreateWithTS(ts, &ObjectMVCCNode{*objectio.NewObjectStats()})
-	e.Stat.entry = e
 	return e
 }
 
@@ -561,4 +552,19 @@ func (entry *ObjectEntry) GetPKZoneMap(
 		return
 	}
 	return stats.SortKeyZoneMap(), nil
+}
+func MockObjEntryWithTbl(tbl *TableEntry, size uint64) *ObjectEntry {
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsSize(stats, uint32(size))
+	// to make sure pass the stats empty check
+	objectio.SetObjectStatsRowCnt(stats, uint32(1))
+
+	e := &ObjectEntry{
+		BaseEntryImpl: NewBaseEntry(
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{*objectio.NewObjectStats()} }),
+		table:      tbl,
+		ObjectNode: &ObjectNode{},
+	}
+	e.CreateWithTS(types.BuildTS(time.Now().UnixNano(), 0), &ObjectMVCCNode{*stats})
+	return e
 }

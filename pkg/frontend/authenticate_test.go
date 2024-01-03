@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"reflect"
 	"strings"
 	"testing"
@@ -10579,4 +10582,51 @@ func TestParseLabel(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestUpload(t *testing.T) {
+	convey.Convey("call upload func", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		proc := testutil.NewProc()
+		cnt := 0
+		ioses.EXPECT().Read(gomock.Any()).DoAndReturn(func(options goetty.ReadOptions) (pkt any, err error) {
+			if cnt == 0 {
+				pkt = &Packet{Length: 5, Payload: []byte("def add(a, b):\n"), SequenceID: 1}
+			} else if cnt == 1 {
+				pkt = &Packet{Length: 5, Payload: []byte("  return a + b"), SequenceID: 2}
+			} else {
+				err = moerr.NewInvalidInput(proc.Ctx, "length 0")
+			}
+			cnt++
+			return
+		}).AnyTimes()
+		proto := &FakeProtocol{
+			ioses: ioses,
+		}
+		mce := NewMysqlCmdExecutor()
+		fs, err := fileservice.NewLocalFS(proc.Ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
+		convey.So(err, convey.ShouldBeNil)
+		proc.FileService = fs
+		ses := &Session{
+			protocol: proto,
+			proc:     proc,
+		}
+		mce.ses = ses
+		fp, err := mce.Upload(proc.Ctx, "test.py", "test")
+		convey.So(err, convey.ShouldBeNil)
+		iovec := &fileservice.IOVector{
+			FilePath: fp,
+			Entries: []fileservice.IOEntry{
+				{
+					Offset: 0,
+					Size:   -1,
+				},
+			},
+		}
+		err = fs.Read(proc.Ctx, iovec)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(iovec.Entries[0].Data, convey.ShouldResemble, []byte("def add(a, b):\n  return a + b"))
+	})
 }

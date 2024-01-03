@@ -13,9 +13,3 @@
 // limitations under the License.
 
 package catalog
-
-import "testing"
-
-func TestGenBlockMeta(t *testing.T) {
-	_ = GenBlockInfo(nil)
-}

@@ -25,14 +25,13 @@ import (
 )
 
 // makeOKPacket returns an OK packet
-func makeOKPacket() []byte {
-	l := 1
+func makeOKPacket(l int) []byte {
 	data := make([]byte, l+4)
 	data[4] = 0
 	data[0] = byte(l)
 	data[1] = byte(l >> 8)
 	data[2] = byte(l >> 16)
-	data[3] = 0
+	data[3] = 1
 	return data
 }
 
@@ -45,6 +44,20 @@ func isCmdQuery(p []byte) bool {
 
 func isCmdInitDB(p []byte) bool {
 	if len(p) > 4 && p[4] == byte(cmdInitDB) {
+		return true
+	}
+	return false
+}
+
+func isCmdStmtPrepare(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdStmtPrepare) {
+		return true
+	}
+	return false
+}
+
+func isCmdStmtExecute(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdStmtExecute) {
 		return true
 	}
 	return false

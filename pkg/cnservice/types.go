@@ -226,6 +226,9 @@ type Config struct {
 		// normal state; if the value is true, it does not wait and just return an error to the
 		// client. Default value is false.
 		NormalStateNoWait bool `toml:"normal-state-no-wait"`
+		//PKDedupCount check whether primary key in transaction's workspace is duplicated if the count of pk
+		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
+		PkDedupCount int `toml:"pk-dedup-count"`
 	} `toml:"txn"`
 
 	// AutoIncrement auto increment config

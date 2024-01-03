@@ -100,7 +100,7 @@ type LockService interface {
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
-	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
+	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
 
 	// Close close the lock service.
 	Close() error
@@ -112,7 +112,7 @@ type LockService interface {
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets ...uint64)
 	// GetLockTableBind returns lock table bind
-	GetLockTableBind(tableID uint64) (pb.LockTable, error)
+	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
@@ -137,7 +137,7 @@ type lockTable interface {
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
-	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
+	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getBind returns lock table binding
@@ -162,7 +162,7 @@ type lockTable interface {
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
-	Get(serviceID string, tableID uint64) pb.LockTable
+	Get(serviceID string, group uint32, tableID, originTableID uint64, sharding pb.Sharding) pb.LockTable
 	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.

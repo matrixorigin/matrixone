@@ -91,8 +91,7 @@ const (
 )
 
 var (
-	ncpu = runtime.NumCPU()
-
+	ncpu           = runtime.NumCPU()
 	ctxCancelError = context.Canceled.Error()
 )
 
@@ -523,7 +522,7 @@ func (c *Compile) runOnce() error {
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
-		ants.Submit(func() {
+		errSubmit := ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
@@ -536,6 +535,10 @@ func (c *Compile) runOnce() error {
 			}()
 			errC <- c.run(scope)
 		})
+		if errSubmit != nil {
+			errC <- errSubmit
+			wg.Done()
+		}
 	}
 	wg.Wait()
 	close(errC)

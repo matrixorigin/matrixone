@@ -217,6 +217,10 @@ func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) 
 	return nil
 }
 
+func (cs *testClientSession) AsyncWrite(response morpc.Message) error {
+	return nil
+}
+
 func (cs *testClientSession) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {

@@ -53,3 +53,26 @@ type errorStr string
 func (e errorStr) Error() string {
 	return string(e)
 }
+
+type throwError struct {
+	err error
+}
+
+func throw(err error) {
+	panic(throwError{
+		err: err,
+	})
+}
+
+func catch(ptr *error) {
+	p := recover()
+	if p == nil {
+		return
+	}
+	e, ok := p.(throwError)
+	if !ok {
+		panic(p)
+	} else {
+		*ptr = e.err
+	}
+}
