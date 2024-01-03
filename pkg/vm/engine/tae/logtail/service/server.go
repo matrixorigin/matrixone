@@ -354,23 +354,12 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 	}
 }
 
-// logtailSender sends total or incremental logtail.
-func (s *LogtailServer) logtailSender(ctx context.Context) {
-	e, ok := <-s.event.C
-	if !ok {
-		s.logger.Info("publishemtn channel closed")
-		return
-	}
-	s.waterline.Advance(e.to)
-	s.logger.Info("init waterline", zap.String("to", e.to.String()))
-
-	// lastUpdate is used to record the time of update event.
-	lastUpdate := time.Now()
-
+// logtailSender sends full logtail.
+func (s *LogtailServer) logtailFullSender(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Error("stop subscription handler", zap.Error(ctx.Err()))
+			s.logger.Error("stop full logtail sender", zap.Error(ctx.Err()))
 			return
 
 		case sub, ok := <-s.subChan:
@@ -378,29 +367,33 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				s.logger.Info("subscription channel closed")
 				return
 			}
-
 			v2.LogTailSubscriptionCounter.Inc()
-			interval := time.Since(lastUpdate)
-			if interval > updateEventMaxInterval {
-				s.logger.Info("long time passed since last update event", zap.Duration("interval", interval))
-
-				select {
-				case e, ok := <-s.event.C:
-					if !ok {
-						s.logger.Info("publishment channel closed")
-						return
-					}
-					s.logger.Info("send an update event first as long time passed since last one.")
-					s.publishEvent(ctx, e)
-					lastUpdate = time.Now()
-
-				default:
-					s.logger.Info("there is no update event, although we want to send it first")
-				}
-			}
-
 			s.logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 			s.sendSubscription(ctx, sub)
+		}
+	}
+}
+
+// logtailSender sends full and increment logtail.
+func (s *LogtailServer) logtailSender(ctx context.Context) {
+	e, ok := <-s.event.C
+	if !ok {
+		s.logger.Info("publish channel closed")
+		return
+	}
+	s.waterline.Advance(e.to)
+	s.logger.Info("init waterline", zap.String("to", e.to.String()))
+
+	if err := s.stopper.RunNamedTask("logtail full sender", s.logtailFullSender); err != nil {
+		s.logger.Error("fail to start logtail update sender", zap.Error(err))
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Error("stop increment logtail sender", zap.Error(ctx.Err()))
+			return
 
 		case e, ok := <-s.event.C:
 			if !ok {
@@ -408,7 +401,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 			s.publishEvent(ctx, e)
-			lastUpdate = time.Now()
 		}
 	}
 }
@@ -558,8 +550,8 @@ func (s *LogtailServer) Start() error {
 		return err
 	}
 
-	if err := s.stopper.RunNamedTask("logtail sender", s.logtailSender); err != nil {
-		s.logger.Error("fail to start logtail sender", zap.Error(err))
+	if err := s.stopper.RunNamedTask("logtail sub sender", s.logtailSender); err != nil {
+		s.logger.Error("fail to start logtail sub sender", zap.Error(err))
 		return err
 	}
 
