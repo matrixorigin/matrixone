@@ -734,16 +734,14 @@ func (s *service) bootstrap() error {
 	})
 }
 
-var (
-	bootstrapKey = "_mo_bootstrap"
-)
-
 type locker struct {
 	hakeeperClient logservice.CNHAKeeperClient
 }
 
-func (l *locker) Get(ctx context.Context) (bool, error) {
-	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, bootstrapKey, 1)
+func (l *locker) Get(
+	ctx context.Context,
+	key string) (bool, error) {
+	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, key, 1)
 	if err != nil {
 		return false, err
 	}

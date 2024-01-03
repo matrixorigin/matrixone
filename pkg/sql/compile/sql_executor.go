@@ -183,9 +183,10 @@ func (s *sqlExecutor) adjustOptions(
 }
 
 type txnExecutor struct {
-	s    *sqlExecutor
-	ctx  context.Context
-	opts executor.Options
+	s        *sqlExecutor
+	ctx      context.Context
+	opts     executor.Options
+	database string
 }
 
 func newTxnExecutor(
@@ -202,6 +203,10 @@ func newTxnExecutor(
 		}
 	}
 	return &txnExecutor{s: s, ctx: ctx, opts: opts}, nil
+}
+
+func (exec *txnExecutor) Use(db string) {
+	exec.database = db
 }
 
 func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
@@ -254,7 +259,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := NewCompile(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
@@ -296,6 +301,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
+	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	return result, nil
@@ -313,4 +319,11 @@ func (exec *txnExecutor) rollback(err error) error {
 		return err
 	}
 	return errors.Join(err, exec.opts.Txn().Rollback(exec.ctx))
+}
+
+func (exec *txnExecutor) getDatabase() string {
+	if exec.database != "" {
+		return exec.database
+	}
+	return exec.opts.Database()
 }

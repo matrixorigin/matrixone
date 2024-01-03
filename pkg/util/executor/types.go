@@ -41,6 +41,7 @@ type SQLExecutor interface {
 
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
+	Use(db string)
 	Exec(sql string) (Result, error)
 }
 
@@ -58,6 +59,7 @@ type Options struct {
 
 // Result exec sql result
 type Result struct {
+	LastInsertID uint64
 	AffectedRows uint64
 	Batches      []*batch.Batch
 	mp           *mpool.MPool

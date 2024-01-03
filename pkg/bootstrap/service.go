@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -31,6 +32,10 @@ import (
 
 var (
 	_ Service = (*service)(nil)
+)
+
+var (
+	bootstrapKey = "_mo_bootstrap"
 )
 
 var (
@@ -77,17 +82,6 @@ var (
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
-
-		fmt.Sprintf(`create table %s.%s (
-			id                  int not null,
-			version             varchar(50) not null, 
-			pre_version         varchar(50),
-			upgrade             int,
-			upgrade_tenant      int,
-			upgrade_metadata    text, 
-			upgrade_status      int,
-			primary key(id)
-		);`, catalog.MO_CATALOG, catalog.MOVersionTable),
 	}
 
 	step2InitSQLs = []string{
@@ -160,10 +154,11 @@ var (
 )
 
 type service struct {
-	lock   Locker
-	clock  clock.Clock
-	client client.TxnClient
-	exec   executor.SQLExecutor
+	lock    Locker
+	clock   clock.Clock
+	client  client.TxnClient
+	exec    executor.SQLExecutor
+	stopper *stopper.Stopper
 }
 
 // NewService create service to bootstrap mo database
@@ -172,7 +167,14 @@ func NewService(
 	clock clock.Clock,
 	client client.TxnClient,
 	exec executor.SQLExecutor) Service {
-	return &service{clock: clock, exec: exec, lock: lock, client: client}
+	s := &service{
+		clock:   clock,
+		exec:    exec,
+		lock:    lock,
+		client:  client,
+		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
+	}
+	return s
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
@@ -185,7 +187,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 		return err
 	}
 
-	ok, err := s.lock.Get(ctx)
+	ok, err := s.lock.Get(ctx, bootstrapKey)
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -38,45 +39,25 @@ import (
 type Service interface {
 	// Bootstrap try to bootstrap and upgrade mo cluster
 	Bootstrap(ctx context.Context) error
-
-	// AddTenantUpgrade upgrade logic handle func for tenant with special version.
-	AddTenantUpgrade(Version, TenantUpgradeHandleFunc)
-	// AddClusterUpgrade upgrade logic handle func for cluster with special version.
-	AddClusterUpgrade(Version, ClusterUpgradeHandleFunc)
 }
 
 // Locker locker is used to get lock to bootstrap. Only one cn can get lock to bootstrap.
 // Other cns need to wait bootstrap completed.
 type Locker interface {
 	// Get return true means get lock
-	Get(ctx context.Context) (bool, error)
+	Get(ctx context.Context, key string) (bool, error)
 }
 
-// Version version
-type Version struct {
-	// ID every mo version has a id.
-	ID int
-	// Version version string, like 1.0.0
-	version string
-	// prevVersion previous version string, like 0.9.0
-	prevVersion string
-	// upgrade need upgrade or not. 1: need.
-	upgrade int
-	// upgradeTenant upgrade tenant or not. 1: need.
-	upgradeTenant int
-	// UpgradeMetadata upgrade metadata
-	upgradeMetadata string
-	// upgradeStatus upgrade statue. 0. ready to upgrade. 1: upgrading. 2: upgraded.
-	upgradeStatus int
+// UpgradeHandle every version that needs to be upgraded with cluster metadata needs to
+// have an UpgradeHandle implementation!
+type UpgradeHandle interface {
+	// Metadata version metadata
+	Metadata() versions.Version
+	// Prepare prepare upgrade. This upgrade will be executed before cluster and tenant upgrade.
+	Prepare(ctx context.Context, txn executor.TxnExecutor) error
+	// ClusterNeedUpgrade handle upgrade cluster metadata. This upgrade will be executed before
+	// tenant upgrade.
+	HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error
+	// HandleTenantUpgrade handle upgrade a special tenant.
+	HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error
 }
-
-type TenantUpgradeHandleFunc func(
-	ctx context.Context,
-	version Version,
-	tenantID uint64,
-	txn executor.TxnExecutor) error
-
-type ClusterUpgradeHandleFunc func(
-	ctx context.Context,
-	version Version,
-	txn executor.TxnExecutor) error

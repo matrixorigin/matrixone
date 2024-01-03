@@ -60,6 +60,10 @@ func (te *memTxnExecutor) Exec(sql string) (Result, error) {
 	return te.mocker(sql)
 }
 
+func (te *memTxnExecutor) Use(db string) {
+
+}
+
 // MemResult used to test. Construct a Result from memory.
 type MemResult struct {
 	cols  int
