@@ -76,7 +76,6 @@ func (l *lockTableAllocator) Get(
 	if binds == nil {
 		binds = l.registerService(serviceID, tableID)
 	}
-	binds.active()
 	return l.registerBind(binds, tableID)
 }
 
