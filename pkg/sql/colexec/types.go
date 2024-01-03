@@ -45,7 +45,6 @@ type ReceiveInfo struct {
 	Uuid     uuid.UUID
 }
 
-// TODO: remove batchCntMap when dispatch executor using the stream correctly
 // Server used to support cn2s3 directly, for more info, refer to docs about it
 type Server struct {
 	sync.Mutex
@@ -61,10 +60,6 @@ type Server struct {
 
 type uuidProcMapItem struct {
 	proc *process.Process
-
-	// if referenceCount is 0, it means all process dependent on this uuidProcMapItem is over.
-	// and we can delete this item from uuidCsChanMap.
-	referenceCount int
 }
 
 type UuidProcMap struct {
