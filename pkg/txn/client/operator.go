@@ -170,6 +170,12 @@ func WithTxnSkipLock(
 	}
 }
 
+func WithTxnPKDedupCount(count int) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.PKDedupCount = count
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
@@ -181,6 +187,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		PKDedupCount     int
 		createBy         string
 		lockService      lockservice.LockService
 		skipLocks        []uint64
@@ -580,6 +587,10 @@ func (tc *txnOperator) IsOpenLog() bool {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.openlog
+}
+
+func (tc *txnOperator) PKDedupCount() int {
+	return tc.option.PKDedupCount
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
