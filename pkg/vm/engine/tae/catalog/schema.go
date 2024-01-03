@@ -233,6 +233,15 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
+	case apipb.AlterKind_AddPartition:
+		newPartitionDef := req.GetAddPartition().GetPartitionDef()
+		bytes, err := newPartitionDef.MarshalPartitionInfo()
+		if err != nil {
+			return err
+		}
+		s.Partition = string(bytes)
+		// 问韩枫：这个是干嘛用的？是否有必要？
+		return s.Finalize(true)
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
 	}
