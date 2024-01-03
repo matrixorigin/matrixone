@@ -1363,7 +1363,8 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		var indexdef *engine.IndexDef
 		for i, ct := range oldCt.Cts {
 			if indexdef, ok = ct.(*engine.IndexDef); ok {
-				indexdef.Indexes = append(indexdef.Indexes, t.Indexes[0])
+				//TODO: verify if this is correct @ouyuanning & @qingx
+				indexdef.Indexes = append(indexdef.Indexes, t.Indexes...)
 				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
 				oldCt.Cts = append(oldCt.Cts, indexdef)
 				break
