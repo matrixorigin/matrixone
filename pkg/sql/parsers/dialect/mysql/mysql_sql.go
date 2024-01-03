@@ -12632,7 +12632,7 @@ yydefault:
 //line mysql_sql.y:3205
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				&tree.VarAssignmentExpr{
+				{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
