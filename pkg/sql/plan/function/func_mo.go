@@ -311,9 +311,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			if len(ranges) == 0 {
+			if ranges.Len() == 0 {
 				getValueFailed = true
-			} else if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
+			} else if ranges.Len() == 1 && engine.IsMemtable(ranges.GetBytes(0)) {
 				getValueFailed = true
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
