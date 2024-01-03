@@ -8,7 +8,7 @@ inputs:
   cache:
     description: 'wether use cache'
     required: false
-    default: "true"
+    default: "false"
 
 runs:
   using: "composite"
