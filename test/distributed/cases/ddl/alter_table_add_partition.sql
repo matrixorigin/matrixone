@@ -272,6 +272,48 @@ select table_schema, table_name, partition_name,partition_ordinal_position,parti
 from information_schema.PARTITIONS
 where table_schema = 'db1' and table_name = 'pt3';
 
+drop table if exists pt4;
+CREATE TABLE pt4 (
+                     a INT,
+                     b INT,
+                     c date,
+                     d decimal(7,2),
+                     PRIMARY KEY(a, b)
+) PARTITION BY LIST COLUMNS(a,b) (
+PARTITION p0 VALUES IN( (0,0), (0,1), (0,2) ),
+PARTITION p1 VALUES IN( (0,3), (1,0), (1,1) ),
+PARTITION p2 VALUES IN( (1,2), (2,0), (2,1) ),
+PARTITION p3 VALUES IN( (1,3), (2,2), (2,3) )
+);
+
+select table_schema, table_name, partition_name,partition_ordinal_position,partition_method,partition_expression
+from information_schema.PARTITIONS
+where table_schema = 'db1' and table_name = 'pt4';
+
+insert into pt4 values(0, 2, '1980-12-17', 9000);
+insert into pt4 values(1, 2, '1983-11-11', 800);
+insert into pt4 values(2, 1, '1997-04-20', 1600);
+insert into pt4 values(1, 1, '1991-02-02', 3400);
+insert into pt4 values(1, 3, '1992-07-26', 5600);
+insert into pt4 values(2, 0, '1993-02-12', 500);
+
+select * from pt4 order by a, b;
+
+ALTER TABLE pt4 ADD PARTITION (
+PARTITION r4 VALUES IN ((3,0), (3,1)),
+PARTITION r5 VALUES IN ((3,2), (3,3))
+);
+
+select table_schema, table_name, partition_name,partition_ordinal_position,partition_method,partition_expression
+from information_schema.PARTITIONS
+where table_schema = 'db1' and table_name = 'pt4';
+
+insert into pt4 values(3, 0, '1991-02-02', 2400);
+insert into pt4 values(3, 1, '2001-12-02', 3800);
+insert into pt4 values(3, 2, '1013-01-30', 3400);
+insert into pt4 values(3, 3, '1991-02-22', 1900);
+
+select * from pt4 order by a, b;
 -----------------------------------------KEY / hash分区容错测试-----------------------------------------------
 drop table if exists pt4;
 CREATE TABLE pt4 (
