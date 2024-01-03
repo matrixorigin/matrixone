@@ -41,7 +41,8 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	b := pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 	stack := string(debug.Stack())
 	runtime.SetFinalizer(&b[0], func(ptr *byte) {
-		pHdr := (*memHdr)(unsafe.Pointer(ptr))
+		hdr := unsafe.Add((unsafe.Pointer)(ptr), -kMemHdrSz)
+		pHdr := (*memHdr)(unsafe.Pointer(hdr))
 		if atomic.LoadInt32(&pHdr.allocSz) >= 0 {
 			logutil.Error("memory leak detected",
 				zap.Any("ptr", pHdr),
