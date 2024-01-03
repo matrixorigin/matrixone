@@ -102,6 +102,7 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
+		p.checkpointConsumed.Store(true)
 		return nil
 	}
 
