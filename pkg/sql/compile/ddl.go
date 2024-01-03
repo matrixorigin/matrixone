@@ -249,8 +249,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var alterKinds []api.AlterKind
 	var comment string
 	var oldName, newName string
-	var addCol []*plan.AlterAddCol
-	var dropCol []*plan.AlterDropCol
+	var addCol []*plan.AlterAddColumn
+	var dropCol []*plan.AlterDropColumn
 	var changePartitionDef *plan.PartitionByDef
 
 	cols := tableDef.Cols
@@ -302,7 +302,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				var idx int
 				for idx = 0; idx < len(cols); idx++ {
 					if cols[idx].Name == constraintName {
-						drop := &plan.AlterDropCol{
+						drop := &plan.AlterDropColumn{
 							Idx: uint32(idx),
 							Seq: cols[idx].Seqnum,
 						}
@@ -482,20 +482,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_RenameTable)
 			oldName = act.AlterName.OldName
 			newName = act.AlterName.NewName
-		case *plan.AlterTable_Action_AddCol:
+		case *plan.AlterTable_Action_AddColumn:
 			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddCol.Name,
+				Name: act.AddColumn.Name,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddCol.Type,
+				Typ:  act.AddColumn.Type,
 			}
 			var pos int32
-			cols, pos, err = getAddColPos(cols, col, act.AddCol.PreName, act.AddCol.Pos)
+			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
 			if err != nil {
 				return err
 			}
-			act.AddCol.Pos = pos
-			addCol = append(addCol, act.AddCol)
+			act.AddColumn.Pos = pos
+			addCol = append(addCol, act.AddColumn)
 		case *plan.AlterTable_Action_AddPartition:
 			alterKinds = append(alterKinds, api.AlterKind_AddPartition)
 			changePartitionDef = act.AddPartition.PartitionDef

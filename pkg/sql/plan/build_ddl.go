@@ -2731,8 +2731,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, err
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
-				Action: &plan.AlterTable_Action_AddCol{
-					AddCol: &plan.AlterAddCol{
+				Action: &plan.AlterTable_Action_AddColumn{
+					AddColumn: &plan.AlterAddColumn{
 						Name:    opt.Column.Name.Parts[0],
 						PreName: preName,
 						Type:    colType,
