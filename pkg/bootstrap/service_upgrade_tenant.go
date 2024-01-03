@@ -25,6 +25,9 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				if !ok {
 					return nil
 				}
+				if upgrade.TotalTenant == upgrade.ReadyTenant {
+					panic("BUG: invalid upgrade tenant")
+				}
 
 				// no upgrade logic on current cn, skip
 				v := getFinalUpgradeHandle().Metadata().Version
@@ -44,7 +47,15 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						return err
 					}
 				}
-				return nil
+				if err := versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
+					return err
+				}
+
+				upgrade.ReadyTenant += int32(len(tenants))
+				if upgrade.TotalTenant < upgrade.ReadyTenant {
+					panic("BUG: invalid upgrade tenant")
+				}
+				return versions.UpdateVersionUpgradeTasks(upgrade, txn)
 			},
 			opts)
 	}

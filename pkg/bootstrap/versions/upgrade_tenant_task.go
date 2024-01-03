@@ -29,6 +29,22 @@ func AddUpgradeTenantTask(
 	return nil
 }
 
+func UpdateUpgradeTenantTaskState(
+	taskID uint64,
+	state int32,
+	txn executor.TxnExecutor) error {
+	sql := fmt.Sprintf("update %s set ready = %d where id = %d",
+		catalog.MOUpgradeTenantTable,
+		state,
+		taskID)
+	res, err := txn.Exec(sql)
+	if err != nil {
+		return err
+	}
+	res.Close()
+	return nil
+}
+
 func GetUpgradeTenantTasks(
 	upgradeID uint64,
 	txn executor.TxnExecutor) (uint64, []int32, error) {

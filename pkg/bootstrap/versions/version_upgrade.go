@@ -103,13 +103,16 @@ func UpdateVersionUpgradeState(
 
 func UpdateVersionUpgradeTasks(
 	upgrade VersionUpgrade,
-	total int32,
-	ready int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
+	state := No
+	if upgrade.TotalTenant == upgrade.ReadyTenant {
+		state = Yes
+	}
+	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, ready = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
 		catalog.MOVersionTable,
-		total,
-		ready,
+		upgrade.TotalTenant,
+		upgrade.ReadyTenant,
+		state,
 		upgrade.FinalVersion,
 		upgrade.UpgradeOrder)
 	res, err := txn.Exec(sql)

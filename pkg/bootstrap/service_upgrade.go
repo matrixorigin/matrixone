@@ -221,19 +221,17 @@ func (s *service) doUpgrade(
 
 	if upgrade.UpgradeTenant == versions.Yes {
 		state = versions.StateUpgradingTenant
-		total := 0
 		err := fetchTenants(
 			upgradeTenantBatch,
 			func(ids []int32) error {
-				total += len(ids)
+				upgrade.TotalTenant += int32(len(ids))
 				return versions.AddUpgradeTenantTask(upgrade.ID, upgrade.ToVersion, ids[0], ids[len(ids)-1], txn)
 			},
 			txn)
 		if err != nil {
 			return 0, err
 		}
-
-		if err := versions.UpdateVersionUpgradeTasks(upgrade, int32(total), 0, txn); err != nil {
+		if err := versions.UpdateVersionUpgradeTasks(upgrade, txn); err != nil {
 			return 0, err
 		}
 	}
