@@ -202,6 +202,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	tblId := rel.GetTableID(c.ctx)
 
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	oldDefs, err := rel.TableDefs(c.ctx)
@@ -237,7 +238,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
-	tblId := rel.GetTableID(c.ctx)
 	removeRefChildTbls := make(map[string]uint64)
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
@@ -246,11 +246,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
 
-	var alterKind []api.AlterKind
+	var alterKinds []api.AlterKind
 	var comment string
 	var oldName, newName string
 	var addCol []*plan.AlterAddCol
 	var dropCol []*plan.AlterDropCol
+	var changePartitionDef *plan.PartitionByDef
+
 	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
@@ -259,7 +261,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
-				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				for i, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
@@ -268,7 +270,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
-				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
@@ -296,7 +298,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				// Avoid modifying slice directly during iteration
 				tableDef.Indexes = notDroppedIndex
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
-				alterKind = append(alterKind, api.AlterKind_DropColumn)
+				alterKinds = append(alterKinds, api.AlterKind_DropColumn)
 				var idx int
 				for idx = 0; idx < len(cols); idx++ {
 					if cols[idx].Name == constraintName {
@@ -312,11 +314,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
@@ -378,7 +380,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterIndex:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterIndex
 			constraintName := tableAlterIndex.IndexName
 			for i, indexdef := range tableDef.Indexes {
@@ -404,7 +406,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
 			multiTableIndexes := make(map[string]*MultiTableIndex)
@@ -474,14 +476,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterComment:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateComment)
 			comment = act.AlterComment.NewComment
 		case *plan.AlterTable_Action_AlterName:
-			alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_RenameTable)
 			oldName = act.AlterName.OldName
 			newName = act.AlterName.NewName
 		case *plan.AlterTable_Action_AddCol:
-			alterKind = append(alterKind, api.AlterKind_AddColumn)
+			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
 				Name: act.AddCol.Name,
 				Alg:  plan.CompressType_Lz4,
@@ -494,6 +496,27 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 			act.AddCol.Pos = pos
 			addCol = append(addCol, act.AddCol)
+		case *plan.AlterTable_Action_AddPartition:
+			alterKinds = append(alterKinds, api.AlterKind_AddPartition)
+			changePartitionDef = act.AddPartition.PartitionDef
+			partitionTables := act.AddPartition.GetPartitionTables()
+			for _, table := range partitionTables {
+				storageCols := planColsToExeCols(table.GetCols())
+				storageDefs, err := planDefsToExeDefs(table)
+				if err != nil {
+					return err
+				}
+				err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+				if err != nil {
+					return err
+				}
+			}
+
+			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tblId, act.AddPartition.PartitionDef, act.AddPartition.Definitions)
+			err = c.runSql(insertMoTablePartitionSql)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -567,7 +590,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var addColIdx int
 	var dropColIdx int
 	constraint := make([][]byte, 0)
-	for _, kind := range alterKind {
+	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
 		case api.AlterKind_UpdateConstraint:
@@ -589,6 +612,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
+		case api.AlterKind_AddPartition:
+			req = api.NewAddPartitionReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), changePartitionDef)
 		default:
 		}
 		tmp, err := req.Marshal()

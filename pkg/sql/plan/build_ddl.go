@@ -881,7 +881,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
 		}
 
-		//save the table name for a partition
+		// save the table name for a partition
 		part.PartitionTableName = partitionTableName
 		partitionTableNames[i] = partitionTableName
 
@@ -2345,11 +2345,6 @@ func getTableComment(tableDef *plan.TableDef) string {
 
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
-	alterTable := &plan.AlterTable{
-		Actions:       make([]*plan.AlterTable_Action, len(stmt.Options)),
-		AlgorithmType: plan.AlterTable_INPLACE,
-	}
-
 	databaseName := string(stmt.Table.SchemaName)
 	if databaseName == "" {
 		databaseName = ctx.DefaultDatabase()
@@ -2360,8 +2355,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 
-	alterTable.Database = databaseName
-	alterTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
+	alterTable := &plan.AlterTable{
+		Actions:        make([]*plan.AlterTable_Action, len(stmt.Options)),
+		AlgorithmType:  plan.AlterTable_INPLACE,
+		Database:       databaseName,
+		TableDef:       tableDef,
+		IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+	}
+
 	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
@@ -2375,8 +2376,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
-
-	alterTable.TableDef = tableDef
 
 	var primaryKeys []string
 	var indexs []string
@@ -2753,6 +2752,29 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
+		}
+	}
+
+	if stmt.PartitionOptions != nil {
+		alterPartitionOption := stmt.PartitionOptions
+		switch partitionOption := alterPartitionOption.(type) {
+		case *tree.AlterPartitionAddPartitionClause:
+			alterTableAddPartition, err := AddTablePartitions(ctx, alterTable, partitionOption)
+			if err != nil {
+				return nil, err
+			}
+
+			alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddPartition{
+					AddPartition: alterTableAddPartition,
+				},
+			})
+		case *tree.AlterPartitionDropPartitionClause:
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table drop partition clause")
+		case *tree.AlterPartitionTruncatePartitionClause:
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table truncate partition clause")
+		case *tree.AlterPartitionRedefinePartitionClause:
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table partition by clause")
 		}
 	}
 
