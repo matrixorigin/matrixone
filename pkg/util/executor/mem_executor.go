@@ -56,7 +56,7 @@ type memTxnExecutor struct {
 	mocker func(sql string) (Result, error)
 }
 
-func (te *memTxnExecutor) Exec(sql string) (Result, error) {
+func (te *memTxnExecutor) Exec(sql string, _ StatementOption) (Result, error) {
 	return te.mocker(sql)
 }
 
