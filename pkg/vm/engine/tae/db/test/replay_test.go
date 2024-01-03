@@ -442,6 +442,8 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	err = obj.SoftDeleteBlock(blk.ID)
 	assert.Nil(t, err)
+	err = rel.SoftDeleteObject(obj.GetID())
+	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
