@@ -40,6 +40,8 @@ var (
 	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
 	// ErrLockTableNotFound lock table not found on remote lock service
 	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
+	// ErrLockConflict lock option conflict
+	ErrLockConflict = moerr.NewLockConflictNoCtx()
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
