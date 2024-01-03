@@ -487,18 +487,19 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
-	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
-	for _, r := range ranges {
-		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
+	for i := 0; i < blkSlice.Len(); i++ {
+		blkInfos = append(blkInfos, blkSlice.Get(i))
 	}
 	if len(blkInfos) < num || len(blkInfos) == 1 {
 		for i, blk := range blkInfos {
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
