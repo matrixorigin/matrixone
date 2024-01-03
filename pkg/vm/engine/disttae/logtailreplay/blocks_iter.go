@@ -15,7 +15,6 @@
 package logtailreplay
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -171,7 +170,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
-func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
+func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
 
@@ -181,7 +180,7 @@ func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocat
 		e := iter.Item()
 		return e.DeltaLoc, e.CommitTs, true
 	}
-	return catalog.ObjectLocation{}, types.TS{}, false
+	return objectio.ObjectLocation{}, types.TS{}, false
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
