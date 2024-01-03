@@ -15,9 +15,11 @@
 package executor
 
 import (
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"time"
 )
 
 // WithDisableIncrStatement disable incr statement
@@ -119,4 +121,26 @@ func (opts Options) DisableIncrStatement() bool {
 // GetTimeZone return the time zone of original session
 func (opts Options) GetTimeZone() *time.Location {
 	return opts.timeZone
+}
+
+// WithStatementOption set statement option
+func (opts Options) WithStatementOption(statementOption StatementOption) Options {
+	opts.statementOptions = statementOption
+	return opts
+}
+
+// StatementOption returns statement options
+func (opts Options) StatementOption() StatementOption {
+	return opts.statementOptions
+}
+
+// WithWaitPolicy set wait policy for current statement
+func (opts StatementOption) WithWaitPolicy(waitPolicy lock.WaitPolicy) StatementOption {
+	opts.waitPolicy = waitPolicy
+	return opts
+}
+
+// WaitPolicy returns the wait policy for current statement
+func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
+	return opts.waitPolicy
 }
