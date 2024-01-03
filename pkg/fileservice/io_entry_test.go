@@ -62,3 +62,14 @@ func TestIOEntriesReader(t *testing.T) {
 	assert.Nil(t, iotest.TestReader(newIOEntriesReader(ctx, entries), []byte("abc")))
 
 }
+
+func TestIOEntryString(t *testing.T) {
+	entry := IOEntry{
+		Size:   90,
+		Offset: -1,
+	}
+	str := entry.String()
+	if str != "IOEntry(offset = -1, size = 90)" {
+		t.Fatalf("got %v", str)
+	}
+}

@@ -244,7 +244,7 @@ func (lpb *listPartitionBuilder) buildAddPartitionDefinitions(ctx context.Contex
 		name := string(partition.Name)
 		partitionItem := &plan.PartitionItem{
 			PartitionName:   name,
-			OrdinalPosition: uint32(srcLen + 1),
+			OrdinalPosition: uint32(srcLen + 1 + i),
 		}
 
 		if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {

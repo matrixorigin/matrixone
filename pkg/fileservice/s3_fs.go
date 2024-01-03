@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"math"
 	"net/http/httptrace"
@@ -415,7 +416,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -427,7 +428,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := s.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -439,7 +440,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.diskCache != nil {
-		if err := s.diskCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}
 		// try to cache IOEntry if not caching the full file
@@ -454,7 +455,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.remoteCache != nil {
-		if err := s.remoteCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.remoteCache, vector); err != nil {
 			return err
 		}
 	}
@@ -482,7 +483,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, cache, vector); err != nil {
 			return err
 		}
 		defer func() {
@@ -494,7 +495,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := s.memCache.Read(ctx, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector); err != nil {
 			return err
 		}
 	}
@@ -763,7 +764,27 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		keys = append(keys, s.pathToKey(path.File))
 	}
 
-	return s.storage.Delete(ctx, keys...)
+	return errors.Join(
+		s.storage.Delete(ctx, keys...),
+		func() error {
+			if s.memCache == nil {
+				return nil
+			}
+			return s.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.diskCache == nil {
+				return nil
+			}
+			return s.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.remoteCache == nil {
+				return nil
+			}
+			return s.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 var _ ETLFileService = new(S3FS)

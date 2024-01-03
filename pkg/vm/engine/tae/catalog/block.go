@@ -33,9 +33,9 @@ import (
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 type BlockEntry struct {
-	*BaseEntryImpl[*MetadataMVCCNode]
-	object *ObjectEntry
-	*BlockNode
+	BlockNode
+	BaseEntryImpl[*MetadataMVCCNode]
+	object   *ObjectEntry
 	ID       types.Blockid
 	blkData  data.Block
 	location objectio.Location
@@ -43,10 +43,11 @@ type BlockEntry struct {
 }
 
 func NewReplayBlockEntry() *BlockEntry {
+	impl := NewReplayBaseEntry(
+		func() *MetadataMVCCNode { return &MetadataMVCCNode{} },
+	)
 	return &BlockEntry{
-		BaseEntryImpl: NewReplayBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} },
-		),
+		BaseEntryImpl: *impl,
 	}
 }
 
@@ -57,12 +58,12 @@ func NewBlockEntry(
 	state EntryState,
 	dataFactory BlockDataFactory,
 ) *BlockEntry {
+	impl := NewBaseEntry(func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 	e := &BlockEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		object: object,
-		BlockNode: &BlockNode{
+		ID:            *id,
+		BaseEntryImpl: *impl,
+		object:        object,
+		BlockNode: BlockNode{
 			state: state,
 		},
 	}
@@ -80,13 +81,14 @@ func NewBlockEntryWithMeta(
 	state EntryState,
 	dataFactory BlockDataFactory,
 	metaLoc objectio.Location,
-	deltaLoc objectio.Location) *BlockEntry {
+	deltaLoc objectio.Location,
+) *BlockEntry {
+	impl := NewBaseEntry(func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 	e := &BlockEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		object: object,
-		BlockNode: &BlockNode{
+		ID:            *id,
+		BaseEntryImpl: *impl,
+		object:        object,
+		BlockNode: BlockNode{
 			state: state,
 		},
 	}
@@ -98,12 +100,12 @@ func NewBlockEntryWithMeta(
 }
 
 func NewStandaloneBlock(object *ObjectEntry, id *objectio.Blockid, ts types.TS) *BlockEntry {
+	impl := NewBaseEntry(func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 	e := &BlockEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		object: object,
-		BlockNode: &BlockNode{
+		ID:            *id,
+		BaseEntryImpl: *impl,
+		object:        object,
+		BlockNode: BlockNode{
 			state: ES_Appendable,
 		},
 	}
@@ -116,13 +118,14 @@ func NewStandaloneBlockWithLoc(
 	id *objectio.Blockid,
 	ts types.TS,
 	metaLoc objectio.Location,
-	delLoc objectio.Location) *BlockEntry {
+	delLoc objectio.Location,
+) *BlockEntry {
+	impl := NewBaseEntry(func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 	e := &BlockEntry{
-		ID: *id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		object: object,
-		BlockNode: &BlockNode{
+		ID:            *id,
+		BaseEntryImpl: *impl,
+		object:        object,
+		BlockNode: BlockNode{
 			state: ES_Appendable,
 		},
 	}
@@ -131,12 +134,12 @@ func NewStandaloneBlockWithLoc(
 }
 
 func NewSysBlockEntry(Object *ObjectEntry, id types.Blockid) *BlockEntry {
+	impl := NewBaseEntry(func() *MetadataMVCCNode { return &MetadataMVCCNode{} })
 	e := &BlockEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		object: Object,
-		BlockNode: &BlockNode{
+		ID:            id,
+		BaseEntryImpl: *impl,
+		object:        Object,
+		BlockNode: BlockNode{
 			state: ES_Appendable,
 		},
 	}

@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"hash/crc32"
+	"hash/crc64"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,7 +27,6 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -60,8 +61,10 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 				require.NoError(t, err, err)
 				require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-				lt, err := s1.getLockTable(table)
+				lt, err := s1.getLockTable(0, table)
 				require.NoError(t, err)
+				require.Equal(t, table, lt.getBind().Table)
+				require.Equal(t, table, lt.getBind().OriginTable)
 
 				target := s1
 				if remote {
@@ -1075,7 +1078,7 @@ func TestLockResultWithNoConflict(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, res.Timestamp.IsEmpty())
 
-			lb, err := l.getLockTable(0)
+			lb, err := l.getLockTable(0, 0)
 			require.NoError(t, err)
 			assert.Equal(t, lb.getBind(), res.LockedOn)
 		},
@@ -1324,9 +1327,174 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 	}
 }
 
+func TestTxnUnlockWithBindChanged(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					// changed bind
+					bind := lt.getBind()
+					bind.Version = bind.Version + 1
+					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
+					s.getTables(0).Store(table, new)
+					lt.close()
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.NoError(t, err)
+					checkLock(t, new.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
+func TestMultiGroupWithSameTableID(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			g1 := uint32(1)
+			g2 := uint32(2)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+
+					rows := newTestRows(1)
+
+					txn1 := newTestTxnID(1)
+					option1 := newTestRowSharedOptions()
+					option1.Group = g1
+
+					txn2 := newTestTxnID(2)
+					option2 := newTestRowSharedOptions()
+					option2.Group = g2
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows, txn1, option1)
+					require.NoError(t, err)
+					lt1, err := s.getLockTable(g1, table)
+					assert.NoError(t, err)
+					checkLock(t, lt1.(*localLockTable), rows[0], [][]byte{txn1}, nil, nil)
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows, txn2, option2)
+					require.NoError(t, err)
+					lt2, err := s.getLockTable(g2, table)
+					assert.NoError(t, err)
+					checkLock(t, lt2.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
+func TestShardingByRowWithSameTableID(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+
+					option := newTestRowSharedOptions()
+					option.Sharding = pb.Sharding_ByRow
+					option.Group = 1
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+					rows1 := newTestRows(1)
+					rows2 := newTestRows(2)
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows1, txn1, option)
+					require.NoError(t, err)
+					l := s.loadLockTable(1, shardingByRow(rows1[0]))
+					assert.Equal(t, table, l.getBind().OriginTable)
+					checkLock(t, l.(*localLockTable), rows1[0], [][]byte{txn1}, nil, nil)
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows2, txn2, option)
+					require.NoError(t, err)
+					l = s.loadLockTable(1, shardingByRow(rows2[0]))
+					assert.Equal(t, table, l.getBind().OriginTable)
+					checkLock(t, l.(*localLockTable), rows2[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
+}
+
+func BenchmarkCrc64(b *testing.B) {
+	b.Run("crc64-ISO", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint64(0)
+			for p.Next() {
+				n := crc64.Checksum([]byte("hello"), crc64.MakeTable(crc64.ISO))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
+	b.Run("crc64-ECMA", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint64(0)
+			for p.Next() {
+				n := crc64.Checksum([]byte("hello"), crc64.MakeTable(crc64.ECMA))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
+	b.Run("crc32", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(p *testing.PB) {
+			sum := uint32(0)
+			for p.Next() {
+				n := crc32.Checksum([]byte("hello"), crc32.MakeTable(crc32.IEEE))
+				sum += n
+			}
+			b.Log(sum)
+		})
+	})
 }
 
 var tableID atomic.Uint64
@@ -1459,7 +1627,7 @@ func waitWaiters(
 	table uint64,
 	key []byte,
 	waitersCount int) {
-	require.NoError(t, WaitWaiters(s, table, key, waitersCount))
+	require.NoError(t, WaitWaiters(s, 0, table, key, waitersCount))
 }
 
 func newTestRowExclusiveOptions() pb.LockOptions {
@@ -1560,15 +1728,4 @@ func mustAddTestLock(t *testing.T,
 		txnID,
 		lock,
 		granularity)
-}
-
-func TestSharedTableID(t *testing.T) {
-	tenantID := uint32(955)
-	tableID := uint64(2)
-
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, tenantID)
-	tenantID2, tableID2, ok := decodeSharedTableID(encodeSharedTableID(ctx, tableID))
-	require.True(t, ok)
-	require.Equal(t, tenantID, tenantID2)
-	require.Equal(t, tableID, tableID2)
 }

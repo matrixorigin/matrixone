@@ -64,7 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
@@ -1512,7 +1512,7 @@ func doShowBackendServers(ses *Session) error {
 	}
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
-		filterLabels(labels), clusterservice.EQ)
+		filterLabels(labels), clusterservice.Contain)
 	if isSysTenant(tenant) {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
@@ -1523,10 +1523,10 @@ func doShowBackendServers(ses *Session) error {
 					return true
 				})
 		} else {
-			disttae.SelectForSuperTenant(se, u, nil, appendFn)
+			route.RouteForSuperTenant(se, u, nil, appendFn)
 		}
 	} else {
-		disttae.SelectForCommonTenant(se, nil, appendFn)
+		route.RouteForCommonTenant(se, nil, appendFn)
 	}
 	return nil
 }
@@ -1712,41 +1712,53 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	return ret, err
 }
 
-func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
+func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
+	checkFn := func(db string, def *plan.TableDef) bool {
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, def.Name)
+		if tableDef == nil {
+			return true
+		}
+		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+			return true
+		}
+		return false
+	}
 	switch p := plan2.Plan.(type) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
-			if p.Query.Nodes[i].NodeType == plan.Node_TABLE_SCAN {
-				// check table_scan node' s tableDef whether be modified
-				tblName := p.Query.Nodes[i].TableDef.Name
-				dbName := p.Query.Nodes[i].ObjRef.SchemaName
-				_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tblName)
-				if tableDef == nil {
+			if def := p.Query.Nodes[i].TableDef; def != nil {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def) {
 					return true
 				}
-				colCnt1, colCnt2 := 0, 0
-				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
-					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
-						continue
-					}
-					colCnt1++
-				}
-				for j := 0; j < len(tableDef.Cols); j++ {
-					if tableDef.Cols[j].Hidden {
-						continue
-					}
-					colCnt2++
-				}
-				if colCnt1 != colCnt2 {
+			}
+			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
 					return true
 				}
-				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
-					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
-						continue
-					}
-					if p.Query.Nodes[i].TableDef.Cols[j].Name != tableDef.Cols[j].Name {
-						return true
-					}
+			}
+			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+					return true
+				}
+			}
+			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+					return true
+				}
+			}
+			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+					return true
+				}
+			}
+			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+					return true
+				}
+			}
+			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableDef) {
+					return true
 				}
 			}
 		}
@@ -1765,7 +1777,7 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
-			if checkColModify(tcw.plan, proc, ses) {
+			if checkModify(tcw.plan, proc, ses) {
 				modify = true
 				break
 			}
@@ -3911,11 +3923,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok && checkNodeCanCache(cwft.plan) {
-				plans[i] = cwft.plan
-				stmts[i] = cwft.stmt
-			} else {
-				return nil
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				if checkNodeCanCache(cwft.plan) {
+					plans[i] = cwft.plan
+					stmts[i] = cwft.stmt
+				} else {
+					cwft.Free()
+					return nil
+				}
 			}
 		}
 		ses.cachePlan(input.getSql(), stmts, plans)

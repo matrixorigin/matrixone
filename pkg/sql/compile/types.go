@@ -66,7 +66,7 @@ const (
 	Replace
 )
 
-// Source contains information of a relation which will be used in execution,
+// Source contains information of a relation which will be used in execution.
 type Source struct {
 	PushdownId             uint64
 	PushdownAddr           string
@@ -127,9 +127,11 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx       int
-	ShuffleCnt     int
-	PartialResults []any
+	BuildIdx   int
+	ShuffleCnt int
+
+	PartialResults     []any
+	PartialResultTypes []types.T
 }
 
 // canRemote checks whether the current scope can be executed remotely.

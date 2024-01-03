@@ -72,6 +72,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+
+	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
 
 func initFileServiceMetrics() {
@@ -101,8 +103,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
-
-	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {
@@ -122,6 +122,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnCheckPKDupDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(txnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
@@ -140,6 +141,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcNetworkBytesCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)

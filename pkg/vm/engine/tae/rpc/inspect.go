@@ -19,10 +19,13 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,6 +189,78 @@ func (c *objStatArg) Run() error {
 		c.ctx.resp.Payload = b.Bytes()
 	}
 	return nil
+}
+
+type storageUsageHistoryArg struct {
+	ctx    *inspectContext
+	detail *struct {
+		accId uint64
+		dbI   uint64
+		tblId uint64
+	}
+
+	trace *struct {
+		tStart, tEnd time.Time
+		accounts     map[uint64]struct{}
+	}
+
+	transfer bool
+}
+
+func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	expr, _ := cmd.Flags().GetString("detail")
+	if expr != "" {
+		accId, dbId, tblId, err := parseStorageUsageDetail(expr, c.ctx.acinfo, c.ctx.db)
+		if err != nil {
+			return err
+		}
+		c.detail = &struct {
+			accId uint64
+			dbI   uint64
+			tblId uint64
+		}{accId: accId, dbI: dbId, tblId: tblId}
+	}
+
+	expr, _ = cmd.Flags().GetString("trace")
+	if expr != "" {
+		start, end, accs, err := parseStorageUsageTrace(expr, c.ctx.acinfo, c.ctx.db)
+		if err != nil {
+			return err
+		}
+
+		c.trace = &struct {
+			tStart, tEnd time.Time
+			accounts     map[uint64]struct{}
+		}{tStart: start, tEnd: end, accounts: accs}
+	}
+
+	expr, _ = cmd.Flags().GetString("transfer")
+	if expr != "" {
+		if expr == "*" {
+			c.transfer = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -f *` expected")
+		}
+	}
+
+	return nil
+}
+
+func (c *storageUsageHistoryArg) Run() (err error) {
+	if c.detail != nil {
+		return storageUsageDetails(c)
+	} else if c.trace != nil {
+		return storageTrace(c)
+	} else if c.transfer {
+		return storageTransfer(c)
+	}
+	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
+}
+
+func (c *storageUsageHistoryArg) String() string {
+	return ""
 }
 
 type manualyIgnoreArg struct {
@@ -404,6 +479,7 @@ type compactPolicyArg struct {
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
 	minRowsQualified int32
+	maxRowsObj       int32
 	notLoadMoreThan  int32
 	hints            []api.MergeHint
 }
@@ -417,6 +493,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 		return err
 	}
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
+	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
 	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
@@ -449,11 +526,13 @@ func (c *compactPolicyArg) Run() error {
 		} else {
 			merge.StopMerge.Store(false)
 		}
+		common.RuntimeMaxRowsObj.Store(c.maxRowsObj)
 	} else {
 		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
-			MergeMaxOneRun: int(c.maxMergeObjN),
-			ObjectMinRows:  int(c.minRowsQualified),
-			MergeHints:     c.hints,
+			MergeMaxOneRun:   int(c.maxMergeObjN),
+			ObjectMinRows:    int(c.minRowsQualified),
+			MaxRowsMergedObj: int(c.maxRowsObj),
+			MergeHints:       c.hints,
 		})
 	}
 	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
@@ -566,6 +645,19 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	}
 	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
 	rootCmd.AddCommand(maiCmd)
+
+	storageUsageCmd := &cobra.Command{
+		Use:   "storage_usage",
+		Short: "storage usage details",
+		Run:   RunFactory(&storageUsageHistoryArg{}),
+	}
+
+	// storage usage request history
+	storageUsageCmd.Flags().StringP("trace", "t", "", "format: -time time range or -acc account id list")
+	// storage usage details in ckp
+	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
+	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	rootCmd.AddCommand(storageUsageCmd)
 
 	return rootCmd
 }
@@ -685,4 +777,342 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 		heap.Pop(&o.candidates)
 	}
 	return nil
+}
+
+// the history of one table
+// mo_ctl("dn", "inspect", "storage_usage -t accId.dbName.tableName");
+//
+// the history of one db
+// mo_ctl("dn", "inspect", "storage_usage -t accId.dbName");
+//
+// the history of one acc
+// mo_ctl("dn", "inspect", "storage_usage -t accId");
+//
+// the history of all
+// mo_ctl("dn", "inspect", "storage_usage -t *");
+func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
+	accId uint64, dbId uint64, tblId uint64, err error) {
+	strs := strings.Split(expr, ".")
+
+	if len(strs) == 0 || len(strs) > 3 {
+		return 0, 0, 0, moerr.NewInvalidArgNoCtx(expr, "")
+	}
+
+	if len(strs) == 1 && strs[0] == "*" {
+		return math.MaxUint32, math.MaxUint64, math.MaxUint64, nil
+	}
+
+	txn, _ := db.StartTxn(nil)
+	defer txn.Commit(context.Background())
+
+	if ac != nil {
+		logutil.Infof("inspect with access info: %+v", ac)
+		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
+	}
+
+	var id int
+	if id, err = strconv.Atoi(strs[0]); err != nil {
+		return 0, 0, 0, err
+	}
+
+	accId = uint64(id)
+	dbId, tblId = math.MaxUint64, math.MaxUint64
+
+	var dbHdl handle.Database
+	if len(strs) >= 2 {
+		dbHdl, err = txn.GetDatabase(strs[1])
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		dbId = dbHdl.GetID()
+	}
+
+	if len(strs) == 3 {
+		tblHdl, err := dbHdl.GetRelationByName(strs[2])
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		tblId = tblHdl.ID()
+	}
+
+	return accId, dbId, tblId, nil
+}
+
+// [pos1, pos2)
+func subString(src string, pos1, pos2 int) (string, error) {
+	if pos2 > len(src) {
+		return "", moerr.NewOutOfRangeNoCtx("", src, pos1, " to ", pos2)
+	}
+
+	dst := make([]byte, pos2-pos1)
+
+	copy(dst, []byte(src)[pos1:pos2])
+
+	return string(dst), nil
+}
+
+// specify the time range
+// select mo_ctl("dn", "inspect", "-t '-time 2023-12-18 14:26:14_2023-12-18 15:26:14'");
+//
+// specify the account id list
+// select mo_ctl("dn", "inspect", "-t '-acc 0 1 2'");
+//
+// specify time range and account list
+// select mo_ctl("dn", "inspect", "-t '-time 2023-12-18 14:26:14_2023-12-18 15:26:14 -acc 0 1 2'");
+//
+// no limit, show all request trace info
+// select mo_ctl("dn", "inspect", "-t ");
+func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
+	tStart, tEnd time.Time, accounts map[uint64]struct{}, err error) {
+
+	var str string
+	tIdx := strings.Index(expr, "-time")
+	if tIdx != -1 {
+		dash := strings.Index(expr, "_")
+		if dash == -1 {
+			err = moerr.NewInvalidArgNoCtx(expr, "")
+			return
+		}
+		str, err = subString(expr, tIdx+len("-time")+len(" "), dash)
+		if err != nil {
+			return
+		}
+
+		tStart, err = time.Parse("2006-01-02 15:04:05", str)
+		if err != nil {
+			return
+		}
+
+		str, err = subString(expr, dash+len("_"), dash+len("_")+len("2006-01-02 15:04:05"))
+		if err != nil {
+			return
+		}
+		tEnd, err = time.Parse("2006-01-02 15:04:05", str)
+		if err != nil {
+			return
+		}
+	}
+
+	aIdx := strings.Index(expr, "-acc")
+	if aIdx != -1 {
+		stop := len(expr)
+		if aIdx < tIdx {
+			stop = tIdx
+		}
+		str, err = subString(expr, aIdx+len("-acc")+len(" "), stop)
+		if err != nil {
+			return
+		}
+		accs := strings.Split(str, " ")
+
+		accounts = make(map[uint64]struct{})
+
+		var id int
+		for i := range accs {
+			id, err = strconv.Atoi(accs[i])
+			if err != nil {
+				return
+			}
+			accounts[uint64(id)] = struct{}{}
+		}
+	}
+
+	return
+}
+
+func checkUsageData(data logtail.UsageData, c *storageUsageHistoryArg) bool {
+	if c.detail.accId == math.MaxUint32 {
+		return true
+	}
+
+	if c.detail.accId != data.AccId {
+		return false
+	}
+
+	if c.detail.dbI == math.MaxUint64 {
+		return true
+	}
+
+	if c.detail.dbI != data.DbId {
+		return false
+	}
+
+	if c.detail.tblId == math.MaxUint64 {
+		return true
+	}
+
+	return c.detail.tblId == data.TblId
+}
+
+func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+
+	versions := make([]uint32, 0)
+	locations := make([]objectio.Location, 0)
+
+	for idx := range entries {
+		if entries[idx].GetVersion() < logtail.CheckpointVersion11 {
+			continue
+		}
+		versions = append(versions, entries[idx].GetVersion())
+		locations = append(locations, entries[idx].GetLocation())
+	}
+
+	// remove the old version
+	entries = entries[len(entries)-len(versions):]
+
+	var usageInsData [][]logtail.UsageData
+	var usageDelData [][]logtail.UsageData
+
+	if usageInsData, usageDelData, err = logtail.GetStorageUsageHistory(
+		ctx, locations, versions,
+		c.ctx.db.Runtime.Fs.Service, common.DebugAllocator); err != nil {
+		return err
+	}
+
+	txn, _ := c.ctx.db.StartTxn(nil)
+	defer txn.Commit(context.Background())
+
+	getDbAndTblNames := func(dbId, tblId uint64) (string, string) {
+		h, _ := txn.GetDatabaseByID(dbId)
+		if h == nil {
+			return "deleted", "deleted"
+		}
+
+		r, _ := h.GetRelationByID(tblId)
+		if r == nil {
+			return h.GetName(), "deleted"
+		}
+		return h.GetName(), r.Schema().(*catalog.Schema).Name
+	}
+
+	getAllDbAndTblNames := func(usages []logtail.UsageData) (dbs, tbls []string, maxDbLen, maxTblLen int) {
+		for idx := range usages {
+			if checkUsageData(usages[idx], c) {
+				dbName, tblName := getDbAndTblNames(usages[idx].DbId, usages[idx].TblId)
+				dbs = append(dbs, dbName)
+				tbls = append(tbls, tblName)
+
+				maxDbLen = int(math.Max(float64(maxDbLen), float64(len(dbName))))
+				maxTblLen = int(math.Max(float64(maxTblLen), float64(len(tblName))))
+			}
+		}
+		return
+	}
+
+	formatOutput := func(
+		dst *bytes.Buffer, data logtail.UsageData,
+		dbName, tblName string, maxDbLen, maxTblLen int, hint string) float64 {
+
+		size := float64(data.Size) / 1048576
+
+		dst.WriteString(fmt.Sprintf("\t[(acc)-%-10d (%*s)-%-10d (%*s)-%-10d] %s -> %15.6f (mb)\n",
+			data.AccId, maxDbLen, dbName, data.DbId,
+			maxTblLen, tblName, data.TblId, hint, size))
+
+		return size
+	}
+
+	b := &bytes.Buffer{}
+	ckpType := []string{"G", "I"}
+
+	totalSize := 0.0
+	for x := range entries {
+		eachCkpTotal := 0.0
+
+		b.WriteString(fmt.Sprintf("CKP[%s]: %s\n", ckpType[entries[x].GetType()],
+			time.Unix(0, entries[x].GetEnd().Physical())))
+
+		dbNames, tblNames, dbLen, tblLen := getAllDbAndTblNames(usageInsData[x])
+		for _, data := range usageInsData[x] {
+			if checkUsageData(data, c) {
+				eachCkpTotal += formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "insert")
+				dbNames = dbNames[1:]
+				tblNames = tblNames[1:]
+			}
+		}
+
+		dbNames, tblNames, dbLen, tblLen = getAllDbAndTblNames(usageDelData[x])
+		for _, data := range usageDelData[x] {
+			if checkUsageData(data, c) {
+				eachCkpTotal -= formatOutput(b, data, dbNames[0], tblNames[0], dbLen, tblLen, "delete")
+				dbNames = dbNames[1:]
+				tblNames = tblNames[1:]
+			}
+		}
+
+		if eachCkpTotal != 0 {
+			b.WriteString(fmt.Sprintf("\n\taccumulation: %f (mb)\n", eachCkpTotal))
+		}
+
+		totalSize += eachCkpTotal
+
+		b.WriteByte('\n')
+	}
+
+	b.WriteString(fmt.Sprintf(
+		"total accumulation in all ckps: %f (mb), current tn cache mem used: %f (mb)\n",
+		totalSize, c.ctx.db.GetUsageMemo().MemoryUsed()))
+
+	c.ctx.resp.Payload = b.Bytes()
+	return nil
+}
+
+func storageTrace(c *storageUsageHistoryArg) (err error) {
+
+	filter := func(accId uint64, stamp time.Time) bool {
+		if !c.trace.tStart.IsZero() {
+			if stamp.UTC().Add(time.Hour*8).Before(c.trace.tStart) ||
+				stamp.UTC().Add(time.Hour*8).After(c.trace.tEnd) {
+				return false
+			}
+		}
+
+		if len(c.trace.accounts) != 0 {
+			if _, ok := c.trace.accounts[accId]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+
+	var b bytes.Buffer
+
+	memo := c.ctx.db.GetUsageMemo()
+	accIds, stamps, sizes, hints := memo.GetAllReqTrace()
+
+	preIdx := -1
+	for idx := range stamps {
+		if !filter(accIds[idx], stamps[idx]) {
+			continue
+		}
+		if preIdx == -1 || !stamps[preIdx].Equal(stamps[idx]) {
+			preIdx = idx
+			b.WriteString(fmt.Sprintf("\n%s:\n", stamps[idx].String()))
+		}
+
+		size := float64(sizes[idx]) / 1048576
+		b.WriteString(fmt.Sprintf("\taccount id: %-10d\tsize: %15.6f\thint: %s\n",
+			accIds[idx], size, hints[idx]))
+	}
+
+	b.WriteString("\n")
+
+	c.ctx.resp.Payload = b.Bytes()
+
+	return nil
+}
+
+func storageTransfer(c *storageUsageHistoryArg) (err error) {
+	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
+	if err != nil {
+		return err
+	}
+
+	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
+	return
 }
