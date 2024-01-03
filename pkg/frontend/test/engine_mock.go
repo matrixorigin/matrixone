@@ -395,7 +395,7 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 [][]byte) ([]engine.Reader, error) {
+func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]engine.Reader)
@@ -425,10 +425,10 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyV
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) ([][]byte, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) (engine.Ranges, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
-	ret0, _ := ret[0].([][]byte)
+	ret0, _ := ret[0].(engine.Ranges)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -917,7 +917,7 @@ func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 }
 
 // NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, ranges, tblDef, proc)
 	ret0, _ := ret[0].([]engine.Reader)
