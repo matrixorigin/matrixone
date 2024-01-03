@@ -105,7 +105,7 @@ jobs:
           fetch-depth: '3'
           path: ./matrixone
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./matrixone/.github/actions/setup_env
         with:
           cache: false
       - name: Set Variables

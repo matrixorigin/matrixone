@@ -20,7 +20,7 @@ jobs:
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./.github/actions/setup_env
       - name: Build normal
         run: |
           make build
@@ -64,7 +64,7 @@ jobs:
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./.github/actions/setup_env
         with:
           cache: false
       - name: Build normal
@@ -123,7 +123,7 @@ jobs:
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./.github/actions/setup_env
       - name: Build normal
         run: |
           make build

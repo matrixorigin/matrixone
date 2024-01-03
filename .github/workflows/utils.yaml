@@ -88,7 +88,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./matrixone/.github/actions/setup_env
       - name: Set Variables
         run: |
           cd $GITHUB_WORKSPACE/matrixone
