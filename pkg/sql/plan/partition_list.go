@@ -189,7 +189,6 @@ func (lpb *listPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 	return nil
 }
 
-// -------------------------------------------------------add partition---------------------------------------------------------------
 // buildAddPartition Perform `ADD PARTITION` semantic check on the list partition table
 func (lpb *listPartitionBuilder) buildAddPartition(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.AlterPartitionAddPartitionClause, tableDef *TableDef) error {
 	partitionInfo := DeepCopyPartitionByDef(tableDef.Partition)

@@ -188,7 +188,6 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 	return nil
 }
 
-// ----------------------------------------------------------add partition------------------------------------------------------------
 // buildAddPartition Perform `ADD PARTITION` semantic check on the range partition table
 func (rpb *rangePartitionBuilder) buildAddPartition(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.AlterPartitionAddPartitionClause, tableDef *TableDef) error {
 	partitionInfo := DeepCopyPartitionByDef(tableDef.Partition)
