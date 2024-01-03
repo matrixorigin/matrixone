@@ -455,7 +455,8 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  repeated string payload = 4;
+  string payload = 4;
+  uint32 type = 5;
 }
 
 message ProcessLimitation {

@@ -472,8 +472,7 @@ jobs:
         timeout-minutes: 2
         id: account_for_sysbench
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
-          echo "sysbench_account=sysbench_test:admin" >> $GITHUB_OUTPUT
+          echo "sysbench_account=dump" >> $GITHUB_OUTPUT
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 

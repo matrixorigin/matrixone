@@ -3027,11 +3027,10 @@ func TestSegDelLogtail(t *testing.T) {
 		entry := ckpEntries[0]
 		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
-		require.Equal(t, uint32(6), ins.Vecs[0].Len)    // 6 nablk
-		require.Equal(t, uint32(6), del.Vecs[0].Len)    // 3 ablk + 3 nablk
-		require.Equal(t, uint32(6), cnins.Vecs[0].Len)  // 3 ablk + 3 nablk
+		require.Nil(t, ins)                             // 0 blk, skip blks without deltaloc
+		require.Equal(t, uint32(1), del.Vecs[0].Len)    // 1 deltaloc
+		require.Equal(t, uint32(1), cnins.Vecs[0].Len)  // 1 deltaloc
 		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
-		require.Equal(t, 2, len(del.Vecs))
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
 	check()
@@ -4957,7 +4956,7 @@ func TestBlockRead(t *testing.T) {
 
 	bid, sid := blkEntry.ID, blkEntry.GetObject().ID
 
-	info := &pkgcatalog.BlockInfo{
+	info := &objectio.BlockInfo{
 		BlockID:    bid,
 		SegmentID:  *sid.Segment(),
 		EntryState: true,
@@ -4979,8 +4978,8 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Runtime.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	infos := make([][]*pkgcatalog.BlockInfo, 0)
-	infos = append(infos, []*pkgcatalog.BlockInfo{info})
+	infos := make([][]*objectio.BlockInfo, 0)
+	infos = append(infos, []*objectio.BlockInfo{info})
 	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
