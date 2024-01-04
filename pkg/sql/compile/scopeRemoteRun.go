@@ -137,34 +137,46 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
-		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || opProc == nil {
+		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || dispatchProc == nil {
 			return err
 		}
 
-		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-		defer putCancel()
-		doneCh := make(chan struct{})
-		info := process.WrapCs{
-			MsgId:  receiver.messageId,
-			Uid:    receiver.messageUuid,
-			Cs:     receiver.clientSession,
-			DoneCh: doneCh,
+		infoToDispatchOperator := process.WrapCs{
+			MsgId: receiver.messageId,
+			Uid:   receiver.messageUuid,
+			Cs:    receiver.clientSession,
+			Err:   make(chan error, 1),
+		}
+
+		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+
+		succeed := false
+		select {
+		case <-timeLimit.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+
+		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			succeed = true
+		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
+		}
+		cancel()
+
+		if err != nil || !succeed {
+			dispatchProc.Cancel()
+			return err
 		}
 
 		select {
-		case <-putCtx.Done():
-			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
-		case <-opProc.Ctx.Done():
-			//logutil.Errorf("dispatch operator context done")
-		case opProc.DispatchNotifyCh <- info:
-			// TODO: need fix. It may hung here if dispatch operator receive the info but
-			// end without close doneCh
-			<-doneCh
+			dispatchProc.Cancel()
+
+		// there is no need to check the dispatchProc.Ctx.Done() here.
+		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		case err = <-infoToDispatchOperator.Err:
 		}
-		return nil
+		return err
 
 	case pipeline.PipelineMessage:
 		c := receiver.newCompile()

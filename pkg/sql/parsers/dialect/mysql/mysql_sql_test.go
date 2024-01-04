@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select reference from t1;",
-		output: "select reference from t1",
+		input:  "select 1 as _binary from t1;",
+		output: "select 1 as _binary from t1",
 	}
 )
 

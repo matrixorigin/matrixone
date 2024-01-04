@@ -15,15 +15,11 @@
 package dispatch
 
 import (
-	"context"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,30 +29,16 @@ const (
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
 
-	// send to all reg functions
 	SendToAllLocalFunc = iota
-	SendToAllRemoteFunc
 	SendToAllFunc
-
-	// send to any reg functions
 	SendToAnyLocalFunc
-	SendToAnyRemoteFunc
 	SendToAnyFunc
-
-	//shuffle to all reg functions
 	ShuffleToAllFunc
 )
 
-type WrapperClientSession struct {
-	msgId uint64
-	cs    morpc.ClientSession
-	uuid  uuid.UUID
-	// toAddr string
-	doneCh chan struct{}
-}
 type container struct {
 	// the clientsession info for the channel you want to dispatch
-	remoteReceivers []*WrapperClientSession
+	remoteReceivers []process.WrapCs
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 
@@ -97,24 +79,8 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
-			if !arg.ctr.prepared {
-				arg.waitRemoteRegsReady(proc)
-			}
 			for _, r := range arg.ctr.remoteReceivers {
-				timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
-				_ = cancel
-				message := cnclient.AcquireMessage()
-				{
-					message.Id = r.msgId
-					message.Cmd = pipeline.BatchMessage
-					message.Sid = pipeline.MessageEnd
-					message.Uuid = r.uuid[:]
-				}
-				if pipelineFailed {
-					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
-				}
-				r.cs.Write(timeoutCtx, message)
-				close(r.doneCh)
+				r.Err <- err
 			}
 
 			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
