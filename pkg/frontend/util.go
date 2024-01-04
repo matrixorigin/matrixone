@@ -604,7 +604,6 @@ func makeCmdFieldListSql(query string) string {
 	nullIdx := strings.IndexRune(query, rune(0))
 	if nullIdx != -1 {
 		query = query[:nullIdx]
-		return cmdFieldListSql + " " + query
 	}
 	return cmdFieldListSql + " " + query
 }
