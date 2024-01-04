@@ -10865,6 +10865,7 @@ non_reserved_keyword:
 |	HANDLER
 |	SAMPLE
 |	PERCENT
+|	LAST
 
 func_not_keyword:
     DATE_ADD
