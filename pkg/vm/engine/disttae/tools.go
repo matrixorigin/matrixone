@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1212,18 +1213,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
+		accountId:  id,
 	}
 }
 
@@ -1446,8 +1447,8 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
-	var infos [][]*catalog.BlockInfo
+func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objectio.BlockInfo, []int) {
+	var infos [][]*objectio.BlockInfo
 	objMap := make(map[string]int)
 	lenObjs := 0
 	for _, blkInfo := range blkInfos {
@@ -1458,7 +1459,7 @@ func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{blkInfo})
+			infos = append(infos, []*objectio.BlockInfo{blkInfo})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1485,7 +1486,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	return rds
 }
 
-func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*objectio.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		//distribute objects and steps for prefetch
