@@ -25,7 +25,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_duration_seconds",
 			Help:      "Bucketed histogram of trace collector duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
 	TraceCollectorGenerateAwareDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_awake")
