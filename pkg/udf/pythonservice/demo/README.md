@@ -34,6 +34,8 @@ $$
 handler 'add';
 ```
 
+> Note: currently, matrixone does not perform syntax checking on the python script in UDF body.
+
 This SQL defines a function called py_add that takes two parameters of type `int` and returns the sum of the two parameters. Python code comes after `as`. `handler` represents the name of the python function that will be called.
 
 Now we can use the function:
@@ -75,7 +77,7 @@ def add(a, b):
   return a + b
 ```
 
-Input the following SQL in the client to create the function:
+Input the following SQL in the client to create the function(if you connect to matrixone via `mysql` cli, `--local-infile` flag is required to allow the cli reading local python files）:
 
 ```sql
 create or replace function py_add(a int, b int) returns int language python import 
@@ -158,15 +160,7 @@ The correspondence between MO types and python types is as follows:
 
 ### Function Overloading and Matching
 
-MO UDF supports overloading. We can create multiple functions with the same name but different types or numbers of parameters.
-
-MO's strategy for function matching is as follows:
-
-1. Determine candidate functions: Match all functions with the same name.
-2. Determine viable functions: Select functions from the candidate functions with the same number of parameters, the same types, or those that can undergo implicit type conversion. Calculate the cost of implicit type conversion, with a cost of zero if no conversion is required.
-3. Determine the best match: Choose the function with the lowest type conversion cost from all viable functions.
-
-It's worth noting that while MO strives to find the best match, we should not rely on this mechanism, as implicit type conversion can often lead to unexpected results.
+Overloading is not supported in MO UDF yet, all function names must be unique across an MO cluster.
 
 ## Example: Credit Card Fraud Detection
 
