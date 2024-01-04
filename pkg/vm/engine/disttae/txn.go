@@ -426,7 +426,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
 
 		table := tbl.(*txnTable)
-		fileName := catalog.DecodeBlockInfo(
+		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
 		err = table.db.txn.WriteFileLocked(
@@ -483,7 +483,7 @@ func (txn *Transaction) insertPosForCNBlock(
 	tbName string) error {
 	blks := vector.MustBytesCol(vec)
 	for i, blk := range blks {
-		blkInfo := *catalog.DecodeBlockInfo(blk)
+		blkInfo := *objectio.DecodeBlockInfo(blk)
 		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
 			bat:       b,
 			accountId: id,
@@ -517,7 +517,7 @@ func (txn *Transaction) WriteFileLocked(
 
 		blkInfosVec := bat.Vecs[0]
 		for idx := 0; idx < blkInfosVec.Length(); idx++ {
-			blkInfo := *catalog.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
+			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
 		}
@@ -720,7 +720,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[tableKey]map[catalog.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[objectio.BlockInfo][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -740,7 +740,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					dbName:    pos.dbName,
 					name:      pos.tbName,
 				}] =
-					map[catalog.BlockInfo][]int64{pos.blkInfo: offsets}
+					map[objectio.BlockInfo][]int64{pos.blkInfo: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
 			delete(txn.cnBlkId_Pos, *blkId)
@@ -766,7 +766,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
-					catalog.EncodeBlockInfo(blkInfo),
+					objectio.EncodeBlockInfo(blkInfo),
 					false,
 					tbl.db.txn.proc.GetMPool())
 			}
