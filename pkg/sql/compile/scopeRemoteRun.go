@@ -165,11 +165,11 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
-
+		case <-dispatchProc.Ctx.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator failed, dispatch operator has done")
 		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.ctx.Done():
-		case <-dispatchProc.Ctx.Done():
 		}
 		cancel()
 
