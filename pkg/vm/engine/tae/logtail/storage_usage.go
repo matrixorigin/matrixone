@@ -639,7 +639,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		}
 		logutil.Info("[storage usage] replay:",
 			zap.String("remove old deleted db/tbl", buf.String()),
-			zap.Int("delayed %d tbl", len(m.pendingReplay.delayed)))
+			zap.Int("delayed tbl", len(m.pendingReplay.delayed)))
 	}()
 
 	for x := range m.pendingReplay.datas {
