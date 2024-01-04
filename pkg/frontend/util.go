@@ -601,8 +601,8 @@ func isCmdFieldListSql(sql string) bool {
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
 func makeCmdFieldListSql(query string) string {
-	if strings.Contains(query, "\x00") {
-		nullIdx := strings.IndexRune(query, rune(0))
+	nullIdx := strings.IndexRune(query, rune(0))
+	if nullIdx != -1 {
 		query = query[:nullIdx]
 		return cmdFieldListSql + " " + query
 	}
