@@ -29,7 +29,7 @@ import (
 
 func TestGetLabelOrTitle(t *testing.T) {
 	m := MarshalNodeImpl{}
-	errNo := 0
+	errCount := 0
 	for _, v := range plan2.Node_NodeType_value {
 		node := &plan2.Node{
 			NodeType: plan2.Node_NodeType(v),
@@ -48,17 +48,17 @@ func TestGetLabelOrTitle(t *testing.T) {
 		}
 		_, e := m.GetNodeTitle(context.TODO(), opt)
 		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
-			errNo = errNo + 1
+			errCount = errCount + 1
 			fmt.Printf("you should add title for node=%s\n", plan2.Node_NodeType_name[v])
 		}
 
 		_, e = m.GetNodeLabels(context.TODO(), opt)
 		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
-			errNo = errNo + 1
+			errCount = errCount + 1
 			fmt.Printf("you should add label for node=%s\n", plan2.Node_NodeType_name[v])
 		}
 	}
-	if errNo > 0 {
+	if errCount > 0 {
 		t.Fatalf("you should add title/label for some nodes")
 	}
 }
