@@ -2132,6 +2132,11 @@ func (sh *SqlHelper) GetCompilerContext() any {
 	return sh.ses.txnCompileCtx
 }
 
+func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (sub *plan.SubscriptionMeta, err error) {
+	sub, err = sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
+	return
+}
+
 // Made for sequence func. nextval, setval.
 func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 	var erArray []ExecResult

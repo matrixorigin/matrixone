@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	getAccountIdNamesSql = "select account_id, account_name from mo_catalog.mo_account"
+	getAccountIdNamesSql = "select account_id, account_name from mo_catalog.mo_account where status != 'suspend'"
 	getPubsSql           = "select pub_name, database_name, account_list, created_time from mo_catalog.mo_pubs"
 	getSubsSql           = "select datname, dat_createsql, created_time from mo_catalog.mo_database where dat_type = 'subscription'"
 )
@@ -102,7 +102,7 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 	sql := getAccountIdNamesSql
 	if len(likeName) > 0 {
-		sql += fmt.Sprintf(" where account_name like '%s'", likeName)
+		sql += fmt.Sprintf(" and account_name like '%s'", likeName)
 	}
 	if err := bh.Exec(ctx, sql); err != nil {
 		return nil, nil, err
