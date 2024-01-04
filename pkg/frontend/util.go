@@ -601,6 +601,10 @@ func isCmdFieldListSql(sql string) bool {
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
 func makeCmdFieldListSql(query string) string {
+	nullIdx := strings.IndexRune(query, rune(0))
+	if nullIdx != -1 {
+		query = query[:nullIdx]
+	}
 	return cmdFieldListSql + " " + query
 }
 
@@ -609,18 +613,8 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	if !isCmdFieldListSql(sql) {
 		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
 	}
-	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
-	//find null
-	nullIdx := strings.IndexRune(rest, rune(0))
-	var tableName string
-	if nullIdx < len(rest) {
-		tableName = rest[:nullIdx]
-		//neglect wildcard
-		//wildcard := payload[nullIdx+1:]
-		return &InternalCmdFieldList{tableName: tableName}, nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
-	}
+	tableName := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	return &InternalCmdFieldList{tableName: tableName}, nil
 }
 
 func getVariableValue(varDefault interface{}) string {

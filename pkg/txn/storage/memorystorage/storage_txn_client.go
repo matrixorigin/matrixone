@@ -217,6 +217,10 @@ func (s *StorageTxnOperator) Status() txn.TxnStatus {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) PKDedupCount() int {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
 	return &s.meta
 }

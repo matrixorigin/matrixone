@@ -266,7 +266,7 @@ func (s *service) now() timestamp.Timestamp {
 func execFunc(sql []string) func(executor.TxnExecutor) error {
 	return func(e executor.TxnExecutor) error {
 		for _, s := range sql {
-			r, err := e.Exec(s)
+			r, err := e.Exec(s, executor.StatementOption{})
 			if err != nil {
 				return err
 			}
