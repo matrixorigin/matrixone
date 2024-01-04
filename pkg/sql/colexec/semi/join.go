@@ -164,51 +164,23 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if ap.Cond != nil {
-				matched := false // mark if any tuple satisfies the condition
-				if ap.HashOnPK {
-					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
-						1, ctr.cfs1); err != nil {
-						return err
-					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
-						1, ctr.cfs2); err != nil {
-						return err
-					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
-					if err != nil {
-						return err
-					}
-					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-						continue
-					}
-					bs := vector.MustFixedCol[bool](vec)
-					if bs[0] {
-						matched = true
-					}
-				} else {
-					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
-						1, ctr.cfs1); err != nil {
-						return err
-					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
-						1, ctr.cfs2); err != nil {
-						return err
-					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
-					if err != nil {
-						return err
-					}
-					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-						continue
-					}
-					bs := vector.MustFixedCol[bool](vec)
-					if bs[0] {
-						matched = true
-						break
-					}
-
+				if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+					1, ctr.cfs1); err != nil {
+					return err
 				}
-				if !matched {
+				if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
+					1, ctr.cfs2); err != nil {
+					return err
+				}
+				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+				if err != nil {
+					return err
+				}
+				if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+					continue
+				}
+				bs := vector.MustFixedCol[bool](vec)
+				if !bs[0] {
 					continue
 				}
 			}
