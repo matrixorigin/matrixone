@@ -222,6 +222,10 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	// We need to validate that all vectors have the same dimension.
 	// This is already done by moarray.ToGonumVectors, so skipping it here.
 
+	if (clusterCnt * clusterCnt) > math.MaxInt {
+		return moerr.NewInternalErrorNoCtx("cluster count is too large for int*int")
+	}
+
 	return nil
 }
 
