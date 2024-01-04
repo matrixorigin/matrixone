@@ -120,33 +120,6 @@ func NewMergeBlocksTask(
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func mergeColumns(
-	srcVecs []containers.Vector,
-	sortedIdx []uint32,
-	mapping []uint32,
-	isPrimary bool,
-	fromLayout,
-	toLayout []uint32,
-	sort bool,
-	pool *containers.VectorPool) (retVecs []containers.Vector) {
-	if len(srcVecs) == 0 {
-		return
-	}
-	if sort {
-		if isPrimary {
-			// modify sortidx and mapping
-			retVecs = mergesort.MergeColumn(srcVecs, sortedIdx, mapping, fromLayout, toLayout, pool)
-		} else {
-			// just read sortidx
-			retVecs = mergesort.ShuffleColumn(srcVecs, sortedIdx, fromLayout, toLayout, pool)
-		}
-	} else {
-		retVecs = mergesort.ReshapeColumn(srcVecs, fromLayout, toLayout, pool)
-		// leave mapping nil, nil mapping means mapping[k] = k, handle it yourself
-	}
-	return
-}
-
 func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	objs := ""
 	for _, obj := range task.mergedObjs {
@@ -182,7 +155,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		common.OperandField(schema.Name),
 		common.OperandField(task))
 	sortVecs := make([]containers.Vector, 0)
-	rows := make([]uint32, 0)
+	fromLayout := make([]uint32, 0)
 	skipBlks := make([]int, 0)
 	length := 0
 	ids := make([]*common.ID, 0, len(task.compacted))
@@ -233,7 +206,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 		task.transMappings.AddSortPhaseMapping(i, rowCntBeforeApplyDelete, task.deletes[i], nil /*it is sorted, no mapping*/)
 		sortVecs = append(sortVecs, vec.TryConvertConst())
-		rows = append(rows, uint32(vec.Length()))
+		fromLayout = append(fromLayout, uint32(vec.Length()))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
@@ -267,43 +240,60 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		panic("warning: merge to a existing Object")
 	}
 
-	to := make([]uint32, 0)
+	toLayout := make([]uint32, 0)
 	maxrow := schema.BlockMaxRows
 	totalRows := length
 	for totalRows > 0 {
 		if totalRows > int(maxrow) {
-			to = append(to, maxrow)
+			toLayout = append(toLayout, maxrow)
 			totalRows -= int(maxrow)
 		} else {
-			to = append(to, uint32(totalRows))
+			toLayout = append(toLayout, uint32(totalRows))
 			break
 		}
 	}
 
 	// merge sort the sort key
-	allocSz := length * 4
-	sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
-	if err != nil {
-		panic(err)
-	}
-	mappingNode, err := common.MergeAllocator.Alloc(allocSz)
-	if err != nil {
-		panic(err)
-	}
-	defer common.MergeAllocator.Free(sortIdxNode)
-	// sortedIdx is used to shuffle other columns according to the order of the sort key
-	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), length)
-	mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), length)
+	var sortedVecs []containers.Vector
+	var sortedIdx []uint32
+	if schema.HasSortKey() {
+		// mergesort is needed, allocate sortedidx and mapping
+		allocSz := length * 4
+		// sortedIdx is used to shuffle other columns according to the order of the sort key
+		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		// sortedidx will be used to shuffle other column, defer free
+		defer common.MergeAllocator.Free(sortIdxNode)
+		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), length)
 
-	sortedVecs := mergeColumns(sortVecs, sortedIdx, mapping, true, rows, to, schema.HasSortKey(), task.rt.VectorPool.Transient)
-	task.transMappings.UpdateMappingAfterMerge(mapping, rows, to)
-	common.MergeAllocator.Free(mappingNode)
+		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), length)
+
+		// modify sortidx and mapping
+		sortedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
+		// free mapping, which is never used again
+		common.MergeAllocator.Free(mappingNode)
+	} else {
+		// just do reshape
+		sortedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		// UpdateMappingAfterMerge will handle the nil mapping
+		task.transMappings.UpdateMappingAfterMerge(nil, fromLayout, toLayout)
+	}
 
 	length = 0
 
 	batchs := make([]*containers.Batch, 0)
 	blockHandles := make([]handle.Block, 0)
 	phaseNumber = 2
+	for _, vec := range sortedVecs {
+		defer vec.Close()
+	}
 	for i, vec := range sortedVecs {
 		length += vec.Length()
 		blk, err := toObjEntry.CreateNonAppendableBlock(
@@ -314,7 +304,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		blockHandles = append(blockHandles, blk)
 		batchs = append(batchs, containers.NewBatch())
-		defer vec.Close()
 	}
 
 	// Build and flush block index if sort key is defined
@@ -344,19 +333,15 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			}
 			vecs = append(vecs, vec)
 		}
-		vecs := mergeColumns(
-			vecs, sortedIdx,
-			nil,   // do not read mapping in shuffle column
-			false, // just shuffle or reshape
-			rows, to,
-			schema.HasSortKey(), // true to shuffle, false to reshape
-			task.rt.VectorPool.Transient,
-		)
-		for i := range vecs {
-			defer vecs[i].Close()
+		var outvecs []containers.Vector
+		if schema.HasSortKey() {
+			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		} else {
+			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
-		for i, vec := range vecs {
+		for i, vec := range outvecs {
 			batchs[i].AddVector(def.Name, vec)
+			defer vec.Close()
 		}
 	}
 
