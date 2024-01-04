@@ -539,7 +539,7 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	col1, _, funcName1 := extractColRefAndLiteralsInFilter(expr1)
 	col2, _, funcName2 := extractColRefAndLiteralsInFilter(expr2)
-	if col1 != nil && col2 != nil {
+	if col1 == nil || col2 == nil {
 		return false
 	}
 	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {

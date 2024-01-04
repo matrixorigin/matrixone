@@ -45,7 +45,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		return nodeID
 	}
 
-	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > InFilterCardLimit {
+	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
 		return nodeID
 	}
 
@@ -480,7 +480,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node)
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
-	if rightChild.Stats.Outcnt > InFilterCardLimit || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimit()) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID
 	}
 
