@@ -234,8 +234,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(joinNodeID, builder, true, true, true)
-
 		return joinNodeID
 	}
 
@@ -356,8 +354,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
-		ReCalcNodeStats(joinNodeID, builder, true, true, true)
-
 		return joinNodeID
 	}
 
@@ -458,8 +454,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			JoinType: plan.Node_SEMI,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
-
-		ReCalcNodeStats(joinNodeID, builder, true, true, true)
 
 		return joinNodeID
 	}
@@ -649,8 +643,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node)
 
 		node.Children[1] = idxJoinNodeID
 		node.Limit, node.Offset = nil, nil
-
-		ReCalcNodeStats(nodeID, builder, false, true, true)
 
 		break
 	}
