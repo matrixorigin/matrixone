@@ -3590,274 +3590,269 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					partialResults = nil
 					break
-				} else {
-					objDataMeta := objMeta.MustDataMeta()
-					blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-					for i := range n.AggList {
-						agg := n.AggList[i].Expr.(*plan.Expr_F)
-						name := agg.F.Func.ObjName
-						switch name {
-						case "starcount":
-							partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
-						case "count":
-							partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							nullCnt := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).NullCnt()
-							partialResults[i] = partialResults[i].(int64) - int64(nullCnt)
-						case "min":
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
-							if zm.GetType().FixedLength() < 0 {
-								partialResults = nil
+				}
+				objDataMeta := objMeta.MustDataMeta()
+				blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+				for i := range n.AggList {
+					agg := n.AggList[i].Expr.(*plan.Expr_F)
+					switch agg.F.Func.ObjName {
+					case "starcount":
+						partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
+					case "count":
+						partialResults[i] = partialResults[i].(int64) + int64(blkMeta.GetRows())
+						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+						nullCnt := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).NullCnt()
+						partialResults[i] = partialResults[i].(int64) - int64(nullCnt)
+					case "min":
+						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+						zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
+						if zm.GetType().FixedLength() < 0 {
+							partialResults = nil
+						} else {
+							if partialResults[i] == nil {
+								partialResults[i] = zm.GetMin()
+								partialResultTypes[i] = zm.GetType()
 							} else {
-								if partialResults[i] == nil {
-									partialResults[i] = zm.GetMin()
-									partialResultTypes[i] = zm.GetType()
-								} else {
-									switch zm.GetType() {
-									case types.T_bool:
-										partialResults[i] = !partialResults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
-									case types.T_int8:
-										min := types.DecodeFixed[int8](zm.GetMinBuf())
-										if min < partialResults[i].(int8) {
-											partialResults[i] = min
-										}
-									case types.T_int16:
-										min := types.DecodeFixed[int16](zm.GetMinBuf())
-										if min < partialResults[i].(int16) {
-											partialResults[i] = min
-										}
-									case types.T_int32:
-										min := types.DecodeFixed[int32](zm.GetMinBuf())
-										if min < partialResults[i].(int32) {
-											partialResults[i] = min
-										}
-									case types.T_int64:
-										min := types.DecodeFixed[int64](zm.GetMinBuf())
-										if min < partialResults[i].(int64) {
-											partialResults[i] = min
-										}
-									case types.T_uint8:
-										min := types.DecodeFixed[uint8](zm.GetMinBuf())
-										if min < partialResults[i].(uint8) {
-											partialResults[i] = min
-										}
-									case types.T_uint16:
-										min := types.DecodeFixed[uint16](zm.GetMinBuf())
-										if min < partialResults[i].(uint16) {
-											partialResults[i] = min
-										}
-									case types.T_uint32:
-										min := types.DecodeFixed[uint32](zm.GetMinBuf())
-										if min < partialResults[i].(uint32) {
-											partialResults[i] = min
-										}
-									case types.T_uint64:
-										min := types.DecodeFixed[uint64](zm.GetMinBuf())
-										if min < partialResults[i].(uint64) {
-											partialResults[i] = min
-										}
-									case types.T_float32:
-										min := types.DecodeFixed[float32](zm.GetMinBuf())
-										if min < partialResults[i].(float32) {
-											partialResults[i] = min
-										}
-									case types.T_float64:
-										min := types.DecodeFixed[float64](zm.GetMinBuf())
-										if min < partialResults[i].(float64) {
-											partialResults[i] = min
-										}
-									case types.T_date:
-										min := types.DecodeFixed[types.Date](zm.GetMinBuf())
-										if min < partialResults[i].(types.Date) {
-											partialResults[i] = min
-										}
-									case types.T_time:
-										min := types.DecodeFixed[types.Time](zm.GetMinBuf())
-										if min < partialResults[i].(types.Time) {
-											partialResults[i] = min
-										}
-									case types.T_datetime:
-										min := types.DecodeFixed[types.Datetime](zm.GetMinBuf())
-										if min < partialResults[i].(types.Datetime) {
-											partialResults[i] = min
-										}
-									case types.T_timestamp:
-										min := types.DecodeFixed[types.Timestamp](zm.GetMinBuf())
-										if min < partialResults[i].(types.Timestamp) {
-											partialResults[i] = min
-										}
-									case types.T_enum:
-										min := types.DecodeFixed[types.Enum](zm.GetMinBuf())
-										if min < partialResults[i].(types.Enum) {
-											partialResults[i] = min
-										}
-									case types.T_decimal64:
-										min := types.DecodeFixed[types.Decimal64](zm.GetMinBuf())
-										if min < partialResults[i].(types.Decimal64) {
-											partialResults[i] = min
-										}
-									case types.T_decimal128:
-										min := types.DecodeFixed[types.Decimal128](zm.GetMinBuf())
-										if min.Compare(partialResults[i].(types.Decimal128)) < 0 {
-											partialResults[i] = min
-										}
-									case types.T_uuid:
-										min := types.DecodeFixed[types.Uuid](zm.GetMinBuf())
-										if min.Lt(partialResults[i].(types.Uuid)) {
-											partialResults[i] = min
-										}
-									case types.T_TS:
-										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.TS)) {
-											partialResults[i] = min
-										}
-									case types.T_Rowid:
-										min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.Rowid)) {
-											partialResults[i] = min
-										}
-									case types.T_Blockid:
-										min := types.DecodeFixed[types.Blockid](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.Blockid)) {
-											partialResults[i] = min
-										}
+								switch zm.GetType() {
+								case types.T_bool:
+									partialResults[i] = !partialResults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
+								case types.T_int8:
+									min := types.DecodeFixed[int8](zm.GetMinBuf())
+									if min < partialResults[i].(int8) {
+										partialResults[i] = min
+									}
+								case types.T_int16:
+									min := types.DecodeFixed[int16](zm.GetMinBuf())
+									if min < partialResults[i].(int16) {
+										partialResults[i] = min
+									}
+								case types.T_int32:
+									min := types.DecodeFixed[int32](zm.GetMinBuf())
+									if min < partialResults[i].(int32) {
+										partialResults[i] = min
+									}
+								case types.T_int64:
+									min := types.DecodeFixed[int64](zm.GetMinBuf())
+									if min < partialResults[i].(int64) {
+										partialResults[i] = min
+									}
+								case types.T_uint8:
+									min := types.DecodeFixed[uint8](zm.GetMinBuf())
+									if min < partialResults[i].(uint8) {
+										partialResults[i] = min
+									}
+								case types.T_uint16:
+									min := types.DecodeFixed[uint16](zm.GetMinBuf())
+									if min < partialResults[i].(uint16) {
+										partialResults[i] = min
+									}
+								case types.T_uint32:
+									min := types.DecodeFixed[uint32](zm.GetMinBuf())
+									if min < partialResults[i].(uint32) {
+										partialResults[i] = min
+									}
+								case types.T_uint64:
+									min := types.DecodeFixed[uint64](zm.GetMinBuf())
+									if min < partialResults[i].(uint64) {
+										partialResults[i] = min
+									}
+								case types.T_float32:
+									min := types.DecodeFixed[float32](zm.GetMinBuf())
+									if min < partialResults[i].(float32) {
+										partialResults[i] = min
+									}
+								case types.T_float64:
+									min := types.DecodeFixed[float64](zm.GetMinBuf())
+									if min < partialResults[i].(float64) {
+										partialResults[i] = min
+									}
+								case types.T_date:
+									min := types.DecodeFixed[types.Date](zm.GetMinBuf())
+									if min < partialResults[i].(types.Date) {
+										partialResults[i] = min
+									}
+								case types.T_time:
+									min := types.DecodeFixed[types.Time](zm.GetMinBuf())
+									if min < partialResults[i].(types.Time) {
+										partialResults[i] = min
+									}
+								case types.T_datetime:
+									min := types.DecodeFixed[types.Datetime](zm.GetMinBuf())
+									if min < partialResults[i].(types.Datetime) {
+										partialResults[i] = min
+									}
+								case types.T_timestamp:
+									min := types.DecodeFixed[types.Timestamp](zm.GetMinBuf())
+									if min < partialResults[i].(types.Timestamp) {
+										partialResults[i] = min
+									}
+								case types.T_enum:
+									min := types.DecodeFixed[types.Enum](zm.GetMinBuf())
+									if min < partialResults[i].(types.Enum) {
+										partialResults[i] = min
+									}
+								case types.T_decimal64:
+									min := types.DecodeFixed[types.Decimal64](zm.GetMinBuf())
+									if min < partialResults[i].(types.Decimal64) {
+										partialResults[i] = min
+									}
+								case types.T_decimal128:
+									min := types.DecodeFixed[types.Decimal128](zm.GetMinBuf())
+									if min.Compare(partialResults[i].(types.Decimal128)) < 0 {
+										partialResults[i] = min
+									}
+								case types.T_uuid:
+									min := types.DecodeFixed[types.Uuid](zm.GetMinBuf())
+									if min.Lt(partialResults[i].(types.Uuid)) {
+										partialResults[i] = min
+									}
+								case types.T_TS:
+									min := types.DecodeFixed[types.TS](zm.GetMinBuf())
+									if min.Less(partialResults[i].(types.TS)) {
+										partialResults[i] = min
+									}
+								case types.T_Rowid:
+									min := types.DecodeFixed[types.Rowid](zm.GetMinBuf())
+									if min.Less(partialResults[i].(types.Rowid)) {
+										partialResults[i] = min
+									}
+								case types.T_Blockid:
+									min := types.DecodeFixed[types.Blockid](zm.GetMinBuf())
+									if min.Less(partialResults[i].(types.Blockid)) {
+										partialResults[i] = min
 									}
 								}
 							}
-						case "max":
-							col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-							zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
-							if zm.GetType().FixedLength() < 0 {
-								partialResults = nil
+						}
+					case "max":
+						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+						zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
+						if zm.GetType().FixedLength() < 0 {
+							partialResults = nil
+						} else {
+							if partialResults[i] == nil {
+								partialResults[i] = zm.GetMax()
+								partialResultTypes[i] = zm.GetType()
 							} else {
-								if partialResults[i] == nil {
-									partialResults[i] = zm.GetMax()
-									partialResultTypes[i] = zm.GetType()
-								} else {
-									switch zm.GetType() {
-									case types.T_bool:
-										partialResults[i] = partialResults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
-									case types.T_int8:
-										max := types.DecodeFixed[int8](zm.GetMaxBuf())
-										if max > partialResults[i].(int8) {
-											partialResults[i] = max
-										}
-									case types.T_int16:
-										max := types.DecodeFixed[int16](zm.GetMaxBuf())
-										if max > partialResults[i].(int16) {
-											partialResults[i] = max
-										}
-									case types.T_int32:
-										max := types.DecodeFixed[int32](zm.GetMaxBuf())
-										if max > partialResults[i].(int32) {
-											partialResults[i] = max
-										}
-									case types.T_int64:
-										max := types.DecodeFixed[int64](zm.GetMaxBuf())
-										if max > partialResults[i].(int64) {
-											partialResults[i] = max
-										}
-									case types.T_uint8:
-										max := types.DecodeFixed[uint8](zm.GetMaxBuf())
-										if max > partialResults[i].(uint8) {
-											partialResults[i] = max
-										}
-									case types.T_uint16:
-										max := types.DecodeFixed[uint16](zm.GetMaxBuf())
-										if max > partialResults[i].(uint16) {
-											partialResults[i] = max
-										}
-									case types.T_uint32:
-										max := types.DecodeFixed[uint32](zm.GetMaxBuf())
-										if max > partialResults[i].(uint32) {
-											partialResults[i] = max
-										}
-									case types.T_uint64:
-										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
-										if max > partialResults[i].(uint64) {
-											partialResults[i] = max
-										}
-									case types.T_float32:
-										max := types.DecodeFixed[float32](zm.GetMaxBuf())
-										if max > partialResults[i].(float32) {
-											partialResults[i] = max
-										}
-									case types.T_float64:
-										max := types.DecodeFixed[float64](zm.GetMaxBuf())
-										if max > partialResults[i].(float64) {
-											partialResults[i] = max
-										}
-									case types.T_date:
-										max := types.DecodeFixed[types.Date](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Date) {
-											partialResults[i] = max
-										}
-									case types.T_time:
-										max := types.DecodeFixed[types.Time](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Time) {
-											partialResults[i] = max
-										}
-									case types.T_datetime:
-										max := types.DecodeFixed[types.Datetime](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Datetime) {
-											partialResults[i] = max
-										}
-									case types.T_timestamp:
-										max := types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Timestamp) {
-											partialResults[i] = max
-										}
-									case types.T_enum:
-										max := types.DecodeFixed[types.Enum](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Enum) {
-											partialResults[i] = max
-										}
-									case types.T_decimal64:
-										max := types.DecodeFixed[types.Decimal64](zm.GetMaxBuf())
-										if max > partialResults[i].(types.Decimal64) {
-											partialResults[i] = max
-										}
-									case types.T_decimal128:
-										max := types.DecodeFixed[types.Decimal128](zm.GetMaxBuf())
-										if max.Compare(partialResults[i].(types.Decimal128)) > 0 {
-											partialResults[i] = max
-										}
-									case types.T_uuid:
-										max := types.DecodeFixed[types.Uuid](zm.GetMaxBuf())
-										if max.Gt(partialResults[i].(types.Uuid)) {
-											partialResults[i] = max
-										}
-									case types.T_TS:
-										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										if max.Greater(partialResults[i].(types.TS)) {
-											partialResults[i] = max
-										}
-									case types.T_Rowid:
-										max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
-										if max.Great(partialResults[i].(types.Rowid)) {
-											partialResults[i] = max
-										}
-									case types.T_Blockid:
-										max := types.DecodeFixed[types.Blockid](zm.GetMaxBuf())
-										if max.Great(partialResults[i].(types.Blockid)) {
-											partialResults[i] = max
-										}
+								switch zm.GetType() {
+								case types.T_bool:
+									partialResults[i] = partialResults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
+								case types.T_int8:
+									max := types.DecodeFixed[int8](zm.GetMaxBuf())
+									if max > partialResults[i].(int8) {
+										partialResults[i] = max
+									}
+								case types.T_int16:
+									max := types.DecodeFixed[int16](zm.GetMaxBuf())
+									if max > partialResults[i].(int16) {
+										partialResults[i] = max
+									}
+								case types.T_int32:
+									max := types.DecodeFixed[int32](zm.GetMaxBuf())
+									if max > partialResults[i].(int32) {
+										partialResults[i] = max
+									}
+								case types.T_int64:
+									max := types.DecodeFixed[int64](zm.GetMaxBuf())
+									if max > partialResults[i].(int64) {
+										partialResults[i] = max
+									}
+								case types.T_uint8:
+									max := types.DecodeFixed[uint8](zm.GetMaxBuf())
+									if max > partialResults[i].(uint8) {
+										partialResults[i] = max
+									}
+								case types.T_uint16:
+									max := types.DecodeFixed[uint16](zm.GetMaxBuf())
+									if max > partialResults[i].(uint16) {
+										partialResults[i] = max
+									}
+								case types.T_uint32:
+									max := types.DecodeFixed[uint32](zm.GetMaxBuf())
+									if max > partialResults[i].(uint32) {
+										partialResults[i] = max
+									}
+								case types.T_uint64:
+									max := types.DecodeFixed[uint64](zm.GetMaxBuf())
+									if max > partialResults[i].(uint64) {
+										partialResults[i] = max
+									}
+								case types.T_float32:
+									max := types.DecodeFixed[float32](zm.GetMaxBuf())
+									if max > partialResults[i].(float32) {
+										partialResults[i] = max
+									}
+								case types.T_float64:
+									max := types.DecodeFixed[float64](zm.GetMaxBuf())
+									if max > partialResults[i].(float64) {
+										partialResults[i] = max
+									}
+								case types.T_date:
+									max := types.DecodeFixed[types.Date](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Date) {
+										partialResults[i] = max
+									}
+								case types.T_time:
+									max := types.DecodeFixed[types.Time](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Time) {
+										partialResults[i] = max
+									}
+								case types.T_datetime:
+									max := types.DecodeFixed[types.Datetime](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Datetime) {
+										partialResults[i] = max
+									}
+								case types.T_timestamp:
+									max := types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Timestamp) {
+										partialResults[i] = max
+									}
+								case types.T_enum:
+									max := types.DecodeFixed[types.Enum](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Enum) {
+										partialResults[i] = max
+									}
+								case types.T_decimal64:
+									max := types.DecodeFixed[types.Decimal64](zm.GetMaxBuf())
+									if max > partialResults[i].(types.Decimal64) {
+										partialResults[i] = max
+									}
+								case types.T_decimal128:
+									max := types.DecodeFixed[types.Decimal128](zm.GetMaxBuf())
+									if max.Compare(partialResults[i].(types.Decimal128)) > 0 {
+										partialResults[i] = max
+									}
+								case types.T_uuid:
+									max := types.DecodeFixed[types.Uuid](zm.GetMaxBuf())
+									if max.Gt(partialResults[i].(types.Uuid)) {
+										partialResults[i] = max
+									}
+								case types.T_TS:
+									max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
+									if max.Greater(partialResults[i].(types.TS)) {
+										partialResults[i] = max
+									}
+								case types.T_Rowid:
+									max := types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
+									if max.Great(partialResults[i].(types.Rowid)) {
+										partialResults[i] = max
+									}
+								case types.T_Blockid:
+									max := types.DecodeFixed[types.Blockid](zm.GetMaxBuf())
+									if max.Great(partialResults[i].(types.Blockid)) {
+										partialResults[i] = max
 									}
 								}
 							}
-						default:
 						}
-						if partialResults == nil {
-							break
-						}
+					default:
 					}
 					if partialResults == nil {
 						break
 					}
 				}
 			}
-			if ranges.Len() == len(newranges) {
+			if ranges.Size() == len(newranges) {
 				partialResults = nil
 			} else if partialResults != nil {
 				ranges.SetBytes(newranges)
