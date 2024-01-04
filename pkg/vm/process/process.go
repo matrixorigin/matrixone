@@ -118,6 +118,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	}
 	proc.DispatchNotifyCh = make(chan WrapCs)
 	proc.LoadLocalReader = p.LoadLocalReader
+	proc.WaitPolicy = p.WaitPolicy
 	return proc
 }
 

@@ -523,27 +523,33 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
 	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-	defer getCancel()
 	var opProc *process.Process
 	var ok bool
-outter:
+
 	for {
 		select {
 		case <-getCtx.Done():
 			colexec.Srv.GetProcByUuid(uid, true)
+			getCancel()
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
 
 		case <-receiver.ctx.Done():
 			colexec.Srv.GetProcByUuid(uid, true)
+			getCancel()
 			return nil, nil
 
 		default:
 			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
+				// it's bad to call the Gosched() here.
+				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
 				runtime.Gosched()
 			} else {
-				break outter
+				getCancel()
+				if opProc == nil {
+					return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid failed, dispatch process has done")
+				}
+				return opProc, nil
 			}
 		}
 	}
-	return opProc, nil
 }
