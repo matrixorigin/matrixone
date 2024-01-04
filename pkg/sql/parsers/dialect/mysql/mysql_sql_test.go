@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select reference from t1",
-		output: "select reference from t1",
+		input:  "select last from t1",
+		output: "select last from t1",
 	}
 )
 
