@@ -124,17 +124,54 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err = txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	if err = txn.WriteBatch(INSERT, 0, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
 		bat.Clean(e.mp)
 		return err
 	}
-	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
+	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
 		txn:          txn,
 		databaseId:   databaseId,
 		databaseName: name,
 	})
 	return nil
+}
+
+func (e *Engine) DatabaseByAccountID(
+	accountID uint32,
+	name string,
+	op client.TxnOperator) (engine.Database, error) {
+	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
+	txn := e.getTransaction(op)
+	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	}
+	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
+		return v.(*txnDatabase), nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		return db, nil
+	}
+	key := &cache.DatabaseItem{
+		Name:      name,
+		AccountId: accountID,
+		Ts:        txn.op.SnapshotTS(),
+	}
+	if ok := e.catalog.GetDatabase(key); !ok {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	return &txnDatabase{
+		txn:               txn,
+		databaseName:      name,
+		databaseId:        key.Id,
+		databaseType:      key.Typ,
+		databaseCreateSql: key.CreateSql,
+	}, nil
 }
 
 func (e *Engine) Database(ctx context.Context, name string,
@@ -144,7 +181,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
+	if v, ok := txn.databaseMap.Load(genDatabaseKey(defines.GetAccountId(ctx), name)); ok {
 		return v.(*txnDatabase), nil
 	}
 	if name == catalog.MO_CATALOG {
@@ -297,7 +334,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	key := genDatabaseKey(ctx, name)
+	key := genDatabaseKey(defines.GetAccountId(ctx), name)
 	if _, ok := txn.databaseMap.Load(key); ok {
 		txn.databaseMap.Delete(key)
 		return nil
@@ -330,7 +367,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	if err := txn.WriteBatch(DELETE, 0, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
 		return err
 	}
@@ -383,10 +420,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			offsets: map[types.Blockid][]int64{},
 		},
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
-		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
-		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
+		toFreeBatches:                   make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
 	txn.readOnly.Store(true)
@@ -451,18 +487,19 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
-	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
-	for _, r := range ranges {
-		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
+	for i := 0; i < blkSlice.Len(); i++ {
+		blkInfos = append(blkInfos, blkSlice.Get(i))
 	}
 	if len(blkInfos) < num || len(blkInfos) == 1 {
 		for i, blk := range blkInfos {
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {

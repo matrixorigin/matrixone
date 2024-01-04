@@ -76,13 +76,13 @@ func NewMinioSDK(
 			},
 		})
 	}
-	if args.AssumeRoleARN != "" {
+	if args.RoleARN != "" {
 		// assume role
 		credentialProviders = append(credentialProviders, &credentials.STSAssumeRole{
 			Options: credentials.STSAssumeRoleOptions{
 				AccessKey:       args.KeyID,
 				SecretKey:       args.KeySecret,
-				RoleARN:         args.AssumeRoleARN,
+				RoleARN:         args.RoleARN,
 				RoleSessionName: args.ExternalID,
 			},
 		})

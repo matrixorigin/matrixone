@@ -16,12 +16,10 @@ package catalog
 
 import (
 	"strings"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -340,56 +338,6 @@ const (
 
 	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
 )
-
-type ObjectLocation [objectio.LocationLen]byte
-
-const (
-	BlockInfoSize = unsafe.Sizeof(BlockInfo{})
-)
-
-type BlockInfo struct {
-	BlockID    types.Blockid
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
-
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
-}
-
-func (b *BlockInfo) MetaLocation() objectio.Location {
-	return b.MetaLoc[:]
-}
-
-func (b *BlockInfo) SetMetaLocation(metaLoc objectio.Location) {
-	b.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
-}
-
-func (b *BlockInfo) DeltaLocation() objectio.Location {
-	return b.DeltaLoc[:]
-}
-
-func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
-	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
-}
-
-// XXX info is passed in by value.   The use of unsafe here will cost
-// an allocation and copy.  BlockInfo is not small therefore this is
-// not exactly cheap.   However, caller of this function will keep a
-// reference to the buffer.  See txnTable.rangesOnePart.
-// ranges is *[][]byte.
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
-}
-
-func DecodeBlockInfo(buf []byte) *BlockInfo {
-	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
-}
 
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table

@@ -37,13 +37,12 @@ type ObjectStorageArguments struct {
 	CertFiles []string `toml:"cert-files"`
 
 	// credentials
-	AssumeRoleARN     string `json:"-" toml:"role-arn"`
+	RoleARN           string `json:"-" toml:"role-arn"`
 	BearerToken       string `json:"-" toml:"bearer-token"`
 	ExternalID        string `json:"-" toml:"external-id"`
 	KeyID             string `json:"-" toml:"key-id"`
 	KeySecret         string `json:"-" toml:"key-secret"`
 	OIDCProviderARN   string `json:"-" toml:"oidc-provider-arn"`
-	OIDCRoleARN       string `json:"-" toml:"oidc-role-arn"`
 	OIDCTokenFilePath string `json:"-" toml:"oidc-token-file-path"`
 	RAMRole           string `json:"-" toml:"ram-role"`
 	RoleSessionName   string `json:"-" toml:"role-session-name"`
@@ -89,7 +88,7 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 		case "region":
 			o.Region = value
 		case "role-arn":
-			o.AssumeRoleARN = value
+			o.RoleARN = value
 		case "role-session-name":
 			o.RoleSessionName = value
 		case "secret", "key-secret", "secret-id":
@@ -104,8 +103,6 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.OIDCProviderARN = value
 		case "oidc-token-file-path":
 			o.OIDCTokenFilePath = value
-		case "oidc-role-arn":
-			o.OIDCRoleARN = value
 		case "cert-files":
 			o.CertFiles = strings.Split(value, ",")
 

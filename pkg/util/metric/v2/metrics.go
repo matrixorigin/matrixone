@@ -103,8 +103,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
-
-	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {
@@ -124,6 +122,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnCheckPKDupDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(txnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
