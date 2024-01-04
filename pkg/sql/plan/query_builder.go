@@ -1443,6 +1443,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		builder.pushdownLimit(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
@@ -1479,7 +1481,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		builder.pushdownLimit(rootID)
 		rootID = builder.applyIndices(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 

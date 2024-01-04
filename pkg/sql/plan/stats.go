@@ -310,8 +310,8 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, _ := CheckFilter(expr)
-	if !ret {
+	col := extractColRefInFilter(expr)
+	if col == nil {
 		return 0.01
 	}
 	ndv := getExprNdv(expr, builder)
@@ -321,21 +321,50 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 	return 0.01
 }
 
-func calcSelectivityByMinMax(funcName string, min, max, val float64) float64 {
+func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) float64 {
 	switch funcName {
 	case ">", ">=":
-		return (max - val) / (max - min)
+		if val, ok := getFloat64Value(typ, vals[0]); ok {
+			return (max - val) / (max - min)
+		}
 	case "<", "<=":
-		return (val - min) / (max - min)
+		if val, ok := getFloat64Value(typ, vals[0]); ok {
+			return (val - min) / (max - min)
+		}
+	case "between":
+		if lb, ok := getFloat64Value(typ, vals[0]); ok {
+			if ub, ok := getFloat64Value(typ, vals[1]); ok {
+				return (ub - lb) / (max - min)
+			}
+		}
 	}
 	return -1 // never reach here
+}
+
+func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
+	switch typ {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		if val, valOk := lit.Value.(*plan.Literal_I64Val); valOk {
+			return float64(val.I64Val), true
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		if val, valOk := lit.Value.(*plan.Literal_U64Val); valOk {
+			return float64(val.U64Val), true
+		}
+	case types.T_date:
+		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
+			return float64(val.Dateval), true
+		}
+	}
+
+	return 0, false
 }
 
 func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *QueryBuilder) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
-	if !ret {
+	col := extractColRefInFilter(expr)
+	if col == nil {
 		return 0.1
 	}
 	s := getStatsInfoByCol(col, builder)
@@ -343,34 +372,20 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		return 0.1
 	}
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	ret, col, constExpr, _ := CheckStrictFilter(expr)
-	if ret {
-		switch s.DataTypeMap[col.Name] {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
-			}
-		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if val, valOk := constExpr.Value.(*plan.Literal_U64Val); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
-			}
-		case types.T_date:
-			if val, valOk := constExpr.Value.(*plan.Literal_Dateval); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
-			}
+	col, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	if col != nil && len(literals) > 0 {
+		typ := s.DataTypeMap[col.Name]
+		if !(typ.IsInteger() || typ.IsDateRelate()) {
+			return 0.1
 		}
-	}
 
-	//check strict filter, otherwise can not estimate outcnt by min/max val
-	ret, col, constExpr, leftFuncName := CheckFunctionFilter(expr)
-	if ret {
-		switch leftFuncName {
+		switch colFnName {
+		case "":
+			return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], typ, literals)
 		case "year":
-			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
-				minVal := types.Date(s.MinValMap[col.Name])
-				maxVal := types.Date(s.MaxValMap[col.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
-			}
+			minVal := types.Date(s.MinValMap[col.Name])
+			maxVal := types.Date(s.MaxValMap[col.Name])
+			return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), typ, literals)
 		}
 	}
 
@@ -390,7 +405,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return estimateEqualitySelectivity(expr, builder)
 		case "!=", "<>":
 			return 0.9
-		case ">", "<", ">=", "<=":
+		case ">", "<", ">=", "<=", "between":
 			return estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
@@ -428,7 +443,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				return 10 * card / ndv
 			}
 			return 0.5
-		case "between", "prefix_between":
+		case "prefix_between":
 			return 0.1
 		default:
 			return 0.15
@@ -476,11 +491,11 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 
 // harsh estimate of block selectivity, will improve it in the future
 func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
-	if !CheckExprIsZonemappable(ctx, expr) {
+	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
-	ret, col := CheckFilter(expr)
-	if ret && col != nil {
+	col := extractColRefInFilter(expr)
+	if col != nil {
 		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)

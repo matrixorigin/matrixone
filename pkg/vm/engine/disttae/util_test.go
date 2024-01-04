@@ -88,7 +88,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	require.Equal(t, info, *info2)
 }
 
-func TestCheckExprIsMonotonic(t *testing.T) {
+func TestCheckExprIsZonemappable(t *testing.T) {
 	type asserts = struct {
 		result bool
 		expr   *plan.Expr
@@ -110,11 +110,11 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 		})},
 	}
 
-	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
+	t.Run("test checkExprIsZonemappable", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := plan2.CheckExprIsZonemappable(context.TODO(), testCase.expr)
-			if isMonotonic != testCase.result {
-				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
+			zonemappable := plan2.ExprIsZonemappable(context.TODO(), testCase.expr)
+			if zonemappable != testCase.result {
+				t.Fatalf("checkExprIsZonemappable testExprs[%d] is different with expected", i)
 			}
 		}
 	})

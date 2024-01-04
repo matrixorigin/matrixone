@@ -45,7 +45,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		return nodeID
 	}
 
-	if node.Stats.Selectivity > 0.1 {
+	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > InFilterCardLimit {
 		return nodeID
 	}
 
@@ -362,10 +362,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	}
 
 	// Apply single-column unique/secondary indices for BETWEEN-expression
-
-	if node.Limit == nil {
-		return nodeID
-	}
 
 	limitExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, node.Limit, builder.compCtx.GetProcess(), false)
 	if err != nil {
