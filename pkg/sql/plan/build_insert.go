@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -274,25 +275,30 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil
 	}
+
+	var bat *batch.Batch
+	var err error
+	proc := ctx.GetProcess()
+	node := builder.qry.Nodes[0]
+	if builder.isPrepareStatement {
+		bat = proc.GetPrepareBatch()
+	} else {
+		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+	}
+
 	pkPos, pkTyp := getPkPos(tableDef, true)
 	if pkPos == -1 {
 		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 			return nil
 		}
 	} else if pkTyp.AutoIncr {
-		return nil
+		// if pk col is incr col and this col has at least one values is null, then can not use pk filter
+		pkVec := bat.Vecs[pkPos]
+		if nulls.Any(pkVec.GetNulls()) {
+			return nil
+		}
 	}
 
-	node := builder.qry.Nodes[0]
-
-	proc := ctx.GetProcess()
-	var bat *batch.Batch
-	var err error
-	if builder.isPrepareStatement {
-		bat = proc.GetPrepareBatch()
-	} else {
-		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
-	}
 	rowsCount := bat.RowCount()
 
 	colExprs := make([][]*Expr, len(pkPosInValues))

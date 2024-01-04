@@ -20,7 +20,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -81,10 +80,10 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
-	var info catalog.BlockInfo
+	var info objectio.BlockInfo
 	info.SetMetaLocation(location)
-	data := catalog.EncodeBlockInfo(info)
-	info2 := catalog.DecodeBlockInfo(data)
+	data := objectio.EncodeBlockInfo(info)
+	info2 := objectio.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }
 
@@ -827,7 +826,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -835,7 +834,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -843,7 +842,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)
@@ -856,7 +855,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)
