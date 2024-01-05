@@ -1473,13 +1473,13 @@ func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.
 	return infos, steps
 }
 
-func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
+func newBlockReaders(ctx context.Context, tbl *txnTable, fs fileservice.FileService, tblDef *plan.TableDef,
 	primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr,
 	proc *process.Process) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = newBlockReader(
-			ctx, tblDef, ts, nil, expr, fs, proc,
+			ctx, tbl, tblDef, ts, nil, expr, fs, proc,
 		)
 	}
 	return rds

@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -132,6 +135,22 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				aObjs := ""
+				iter := part.NewObjectsIterForTest()
+				defer iter.Close()
+				for iter.Next() {
+					obj := iter.Entry()
+					segId := obj.Location().ShortName().Segmentid().ToString()
+					aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
+						aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
+						obj.CreateTime.ToTimestamp().DebugString(),
+						obj.DeleteTime.ToTimestamp().DebugString())
+				}
+				logutil.Fatalf("xxxx UpdateInfoFromZM: txn:%s, all objs in partition state:[%s]",
+					tbl.db.txn.op.Txn().DebugString(),
+					aObjs)
+			}
 			return err
 		}
 		meta = objMeta.MustDataMeta()

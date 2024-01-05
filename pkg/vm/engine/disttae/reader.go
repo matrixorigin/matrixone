@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -268,6 +269,7 @@ func (r *emptyReader) Read(_ context.Context, _ []string,
 
 func newBlockReader(
 	ctx context.Context,
+	table *txnTable,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	blks []*catalog.BlockInfo,
@@ -283,7 +285,8 @@ func newBlockReader(
 			proc:     proc,
 			tableDef: tableDef,
 		},
-		blks: blks,
+		blks:  blks,
+		table: table,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -361,6 +364,23 @@ func (r *blockReader) Read(
 		filter,
 		r.fs, mp, vp,
 	)
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		part, _ := r.table.getPartitionState(ctx)
+		aObjs := ""
+		iter := part.NewObjectsIterForTest()
+		defer iter.Close()
+		for iter.Next() {
+			obj := iter.Entry()
+			segId := obj.Location().ShortName().Segmentid().ToString()
+			aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
+				aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
+				obj.CreateTime.ToTimestamp().DebugString(),
+				obj.DeleteTime.ToTimestamp().DebugString())
+		}
+		logutil.Fatalf("xxxx blockReader.Read: txn:%s, all objs in partition state:[%s]",
+			r.table.db.txn.op.Txn().DebugString(),
+			aObjs)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -422,6 +442,7 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
+			txnTable,
 			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,
