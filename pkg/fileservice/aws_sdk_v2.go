@@ -24,6 +24,7 @@ import (
 	"net"
 	stdhttp "net/http"
 	"os"
+	"runtime/debug"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -670,6 +671,7 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
+			logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 			return moerr.NewFileNotFoundNoCtx(path)
 		}
 	}

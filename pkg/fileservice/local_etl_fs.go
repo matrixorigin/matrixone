@@ -17,10 +17,12 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -193,6 +195,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
+		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
@@ -211,6 +214,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		if entry.WriterForRead != nil {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
+				logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
@@ -259,6 +263,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		} else if entry.ReadCloserForRead != nil {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
+				logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
@@ -297,6 +302,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		} else {
 			f, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
+				logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
@@ -368,6 +374,7 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 
 	stat, err := os.Stat(nativePath)
 	if os.IsNotExist(err) {
+		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
@@ -375,6 +382,7 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 	}
 
 	if stat.IsDir() {
+		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 
@@ -468,6 +476,7 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
+		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
@@ -576,6 +585,7 @@ func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, 
 	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
+		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return &LocalETLFSMutator{

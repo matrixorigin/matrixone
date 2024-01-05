@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -343,6 +344,7 @@ func (a *MinioSDK) Read(
 	defer func() {
 		if a.is404(err) {
 			err = moerr.NewFileNotFoundNoCtx(key)
+			logutil.Infof("file not found,stack:%s", string(debug.Stack()))
 		}
 	}()
 

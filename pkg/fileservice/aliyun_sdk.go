@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime/debug"
 	gotrace "runtime/trace"
 	"strconv"
 	"time"
@@ -259,6 +260,7 @@ func (a *AliyunSDK) Read(
 	defer func() {
 		if a.is404(err) {
 			err = moerr.NewFileNotFoundNoCtx(key)
+			logutil.Infof("file not found, stack:%s", string(debug.Stack()))
 		}
 	}()
 
