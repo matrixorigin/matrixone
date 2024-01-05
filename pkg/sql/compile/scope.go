@@ -633,24 +633,15 @@ func (s *Scope) LoadRun(c *Compile) error {
 func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
-	var releaseArgs []vm.Operator
-	defer func() {
-		for i := range releaseArgs {
-			releaseArgs[i].Release()
-		}
-	}()
-	releaseArgBeforeIdx := func(scope *Scope, idx int) {
+	idx := 0
+	defer func(ins vm.Instructions) {
 		for i := 0; i < idx; i++ {
-			if scope.Instructions[i].Arg != nil {
-				releaseArgs = append(releaseArgs, scope.Instructions[i].Arg)
+			if ins[i].Arg != nil {
+				ins[i].Arg.Release()
 			}
 		}
-	}
-	releaseArgInIdx := func(scope *Scope, idx int) {
-		if scope.Instructions[idx].Arg != nil {
-			releaseArgs = append(releaseArgs, scope.Instructions[idx].Arg)
-		}
-	}
+	}(s.Instructions)
+
 	for i, in := range s.Instructions {
 		if flg {
 			break
@@ -658,11 +649,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		switch in.Op {
 		case vm.Top:
 			flg = true
+			idx = i + 1
 			arg := in.Arg.(*top.Argument)
 			// release the useless arg
-			releaseArgBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
-			releaseArgInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeTop,
 				Idx: in.Idx,
@@ -703,10 +693,9 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		//	}
 		case vm.Limit:
 			flg = true
+			idx = i + 1
 			arg := in.Arg.(*limit.Argument)
-			releaseArgBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
-			releaseArgInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
@@ -724,10 +713,9 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			}
 		case vm.Group:
 			flg = true
+			idx = i + 1
 			arg := in.Arg.(*group.Argument)
-			releaseArgBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
-			releaseArgInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
 				Idx: in.Idx,
@@ -750,14 +738,12 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			arg := in.Arg.(*sample.Argument)
 			if !arg.IsMergeSampleByRow() {
 				flg = true
-
+				idx = i + 1
 				// if by percent, there is no need to do merge sample.
-				releaseArgBeforeIdx(s, i)
 				if arg.IsByPercent() {
 					s.Instructions = s.Instructions[i:]
 				} else {
 					s.Instructions = append(make([]vm.Instruction, 1), s.Instructions[i:]...)
-					releaseArgInIdx(s, 1)
 					s.Instructions[1] = vm.Instruction{
 						Op:      vm.Sample,
 						Idx:     in.Idx,
@@ -765,7 +751,6 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Arg:     sample.NewMergeSample(arg),
 					}
 				}
-				releaseArgInIdx(s, 0)
 				s.Instructions[0] = vm.Instruction{
 					Op:  vm.Merge,
 					Idx: s.Instructions[0].Idx,
@@ -784,10 +769,9 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 
 		case vm.Offset:
 			flg = true
+			idx = i + 1
 			arg := in.Arg.(*offset.Argument)
-			releaseArgBeforeIdx(s, i)
 			s.Instructions = s.Instructions[i:]
-			releaseArgInIdx(s, 0)
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
@@ -812,10 +796,14 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	}
 	if !flg {
 		for i := range ss {
-			releaseArgInIdx(ss[i], len(ss[i].Instructions)-1)
+			if arg := ss[i].Instructions[len(ss[i].Instructions)-1].Arg; arg != nil {
+				arg.Release()
+			}
 			ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
 		}
-		releaseArgInIdx(s, 0)
+		if arg := s.Instructions[0].Arg; arg != nil {
+			arg.Release()
+		}
 		s.Instructions[0] = vm.Instruction{
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
@@ -829,12 +817,14 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			)
 			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
 		}
-		if len(s.Instructions)-1 != 1 {
-			releaseArgInIdx(s, 1)
+		if len(s.Instructions)-1 != 1 && s.Instructions[1].Arg != nil {
+			s.Instructions[1].Arg.Release()
 		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		for i := 2; i < len(s.Instructions)-1; i++ {
-			releaseArgInIdx(s, i)
+			if arg := s.Instructions[i].Arg; arg != nil {
+				arg.Release()
+			}
 		}
 		s.Instructions = s.Instructions[:2]
 	}
