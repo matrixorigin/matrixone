@@ -1994,7 +1994,27 @@ var supportedArrayOperations = []FuncNew{
 
 		Overloads: []overload{
 			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SliceVectorWith2Args[float32]
+				},
+			},
+			{
 				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SliceVectorWith2Args[float64]
+				},
+			},
+			{
+				overloadId: 2,
 				args:       []types.T{types.T_array_float32, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_array_float32.ToType()
@@ -2004,7 +2024,7 @@ var supportedArrayOperations = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				overloadId: 3,
 				args:       []types.T{types.T_array_float64, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_array_float64.ToType()

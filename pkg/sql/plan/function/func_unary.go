@@ -125,6 +125,36 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	})
 }
 
+func SliceVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r []T
+			if s > 0 {
+				r = moarray.SliceArrFromLeft[T](types.BytesToArray[T](v), s-1)
+			} else if s < 0 {
+				r = moarray.SliceArrFromRight[T](types.BytesToArray[T](v), -s)
+			} else {
+				r = []T{}
+			}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -141,14 +171,15 @@ func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result ve
 				return err
 			}
 		} else {
-			_in := types.BytesToArray[T](in)
-			out, err := moarray.Slice[T](_in, s, l)
-			if err != nil {
-				return err
+			var r []T
+			if s > 0 {
+				r = moarray.SliceArrFromLeftWithLength[T](types.BytesToArray[T](in), s-1, l)
+			} else if s < 0 {
+				r = moarray.SliceArrFromRightWithLength[T](types.BytesToArray[T](in), -s, l)
+			} else {
+				r = []T{}
 			}
-			_out := types.ArrayToBytes[T](out)
-
-			if err = rs.AppendBytes(_out, false); err != nil {
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
 				return err
 			}
 		}

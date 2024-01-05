@@ -294,10 +294,60 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 	return out, nil
 }
 
-func Slice[T types.RealNumbers](v []T, start, len int64) ([]T, error) {
-	vec := ToGonumVector[T](v)
-	res := vec.SliceVec(int(start), int(len))
-	return ToMoArray[T](res.(*mat.VecDense)), nil
+/** Slice Array **/
+
+// SliceArrFromLeft Slice from left to right, starting from 0
+func SliceArrFromLeft[T types.RealNumbers](s []T, offset int64) []T {
+	totalLen := int64(len(s))
+	if offset > totalLen {
+		return []T{}
+	}
+	return s[offset:]
+}
+
+// SliceArrFromRight Cut slices from right to left, starting from 1
+func SliceArrFromRight[T types.RealNumbers](s []T, offset int64) []T {
+	totalLen := int64(len(s))
+	if offset > totalLen {
+		return []T{}
+	}
+	return s[totalLen-offset:]
+}
+
+// SliceArrFromLeftWithLength Cut the slice with length from left to right, starting from 0
+func SliceArrFromLeftWithLength[T types.RealNumbers](s []T, offset int64, length int64) []T {
+	if offset < 0 {
+		return []T{}
+	}
+	return sliceArrOffsetLen(s, offset, length)
+}
+
+// SliceArrFromRightWithLength From right to left, cut the slice with length from 1
+func SliceArrFromRightWithLength[T types.RealNumbers](s []T, offset int64, length int64) []T {
+	return sliceArrOffsetLen(s, -offset, length)
+}
+
+func sliceArrOffsetLen[T types.RealNumbers](s []T, offset int64, length int64) []T {
+	totalLen := int64(len(s))
+	if offset < 0 {
+		offset += totalLen
+		if offset < 0 {
+			return []T{}
+		}
+	}
+	if offset >= totalLen {
+		return []T{}
+	}
+
+	if length <= 0 {
+		return []T{}
+	} else {
+		end := offset + length
+		if end > totalLen {
+			end = totalLen
+		}
+		return s[offset:end]
+	}
 }
 
 /* ------------ [END] mat.VecDense not supported functions ------- */
