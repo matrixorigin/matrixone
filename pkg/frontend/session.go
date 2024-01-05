@@ -2132,9 +2132,8 @@ func (sh *SqlHelper) GetCompilerContext() any {
 	return sh.ses.txnCompileCtx
 }
 
-func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (sub *plan.SubscriptionMeta, err error) {
-	sub, err = sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
-	return
+func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
 }
 
 // Made for sequence func. nextval, setval.

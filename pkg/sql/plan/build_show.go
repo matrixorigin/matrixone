@@ -1157,8 +1157,7 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 		}
 		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
 	} else {
-		sql += " order by created_time desc;"
-		//sql += " order by update_time, created_time desc;"
+		sql += " order by update_time desc, created_time desc;"
 	}
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }

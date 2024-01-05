@@ -30,7 +30,7 @@ import (
 const (
 	getAccountIdNamesSql = "select account_id, account_name from mo_catalog.mo_account where status != 'suspend'"
 	getPubsSql           = "select pub_name, database_name, account_list, created_time from mo_catalog.mo_pubs"
-	getSubsSql           = "select datname, dat_createsql, created_time from mo_catalog.mo_database where dat_type = 'subscription'"
+	getSubsFormat        = "select datname, dat_createsql, created_time from mo_catalog.mo_database where dat_type = 'subscription' and account_id = %d"
 )
 
 var (
@@ -200,7 +200,8 @@ func getSubInfoFromSql(ctx context.Context, ses *Session, sql string) (subName, 
 func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uint32) ([]*subscribed, error) {
 	bh.ClearExecResultBatches()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-	if err := bh.Exec(ctx, getSubsSql); err != nil {
+	sql := fmt.Sprintf(getSubsFormat, accountId)
+	if err := bh.Exec(ctx, sql); err != nil {
 		return nil, err
 	}
 

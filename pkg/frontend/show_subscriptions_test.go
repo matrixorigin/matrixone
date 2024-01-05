@@ -59,10 +59,11 @@ func (m *mockedBackgroundHandler) ClearExecResultSet() {}
 func (m *mockedBackgroundHandler) GetExecResultBatches() []*batch.Batch {
 	if m.currentSql == getAccountIdNamesSql {
 		return m.accountIdNamesBatches
-	} else if m.currentSql == getSubsSql {
+	} else if m.currentSql == getPubsSql {
+		return m.pubBatches[m.accountId]
+	} else {
 		return m.subBatches
 	}
-	return m.pubBatches[m.accountId]
 }
 
 func (m *mockedBackgroundHandler) ClearExecResultBatches() {}
