@@ -620,8 +620,9 @@ import (
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
-%type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
+%type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
+%type <exprs> value_expression_list
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
@@ -6967,11 +6968,11 @@ values_opt:
         expr := tree.NewMaxValue()
         $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
-|   VALUES LESS THAN '(' expression_list ')'
+|   VALUES LESS THAN '(' value_expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
     }
-|   VALUES IN '(' expression_list ')'
+|   VALUES IN '(' value_expression_list ')'
     {
     $$ = &tree.ValuesIn{ValueList: $4}
     }
@@ -9258,6 +9259,16 @@ expression_list_opt:
         $$ = $1
     }
 
+value_expression_list:
+    value_expression
+    {
+        $$ = tree.Exprs{$1}
+    }
+|   value_expression_list ',' value_expression
+    {
+        $$ = append($1, $3)
+    }
+
 expression_list:
     expression
     {
@@ -9294,13 +9305,18 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   MAXVALUE
-    {
-        $$ = tree.NewMaxValue()
-    }
 |   boolean_primary
     {
         $$ = $1
+    }
+
+value_expression:
+    expression {
+        $$ = $1
+    }
+|   MAXVALUE
+    {
+        $$ = tree.NewMaxValue()
     }
 
 boolean_primary:
@@ -10952,6 +10968,7 @@ non_reserved_keyword:
 |	HANDLER
 |	SAMPLE
 |	PERCENT
+|	OWNERSHIP
 
 func_not_keyword:
     DATE_ADD

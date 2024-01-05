@@ -194,15 +194,17 @@ func (c *objStatArg) Run() error {
 type storageUsageHistoryArg struct {
 	ctx    *inspectContext
 	detail *struct {
-		accId uint32
+		accId uint64
 		dbI   uint64
 		tblId uint64
 	}
 
 	trace *struct {
 		tStart, tEnd time.Time
-		accounts     map[uint32]struct{}
+		accounts     map[uint64]struct{}
 	}
+
+	transfer bool
 }
 
 func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -215,7 +217,7 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 			return err
 		}
 		c.detail = &struct {
-			accId uint32
+			accId uint64
 			dbI   uint64
 			tblId uint64
 		}{accId: accId, dbI: dbId, tblId: tblId}
@@ -230,8 +232,17 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 
 		c.trace = &struct {
 			tStart, tEnd time.Time
-			accounts     map[uint32]struct{}
+			accounts     map[uint64]struct{}
 		}{tStart: start, tEnd: end, accounts: accs}
+	}
+
+	expr, _ = cmd.Flags().GetString("transfer")
+	if expr != "" {
+		if expr == "*" {
+			c.transfer = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -f *` expected")
+		}
 	}
 
 	return nil
@@ -242,6 +253,8 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 		return storageUsageDetails(c)
 	} else if c.trace != nil {
 		return storageTrace(c)
+	} else if c.transfer {
+		return storageTransfer(c)
 	}
 	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
 }
@@ -639,9 +652,11 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&storageUsageHistoryArg{}),
 	}
 
+	// storage usage request history
 	storageUsageCmd.Flags().StringP("trace", "t", "", "format: -time time range or -acc account id list")
 	// storage usage details in ckp
 	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
+	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
 	rootCmd.AddCommand(storageUsageCmd)
 
 	return rootCmd
@@ -776,7 +791,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 // the history of all
 // mo_ctl("dn", "inspect", "storage_usage -t *");
 func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
-	accId uint32, dbId uint64, tblId uint64, err error) {
+	accId uint64, dbId uint64, tblId uint64, err error) {
 	strs := strings.Split(expr, ".")
 
 	if len(strs) == 0 || len(strs) > 3 {
@@ -800,7 +815,7 @@ func parseStorageUsageDetail(expr string, ac *db.AccessInfo, db *db.DB) (
 		return 0, 0, 0, err
 	}
 
-	accId = uint32(id)
+	accId = uint64(id)
 	dbId, tblId = math.MaxUint64, math.MaxUint64
 
 	var dbHdl handle.Database
@@ -849,7 +864,7 @@ func subString(src string, pos1, pos2 int) (string, error) {
 // no limit, show all request trace info
 // select mo_ctl("dn", "inspect", "-t ");
 func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
-	tStart, tEnd time.Time, accounts map[uint32]struct{}, err error) {
+	tStart, tEnd time.Time, accounts map[uint64]struct{}, err error) {
 
 	var str string
 	tIdx := strings.Index(expr, "-time")
@@ -891,7 +906,7 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 		}
 		accs := strings.Split(str, " ")
 
-		accounts = make(map[uint32]struct{})
+		accounts = make(map[uint64]struct{})
 
 		var id int
 		for i := range accs {
@@ -899,7 +914,7 @@ func parseStorageUsageTrace(expr string, ac *db.AccessInfo, db *db.DB) (
 			if err != nil {
 				return
 			}
-			accounts[uint32(id)] = struct{}{}
+			accounts[uint64(id)] = struct{}{}
 		}
 	}
 
@@ -995,7 +1010,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 		size := float64(data.Size) / 1048576
 
-		dst.WriteString(fmt.Sprintf("\t[(acc)-%-8d (%*s)-%-8d (%*s)-%-8d] %s -> %12.6f (mb)\n",
+		dst.WriteString(fmt.Sprintf("\t[(acc)-%-10d (%*s)-%-10d (%*s)-%-10d] %s -> %15.6f (mb)\n",
 			data.AccId, maxDbLen, dbName, data.DbId,
 			maxTblLen, tblName, data.TblId, hint, size))
 
@@ -1049,7 +1064,7 @@ func storageUsageDetails(c *storageUsageHistoryArg) (err error) {
 
 func storageTrace(c *storageUsageHistoryArg) (err error) {
 
-	filter := func(accId uint32, stamp time.Time) bool {
+	filter := func(accId uint64, stamp time.Time) bool {
 		if !c.trace.tStart.IsZero() {
 			if stamp.UTC().Add(time.Hour*8).Before(c.trace.tStart) ||
 				stamp.UTC().Add(time.Hour*8).After(c.trace.tEnd) {
@@ -1081,7 +1096,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 		}
 
 		size := float64(sizes[idx]) / 1048576
-		b.WriteString(fmt.Sprintf("\taccount id: %-8d\tsize: %12.6f\thint: %s\n",
+		b.WriteString(fmt.Sprintf("\taccount id: %-10d\tsize: %15.6f\thint: %s\n",
 			accIds[idx], size, hints[idx]))
 	}
 
@@ -1090,4 +1105,14 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	c.ctx.resp.Payload = b.Bytes()
 
 	return nil
+}
+
+func storageTransfer(c *storageUsageHistoryArg) (err error) {
+	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
+	if err != nil {
+		return err
+	}
+
+	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
+	return
 }

@@ -595,18 +595,7 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
 
-	// allocate.
-	bs := make([]byte, requiredSpaceWithoutHeader+kMemHdrSz)
-	hdr := unsafe.Pointer(&bs[0])
-	pHdr := (*memHdr)(hdr)
-	pHdr.poolId = mp.id
-	pHdr.fixedPoolIdx = NumFixedPool
-	pHdr.allocSz = int32(sz)
-	pHdr.SetGuard()
-	if mp.details != nil {
-		mp.details.recordAlloc(int64(pHdr.allocSz))
-	}
-	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader), nil
+	return alloc(sz, requiredSpaceWithoutHeader, mp), nil
 }
 
 func (mp *MPool) Free(bs []byte) {

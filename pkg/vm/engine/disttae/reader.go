@@ -270,7 +270,7 @@ func newBlockReader(
 	ctx context.Context,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
-	blks []*catalog.BlockInfo,
+	blks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -339,9 +339,9 @@ func (r *blockReader) Read(
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -418,7 +418,7 @@ func newBlockMergeReader(
 	txnTable *txnTable,
 	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
-	dirtyBlks []*catalog.BlockInfo,
+	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,

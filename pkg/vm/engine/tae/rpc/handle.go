@@ -1139,7 +1139,8 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 
 		tblIt := entry.MakeTableIt(true)
 		for tblIt.Valid() {
-			insUsage := logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+			insUsage := logtail.UsageData{
+				AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
 
 			tblEntry := tblIt.Get().GetPayload()
 			if tblEntry.HasDropCommitted() {
@@ -1193,11 +1194,11 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	newIds := make([]uint32, 0)
 	for _, id := range req.AccIds {
 		if usages != nil {
-			if size, exist := usages[uint32(id)]; exist {
-				memo.AddReqTrace(uint32(id), size, start, "req")
+			if size, exist := usages[uint64(id)]; exist {
+				memo.AddReqTrace(uint64(id), size, start, "req")
 				resp.AccIds = append(resp.AccIds, int32(id))
 				resp.Sizes = append(resp.Sizes, size)
-				delete(usages, uint32(id))
+				delete(usages, uint64(id))
 				continue
 			}
 		}
@@ -1206,7 +1207,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for accId, size := range usages {
-		memo.AddReqTrace(accId, size, start, "oth")
+		memo.AddReqTrace(uint64(accId), size, start, "oth")
 		resp.AccIds = append(resp.AccIds, int32(accId))
 		resp.Sizes = append(resp.Sizes, size)
 	}
@@ -1215,10 +1216,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
 
 	for idx := range newIds {
-		if size, exist := memo.GatherNewAccountSize(newIds[idx]); exist {
+		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
 			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
-			memo.AddReqTrace(newIds[idx], size, start, "new")
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
 		}
 	}
 
