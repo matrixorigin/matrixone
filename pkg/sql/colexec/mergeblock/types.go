@@ -167,7 +167,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			continue
 		}
 
-		blkInfo := catalog.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+		blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
 		if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
 			continue
 		}
@@ -202,7 +202,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			blkInfo := catalog.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+			blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
 			arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
 				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())

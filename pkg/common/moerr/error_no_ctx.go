@@ -314,6 +314,10 @@ func NewLockTableNotFoundNoCtx() *Error {
 	return newError(Context(), ErrLockTableNotFound)
 }
 
+func NewLockConflictNoCtx() *Error {
+	return newError(Context(), ErrLockConflict)
+}
+
 func NewUDFAlreadyExistsNoCtx(f string) *Error {
 	return newError(Context(), ErrFunctionAlreadyExists, f)
 }

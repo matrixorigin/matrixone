@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -54,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -378,7 +380,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 	}
 
-	mcpu := DeterminRuntimeDOP(goruntime.NumCPU(), len(s.NodeInfo.Data))
+	numCpu := goruntime.NumCPU()
+	var mcpu int
 
 	switch {
 	case remote:
@@ -389,6 +392,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if s.DataSource.AccountId != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
+		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+		mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
@@ -397,6 +402,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
+		switch s.NodeInfo.Rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
+		default:
+			mcpu = 1
+		}
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
@@ -427,6 +442,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
+		switch rel.GetEngineType() {
+		case engine.Disttae:
+			blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
+		case engine.Memory:
+			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
+			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
+		default:
+			mcpu = 1
+		}
 		if rel.GetEngineType() == engine.Memory ||
 			s.DataSource.PartitionRelationNames == nil {
 			mainRds, err := rel.NewReader(
@@ -440,22 +465,23 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			rds = append(rds, mainRds...)
 		} else {
 			//handle partition table.
-			dirtyRanges := make(map[int][][]byte, 0)
-			cleanRanges := make([][]byte, 0, len(s.NodeInfo.Data))
-			ranges := s.NodeInfo.Data[1:]
-			for _, r := range ranges {
-				blkInfo := catalog.DecodeBlockInfo(r)
+			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
+			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
+			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
+			ranges := objectio.BlockInfoSlice(blkArray.Slice(1, blkArray.Len()))
+			for i := 0; i < ranges.Len(); i++ {
+				blkInfo := ranges.Get(i)
 				if !blkInfo.CanRemote {
 					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
-						newRanges := make([][]byte, 0, 1)
-						newRanges = append(newRanges, []byte{})
+						newRanges := make(objectio.BlockInfoSlice, 0, objectio.BlockInfoSize)
+						newRanges = append(newRanges, objectio.EmptyBlockInfoBytes...)
 						dirtyRanges[blkInfo.PartitionNum] = newRanges
 					}
 					dirtyRanges[blkInfo.PartitionNum] =
-						append(dirtyRanges[blkInfo.PartitionNum], r)
+						append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
 					continue
 				}
-				cleanRanges = append(cleanRanges, r)
+				cleanRanges = append(cleanRanges, ranges.GetBytes(i)...)
 			}
 
 			if len(cleanRanges) > 0 {

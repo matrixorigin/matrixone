@@ -55,12 +55,14 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ctr.sendFunc = sendToAllFunc
 		}
-		ap.prepareRemote(proc)
+		return ap.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
 		ap.ctr.sendFunc = shuffleToAllFunc
 		if ap.ctr.remoteRegsCnt > 0 {
-			ap.prepareRemote(proc)
+			if err := ap.prepareRemote(proc); err != nil {
+				return err
+			}
 		} else {
 			ap.prepareLocal()
 		}
@@ -76,7 +78,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ctr.sendFunc = sendToAnyFunc
 		}
-		ap.prepareRemote(proc)
+		return ap.prepareRemote(proc)
 
 	case SendToAllLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
@@ -202,7 +204,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	return false, nil
 }
 
-func (arg *Argument) prepareRemote(proc *process.Process) {
+func (arg *Argument) prepareRemote(proc *process.Process) error {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
 	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
@@ -211,8 +213,11 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 		if arg.FuncId == ShuffleToAllFunc {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		}
-		colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc)
+		if err := colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (arg *Argument) prepareLocal() {

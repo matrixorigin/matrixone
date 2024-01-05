@@ -235,6 +235,15 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
+	TxnCheckPKDupDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "check_pk_dup_duration_seconds",
+			Help:      "Bucketed histogram of txn check pk dup duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
 	txnTableRangeSizeHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

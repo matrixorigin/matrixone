@@ -221,6 +221,8 @@ const (
 	ErrLockTableNotFound uint16 = 20703
 	// ErrDeadlockCheckBusy deadlock busy error, cannot check deadlock.
 	ErrDeadlockCheckBusy uint16 = 20704
+	// ErrLockConflict lock operation conflict
+	ErrLockConflict uint16 = 20705
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -246,6 +248,7 @@ const (
 	ErrMaxvalueInValuesIn                  uint16 = 20821
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
+	ErrTooManyParameter                    uint16 = 20824
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -425,6 +428,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrLockConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -450,6 +454,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMaxvalueInValuesIn:                  {ER_MAXVALUE_IN_VALUES_IN, []string{MySQLDefaultSqlState}, "Cannot use MAXVALUE as value in VALUES IN"},
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
+	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -1097,6 +1102,10 @@ func NewLockTableNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrLockTableNotFound)
 }
 
+func NewLockConflict(ctx context.Context) *Error {
+	return newError(ctx, ErrLockConflict)
+}
+
 func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
 	return newError(ctx, ErrPartitionFunctionIsNotAllowed)
 }
@@ -1297,6 +1306,10 @@ func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
 
 func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
 	return newError(ctx, ErrTaskNotFound, taskID)
+}
+
+func NewErrTooManyParameter(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyParameter)
 }
 
 var contextFunc atomic.Value
