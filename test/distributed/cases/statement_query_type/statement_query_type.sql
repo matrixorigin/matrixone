@@ -83,6 +83,7 @@ deallocate prepare s1;
 
 
 -- test DDL and DQL
+select sleep(15);
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
@@ -159,8 +160,8 @@ select sleep(1);
 -- @session
 
 -- RESULT CHECK: part 1
-select sleep(30);
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 101;
+select sleep(15);
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 104;
 -- @bvt:issue
 
 -- CASE: part 2

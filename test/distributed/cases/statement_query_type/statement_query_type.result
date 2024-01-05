@@ -92,6 +92,9 @@ execute s1 using @a;
 col1    col2
 2    b
 deallocate prepare s1;
+select sleep(15);
+sleep(15)
+0
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
@@ -204,15 +207,16 @@ use system;
 select sleep(1);
 sleep(1)
 0
-select sleep(30);
-sleep(30)
+select sleep(15);
+sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 101;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 104;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
+execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
@@ -260,7 +264,9 @@ update test_01 set a=100 where b='b'    DML    external_sql
 show create table test_01    Other    external_sql
 create table test_01(a int, b varchar)    DDL    external_sql
 drop table if exists test_01    DDL    external_sql
+select sleep(15)    DQL    external_sql
 deallocate prepare s1    Other    external_sql
+execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
