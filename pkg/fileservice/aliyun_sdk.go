@@ -260,7 +260,7 @@ func (a *AliyunSDK) Read(
 	defer func() {
 		if a.is404(err) {
 			err = moerr.NewFileNotFoundNoCtx(key)
-			logutil.Infof("file not found, stack:%s", string(debug.Stack()))
+			logutil.Infof("xxxx read file:%s, but it is not found, stack:%s", key, string(debug.Stack()))
 		}
 	}()
 

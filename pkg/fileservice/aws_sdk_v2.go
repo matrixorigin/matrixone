@@ -671,7 +671,7 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			logutil.Infof("file not found,stack:%s", string(debug.Stack()))
+			logutil.Infof("xxxx file:%s is not found,stack:%s", path, string(debug.Stack()))
 			return moerr.NewFileNotFoundNoCtx(path)
 		}
 	}

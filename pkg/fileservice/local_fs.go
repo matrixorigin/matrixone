@@ -491,7 +491,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		} else if entry.ReadCloserForRead != nil {
 			file, err = os.Open(nativePath)
 			if os.IsNotExist(err) {
-				logutil.Infof("file not found,stack:%s", string(debug.Stack()))
+				logutil.Infof("xxxx read file:%s, but it is not found,stack:%s", path.File, string(debug.Stack()))
 				return moerr.NewFileNotFoundNoCtx(path.File)
 			}
 			if err != nil {
@@ -860,7 +860,7 @@ func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, err
 	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
-		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
+		logutil.Infof("xxxx file:%s is not found,stack:%s", path.File, string(debug.Stack()))
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return &LocalFSMutator{
