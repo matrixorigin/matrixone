@@ -421,7 +421,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 
 	file, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
-		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
+		logutil.Infof("xxxx read file:%s, but it is not found,stack:%s",
+			path.File, string(debug.Stack()))
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
@@ -761,7 +762,7 @@ func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
-		logutil.Infof("file not found,stack:%s", string(debug.Stack()))
+		logutil.Infof("xxxx delete file:%s, but it is not found,stack:%s", path.File, string(debug.Stack()))
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
