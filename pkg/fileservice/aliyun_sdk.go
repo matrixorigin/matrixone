@@ -54,11 +54,6 @@ func NewAliyunSDK(
 	}
 
 	// env vars
-	if args.RoleARN == "" {
-		if v := os.Getenv("ALIBABA_CLOUD_ROLE_ARN"); v != "" {
-			args.RoleARN = v
-		}
-	}
 	if args.OIDCProviderARN == "" {
 		if v := os.Getenv("ALIBABA_CLOUD_OIDC_PROVIDER_ARN"); v != "" {
 			args.OIDCProviderARN = v
@@ -591,9 +586,18 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 		if o.ExternalID != "" {
 			config.ExternalId = &o.ExternalID
 		}
+
+		var roleARN string
+		// either from args or os env
 		if o.RoleARN != "" {
-			config.SetRoleArn(o.RoleARN)
+			roleARN = o.RoleARN
+		} else if v := os.Getenv("ALIBABA_CLOUD_ROLE_ARN"); v != "" {
+			roleARN = v
 		}
+		if roleARN != "" {
+			config.SetRoleArn(roleARN)
+		}
+
 		config.SetSessionExpiration(3600)
 
 	} else if o.RAMRole != "" {
