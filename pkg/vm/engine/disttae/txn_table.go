@@ -162,7 +162,8 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.Rows: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.Rows: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -246,7 +247,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.MaxAndMinValues: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.MaxAndMinValues: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -397,7 +399,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.Size: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.Size: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -468,7 +471,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.GetColMetadata: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.GetColMetadata: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -869,7 +873,8 @@ func (tbl *txnTable) rangesOnePart(
 							obj.CreateTime.ToTimestamp().DebugString(),
 							obj.DeleteTime.ToTimestamp().DebugString())
 					}
-					logutil.Fatalf("xxxx txnTable.: txn:%s, all objs in partition state:[%s]",
+					logutil.Fatalf("xxxx txnTable.: err:%s, txn:%s, all objs in partition state:[%s]",
+						err.Error(),
 						tbl.db.txn.op.Txn().DebugString(),
 						aObjs)
 				}
@@ -968,7 +973,8 @@ func (tbl *txnTable) rangesOnePart(
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.rangesOnePart: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.rangesOnePart: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -1107,7 +1113,8 @@ func (tbl *txnTable) tryFastRanges(
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.tryFastRange: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.tryFastRange: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -1210,7 +1217,8 @@ func (tbl *txnTable) tryFastRanges(
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx txnTable.tryFastRange: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx txnTable.tryFastRange: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
@@ -2208,7 +2216,8 @@ func (tbl *txnTable) updateDeleteInfo(
 								obj.CreateTime.ToTimestamp().DebugString(),
 								obj.DeleteTime.ToTimestamp().DebugString())
 						}
-						logutil.Fatalf("xxxx txnTable.updateDelInfo: txn:%s, all objs in partition state:[%s]",
+						logutil.Fatalf("xxxx txnTable.updateDelInfo: err:%s, txn:%s, all objs in partition state:[%s]",
+							err.Error(),
 							tbl.db.txn.op.Txn().DebugString(),
 							aObjs)
 					}
@@ -2317,7 +2326,8 @@ func (tbl *txnTable) readNewRowid(ctx context.Context, vec *vector.Vector, row i
 							obj.CreateTime.ToTimestamp().DebugString(),
 							obj.DeleteTime.ToTimestamp().DebugString())
 					}
-					logutil.Fatalf("xxxx txnTable.readNewRowId: txn:%s, all objs in partition state:[%s]",
+					logutil.Fatalf("xxxx txnTable.readNewRowId: err:%s,txn:%s, all objs in partition state:[%s]",
+						err.Error(),
 						tbl.db.txn.op.Txn().DebugString(),
 						aObjs)
 				}

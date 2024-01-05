@@ -147,7 +147,8 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 						obj.CreateTime.ToTimestamp().DebugString(),
 						obj.DeleteTime.ToTimestamp().DebugString())
 				}
-				logutil.Fatalf("xxxx UpdateInfoFromZM: txn:%s, all objs in partition state:[%s]",
+				logutil.Fatalf("xxxx UpdateInfoFromZM: err:%s, txn:%s, all objs in partition state:[%s]",
+					err.Error(),
 					tbl.db.txn.op.Txn().DebugString(),
 					aObjs)
 			}
