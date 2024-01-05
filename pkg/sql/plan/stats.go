@@ -343,17 +343,53 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 
 func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 	switch typ {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_float32:
+		if val, valOk := lit.Value.(*plan.Literal_Fval); valOk {
+			return float64(val.Fval), true
+		}
+	case types.T_float64:
+		if val, valOk := lit.Value.(*plan.Literal_Dval); valOk {
+			return val.Dval, true
+		}
+	case types.T_int8:
+		if val, valOk := lit.Value.(*plan.Literal_I8Val); valOk {
+			return float64(val.I8Val), true
+		}
+	case types.T_int16:
+		if val, valOk := lit.Value.(*plan.Literal_I16Val); valOk {
+			return float64(val.I16Val), true
+		}
+	case types.T_int32:
+		if val, valOk := lit.Value.(*plan.Literal_I32Val); valOk {
+			return float64(val.I32Val), true
+		}
+	case types.T_int64:
 		if val, valOk := lit.Value.(*plan.Literal_I64Val); valOk {
 			return float64(val.I64Val), true
 		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8:
+		if val, valOk := lit.Value.(*plan.Literal_U8Val); valOk {
+			return float64(val.U8Val), true
+		}
+	case types.T_uint16:
+		if val, valOk := lit.Value.(*plan.Literal_U16Val); valOk {
+			return float64(val.U16Val), true
+		}
+	case types.T_uint32:
+		if val, valOk := lit.Value.(*plan.Literal_U32Val); valOk {
+			return float64(val.U32Val), true
+		}
+	case types.T_uint64:
 		if val, valOk := lit.Value.(*plan.Literal_U64Val); valOk {
 			return float64(val.U64Val), true
 		}
 	case types.T_date:
 		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
 			return float64(val.Dateval), true
+		}
+	case types.T_datetime:
+		if val, valOk := lit.Value.(*plan.Literal_Datetimeval); valOk {
+			return float64(val.Datetimeval), true
 		}
 	}
 
@@ -383,9 +419,14 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		case "":
 			return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], typ, literals)
 		case "year":
-			minVal := types.Date(s.MinValMap[col.Name])
-			maxVal := types.Date(s.MaxValMap[col.Name])
-			return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), typ, literals)
+			switch typ {
+			case types.T_date:
+				minVal := types.Date(s.MinValMap[col.Name])
+				maxVal := types.Date(s.MaxValMap[col.Name])
+				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), typ, literals)
+			case types.T_datetime:
+				// TODO
+			}
 		}
 	}
 
@@ -1012,11 +1053,11 @@ func resetHashMapStats(stats *plan.Stats) {
 	}
 }
 
-func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
+func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.applySwapRuleByStats(child, recursive)
+			builder.determineBuildAndProbeSide(child, recursive)
 		}
 	}
 	if node.NodeType != plan.Node_JOIN {
@@ -1038,7 +1079,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}
