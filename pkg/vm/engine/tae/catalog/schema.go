@@ -240,7 +240,6 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 			return err
 		}
 		s.Partition = string(bytes)
-		return s.Finalize(true)
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
 	}
