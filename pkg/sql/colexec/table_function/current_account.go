@@ -31,31 +31,9 @@ func currentAccountPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func getAccountName(proc *process.Process) *vector.Vector {
-	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Account), 1, proc.Mp())
-}
-
-func getRoleName(proc *process.Process) *vector.Vector {
-	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Role), 1, proc.Mp())
-}
-
-func getUserName(proc *process.Process) *vector.Vector {
-	return vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.User), 1, proc.Mp())
-}
-
-func getAccountId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.AccountId, 1, proc.Mp())
-}
-
-func getRoleId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.RoleId, 1, proc.Mp())
-}
-
-func getUserId(proc *process.Process) *vector.Vector {
-	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.UserId, 1, proc.Mp())
-}
-
 func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+	var err error
+
 	switch arg.ctr.state {
 	case dataProducing:
 		rbat := batch.NewWithSize(len(arg.Attrs))
@@ -63,19 +41,22 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		for i, attr := range arg.Attrs {
 			switch attr {
 			case "account_name":
-				rbat.Vecs[i] = getAccountName(proc)
+				rbat.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Account), 1, proc.Mp())
 			case "account_id":
-				rbat.Vecs[i] = getAccountId(proc)
+				rbat.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.AccountId, 1, proc.Mp())
 			case "user_name":
-				rbat.Vecs[i] = getUserName(proc)
+				rbat.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.User), 1, proc.Mp())
 			case "user_id":
-				rbat.Vecs[i] = getUserId(proc)
+				rbat.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.UserId, 1, proc.Mp())
 			case "role_name":
-				rbat.Vecs[i] = getRoleName(proc)
+				rbat.Vecs[i], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(proc.SessionInfo.Role), 1, proc.Mp())
 			case "role_id":
-				rbat.Vecs[i] = getRoleId(proc)
+				rbat.Vecs[i], err = vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.RoleId, 1, proc.Mp())
 			default:
-				return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+				err = moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+			}
+			if err != nil {
+				return false, err
 			}
 		}
 		rbat.SetRowCount(1)
