@@ -222,6 +222,30 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	return mat.Norm(vec, 2), nil
 }
 
+func ScalarOp[T types.RealNumbers](v []T, operation string, scalarOperand float64) ([]T, error) {
+	vec := ToGonumVector[T](v)
+	switch operation {
+	case "+":
+		for i := 0; i < vec.Len(); i++ {
+			vec.SetVec(i, vec.AtVec(i)+scalarOperand)
+		}
+	case "-":
+		for i := 0; i < vec.Len(); i++ {
+			vec.SetVec(i, vec.AtVec(i)-scalarOperand)
+		}
+	case "*":
+		vec.ScaleVec(scalarOperand, vec)
+	case "/":
+		if scalarOperand == 0 {
+			return nil, moerr.NewDivByZeroNoCtx()
+		}
+		vec.ScaleVec(float64(1)/scalarOperand, vec)
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
+	}
+	return ToMoArray[T](vec), nil
+}
+
 /* ------------ [END] Performance critical functions. ------- */
 
 /* ------------ [START] mat.VecDense not supported functions ------- */
@@ -270,7 +294,7 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 	return out, nil
 }
 
-func VectorSlice[T types.RealNumbers](v []T, start, len int64) ([]T, error) {
+func Slice[T types.RealNumbers](v []T, start, len int64) ([]T, error) {
 	vec := ToGonumVector[T](v)
 	res := vec.SliceVec(int(start), int(len))
 	return ToMoArray[T](res.(*mat.VecDense)), nil

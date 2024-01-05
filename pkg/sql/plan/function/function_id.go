@@ -349,6 +349,7 @@ const (
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
 	SLICE_VECTOR    // SLICE_VECTOR
+	SCALAR_OP       // SCALAR_OP
 
 	PYTHON_UDF
 
@@ -433,6 +434,7 @@ var functionIdRegister = map[string]int32{
 	"bit_xor":               BIT_XOR,
 	"cluster_centers":       CLUSTER_CENTERS,
 	"slice_vector":          SLICE_VECTOR,
+	"scalar_op":             SCALAR_OP,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,

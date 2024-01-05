@@ -142,7 +142,38 @@ func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result ve
 			}
 		} else {
 			_in := types.BytesToArray[T](in)
-			out, err := moarray.VectorSlice[T](_in, s, l)
+			out, err := moarray.Slice[T](_in, s, l)
+			if err != nil {
+				return err
+			}
+			_out := types.ArrayToBytes[T](out)
+
+			if err = rs.AppendBytes(_out, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	op := vector.GenerateFunctionStrParameter(ivecs[1])
+	num := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		in, null1 := vs.GetStrValue(i)
+		operation, null2 := op.GetStrValue(i)
+		scalarOperand, null3 := num.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			_in := types.BytesToArray[T](in)
+			out, err := moarray.ScalarOp[T](_in, string(operation), scalarOperand)
 			if err != nil {
 				return err
 			}
