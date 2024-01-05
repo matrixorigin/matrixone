@@ -222,24 +222,31 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	return mat.Norm(vec, 2), nil
 }
 
-func ScalarOp[T types.RealNumbers](v []T, operation string, scalarOperand float64) ([]T, error) {
+func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
 	vec := ToGonumVector[T](v)
 	switch operation {
-	case "+":
-		for i := 0; i < vec.Len(); i++ {
-			vec.SetVec(i, vec.AtVec(i)+scalarOperand)
+	case "+", "-":
+		scalarVec := make([]float64, vec.Len())
+		for i := range scalarVec {
+			if operation == "+" {
+				scalarVec[i] = scalar
+			} else {
+				scalarVec[i] = -scalar
+			}
 		}
-	case "-":
-		for i := 0; i < vec.Len(); i++ {
-			vec.SetVec(i, vec.AtVec(i)-scalarOperand)
+		scalarDenseVec := mat.NewVecDense(vec.Len(), scalarVec)
+		vec.AddVec(vec, scalarDenseVec)
+	case "*", "/":
+		var scale float64
+		if operation == "/" {
+			if scalar == 0 {
+				return nil, moerr.NewDivByZeroNoCtx()
+			}
+			scale = float64(1) / scalar
+		} else {
+			scale = scalar
 		}
-	case "*":
-		vec.ScaleVec(scalarOperand, vec)
-	case "/":
-		if scalarOperand == 0 {
-			return nil, moerr.NewDivByZeroNoCtx()
-		}
-		vec.ScaleVec(float64(1)/scalarOperand, vec)
+		vec.ScaleVec(scale, vec)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
