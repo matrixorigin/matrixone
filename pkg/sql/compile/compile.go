@@ -3857,7 +3857,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if ranges.Len() == len(newranges) {
+			if ranges.Size() == len(newranges) {
 				partialResults = nil
 			} else if partialResults != nil {
 				ranges.SetBytes(newranges)
