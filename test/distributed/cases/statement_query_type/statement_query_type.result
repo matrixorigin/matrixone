@@ -57,6 +57,9 @@ column_0    column_1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
@@ -83,9 +86,6 @@ drop index index_table_2 on table_2;
 drop view view_2;
 drop table table_2;
 drop database db2;
-select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -158,6 +158,9 @@ column_0    column_1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
@@ -192,9 +195,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 internal error: CREATE/DROP of database is not supported in transactions
-select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 internal error: Uncommitted transaction exists. Please commit or rollback first.

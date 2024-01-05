@@ -38,6 +38,7 @@ show collation like '%';
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select * from unnest('{"a":1}') as f;
 
 
 -- test DML sql
@@ -75,7 +76,6 @@ drop database db2;
 
 
 -- test other type
-select * from unnest('{"a":1}') as f;
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -121,6 +121,7 @@ show tables;
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select * from unnest('{"a":1}') as f;
 
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 
@@ -148,7 +149,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 
-select * from unnest('{"a":1}') as f;
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
