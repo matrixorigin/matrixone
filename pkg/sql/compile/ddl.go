@@ -2354,30 +2354,75 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	return &bat, nil
 }
 
-func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) error {
-	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	if stmt.Cycle {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
-	} else {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
 	}
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if stmt.Cycle {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	} else {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	}
+	if err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) error {
-	vecs[0] = vector.NewConstFixed(typ, lastV, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp())
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, lastV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp()); err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
 func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
