@@ -1453,6 +1453,68 @@ func TestShardingByRowWithSameTableID(t *testing.T) {
 	}
 }
 
+func TestRowLockWithFailFast(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					option.Policy = pb.WaitPolicy_FastFail
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.Error(t, ErrLockConflict, err)
+				})
+		})
+	}
+}
+
+func TestRangeLockWithFailFast(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRangeExclusiveOptions()
+					option.Policy = pb.WaitPolicy_FastFail
+					rows := newTestRows(1, 2)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.Error(t, ErrLockConflict, err)
+				})
+		})
+	}
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)

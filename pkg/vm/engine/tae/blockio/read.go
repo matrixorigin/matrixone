@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,7 +39,7 @@ type ReadFilter = func([]*vector.Vector) []int32
 
 func ReadByFilter(
 	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
+	info *objectio.BlockInfo,
 	inputDeletes []int64,
 	columns []uint16,
 	colTypes []types.Type,
@@ -108,7 +107,7 @@ func ReadByFilter(
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
+	info *objectio.BlockInfo,
 	inputDeletes []int64,
 	columns []uint16,
 	colTypes []types.Type,
@@ -211,7 +210,7 @@ func BlockCompactionRead(
 
 func BlockReadInner(
 	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
+	info *objectio.BlockInfo,
 	inputDeleteRows []int64,
 	columns []uint16,
 	colTypes []types.Type,
@@ -399,7 +398,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, 
 }
 
 func buildRowidColumn(
-	info *pkgcatalog.BlockInfo,
+	info *objectio.BlockInfo,
 	sels []int32,
 	m *mpool.MPool,
 	vp engine.VectorPool,
@@ -436,7 +435,7 @@ func readBlockData(
 	ctx context.Context,
 	colIndexes []uint16,
 	colTypes []types.Type,
-	info *pkgcatalog.BlockInfo,
+	info *objectio.BlockInfo,
 	ts types.TS,
 	fs fileservice.FileService,
 	m *mpool.MPool,
@@ -577,7 +576,7 @@ func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo, prefetchFile bool) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*objectio.BlockInfo, prefetchFile bool) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
