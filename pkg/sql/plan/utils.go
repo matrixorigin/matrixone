@@ -537,19 +537,22 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, funcName1 := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, funcName2 := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
 	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {
 		return false
 	}
-	if funcName1 == ">" || funcName1 == ">=" {
-		return funcName2 == "<" || funcName2 == "<="
+
+	fnName1 := expr1.GetF().Func.ObjName
+	fnName2 := expr2.GetF().Func.ObjName
+	if fnName1 == ">" || fnName1 == ">=" {
+		return fnName2 == "<" || fnName2 == "<="
 	}
-	if funcName1 == "<" || funcName1 == "<=" {
-		return funcName2 == ">" || funcName2 == ">="
+	if fnName1 == "<" || fnName1 == "<=" {
+		return fnName2 == ">" || fnName2 == ">="
 	}
 	return false
 }
