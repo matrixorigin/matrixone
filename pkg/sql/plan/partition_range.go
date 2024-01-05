@@ -242,7 +242,7 @@ func (rpb *rangePartitionBuilder) buildAddPartitionDefinitions(ctx context.Conte
 	for i, partition := range defs {
 		partitionItem := &plan.PartitionItem{
 			PartitionName:   string(partition.Name),
-			OrdinalPosition: uint32(srcLen + 1),
+			OrdinalPosition: uint32(srcLen + i + 1),
 		}
 
 		if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
