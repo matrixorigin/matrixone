@@ -55,15 +55,15 @@ func init() {
 	}
 
 	initTypeStrToEnum = map[string]kmeans.InitType{
-		//"random":         kmeans.Random,
+		"random":         kmeans.Random,
 		"kmeansplusplus": kmeans.KmeansPlusPlus,
 	}
 }
 
 var (
-	AggClusterCentersSupportedParameters = []types.T{
-		types.T_array_float32, types.T_array_float64,
-	}
+	//AggClusterCentersSupportedParameters = []types.T{
+	//	types.T_array_float32, types.T_array_float64,
+	//}
 
 	AggClusterCentersReturnType = func(typs []types.Type) types.Type {
 		return types.T_varchar.ToType()

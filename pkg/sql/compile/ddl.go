@@ -323,10 +323,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
 
-			// IVF -> meta      -> indexDef
-			//     -> centroids -> indexDef
-			//     -> entries   -> indexDef
-			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			// indexName -> meta      -> indexDef
+			//     		 -> centroids -> indexDef
+			//     		 -> entries   -> indexDef
+			multiTableIndexes := make(map[string]*MultiTableIndex)
 			for _, indexDef := range indexTableDef.Indexes {
 
 				for i := range addIndex {
@@ -344,20 +344,23 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 					// 3. IVF indexDefs are aggregated and handled later
-					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
-						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+							IndexDefs: make(map[string]*plan.IndexDef),
+						}
 					}
-					multiTableIndexes[catalog.ToLower(indexDef.IndexAlgo)][catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+
 				}
 				if err != nil {
 					return err
 				}
 			}
-
-			for indexAlgoType, indexDefs := range multiTableIndexes {
-				switch indexAlgoType { // no need for catalog.ToLower() here
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -401,12 +404,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterReindex:
-			// NOTE: We hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-			// We need to see how to reduce the critical section.
+			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
+			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
-			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			multiTableIndexes := make(map[string]*MultiTableIndex)
 
 			for i, indexDef := range tableDef.Indexes {
 				if indexDef.IndexName == constraintName {
@@ -447,22 +450,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 
 					// 4. Add to multiTableIndexes
-					if _, ok := multiTableIndexes[indexAlgo]; !ok {
-						multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+							IndexDefs: make(map[string]*plan.IndexDef),
+						}
 					}
-					multiTableIndexes[indexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
+					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 				}
 			}
 
-			if len(multiTableIndexes) == 0 {
+			if len(multiTableIndexes) != 1 {
 				return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
 			}
 
 			// update the hidden tables
-			for indexAlgoType, indexDefs := range multiTableIndexes {
-				switch catalog.ToLower(indexAlgoType) {
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
