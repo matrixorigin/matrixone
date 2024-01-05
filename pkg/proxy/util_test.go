@@ -156,17 +156,17 @@ func TestIsCmdStmtPrepare(t *testing.T) {
 	require.True(t, ret)
 }
 
-func TestIsCmdStmtExecute(t *testing.T) {
+func TestIsCmdStmtClose(t *testing.T) {
 	var data []byte
-	ret := isCmdStmtExecute(data)
+	ret := isCmdStmtClose(data)
 	require.False(t, ret)
 
 	data = []byte{0, 0, 0, 0, 20, 0}
-	ret = isCmdStmtExecute(data)
+	ret = isCmdStmtClose(data)
 	require.False(t, ret)
 
-	data = []byte{0, 0, 0, 0, byte(cmdStmtExecute), 0}
-	ret = isCmdStmtExecute(data)
+	data = []byte{0, 0, 0, 0, byte(cmdStmtClose), 0}
+	ret = isCmdStmtClose(data)
 	require.True(t, ret)
 }
 
