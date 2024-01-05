@@ -605,6 +605,32 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		&ranges,
 		tbl.proc.Load(),
 	)
+	//for test
+	objs := make(map[string]struct{})
+	for _, r := range ranges[1:] {
+		blk := catalog.DecodeBlockInfo(r)
+		objName := blk.BlockID.ShortStringEx()
+		if _, ok := objs[objName]; !ok {
+			objs[objName] = struct{}{}
+		}
+	}
+	for obj := range objs {
+		logutil.Infof("xxxx ranges, txn:%s, visible obj:%s", tbl.db.txn.op.Txn().DebugString(), obj)
+	}
+	iter := part.NewObjectsIterForTest()
+	defer iter.Close()
+	for iter.Next() {
+		obj := iter.Entry()
+		objName := obj.Location().Name().String()
+		logutil.Infof("xxxx ranges, txn:%s, obj in partition state:%s,%v,%v,%s,%s ",
+			tbl.db.txn.op.Txn().DebugString(),
+			objName,
+			obj.EntryState,
+			obj.HasDeltaLoc,
+			obj.CreateTime.ToTimestamp().DebugString(),
+			obj.DeleteTime.ToTimestamp().DebugString())
+	}
+
 	return
 }
 

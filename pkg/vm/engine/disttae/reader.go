@@ -361,6 +361,9 @@ func (r *blockReader) Read(
 		filter,
 		r.fs, mp, vp,
 	)
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		panic("xxxx BlockRead: file not found !!")
+	}
 	if err != nil {
 		return nil, err
 	}

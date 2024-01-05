@@ -39,6 +39,46 @@ func (p *PartitionState) ApproxObjectsNum() int {
 	return p.dataObjects.Len()
 }
 
+// just for test
+type objectsIterForTest struct {
+	iter        btree.IterG[ObjectIndexByCreateTSEntry]
+	firstCalled bool
+}
+
+func (p *PartitionState) NewObjectsIterForTest() *objectsIterForTest {
+	iter := p.dataObjectsByCreateTS.Copy().Iter()
+	ret := &objectsIterForTest{
+		iter: iter,
+	}
+	return ret
+}
+
+var _ ObjectsIter = new(objectsIterForTest)
+
+func (b *objectsIterForTest) Next() bool {
+	if !b.firstCalled {
+		if !b.iter.First() {
+			return false
+		}
+		b.firstCalled = true
+		return true
+	}
+	return b.iter.Next()
+}
+
+func (b *objectsIterForTest) Entry() ObjectEntry {
+	return ObjectEntry{
+		ObjectInfo: b.iter.Item().ObjectInfo,
+	}
+}
+
+func (b *objectsIterForTest) Close() error {
+	b.iter.Release()
+	return nil
+}
+
+//end test
+
 func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 	if ts.Less(p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
