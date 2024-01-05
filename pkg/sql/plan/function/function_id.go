@@ -348,6 +348,7 @@ const (
 	L2_DISTANCE     //L2_DISTANCE
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
+	SLICE_VECTOR    // SLICE_VECTOR
 
 	PYTHON_UDF
 
@@ -431,6 +432,7 @@ var functionIdRegister = map[string]int32{
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
 	"cluster_centers":       CLUSTER_CENTERS,
+	"slice_vector":          SLICE_VECTOR,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,

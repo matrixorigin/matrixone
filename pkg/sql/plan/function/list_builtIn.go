@@ -1985,6 +1985,36 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `slice_vector`
+	{
+		functionId: SLICE_VECTOR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SliceVectorWith3Args[float32]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SliceVectorWith3Args[float64]
+				},
+			},
+		},
+	},
 }
 
 var supportedMathBuiltIns = []FuncNew{

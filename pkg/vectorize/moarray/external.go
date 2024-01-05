@@ -270,4 +270,10 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 	return out, nil
 }
 
+func VectorSlice[T types.RealNumbers](v []T, start, len int64) ([]T, error) {
+	vec := ToGonumVector[T](v)
+	res := vec.SliceVec(int(start), int(len))
+	return ToMoArray[T](res.(*mat.VecDense)), nil
+}
+
 /* ------------ [END] mat.VecDense not supported functions ------- */

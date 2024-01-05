@@ -125,6 +125,37 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	})
 }
 
+func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		in, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			_in := types.BytesToArray[T](in)
+			out, err := moarray.VectorSlice[T](_in, s, l)
+			if err != nil {
+				return err
+			}
+			_out := types.ArrayToBytes[T](out)
+
+			if err = rs.AppendBytes(_out, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0
