@@ -62,7 +62,7 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 		if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
 			logutil.Error("memory leak detected",
 				zap.Any("ptr", pHdr),
-				zap.Int("size", allocSz),
+				zap.Int("size", int(allocSz)),
 				zap.String("stack", stack),
 			)
 		}
