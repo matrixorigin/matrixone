@@ -2047,7 +2047,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float32, types.T_varchar, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float32.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return ScalarOp[float32]
@@ -2057,7 +2057,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_array_float64, types.T_varchar, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return ScalarOp[float64]
