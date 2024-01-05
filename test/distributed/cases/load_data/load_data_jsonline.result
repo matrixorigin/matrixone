@@ -290,3 +290,8 @@ col1    col2    col3    col4
 null    null    null    40.0200000000000000
 -1.763835E21    -1.0E-14    1.2345600000000000    3.9800000000000000
 -345.34244    -1.1118772349834299E73    8349538974359357.0000000000000000    3.9484359854839584
+drop table if exists jsonline01;
+create table jsonline01(col1 bool,col2 int,col3 varchar, col4 date,col5 datetime,col6 timestamp,col7 decimal,col8 float);
+load data infile {'filepath'='$resources/load_data/jsonline_array01.jl','format'='jsonline','jsondata'='array'} into table jsonline01;
+invalid input: [true,1,"var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18",121.11,"1","1qaz",null,null] , wrong number of colunms
+drop table jsonline01;

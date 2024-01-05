@@ -56,8 +56,8 @@ func isCmdStmtPrepare(p []byte) bool {
 	return false
 }
 
-func isCmdStmtExecute(p []byte) bool {
-	if len(p) > 4 && p[4] == byte(cmdStmtExecute) {
+func isCmdStmtClose(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdStmtClose) {
 		return true
 	}
 	return false
