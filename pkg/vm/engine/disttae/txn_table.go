@@ -629,15 +629,15 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	defer iter.Close()
 	for iter.Next() {
 		obj := iter.Entry()
-		objName := obj.Location().Name().String()
+		segId := obj.Location().ShortName().Segmentid().ToString()
 		aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
-			aObjs, objName, obj.EntryState, obj.HasDeltaLoc,
+			aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
 			obj.CreateTime.ToTimestamp().DebugString(),
 			obj.DeleteTime.ToTimestamp().DebugString())
-		logutil.Infof("xxxx ranges, txn:%s, all objs in partition state:[%s]",
-			tbl.db.txn.op.Txn().DebugString(),
-			aObjs)
 	}
+	logutil.Infof("xxxx ranges, txn:%s, all objs in partition state:[%s]",
+		tbl.db.txn.op.Txn().DebugString(),
+		aObjs)
 	//test end
 
 	return
