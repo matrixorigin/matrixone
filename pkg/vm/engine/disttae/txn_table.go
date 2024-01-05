@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 	"unsafe"
@@ -614,22 +615,30 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			objs[objName] = struct{}{}
 		}
 	}
+
+	vObjs := ""
 	for obj := range objs {
-		logutil.Infof("xxxx ranges, txn:%s, visible obj:%s", tbl.db.txn.op.Txn().DebugString(), obj)
+		vObjs = fmt.Sprintf("%s, %s", vObjs, obj)
 	}
+	logutil.Infof("xxxx ranges, txn:%s, visible objs:[%s]",
+		tbl.db.txn.op.Txn().DebugString(),
+		vObjs)
+
+	aObjs := ""
 	iter := part.NewObjectsIterForTest()
 	defer iter.Close()
 	for iter.Next() {
 		obj := iter.Entry()
 		objName := obj.Location().Name().String()
-		logutil.Infof("xxxx ranges, txn:%s, obj in partition state:%s,%v,%v,%s,%s ",
-			tbl.db.txn.op.Txn().DebugString(),
-			objName,
-			obj.EntryState,
-			obj.HasDeltaLoc,
+		aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
+			aObjs, objName, obj.EntryState, obj.HasDeltaLoc,
 			obj.CreateTime.ToTimestamp().DebugString(),
 			obj.DeleteTime.ToTimestamp().DebugString())
+		logutil.Infof("xxxx ranges, txn:%s, all objs in partition state:[%s]",
+			tbl.db.txn.op.Txn().DebugString(),
+			aObjs)
 	}
+	//test end
 
 	return
 }
