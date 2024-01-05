@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"go/constant"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -59,7 +60,7 @@ func (m *mockedBackgroundHandler) ClearExecResultSet() {}
 func (m *mockedBackgroundHandler) GetExecResultBatches() []*batch.Batch {
 	if m.currentSql == getAccountIdNamesSql {
 		return m.accountIdNamesBatches
-	} else if m.currentSql == getPubsSql {
+	} else if strings.HasPrefix(m.currentSql, getPubsSql) {
 		return m.pubBatches[m.accountId]
 	} else {
 		return m.subBatches
@@ -258,7 +259,7 @@ func TestDoShowSubscriptionsAll(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
-	expected = []interface{}{"pub2", "sys", "db2", "0001-01-01 08:05:45", "", ""}
+	expected = []interface{}{"pub2", "sys", "db2", "0001-01-01 08:05:45", nil, nil}
 	actual, err = rs.GetRow(ctx, uint64(2))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)

@@ -7,6 +7,7 @@ create publication sys_pub_1 database sys_db_1;
 set global syspublications = "sys_pub_1";
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 -- @session:id=1&user=acc_idx:root&password=123456
+-- @ignore:3,5
 show subscriptions;
 -- @session
 set global syspublications = default;

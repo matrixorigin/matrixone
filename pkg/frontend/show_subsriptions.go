@@ -319,7 +319,12 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 			continue
 		}
 
-		rs.AddRow([]interface{}{pub.pubName, pub.pubAccount, pub.pubDatabase, pub.pubTime, pub.subName, pub.subTime})
+		var subName, subTime interface{}
+		subName, subTime = pub.subName, pub.subTime
+		if len(pub.subName) == 0 {
+			subName, subTime = nil, nil
+		}
+		rs.AddRow([]interface{}{pub.pubName, pub.pubAccount, pub.pubDatabase, pub.pubTime, subName, subTime})
 	}
 	ses.SetMysqlResultSet(rs)
 	return nil
