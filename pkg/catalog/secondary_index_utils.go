@@ -157,12 +157,10 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList < 0 {
-			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be >= 0")
-		} else if def.IndexOption.AlgoParamList > 0 {
-			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		if def.IndexOption.AlgoParamList <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
 		} else {
-			res[IndexAlgoParamLists] = "1" // set lists = 1 as default
+			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
