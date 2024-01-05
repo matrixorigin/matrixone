@@ -10424,6 +10424,8 @@ non_reserved_keyword:
 |	CREDENTIALS
 |	BINDINGS
 |	UNDERSCORE_BINARY
+|	IMPORT
+|	STREAM
 
 func_not_keyword:
     DATE_ADD
