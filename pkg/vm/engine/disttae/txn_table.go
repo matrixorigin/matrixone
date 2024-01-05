@@ -1218,11 +1218,6 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	return nil
 }
 
-// refactor
-func (tbl *txnTable) AlterTable2(ctx context.Context, c *engine.ConstraintDef, partitionDef engine.PartitionDef, constraint [][]byte) error {
-	return nil
-}
-
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
 	ct, err := c.MarshalBinary()
 	if err != nil {
