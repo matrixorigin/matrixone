@@ -915,9 +915,11 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		if entry.IsDelete {
 			objIDsToDelete[entry.ShortObjName] = struct{}{}
 			if gced {
-				objectsToDelete = fmt.Sprintf("%s, %v", objectsToDelete, entry.ShortObjName)
+				objectsToDelete = fmt.Sprintf("%s, %s",
+					objectsToDelete, entry.ShortObjName.Segmentid().ToString())
 			} else {
-				objectsToDelete = fmt.Sprintf("%s%v", objectsToDelete, entry.ShortObjName)
+				objectsToDelete = fmt.Sprintf("%s%s",
+					objectsToDelete, entry.ShortObjName.Segmentid().ToString())
 			}
 			gced = true
 		}
@@ -937,7 +939,8 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		}
 	}
 	if gced {
-		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objectsToDelete)
+		logutil.Infof("GC partition_state at %v for table %d:%s",
+			ts.ToString(), ids[1], objectsToDelete)
 	}
 
 	objsToDelete := ""
