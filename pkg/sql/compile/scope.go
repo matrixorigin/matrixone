@@ -675,7 +675,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		switch in.Op {
 		case vm.Top:
 			flg = true
-			idx = i + 1
+			idx = i
 			arg := in.Arg.(*top.Argument)
 			// release the useless arg
 			s.Instructions = s.Instructions[i:]
@@ -696,6 +696,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithLimit(arg.Limit),
 				})
 			}
+			arg.Release()
 		//case vm.Order:
 		//	flg = true
 		//	arg := in.Arg.(*order.Argument)
@@ -719,7 +720,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		//	}
 		case vm.Limit:
 			flg = true
-			idx = i + 1
+			idx = i
 			arg := in.Arg.(*limit.Argument)
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
@@ -737,9 +738,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithLimit(arg.Limit),
 				})
 			}
+			arg.Release()
 		case vm.Group:
 			flg = true
-			idx = i + 1
+			idx = i
 			arg := in.Arg.(*group.Argument)
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
@@ -760,11 +762,12 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithMultiAggs(arg.MultiAggs),
 				})
 			}
+			arg.Release()
 		case vm.Sample:
 			arg := in.Arg.(*sample.Argument)
 			if !arg.IsMergeSampleByRow() {
 				flg = true
-				idx = i + 1
+				idx = i
 				// if by percent, there is no need to do merge sample.
 				if arg.IsByPercent() {
 					s.Instructions = s.Instructions[i:]
@@ -792,10 +795,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					})
 				}
 			}
-
+			arg.Release()
 		case vm.Offset:
 			flg = true
-			idx = i + 1
+			idx = i
 			arg := in.Arg.(*offset.Argument)
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
@@ -813,6 +816,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithOffset(arg.Offset),
 				})
 			}
+			arg.Release()
 		case vm.Output:
 		default:
 			for j := range ss {
