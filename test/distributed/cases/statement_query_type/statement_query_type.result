@@ -166,6 +166,7 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
+insert into test_table values (4,'d');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
 create role test_role;
@@ -557,6 +558,9 @@ column_0    column_1
 /* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 /* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
 /* cloud_nonuser */ delete from test_table where col1=3;
+/* cloud_nonuser */ select sleep(5);
+sleep(5)
+0
 /* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_nonuser */ create role test_role;
 /* cloud_nonuser */ create user user_name identified by 'password';
@@ -611,7 +615,7 @@ sleep(1)
 select sleep(30);
 sleep(30)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
@@ -646,6 +650,7 @@ create database if not exists db1    DDL    cloud_nonuser_sql
 create user user_name identified by '******'    DCL    cloud_nonuser_sql
 create role test_role    DCL    cloud_nonuser_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_nonuser_sql
+select sleep(5)    DQL    cloud_nonuser_sql
 delete from test_table where col1=3    DML    cloud_nonuser_sql
 update test_table set col2='xxx' where col1=1    DML    cloud_nonuser_sql
 insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_nonuser_sql

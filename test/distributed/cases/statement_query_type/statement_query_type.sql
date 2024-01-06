@@ -125,6 +125,7 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
+insert into test_table values (4,'d');
 
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
@@ -283,6 +284,7 @@ select sleep(30);
 /* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 /* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
 /* cloud_nonuser */ delete from test_table where col1=3;
+/* cloud_nonuser */ select sleep(5);
 
 /* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_nonuser */ create role test_role;
@@ -330,7 +332,7 @@ select sleep(30);
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
 select sleep(30);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 
 -- CASE: last
 begin;
