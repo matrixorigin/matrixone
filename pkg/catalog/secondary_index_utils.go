@@ -78,6 +78,9 @@ func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
 	if totalCnt > 10_000 && sampleCnt < 10_000 {
 		sampleCnt = 10_000
 	}
+	if sampleCnt > 10_000 {
+		sampleCnt = 10_000
+	}
 	return sampleCnt
 }
 

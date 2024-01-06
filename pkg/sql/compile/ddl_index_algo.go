@@ -304,7 +304,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
 		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
 		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, %s.%s)) as `__mo_index_rn` "+
+		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
 		"FROM "+
 		" %s CROSS JOIN %s "+
 		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
