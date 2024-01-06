@@ -107,6 +107,10 @@ select * from test_01;
 a    b
 1    a
 100    b
+select * from test_01;
+a    b
+1    a
+100    b
 explain select * from test_01;
 QUERY PLAN
 Project
@@ -571,9 +575,6 @@ column_0    column_1
 /* cloud_nonuser */ drop view view_2;
 /* cloud_nonuser */ drop table table_2;
 /* cloud_nonuser */ drop database db2;
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ prepare s1 from select * from test_table where col1=?;
 /* cloud_nonuser */ set @a=2;
 /* cloud_nonuser */ execute s1 using @a;
@@ -588,6 +589,9 @@ test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) D
 /* cloud_nonuser */ insert into test_01 values (1,'a');
 /* cloud_nonuser */ insert into test_01 values (2,'b');
 /* cloud_nonuser */ update test_01 set a=100 where b='b';
+/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ select * from test_01;
 a    b
 1    a
