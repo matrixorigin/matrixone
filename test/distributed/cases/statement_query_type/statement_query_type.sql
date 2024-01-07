@@ -326,7 +326,7 @@ select sleep(30);
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(1);
+/* cloud_nonuser */ select sleep(2);
 
 -- RESULT CHECK: part 3
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456

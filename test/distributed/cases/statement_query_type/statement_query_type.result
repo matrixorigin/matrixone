@@ -609,15 +609,15 @@ Project
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(1);
-sleep(1)
+/* cloud_nonuser */ select sleep(2);
+sleep(2)
 0
 select sleep(30);
 sleep(30)
 0
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 statement    query_type    sql_source_type
-select sleep(1)    DQL    cloud_nonuser_sql
+select sleep(2)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
 use system    Other    cloud_nonuser_sql
 drop table test_01    DDL    cloud_nonuser_sql
