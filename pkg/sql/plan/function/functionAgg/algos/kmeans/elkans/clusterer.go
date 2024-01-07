@@ -57,9 +57,10 @@ type ElkanClusterer struct {
 	clusterCnt int // k in paper
 	vectorCnt  int // n in paper
 
-	distFn   kmeans.DistanceFunction
-	initType kmeans.InitType
-	rand     *rand.Rand
+	distFn    kmeans.DistanceFunction
+	initType  kmeans.InitType
+	rand      *rand.Rand
+	normalize bool
 }
 
 // vectorMeta holds required information for Elkan's kmeans pruning.
@@ -79,6 +80,7 @@ var _ kmeans.Clusterer = new(ElkanClusterer)
 func NewKMeans(vectors [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType kmeans.DistanceType, initType kmeans.InitType,
+	normalize bool,
 ) (kmeans.Clusterer, error) {
 
 	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
@@ -129,13 +131,16 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		clusterCnt: clusterCnt,
 		vectorCnt:  len(vectors),
 
-		rand: rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
+		rand:      rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
+		normalize: normalize,
 	}, nil
 }
 
 // Normalize is required for spherical kmeans initialization.
 func (km *ElkanClusterer) Normalize() {
-	moarray.NormalizeGonumVectors(km.vectorList)
+	if km.normalize {
+		moarray.NormalizeGonumVectors(km.vectorList)
+	}
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
@@ -380,7 +385,9 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 			//newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
-			moarray.NormalizeGonumVector(newCentroids[c])
+			if km.normalize {
+				moarray.NormalizeGonumVector(newCentroids[c])
+			}
 		} else {
 			// find the mean of the cluster members
 			// note: we don't need to normalize here, since the vectors are already normalized

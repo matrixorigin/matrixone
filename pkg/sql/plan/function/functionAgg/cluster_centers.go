@@ -104,6 +104,7 @@ type sAggClusterCenters struct {
 	clusterCnt uint64
 	distType   kmeans.DistanceType
 	initType   kmeans.InitType
+	normalize  bool
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector from []byte to []float64 or []float32
@@ -197,7 +198,7 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		vecf64List := s.bytesListToVecF64List(arrGroup)
 
 		// 2. run kmeans
-		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, s.initType)
+		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, s.initType, s.normalize)
 		if err != nil {
 			return nil, err
 		}
