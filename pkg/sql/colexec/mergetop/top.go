@@ -27,9 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_top"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("mergetop([")
+	buf.WriteString(": mergetop([")
 	for i, f := range ap.Fs {
 		if i > 0 {
 			buf.WriteString(", ")
