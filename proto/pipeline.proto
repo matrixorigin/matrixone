@@ -93,6 +93,8 @@ message Group {
   repeated MultiArguemnt MultiAggs = 7;
   bool isShuffle = 8;
   uint64 preAllocSize = 9;
+  bytes PartialResults = 10;
+  repeated uint32 PartialResultTypes = 11;
 }
 
 message Insert{

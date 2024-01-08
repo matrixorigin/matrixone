@@ -141,6 +141,10 @@ func (b Blockid) Less(than Blockid) bool {
 	return b.Compare(than) < 0
 }
 
+func (b Blockid) Great(than Blockid) bool {
+	return b.Compare(than) > 0
+}
+
 func RandomRowid() Rowid {
 	var r Rowid
 	u := uuid.New()
