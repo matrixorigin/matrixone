@@ -319,7 +319,7 @@ func (s *service) getLockTableWithCreate(
 		if waitC != nil {
 			s.mu.Unlock()
 			<-waitC
-			return s.loadLockTable(group, tableID)
+			s.mu.Lock()
 		}
 
 		v := s.loadLockTable(group, tableID)
