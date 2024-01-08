@@ -21,11 +21,26 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
+
+const (
+	DefaultGCInterval = 1 * time.Second
+)
+
+func init() {
+	go func() {
+		ticker := time.Tick(DefaultGCInterval)
+		for {
+			<-ticker
+			debug.FreeOSMemory()
+		}
+	}()
+}
 
 func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	bs := make([]byte, requiredSpaceWithoutHeader+kMemHdrSz)
@@ -40,13 +55,14 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 	}
 	b := pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 	stack := string(debug.Stack())
-	runtime.SetFinalizer(&b[0], func(ptr *byte) {
-		hdr := unsafe.Add((unsafe.Pointer)(ptr), -kMemHdrSz)
+	runtime.SetFinalizer(&b, func(ptr *[]byte) {
+		d := *ptr
+		hdr := unsafe.Add((unsafe.Pointer)(&d[0]), -kMemHdrSz)
 		pHdr := (*memHdr)(unsafe.Pointer(hdr))
-		if atomic.LoadInt32(&pHdr.allocSz) >= 0 {
+		if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
 			logutil.Error("memory leak detected",
 				zap.Any("ptr", pHdr),
-				zap.Int("size", int(pHdr.allocSz)),
+				zap.Int("size", int(allocSz)),
 				zap.String("stack", stack),
 			)
 		}
