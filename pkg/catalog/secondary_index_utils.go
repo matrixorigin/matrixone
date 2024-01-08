@@ -67,20 +67,26 @@ const (
 
 const (
 	KmeansSamplePerList = 50
+	MaxSampleCount      = 10_000
 )
 
 // CalcSampleCount is used to calculate the sample count for Kmeans index.
 func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
-	sampleCnt = totalCnt
-	if sampleCnt > lists*KmeansSamplePerList {
+
+	if totalCnt > lists*KmeansSamplePerList {
 		sampleCnt = lists * KmeansSamplePerList
+	} else {
+		sampleCnt = totalCnt
 	}
-	if totalCnt > 10_000 && sampleCnt < 10_000 {
-		sampleCnt = 10_000
+
+	if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
+		sampleCnt = MaxSampleCount
 	}
-	if sampleCnt > 10_000 {
-		sampleCnt = 10_000
+
+	if sampleCnt > MaxSampleCount {
+		sampleCnt = MaxSampleCount
 	}
+
 	return sampleCnt
 }
 
