@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -51,6 +52,9 @@ type container struct {
 type Argument struct {
 	NeedEval bool // need to projection the aggregate column
 	ctr      *container
+
+	PartialResults     []any
+	PartialResultTypes []types.T
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

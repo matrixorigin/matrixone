@@ -130,9 +130,10 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx       int
-	ShuffleCnt     int
-	PartialResults []any
+	BuildIdx           int
+	ShuffleCnt         int
+	PartialResults     []any
+	PartialResultTypes []types.T
 }
 
 // canRemote checks whether the current scope can be executed remotely.

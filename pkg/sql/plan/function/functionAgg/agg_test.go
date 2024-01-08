@@ -28,12 +28,12 @@ import (
 )
 
 func testUnaryAggSupported(
-	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error),
+	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error),
 	paramSupported []types.T, getReturnType func(typ []types.Type) types.Type) error {
 	for _, t := range paramSupported {
 		inputs := []types.Type{t.ToType()}
 
-		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil, nil)
+		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil)
 		if err != nil {
 			return err
 		}

@@ -17,10 +17,11 @@ package group_concat
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"strings"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -431,4 +432,7 @@ func hasNull(vecs []*vector.Vector, rowIdx int64) bool {
 		}
 	}
 	return false
+}
+
+func (gc *GroupConcat) SetPartialResult(_ any) {
 }
