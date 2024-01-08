@@ -195,6 +195,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		// only m column deletion should be sent to cn. a and z can be seen as update according to pk, <tid-colname>
 		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, rename.OldName)
 		s.removeDroppedName(rename.NewName)
+		logutil.Infof("[Alter] rename column %s %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
