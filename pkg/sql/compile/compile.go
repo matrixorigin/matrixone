@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	gotrace "runtime/trace"
@@ -3835,186 +3836,186 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		return nodes, partialResults, partialResultTypes, nil
 	}
 
-	//engineType := rel.GetEngineType()
+	engineType := rel.GetEngineType()
 	if isPartitionTable {
 		rel = nil
 	}
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
-	//if isLaunchMode(c.cnList) {
-	return putBlocksInCurrentCN(c, ranges, rel, n), partialResults, partialResultTypes, nil
-	//}
+	if isLaunchMode(c.cnList) {
+		return putBlocksInCurrentCN(c, ranges, rel, n), partialResults, partialResultTypes, nil
+	}
 	// disttae engine
-	//if engineType == engine.Disttae {
-	//	nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
-	//	return nodes, partialResults, partialResultTypes, err
-	//}
-	//// maybe temp table on memengine , just put payloads in average
-	//return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
+	if engineType == engine.Disttae {
+		nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
+		return nodes, partialResults, partialResultTypes, err
+	}
+	// maybe temp table on memengine , just put payloads in average
+	return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
 }
 
-//func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
-//	var nodes engine.Nodes
-//	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
-//	for i := 0; i < len(ranges); i += step {
-//		j := i / step
-//		if i+step >= len(ranges) {
-//			if isSameCN(c.cnList[j].Addr, c.addr) {
-//				if len(nodes) == 0 {
-//					nodes = append(nodes, engine.Node{
-//						Addr: c.addr,
-//						Rel:  rel,
-//						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-//					})
-//				}
-//				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
-//			} else {
-//				nodes = append(nodes, engine.Node{
-//					Rel:  rel,
-//					Id:   c.cnList[j].Id,
-//					Addr: c.cnList[j].Addr,
-//					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-//					Data: ranges[i:],
-//				})
-//			}
-//		} else {
-//			if isSameCN(c.cnList[j].Addr, c.addr) {
-//				if len(nodes) == 0 {
-//					nodes = append(nodes, engine.Node{
-//						Rel:  rel,
-//						Addr: c.addr,
-//						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-//					})
-//				}
-//				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
-//			} else {
-//				nodes = append(nodes, engine.Node{
-//					Rel:  rel,
-//					Id:   c.cnList[j].Id,
-//					Addr: c.cnList[j].Addr,
-//					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-//					Data: ranges[i : i+step],
-//				})
-//			}
-//		}
-//	}
-//	return nodes
-//}
-//
-//func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
-//	var nodes engine.Nodes
-//	//add current CN
-//	nodes = append(nodes, engine.Node{
-//		Addr: c.addr,
-//		Rel:  rel,
-//		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
-//	})
-//	//add memory table block
-//	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-//	ranges = ranges[1:]
-//	// only memory table block
-//	if len(ranges) == 0 {
-//		return nodes, nil
-//	}
-//	//only one cn
-//	if len(c.cnList) == 1 {
-//		nodes[0].Data = append(nodes[0].Data, ranges...)
-//		return nodes, nil
-//	}
-//	// put dirty blocks which can't be distributed remotely in current CN.
-//	newRanges := make([][]byte, 0, len(ranges))
-//	for _, blk := range ranges {
-//		blkInfo := catalog.DecodeBlockInfo(blk)
-//		if blkInfo.CanRemote {
-//			newRanges = append(newRanges, blk)
-//			continue
-//		}
-//		nodes[0].Data = append(nodes[0].Data, blk)
-//	}
-//
-//	//add the rest of CNs in list
-//	for i := range c.cnList {
-//		if c.cnList[i].Addr != c.addr {
-//			nodes = append(nodes, engine.Node{
-//				Rel:  rel,
-//				Id:   c.cnList[i].Id,
-//				Addr: c.cnList[i].Addr,
-//				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
-//			})
-//		}
-//	}
-//
-//	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
-//
-//	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-//		err := shuffleBlocksByRange(c, newRanges, n, nodes)
-//		if err != nil {
-//			return nil, err
-//		}
-//	} else {
-//		shuffleBlocksByHash(c, newRanges, nodes)
-//	}
-//
-//	minWorkLoad := math.MaxInt32
-//	maxWorkLoad := 0
-//	//remove empty node from nodes
-//	var newNodes engine.Nodes
-//	for i := range nodes {
-//		if len(nodes[i].Data) > maxWorkLoad {
-//			maxWorkLoad = len(nodes[i].Data)
-//		}
-//		if len(nodes[i].Data) < minWorkLoad {
-//			minWorkLoad = len(nodes[i].Data)
-//		}
-//		if len(nodes[i].Data) > 0 {
-//			newNodes = append(newNodes, nodes[i])
-//		}
-//	}
-//	if minWorkLoad*2 < maxWorkLoad {
-//		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
-//		logstring = logstring + " cnlist: "
-//		for i := range c.cnList {
-//			logstring = logstring + c.cnList[i].Addr + " "
-//		}
-//		logutil.Warnf(logstring)
-//	}
-//	return newNodes, nil
-//}
+func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+	var nodes engine.Nodes
+	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < len(ranges); i += step {
+		j := i / step
+		if i+step >= len(ranges) {
+			if isSameCN(c.cnList[j].Addr, c.addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Addr: c.addr,
+						Rel:  rel,
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+					})
+				}
+				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i:],
+				})
+			}
+		} else {
+			if isSameCN(c.cnList[j].Addr, c.addr) {
+				if len(nodes) == 0 {
+					nodes = append(nodes, engine.Node{
+						Rel:  rel,
+						Addr: c.addr,
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+					})
+				}
+				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
+			} else {
+				nodes = append(nodes, engine.Node{
+					Rel:  rel,
+					Id:   c.cnList[j].Id,
+					Addr: c.cnList[j].Addr,
+					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
+					Data: ranges[i : i+step],
+				})
+			}
+		}
+	}
+	return nodes
+}
 
-//func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
-//	for i, blk := range ranges {
-//		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
-//		// get timestamp in objName to make sure it is random enough
-//		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
-//		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-//		nodes[index].Data = append(nodes[index].Data, blk)
-//	}
-//}
-//
-//func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
-//	var objDataMeta objectio.ObjectDataMeta
-//	var objMeta objectio.ObjectMeta
-//
-//	for i, blk := range ranges {
-//		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
-//		location := unmarshalledBlockInfo.MetaLocation()
-//		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
-//		if err != nil {
-//			return err
-//		}
-//		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-//			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, false, fs); err != nil {
-//				return err
-//			}
-//			objDataMeta = objMeta.MustDataMeta()
-//		}
-//		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-//		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
-//		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
-//		nodes[index].Data = append(nodes[index].Data, blk)
-//	}
-//	return nil
-//}
+func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
+	var nodes engine.Nodes
+	//add current CN
+	nodes = append(nodes, engine.Node{
+		Addr: c.addr,
+		Rel:  rel,
+		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+	})
+	//add memory table block
+	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
+	ranges = ranges[1:]
+	// only memory table block
+	if len(ranges) == 0 {
+		return nodes, nil
+	}
+	//only one cn
+	if len(c.cnList) == 1 {
+		nodes[0].Data = append(nodes[0].Data, ranges...)
+		return nodes, nil
+	}
+	// put dirty blocks which can't be distributed remotely in current CN.
+	newRanges := make([][]byte, 0, len(ranges))
+	for _, blk := range ranges {
+		blkInfo := catalog.DecodeBlockInfo(blk)
+		if blkInfo.CanRemote {
+			newRanges = append(newRanges, blk)
+			continue
+		}
+		nodes[0].Data = append(nodes[0].Data, blk)
+	}
+
+	//add the rest of CNs in list
+	for i := range c.cnList {
+		if c.cnList[i].Addr != c.addr {
+			nodes = append(nodes, engine.Node{
+				Rel:  rel,
+				Id:   c.cnList[i].Id,
+				Addr: c.cnList[i].Addr,
+				Mcpu: c.generateCPUNumber(c.cnList[i].Mcpu, int(n.Stats.BlockNum)),
+			})
+		}
+	}
+
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
+
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+		err := shuffleBlocksByRange(c, newRanges, n, nodes)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		shuffleBlocksByHash(c, newRanges, nodes)
+	}
+
+	minWorkLoad := math.MaxInt32
+	maxWorkLoad := 0
+	//remove empty node from nodes
+	var newNodes engine.Nodes
+	for i := range nodes {
+		if len(nodes[i].Data) > maxWorkLoad {
+			maxWorkLoad = len(nodes[i].Data)
+		}
+		if len(nodes[i].Data) < minWorkLoad {
+			minWorkLoad = len(nodes[i].Data)
+		}
+		if len(nodes[i].Data) > 0 {
+			newNodes = append(newNodes, nodes[i])
+		}
+	}
+	if minWorkLoad*2 < maxWorkLoad {
+		logstring := fmt.Sprintf("read table %v ,workload among %v nodes not balanced, max %v, min %v,", n.TableDef.Name, len(newNodes), maxWorkLoad, minWorkLoad)
+		logstring = logstring + " cnlist: "
+		for i := range c.cnList {
+			logstring = logstring + c.cnList[i].Addr + " "
+		}
+		logutil.Warnf(logstring)
+	}
+	return newNodes, nil
+}
+
+func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+		// get timestamp in objName to make sure it is random enough
+		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
+		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+}
+
+func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
+	var objDataMeta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
+
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+		location := unmarshalledBlockInfo.MetaLocation()
+		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return err
+		}
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, false, fs); err != nil {
+				return err
+			}
+			objDataMeta = objMeta.MustDataMeta()
+		}
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+	return nil
+}
 
 func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
@@ -4076,14 +4077,14 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 	}
 }
 
-//func isLaunchMode(cnlist engine.Nodes) bool {
-//	for i := range cnlist {
-//		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
-//			return false
-//		}
-//	}
-//	return true
-//}
+func isLaunchMode(cnlist engine.Nodes) bool {
+	for i := range cnlist {
+		if !isSameCN(cnlist[0].Addr, cnlist[i].Addr) {
+			return false
+		}
+	}
+	return true
+}
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
