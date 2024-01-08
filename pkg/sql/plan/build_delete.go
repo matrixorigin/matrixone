@@ -20,6 +20,10 @@ import (
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+        }()
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)

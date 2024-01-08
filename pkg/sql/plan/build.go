@@ -26,6 +26,10 @@ import (
 )
 
 func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
+        }()
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
@@ -45,6 +49,10 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
+        }()
 	//get query optimizer and execute Optimize
 	plan, err := BuildPlan(ctx, stmt.Statement, isPrepareStmt)
 	if err != nil {
@@ -57,6 +65,10 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 }
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
+        }()
 	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
 	defer task.End()
 	switch stmt := stmt.(type) {

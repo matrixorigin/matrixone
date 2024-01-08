@@ -282,6 +282,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+        }()
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil, nil
@@ -593,7 +597,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
-
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+        }()
 	dbName := obj.GetSchemaName()
 	checkSub := true
 	if obj.PubInfo != nil {

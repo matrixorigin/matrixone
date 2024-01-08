@@ -26,6 +26,10 @@ import (
 )
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildReplaceHistogram.Observe(time.Since(start).Seconds())
+        }()
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {
 		return nil, err

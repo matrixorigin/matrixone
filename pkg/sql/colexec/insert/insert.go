@@ -69,11 +69,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
-
+	t := time.Now()
 	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer func() {
 		anal.Stop()
+		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	if arg.ctr.state == vm.Build {

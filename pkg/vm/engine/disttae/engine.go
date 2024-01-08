@@ -399,6 +399,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
+        }()
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
 	var selector clusterservice.Selector

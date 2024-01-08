@@ -24,6 +24,10 @@ import (
 )
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
+        }()
 	tblInfo, err := getUpdateTableInfo(ctx, stmt)
 	if err != nil {
 		return nil, err

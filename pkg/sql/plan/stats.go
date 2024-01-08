@@ -127,6 +127,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *StatsInfoMap) {
+	start := time.Now()
+        defer func() {
+                v2.TxnStatementUpdateStatsInfoMapHistogram.Observe(time.Since(start).Seconds())
+        }()
 	s.ApproxObjectNumber = info.ApproxObjectNumber
 	s.AccurateObjectNumber = info.AccurateObjectNumber
 	s.BlockNumber = info.BlockNumber
