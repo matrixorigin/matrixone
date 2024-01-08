@@ -17,8 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2765,8 +2768,17 @@ func lockMoTable(
 	}
 	defer vec.Free(c.proc.Mp())
 
+	// time diff, tableName, dbName, account_id,
+	start := time.Now()
 	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}
+	elapsed := time.Since(start)
+	if elapsed > time.Second*30 {
+		errMsg := fmt.Sprintf("lockRows(%v, %s, %s)： lockmode:%v ,time consume: %s\n", c.proc.SessionInfo.AccountId, dbName, tblName, lockMode, elapsed)
+		logutil.Errorf("-------------------!!!!!------------- exec timeout : %v", errMsg)
+		debug.PrintStack()
+	}
+
 	return nil
 }
