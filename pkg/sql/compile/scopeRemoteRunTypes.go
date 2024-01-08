@@ -49,6 +49,14 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
+	// HandleNotifyTimeout
+	// todo: this is a bad design here.
+	//  we should do the waiting work in the prepare stage of the dispatch operator but not in the exec stage.
+	//      do the waiting work in the exec stage can save some execution time, but it will cause an unstable waiting time.
+	//		(because we cannot control the execution time of the running sql,
+	//		and the coming time of the first batch of the result is not a constant time.)
+	// 		see the codes in pkg/sql/colexec/dispatch/dispatch.go:waitRemoteRegsReady()
+	//
 	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
 	HandleNotifyTimeout = 300 * time.Second
 )
@@ -544,9 +552,6 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 				runtime.Gosched()
 			} else {
 				getCancel()
-				if opProc == nil {
-					return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid failed, dispatch process has done")
-				}
 				return opProc, nil
 			}
 		}

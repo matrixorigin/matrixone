@@ -1269,7 +1269,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		errorCode, sqlState, msg := RewriteError(err, mp.username)
+		ses.timestampMap[TSSendErrPacketStart] = time.Now()
 		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
+		ses.timestampMap[TSSendErrPacketEnd] = time.Now()
+		v2.SendErrPacketDurationHistogram.Observe(ses.timestampMap[TSSendErrPacketEnd].Sub(ses.timestampMap[TSSendErrPacketStart]).Seconds())
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return err2
@@ -1279,7 +1282,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	mp.incDebugCount(2)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
+	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {
