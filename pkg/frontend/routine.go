@@ -221,7 +221,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		logInfof(ses.GetDebugString(), fmt.Sprintf("mo received first request"))
+		logInfof(ses.GetDebugString(), "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()
