@@ -157,17 +157,18 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			Err:   make(chan error, 1),
 		}
 
+		// todo : the timeout should be removed.
+		//		but I keep it here because I don't know whether it will cause hung sometimes.
 		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
 
 		succeed := false
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
-		case <-dispatchProc.Ctx.Done():
-			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator failed, dispatch operator has done")
 		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
 		}
 		cancel()
 

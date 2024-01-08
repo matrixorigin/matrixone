@@ -167,6 +167,8 @@ type Protocol interface {
 
 	GetCapability() uint32
 
+	SetCapability(uint32)
+
 	GetConnectAttrs() map[string]string
 
 	IsTlsEstablished() bool
@@ -416,6 +418,10 @@ type FakeProtocol struct {
 
 func (fp *FakeProtocol) GetCapability() uint32 {
 	return DefaultCapability
+}
+
+func (fp *FakeProtocol) SetCapability(uint32) {
+
 }
 
 func (fp *FakeProtocol) IsTlsEstablished() bool {

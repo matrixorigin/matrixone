@@ -228,6 +228,10 @@ func (ip *internalProtocol) GetCapability() uint32 {
 	return DefaultCapability
 }
 
+func (ip *internalProtocol) SetCapability(uint32) {
+
+}
+
 func (ip *internalProtocol) IsTlsEstablished() bool {
 	return true
 }
