@@ -119,31 +119,12 @@ jobs:
         with:
           path: ./head
       - name: Set up Go
-        run: |
-          set +e;
-          GO_VERSION="1.20.9"
-          for i in {1..10}; do 
-            sudo bash -c "
-            set -ex;
-            rm -rf "go$GO_VERSION.linux-amd64.tar.gz";
-            rm -rf /usr/local/go;
-            wget "https://dl.google.com/go/go$GO_VERSION.linux-amd64.tar.gz" && tar -zxvf "go$GO_VERSION.linux-amd64.tar.gz" -C /usr/local/;
-            "
-            if [ "$?" -eq 0 ]; then
-              break;
-            fi
-
-            if [ "$i" -ge 10 ]; then
-              exit 1;
-            fi
-          done
-          echo "/usr/local/go/bin" >> $GITHUB_PATH
-          echo "$HOME/go/bin" >> $GITHUB_PATH
-          echo "GOROOT=/usr/local/go" >> $GITHUB_ENV
-          echo "GOPATH=$HOME/go" >> $GITHUB_ENV
-          echo "GOPROXY=https://goproxy.cn,direct" >> $GITHUB_ENV
+        uses: ./head/.github/actions/setup_env
+        with:
+          cache: "false"
       - name: Build MatrixOne
         run: |
+          export GOPROXY='https://goproxy.cn,direct'
           cd $GITHUB_WORKSPACE/head && make clean && make debug
           git rev-parse --short HEAD         
       - name: Start MO

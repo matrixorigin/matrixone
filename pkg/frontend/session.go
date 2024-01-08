@@ -84,8 +84,12 @@ const (
 	TSUpgradeTLSEnd   TS = "TSUpgradeTLSEnd"
 
 	// mysql protocol
-	TSAuthenticateStart TS = "TSAuthenticateStart"
-	TSAuthenticateEnd   TS = "TSAuthenticateEnd"
+	TSAuthenticateStart  TS = "TSAuthenticateStart"
+	TSAuthenticateEnd    TS = "TSAuthenticateEnd"
+	TSSendErrPacketStart TS = "TSSendErrPacketStart"
+	TSSendErrPacketEnd   TS = "TSSendErrPacketEnd"
+	TSSendOKPacketStart  TS = "TSSendOKPacketStart"
+	TSSendOKPacketEnd    TS = "TSSendOKPacketEnd"
 
 	// session
 	TSCheckTenantStart      TS = "TSCheckTenantStart"
