@@ -3805,7 +3805,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
+	} else if requestCtx.Value(defines.TenantIDKey{}) != nil {
+		if v := requestCtx.Value(defines.TenantIDKey{}); v != nil {
+			proc.SessionInfo.AccountId = v.(uint32)
+		}
+		if v := requestCtx.Value(defines.UserIDKey{}); v != nil {
+			proc.SessionInfo.UserId = v.(uint32)
+		}
+		if v := requestCtx.Value(defines.RoleIDKey{}); v != nil {
+			proc.SessionInfo.RoleId = v.(uint32)
+		}
 	} else {
+		panic("session must have tenant info")
 		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID

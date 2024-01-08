@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2037,6 +2038,10 @@ var NewBackgroundHandler = func(
 	return bh
 }
 
+func (bh *BackgroundHandler) UpdateAccount(acc *TenantInfo) {
+	bh.ses.SetTenantInfo(acc)
+}
+
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
 	bh.ses.Close()
@@ -2048,6 +2053,15 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 		ctx = bh.ses.GetRequestContext()
 	} else {
 		bh.ses.SetRequestContext(ctx)
+	}
+	// if bh.ses.GetTenantInfo() == nil {
+	// 	debug.PrintStack()
+	// 	panic("need account info 1")
+	// }
+	x := ctx.Value(defines.TenantIDKey{})
+	if x == nil {
+		debug.PrintStack()
+		panic("need account info 2")
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -2088,6 +2102,15 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 		ctx = bh.ses.GetRequestContext()
 	} else {
 		bh.ses.SetRequestContext(ctx)
+	}
+	// if bh.ses.GetTenantInfo() == nil {
+	// 	debug.PrintStack()
+	// 	panic("need account info 3")
+	// }
+	x := ctx.Value(defines.TenantIDKey{})
+	if x == nil {
+		debug.PrintStack()
+		panic("need account info 4")
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
