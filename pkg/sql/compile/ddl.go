@@ -2776,7 +2776,7 @@ func lockMoTable(
 	elapsed := time.Since(start)
 	if elapsed > time.Second*30 {
 		errMsg := fmt.Sprintf("lockRows(%v, %s, %s)： lockmode:%v ,time consume: %s\n", c.proc.SessionInfo.AccountId, dbName, tblName, lockMode, elapsed)
-		logutil.Errorf("-------------------!!!!!------------- exec timeout : %v", errMsg)
+		logutil.Errorf("-------------------xyxyxy------------- exec timeout : %v", errMsg)
 		debug.PrintStack()
 	}
 
