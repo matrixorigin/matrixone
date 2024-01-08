@@ -37,6 +37,7 @@ const (
 	defaultKmeansDistanceType   = kmeans.L2Distance
 	defaultKmeansInitType       = kmeans.Random
 	defaultKmeansClusterCnt     = 1
+	defaultKmeansNormalize      = false
 
 	configSeparator = ","
 )
@@ -61,9 +62,9 @@ func init() {
 }
 
 var (
-	//AggClusterCentersSupportedParameters = []types.T{
-	//	types.T_array_float32, types.T_array_float64,
-	//}
+	AggClusterCentersSupportedParameters = []types.T{
+		types.T_array_float32, types.T_array_float64,
+	}
 
 	AggClusterCentersReturnType = func(typs []types.Type) types.Type {
 		return types.T_varchar.ToType()
@@ -76,7 +77,7 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
-	aggPriv.clusterCnt, aggPriv.distType, aggPriv.initType, err = decodeConfig(config)
+	aggPriv.clusterCnt, aggPriv.distType, aggPriv.initType, aggPriv.normalize, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +296,11 @@ func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 	var initType = uint16(s.initType)
 	buf.Write(types.EncodeUint16(&initType))
 
-	// 5. groupedData
+	//5. normalize
+	var normalize = s.normalize
+	buf.Write(types.EncodeBool(&normalize))
+
+	// 6. groupedData
 	encoded, err := json.Marshal(s.groupedData)
 	if err != nil {
 		return nil, err
@@ -326,7 +331,11 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 	s.initType = kmeans.InitType(types.DecodeUint16(data[:2]))
 	data = data[2:]
 
-	// 5. groupedData
+	// 5. normalize
+	s.normalize = types.DecodeBool(data[:1])
+	data = data[1:]
+
+	// 6. groupedData
 	err := json.Unmarshal(data, &s.groupedData)
 	if err != nil {
 		return err
@@ -335,7 +344,7 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 }
 
 // decodeConfig will decode the config string (separated by configSeparator) and return the k and distance_type
-func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, initType kmeans.InitType, err error) {
+func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, initType kmeans.InitType, normalize bool, err error) {
 	bts, ok := config.([]byte)
 	if ok && bts != nil {
 		commaSeparatedConfigStr := string(bts)
@@ -371,15 +380,17 @@ func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, initType 
 				distType, err = parseDistType(configs[i])
 			case 2:
 				initType, err = parseInitType(configs[i])
+			case 3:
+				normalize, err = strconv.ParseBool(configs[i])
 			}
 			if err != nil {
-				return 0, defaultKmeansDistanceType, defaultKmeansInitType, err
+				return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, defaultKmeansNormalize, err
 			}
 		}
-		return k, distType, initType, nil
+		return k, distType, initType, normalize, nil
 
 	}
-	return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, nil
+	return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, defaultKmeansNormalize, nil
 }
 
 func deepCopy3DSlice(src [][][]byte) [][][]byte {

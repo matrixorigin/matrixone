@@ -188,7 +188,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		ROW_NUMBER() OVER(),
 		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
 		FROM
-		(SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
+		(SELECT cluster_centers(`embedding` kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
 		CROSS JOIN
 		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
 	*/
@@ -199,7 +199,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		"ROW_NUMBER() OVER(), "+
 		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
 		"FROM "+
-		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
+		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
 		"CROSS JOIN "+
 		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
 		insertSQL,
