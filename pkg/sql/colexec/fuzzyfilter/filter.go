@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package fuzzyfilter
 
 import (
@@ -59,8 +60,11 @@ Note:
     on duplicate key update
 */
 
+const argName = "fuzzy_filter"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" fuzzy check duplicate constraint")
+	buf.WriteString(argName)
+	buf.WriteString(": fuzzy check duplicate constraint")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
