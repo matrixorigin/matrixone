@@ -361,6 +361,12 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.capability = cap
+}
+
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
 }
