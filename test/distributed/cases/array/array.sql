@@ -166,13 +166,20 @@ create table t10(a int, b vecf32(3), c vecf64(3));
 insert into t10 values(1, "[1,2.4,3]", "[4.1,5,6]");
 insert into t10 values(2, "[3,4,5]", "[6,7.3,8]");
 insert into t10 values(3, "[5,6,7]", "[8,9,10]");
-select slice_vector(b, 1, 1) from t10;
-select slice_vector(b, 1, 2) from t10;
-select slice_vector(b, 1, 3) from t10;
-select slice_vector(b, 1, 4) from t10;
-select slice_vector(b, -1, 1) from t10;
-select slice_vector(b, -2, 1) from t10;
-select slice_vector(b, -3, 1) from t10;
+select subvector(b,1) from t10;
+select subvector(b,2) from t10;
+select subvector(b,3) from t10;
+select subvector(b,4) from t10;
+select subvector(b,-1) from t10;
+select subvector(b,-2) from t10;
+select subvector(b,-3) from t10;
+select subvector(b, 1, 1) from t10;
+select subvector(b, 1, 2) from t10;
+select subvector(b, 1, 3) from t10;
+select subvector(b, 1, 4) from t10;
+select subvector(b, -1, 1) from t10;
+select subvector(b, -2, 1) from t10;
+select subvector(b, -3, 1) from t10;
 
 -- Scale Op
 select scalar_op(b,"+", 2.0) from t10;

@@ -331,7 +331,7 @@ func TestL2NormArray(t *testing.T) {
 	}
 }
 
-func initSliceVecTestCase() []tcTemp {
+func initSubVectorTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "2",
@@ -496,8 +496,8 @@ func initSliceVecTestCase() []tcTemp {
 	}
 }
 
-func TestSliceVec(t *testing.T) {
-	testCases := initSliceVecTestCase()
+func TestSubVector(t *testing.T) {
+	testCases := initSubVectorTestCase()
 
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
@@ -506,16 +506,16 @@ func TestSliceVec(t *testing.T) {
 		case types.T_array_float32:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SliceVectorWith2Args[float32])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SliceVectorWith3Args[float32])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
 			}
 		case types.T_array_float64:
 			switch tc.info {
 			case "2":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SliceVectorWith2Args[float64])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
 			case "3":
-				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SliceVectorWith3Args[float64])
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
 			}
 		}
 

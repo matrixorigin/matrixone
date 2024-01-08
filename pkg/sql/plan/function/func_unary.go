@@ -125,7 +125,7 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	})
 }
 
-func SliceVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -141,9 +141,9 @@ func SliceVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result ve
 		} else {
 			var r []T
 			if s > 0 {
-				r = moarray.SliceArrFromLeft[T](types.BytesToArray[T](v), s-1)
+				r = moarray.SubArrayFromLeft[T](types.BytesToArray[T](v), s-1)
 			} else if s < 0 {
-				r = moarray.SliceArrFromRight[T](types.BytesToArray[T](v), -s)
+				r = moarray.SubArrayFromRight[T](types.BytesToArray[T](v), -s)
 			} else {
 				r = []T{}
 			}
@@ -155,7 +155,7 @@ func SliceVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result ve
 	return nil
 }
 
-func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -173,9 +173,9 @@ func SliceVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result ve
 		} else {
 			var r []T
 			if s > 0 {
-				r = moarray.SliceArrFromLeftWithLength[T](types.BytesToArray[T](in), s-1, l)
+				r = moarray.SubArrayFromLeftWithLength[T](types.BytesToArray[T](in), s-1, l)
 			} else if s < 0 {
-				r = moarray.SliceArrFromRightWithLength[T](types.BytesToArray[T](in), -s, l)
+				r = moarray.SubArrayFromRightWithLength[T](types.BytesToArray[T](in), -s, l)
 			} else {
 				r = []T{}
 			}

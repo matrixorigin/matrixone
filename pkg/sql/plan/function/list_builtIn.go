@@ -1985,9 +1985,9 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
-	// function `slice_vector`
+	// function `subvector`
 	{
-		functionId: SLICE_VECTOR,
+		functionId: SUB_VECTOR,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -2000,7 +2000,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_array_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SliceVectorWith2Args[float32]
+					return SubVectorWith2Args[float32]
 				},
 			},
 			{
@@ -2010,7 +2010,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_array_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SliceVectorWith2Args[float64]
+					return SubVectorWith2Args[float64]
 				},
 			},
 			{
@@ -2020,7 +2020,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_array_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SliceVectorWith3Args[float32]
+					return SubVectorWith3Args[float32]
 				},
 			},
 			{
@@ -2030,7 +2030,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_array_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SliceVectorWith3Args[float64]
+					return SubVectorWith3Args[float64]
 				},
 			},
 		},
