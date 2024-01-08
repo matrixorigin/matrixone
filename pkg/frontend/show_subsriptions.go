@@ -111,8 +111,11 @@ func getAccountIdNames(ctx context.Context, ses *Session, bh BackgroundExec, lik
 	var accountIds []int32
 	var accountNames []string
 	for _, batch := range bh.GetExecResultBatches() {
+		mrs := &MysqlResultSet{
+			Columns: make([]Column, len(batch.Vecs)),
+		}
+		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
 			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
 			if err != nil {
 				return nil, nil, err
@@ -153,8 +156,11 @@ func getPubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId int
 
 	var pubs []*published
 	for _, batch := range bh.GetExecResultBatches() {
+		mrs := &MysqlResultSet{
+			Columns: make([]Column, len(batch.Vecs)),
+		}
+		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
 			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
 			if err != nil {
 				return nil, err
@@ -207,8 +213,11 @@ func getSubs(ctx context.Context, ses *Session, bh BackgroundExec, accountId uin
 
 	var subs []*subscribed
 	for _, batch := range bh.GetExecResultBatches() {
+		mrs := &MysqlResultSet{
+			Columns: make([]Column, len(batch.Vecs)),
+		}
+		oq := newFakeOutputQueue(mrs)
 		for i := 0; i < batch.RowCount(); i++ {
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, len(batch.Vecs), nil, nil)
 			row, err := extractRowFromEveryVector(ses, batch, i, oq, true)
 			if err != nil {
 				return nil, err
