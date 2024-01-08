@@ -17,6 +17,7 @@ package defines
 import (
 	"context"
 	"math"
+	"runtime/debug"
 	"sync"
 )
 
@@ -170,6 +171,8 @@ func GetAccountId(ctx context.Context) uint32 {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
 		return v.(uint32)
 	}
+	debug.PrintStack()
+	panic("no account id in context")
 	return 0
 }
 
