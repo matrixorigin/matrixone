@@ -1443,11 +1443,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		builder.pushdownLimit(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
@@ -1463,13 +1465,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.applyAssociativeLaw(rootID)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 
 		builder.qry.Steps[i] = rootID
 
