@@ -226,11 +226,14 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	vec := ToGonumVector[T](v)
 	switch operation {
 	case "+", "-":
+		//TODO: optimize this in future.
 		scalarVec := make([]float64, vec.Len())
-		for i := range scalarVec {
-			if operation == "+" {
+		if operation == "+" {
+			for i := range scalarVec {
 				scalarVec[i] = scalar
-			} else {
+			}
+		} else {
+			for i := range scalarVec {
 				scalarVec[i] = -scalar
 			}
 		}

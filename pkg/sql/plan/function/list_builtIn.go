@@ -2045,7 +2045,7 @@ var supportedArrayOperations = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_array_float32, types.T_varchar, types.T_float64},
+				args:       []types.T{types.T_array_float32, types.T_varchar, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
 				},

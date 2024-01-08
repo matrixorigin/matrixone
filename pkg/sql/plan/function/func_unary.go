@@ -191,7 +191,7 @@ func ScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	op := vector.GenerateFunctionStrParameter(ivecs[1])
-	num := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+	num := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		in, null1 := vs.GetStrValue(i)
@@ -203,7 +203,7 @@ func ScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 				return err
 			}
 		} else {
-			out, err := moarray.ScalarOp[T](types.BytesToArray[T](in), functionUtil.QuickBytesToStr(operation), scalar)
+			out, err := moarray.ScalarOp[T](types.BytesToArray[T](in), functionUtil.QuickBytesToStr(operation), float64(scalar))
 			if err != nil {
 				return err
 			}

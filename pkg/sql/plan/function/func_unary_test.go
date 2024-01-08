@@ -524,6 +524,73 @@ func TestSliceVec(t *testing.T) {
 	}
 }
 
+func initScalarOpTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			typ: types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"+"}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{3, 4, 5}},
+				[]bool{false}),
+		},
+		{
+			typ: types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"-"}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{-1, 0, 1}},
+				[]bool{false}),
+		},
+		{
+			typ: types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"*"}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{2, 4, 6}},
+				[]bool{false}),
+		},
+		{
+			typ: types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"/"}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{0.5, 1, 1.5}},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestScalarOpVec(t *testing.T) {
+	testCases := initScalarOpTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, ScalarOp[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, ScalarOp[float64])
+		}
+
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initAsciiStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
