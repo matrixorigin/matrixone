@@ -41,7 +41,6 @@
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
-MO_DUMP := mo-dump
 UNAME_S := $(shell uname -s)
 GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
@@ -109,9 +108,11 @@ build: config cgo
 	$(info [Build binary])
 	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
-.PHONY: modump
-modump:
-	$(CGO_OPTS) go build $(RACE_OPT) $(GOLDFLAGS) -o $(MO_DUMP) ./cmd/mo-dump
+# build mo-debug tool
+.PHONY: mo-debug
+mo-debug: config cgo
+	$(info [Build mo-debug tool])
+	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -200,13 +201,13 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.52.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.55.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
 static-check: config cgo err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` $(shell go list ./... | grep -v github.com/matrixorigin/matrixone/cmd/mo-dump)
+	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
