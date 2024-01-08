@@ -95,18 +95,6 @@ jobs:
           uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
           name_label: "doc influence"
           mentions: "Prinz,DengNan"
-  
-  auto-to-project:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issues' && github.event.action == 'opened'
-    steps:
-      - name: Add Issue To GitHub Project
-        uses: actions/add-to-project@v0.4.0
-        with:
-          project-url: https://github.com/orgs/matrixorigin/projects/13/views/1
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
-          label-operator: OR
 
   nightly-check:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -117,10 +105,9 @@ jobs:
           fetch-depth: '3'
           path: ./matrixone
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: ./matrixone/.github/actions/setup_env
         with:
-          go-version: '1.20'
-          cache: true
+          cache: false
       - name: Set Variables
         run: |
           echo "ut_report='UT-Report.out'" >> $GITHUB_ENV
