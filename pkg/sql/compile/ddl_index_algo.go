@@ -143,6 +143,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	kmeansInitType := "kmeansplusplus"
+	kmeansNormalize := "true"
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
@@ -199,7 +200,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		"ROW_NUMBER() OVER(), "+
 		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
 		"FROM "+
-		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
+		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
 		"CROSS JOIN "+
 		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
 		insertSQL,
@@ -212,6 +213,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		centroidParamsLists,
 		centroidParamsDistFn,
 		kmeansInitType,
+		kmeansNormalize,
 		sampleSQL,
 	)
 	err = c.runSql(clusterCentersSQL)
@@ -288,7 +290,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
 		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
 		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, tbl.embedding) ) as `__mo_index_rn`
+		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, normalize_l2(tbl.embedding) ) ) as `__mo_index_rn`
 		FROM tbl
 		CROSS JOIN
 		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
