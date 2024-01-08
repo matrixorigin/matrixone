@@ -90,7 +90,7 @@ func Test_NewKMeans(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType, false)
+				tt.fields.distType, tt.fields.initType, false) //<-- Not Spherical Kmeans UT
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewKMeans() error = %v, wantErr %v", err, tt.wantErr)
 				return

@@ -727,7 +727,7 @@ func TestClusterCenters(t *testing.T) {
 		clusterCnt: 2,
 		distType:   kmeans.L2Distance,
 		arrType:    types.T_array_float64.ToType(),
-		normalize:  true,
+		normalize:  true, // <-- Spherical Kmeans UT
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
 	var vecf64Input = [][]byte{
