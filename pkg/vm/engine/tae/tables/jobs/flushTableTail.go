@@ -68,8 +68,8 @@ type flushTableTailTask struct {
 	// record the row mapping from deleted blocks to created blocks
 	transMappings *txnentries.BlkTransferBooking
 
-	ablksMetas        []*catalog.BlockEntry
-	delSrcMetas       []*catalog.BlockEntry
+	ablksMetas        []*catalog.ObjectEntry
+	delSrcMetas       []*catalog.ObjectEntry
 	ablksHandles      []handle.Block
 	delSrcHandles     []handle.Block
 	createdBlkHandles []handle.Block

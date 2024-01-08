@@ -88,7 +88,7 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	var fs fileservice.FileService
 	var fromName, toName string
 
-	fromBlockEntry := entry.from.GetMeta().(*catalog.BlockEntry)
+	fromBlockEntry := entry.from.GetMeta().(*catalog.ObjectEntry)
 	fs = fromBlockEntry.GetBlockData().GetFs().Service
 
 	// do not delete nonappendable `from` block file because it can be compacted again if it has deletes

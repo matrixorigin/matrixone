@@ -33,18 +33,20 @@ import (
 
 type mergeBlocksEntry struct {
 	sync.RWMutex
-	txn           txnif.AsyncTxn
-	relation      handle.Relation
-	droppedObjs   []*catalog.ObjectEntry
-	deletes       []*nulls.Bitmap
-	createdObjs   []*catalog.ObjectEntry
-	droppedBlks   []*catalog.BlockEntry
-	createdBlks   []*catalog.BlockEntry
-	transMappings *BlkTransferBooking
-	mapping       []uint32
-	fromAddr      []uint32
-	toAddr        []uint32
-	skippedBlks   []int
+	txn         txnif.AsyncTxn
+	relation    handle.Relation
+	droppedObjs []*catalog.ObjectEntry
+	deletes     []*nulls.Bitmap
+	createdObjs []*catalog.ObjectEntry
+	// mergedBlkCnt       []int
+	// totalMergedBlkCnt  int
+	createdBlkCnt      []int
+	totalCreatedBlkCnt int
+	transMappings      *BlkTransferBooking
+	mapping            []uint32
+	fromAddr           []uint32
+	toAddr             []uint32
+	skippedBlks        []int
 
 	rt *dbutils.Runtime
 }
@@ -53,27 +55,32 @@ func NewMergeBlocksEntry(
 	txn txnif.AsyncTxn,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
-	droppedBlks, createdBlks []*catalog.BlockEntry,
 	transMappings *BlkTransferBooking,
 	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	rt *dbutils.Runtime,
 ) *mergeBlocksEntry {
+	createdBlkCnt := make([]int, len(createdObjs))
+	totalCreatedBlkCnt := 0
+	for i, obj := range createdObjs {
+		createdBlkCnt[i] = totalCreatedBlkCnt
+		totalCreatedBlkCnt += obj.BlockCnt()
+	}
 	return &mergeBlocksEntry{
-		txn:           txn,
-		relation:      relation,
-		createdObjs:   createdObjs,
-		droppedObjs:   droppedObjs,
-		createdBlks:   createdBlks,
-		droppedBlks:   droppedBlks,
-		transMappings: transMappings,
-		mapping:       mapping,
-		fromAddr:      fromAddr,
-		toAddr:        toAddr,
-		deletes:       deletes,
-		skippedBlks:   skipBlks,
-		rt:            rt,
+		txn:                txn,
+		relation:           relation,
+		createdObjs:        createdObjs,
+		totalCreatedBlkCnt: totalCreatedBlkCnt,
+		createdBlkCnt:      createdBlkCnt,
+		droppedObjs:        droppedObjs,
+		transMappings:      transMappings,
+		mapping:            mapping,
+		fromAddr:           fromAddr,
+		toAddr:             toAddr,
+		deletes:            deletes,
+		skippedBlks:        skipBlks,
+		rt:                 rt,
 	}
 }
 
@@ -101,21 +108,10 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 		id := blk.AsCommonID()
 		createdObjs = append(createdObjs, id)
 	}
-	droppedBlks := make([]*common.ID, 0)
-	for _, blk := range entry.droppedBlks {
-		id := blk.AsCommonID()
-		droppedBlks = append(droppedBlks, id)
-	}
-	createdBlks := make([]*common.ID, 0)
-	for _, blk := range entry.createdBlks {
-		createdBlks = append(createdBlks, blk.AsCommonID())
-	}
 	cmd = newMergeBlocksCmd(
 		entry.relation.ID(),
 		droppedObjs,
 		createdObjs,
-		droppedBlks,
-		createdBlks,
 		entry.mapping,
 		entry.fromAddr,
 		entry.toAddr,
@@ -137,22 +133,26 @@ func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
 }
 
 func (entry *mergeBlocksEntry) transferBlockDeletes(
-	dropped *catalog.BlockEntry,
-	blks []handle.Block,
+	dropped *catalog.ObjectEntry,
+	created handle.Object,
 	delTbls []*model.TransDels,
-	blkidx int) (err error) {
+	blkidx int,
+	blkID uint16) (err error) {
 
 	mapping := entry.transMappings.Mappings[blkidx]
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	tblEntry := dropped.GetObject().GetTable()
+	tblEntry := dropped.GetTable()
 	isTransient := !tblEntry.GetLastestSchema().HasPK()
 	id := dropped.AsCommonID()
+	id.SetBlockOffset(blkID)
 	page := model.NewTransferHashPage(id, time.Now(), isTransient)
 	for srcRow, dst := range mapping {
-		blkid := blks[dst.Idx].ID()
-		page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+		objid := created.GetID()
+		blkOffset := dst.Idx
+		blkID := objectio.NewBlockidWithObjectID(objid, uint16(blkOffset))
+		page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
 	}
 	_ = entry.rt.TransferTable.AddPage(page)
 
@@ -189,8 +189,8 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
 		delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-		if err = blks[destpos.Idx].RangeDelete(
-			uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+		if err = created.RangeDelete(
+			uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
 			return err
 		}
@@ -199,46 +199,40 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 }
 
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
-	blks := make([]handle.Block, len(entry.createdBlks))
-	delTbls := make([]*model.TransDels, len(entry.createdBlks))
-	for i, meta := range entry.createdBlks {
-		id := meta.AsCommonID()
-		obj, err := entry.relation.GetObject(id.ObjectID())
-		if err != nil {
-			return err
-		}
-		defer obj.Close()
-		blk, err := obj.GetBlock(id.BlockID)
-		if err != nil {
-			return err
-		}
-		blks[i] = blk
+	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
+	created, err := entry.relation.GetObject(&entry.createdObjs[0].ID)
+	if err != nil {
+		return
 	}
 
 	ids := make([]*common.ID, 0)
 
-	for idx, dropped := range entry.droppedBlks {
-		if entry.isSkipped(idx) {
-			if len(entry.transMappings.Mappings[idx]) != 0 {
-				panic("empty block do not match")
+	for idx, dropped := range entry.droppedObjs {
+		for i := 0; i < dropped.BlockCnt(); i++ {
+			if entry.isSkipped(idx) {
+				if len(entry.transMappings.Mappings[idx]) != 0 {
+					panic("empty block do not match")
+				}
+				continue
 			}
-			continue
-		}
 
-		if err = entry.transferBlockDeletes(
-			dropped,
-			blks,
-			delTbls,
-			idx); err != nil {
-			break
+			if err = entry.transferBlockDeletes(
+				dropped,
+				created,
+				delTbls,
+				idx,
+				uint16(i)); err != nil {
+				break
+			}
+			ids = append(ids, dropped.AsCommonID())
 		}
-		ids = append(ids, dropped.AsCommonID())
 	}
+	objID := entry.createdObjs[0].ID
 	if err == nil {
 		for i, delTbl := range delTbls {
 			if delTbl != nil {
-				destid := blks[i].ID()
-				entry.rt.TransferDelsMap.SetDelsForBlk(destid, delTbl)
+				destid := objectio.NewBlockidWithObjectID(&objID, uint16(i))
+				entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
 			}
 		}
 	}

@@ -30,8 +30,6 @@ type mergeBlocksCmd struct {
 	tid         uint64
 	droppedObjs []*common.ID
 	createdObjs []*common.ID
-	droppedBlks []*common.ID
-	createdBlks []*common.ID
 	mapping     []uint32
 	fromAddr    []uint32
 	toAddr      []uint32
@@ -41,7 +39,7 @@ type mergeBlocksCmd struct {
 
 func newMergeBlocksCmd(
 	tid uint64,
-	droppedObjs, createdObjs, droppedBlks, createdBlks []*common.ID,
+	droppedObjs, createdObjs []*common.ID,
 	mapping, fromAddr, toAddr []uint32,
 	txn txnif.AsyncTxn,
 	id uint32) *mergeBlocksCmd {
@@ -49,8 +47,6 @@ func newMergeBlocksCmd(
 		tid:         tid,
 		droppedObjs: droppedObjs,
 		createdObjs: createdObjs,
-		droppedBlks: droppedBlks,
-		createdBlks: createdBlks,
 		mapping:     mapping,
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
@@ -93,11 +89,11 @@ func (cmd *mergeBlocksCmd) UnmarshalBinary(buf []byte) (err error) {
 
 func (cmd *mergeBlocksCmd) Desc() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ]", s)
@@ -106,11 +102,11 @@ func (cmd *mergeBlocksCmd) Desc() string {
 
 func (cmd *mergeBlocksCmd) String() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ]", s)
@@ -118,11 +114,11 @@ func (cmd *mergeBlocksCmd) String() string {
 }
 func (cmd *mergeBlocksCmd) VerboseString() string {
 	s := "CmdName=MERGE;From=["
-	for _, blk := range cmd.droppedBlks {
+	for _, blk := range cmd.droppedObjs {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
-	for _, blk := range cmd.createdBlks {
+	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
 	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v", s, cmd.fromAddr, cmd.toAddr)

@@ -34,7 +34,6 @@ import (
 type BlockDataFactory = func(meta *ObjectEntry) data.Block
 type ObjectEntry struct {
 	ID     types.Objectid
-	Stat   ObjStat
 	blkCnt int
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table *TableEntry
@@ -113,7 +112,6 @@ func NewObjectEntry(
 		},
 	}
 	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
-	e.Stat.entry = e
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
@@ -140,7 +138,6 @@ func NewObjectEntryByMetaLocation(
 		},
 	}
 	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
-	e.Stat.entry = e
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
@@ -192,7 +189,6 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 		panic("not supported")
 	}
 	e.ID = *bid.Object()
-	e.Stat.entry = e
 	return e
 }
 func (entry *ObjectEntry) InitData(factory DataFactory) {

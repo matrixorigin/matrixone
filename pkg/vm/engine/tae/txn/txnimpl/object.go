@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -213,7 +214,25 @@ func (obj *txnObject) Close() (err error) {
 	// putObjectCnt.Add(1)
 	return
 }
-
+func (obj *txnObject) GetTotalChanges() int {
+	return obj.entry.GetBlockData().GetTotalChanges()
+}
+func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
+	schema := obj.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := makeWorkspaceVector(pkDef.Type)
+	defer pkVec.Close()
+	for row := start; row <= end; row++ {
+		pkVal, _, err := obj.entry.GetBlockData().GetValue(
+			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, mp,
+		)
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return obj.Txn.GetStore().RangeDelete(obj.entry.AsCommonID(), start, end, pkVec, dt)
+}
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return &obj.entry.ID }
@@ -255,4 +274,22 @@ func (obj *txnObject) CreateBlock(is1PC bool) (blk handle.Block, err error) {
 func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
 	id := obj.entry.AsCommonID()
 	return obj.Txn.GetStore().UpdateObjectStats(id, &stats)
+}
+
+func (obj *txnObject) Prefetch(idxes []int) error {
+	schema := obj.table.GetLocalSchema()
+	seqnums := make([]uint16, 0, len(idxes))
+	for _, idx := range idxes {
+		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
+	}
+	if obj.IsUncommitted() {
+		return obj.table.tableSpace.Prefetch(obj.entry, seqnums)
+	}
+	for i := 0; i < obj.entry.BlockCnt(); i++ {
+		err := obj.entry.GetBlockData().Prefetch(seqnums, uint16(i))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

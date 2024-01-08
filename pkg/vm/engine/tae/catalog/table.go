@@ -443,7 +443,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			return err
 		}
-		if err := processor.OnPostObject(Object); err != nil {
+		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 		objIt.Next()
