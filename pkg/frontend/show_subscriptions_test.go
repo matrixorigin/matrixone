@@ -19,6 +19,7 @@ import (
 	"go/constant"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -190,6 +191,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
 	ses := newTestSession(t, ctrl)
+	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 	defer ses.Close()
@@ -210,12 +212,12 @@ func TestDoShowSubscriptions(t *testing.T) {
 
 	var actual, expected []interface{}
 	// sort by sub_time, pub_time desc
-	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 08:05:47", "sub4", "0001-01-01 08:05:47"}
+	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 00:00:04", "sub4", "0001-01-01 00:00:04"}
 	actual, err = rs.GetRow(ctx, uint64(0))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
-	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 08:05:44", "sub1", "0001-01-01 08:05:44"}
+	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 00:00:01", "sub1", "0001-01-01 00:00:01"}
 	actual, err = rs.GetRow(ctx, uint64(1))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
@@ -229,6 +231,7 @@ func TestDoShowSubscriptionsAll(t *testing.T) {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
 	ses := newTestSession(t, ctrl)
+	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 	defer ses.Close()
@@ -249,17 +252,17 @@ func TestDoShowSubscriptionsAll(t *testing.T) {
 
 	var actual, expected []interface{}
 	// sort by sub_time, pub_time desc
-	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 08:05:47", "sub4", "0001-01-01 08:05:47"}
+	expected = []interface{}{"pub4", "account1", "db4", "0001-01-01 00:00:04", "sub4", "0001-01-01 00:00:04"}
 	actual, err = rs.GetRow(ctx, uint64(0))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
-	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 08:05:44", "sub1", "0001-01-01 08:05:44"}
+	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 00:00:01", "sub1", "0001-01-01 00:00:01"}
 	actual, err = rs.GetRow(ctx, uint64(1))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
 
-	expected = []interface{}{"pub2", "sys", "db2", "0001-01-01 08:05:45", nil, nil}
+	expected = []interface{}{"pub2", "sys", "db2", "0001-01-01 00:00:02", nil, nil}
 	actual, err = rs.GetRow(ctx, uint64(2))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
@@ -273,6 +276,7 @@ func TestDoShowSubscriptionsAllLike(t *testing.T) {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
 	ses := newTestSession(t, ctrl)
+	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
 	defer ses.Close()
@@ -298,7 +302,7 @@ func TestDoShowSubscriptionsAllLike(t *testing.T) {
 	require.Equal(t, uint64(1), rs.GetRowCount())
 
 	var actual, expected []interface{}
-	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 08:05:44", "sub1", "0001-01-01 08:05:44"}
+	expected = []interface{}{"pub1", "sys", "db1", "0001-01-01 00:00:01", "sub1", "0001-01-01 00:00:01"}
 	actual, err = rs.GetRow(ctx, uint64(0))
 	require.NoError(t, err)
 	require.Equal(t, expected, actual)
