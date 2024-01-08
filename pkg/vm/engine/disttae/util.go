@@ -21,7 +21,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1169,7 +1168,7 @@ func ListTnService(appendFn func(service *metadata.TNService)) {
 // UnfoldBlkInfoFromObjStats constructs a block info list from the given object stats.
 // this unfolds all block info at one operation, if an object contains a great many of blocks,
 // this operation is memory sensitive, we recommend another way, StatsBlkIter or ForEach.
-func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.BlockInfo) {
+func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.BlockInfo) {
 	if stats.IsZero() {
 		return blks
 	}
@@ -1186,9 +1185,9 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.Bloc
 		}
 		accumulate += blkRows
 		loc := objectio.BuildLocation(name, stats.Extent(), blkRows, idx)
-		blks = append(blks, catalog.BlockInfo{
+		blks = append(blks, objectio.BlockInfo{
 			BlockID:   *objectio.BuildObjectBlockid(name, idx),
-			MetaLoc:   catalog.ObjectLocation(loc),
+			MetaLoc:   objectio.ObjectLocation(loc),
 			SegmentID: name.SegmentId(),
 		})
 	}
@@ -1204,7 +1203,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []catalog.Bloc
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *catalog.BlockInfo) bool,
+	onBlock func(blk *objectio.BlockInfo) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -1258,7 +1257,7 @@ func (i *StatsBlkIter) Next() bool {
 	return i.cur < int(i.blkCnt)
 }
 
-func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
+func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
 	if i.cur == -1 {
 		i.cur = 0
 	}
@@ -1273,10 +1272,10 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 	}
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := &catalog.BlockInfo{
+	blk := &objectio.BlockInfo{
 		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
 		SegmentID: i.name.SegmentId(),
-		MetaLoc:   catalog.ObjectLocation(loc),
+		MetaLoc:   objectio.ObjectLocation(loc),
 	}
 	return blk
 }

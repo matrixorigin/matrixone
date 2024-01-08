@@ -67,7 +67,9 @@ func runTestWithMOCluster(t *testing.T, fn func(t *testing.T, hc *mockHAKeeperCl
 	rt := runtime.DefaultRuntime()
 	runtime.SetupProcessLevelRuntime(rt)
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
+		clusterservice.WithDisableRefresh(),
+	)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 

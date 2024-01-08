@@ -29,21 +29,12 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'opened'
     runs-on: ubuntu-latest
     steps:
-      - name: Issue Add Projects
-        if: contains(github.event.issue.labels.*.name, 'kind/bug')
-        uses: actions/add-to-project@v0.3.0
-        with:
-          project-url: https://github.com/orgs/matrixorigin/projects/13
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          labeled: kind/bug
-          label-operator: OR
-
       - name: Issue Add  Milestone
         if: contains(github.event.issue.labels.*.name, 'kind/bug')
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "1.1.0"
+          milestone: "1.2.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -104,18 +95,6 @@ jobs:
           uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
           name_label: "doc influence"
           mentions: "Prinz,DengNan"
-  
-  auto-to-project:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issues' && github.event.action == 'opened'
-    steps:
-      - name: Add Issue To GitHub Project
-        uses: actions/add-to-project@v0.4.0
-        with:
-          project-url: https://github.com/orgs/matrixorigin/projects/13/views/1
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
-          label-operator: OR
 
   nightly-check:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -126,10 +105,9 @@ jobs:
           fetch-depth: '3'
           path: ./matrixone
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: ./matrixone/.github/actions/setup_env
         with:
-          go-version: '1.20'
-          cache: true
+          cache: false
       - name: Set Variables
         run: |
           echo "ut_report='UT-Report.out'" >> $GITHUB_ENV

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -164,11 +165,11 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
-
+		case <-dispatchProc.Ctx.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator failed, dispatch operator has done")
 		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.ctx.Done():
-		case <-dispatchProc.Ctx.Done():
 		}
 		cancel()
 
@@ -472,15 +473,14 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: make([]string, len(s.NodeInfo.Data)),
+		Payload: string(s.NodeInfo.Data),
+		Type: objectio.EncodeInfoHeader(objectio.InfoHeader{
+			Type:    objectio.BlockInfoType,
+			Version: objectio.V1},
+		),
 	}
 	ctx.pipe = p
 	ctx.scope = s
-	{
-		for i := range s.NodeInfo.Data {
-			p.Node.Payload[i] = string(s.NodeInfo.Data[i])
-		}
-	}
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -628,10 +628,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.Data = make([][]byte, len(p.Node.Payload))
-		for i := range p.Node.Payload {
-			s.NodeInfo.Data[i] = []byte(p.Node.Payload[i])
-		}
+		s.NodeInfo.Data = []byte(p.Node.Payload)
+		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	{

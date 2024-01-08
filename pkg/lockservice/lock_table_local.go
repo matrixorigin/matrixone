@@ -378,8 +378,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			}
 
 			c.offset = idx
-			l.handleLockConflictLocked(c, key, lock)
-			return nil
+			return l.handleLockConflictLocked(c, key, lock)
 		}
 		l.addRowLockLocked(c, row)
 		// lock added, need create new waiter next time
@@ -412,8 +411,7 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 			}
 
 			c.offset = i
-			l.handleLockConflictLocked(c, conflict, conflictWith)
-			return nil
+			return l.handleLockConflictLocked(c, conflict, conflictWith)
 		}
 
 		// lock added, need create new waiter next time
@@ -441,7 +439,11 @@ func (l *localLockTable) addRowLockLocked(
 func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
-	conflictWith Lock) {
+	conflictWith Lock) error {
+	if c.opts.Policy == pb.WaitPolicy_FastFail {
+		return ErrLockConflict
+	}
+
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
@@ -454,6 +456,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// waiter added, we need to active deadlock check.
 	c.txn.setBlocked(c.w)
 	logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
+	return nil
 }
 
 func (l *localLockTable) addRangeLockLocked(
