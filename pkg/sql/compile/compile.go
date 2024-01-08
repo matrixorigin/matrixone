@@ -2904,9 +2904,11 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 
 	rs := make([]*Scope, 0, len(ss2))
 	uuids := make([]uuid.UUID, 0, len(ss2))
+	var uid uuid.UUID
 	for i := 0; i < len(ss2); i++ {
 		rs = append(rs, new(Scope))
-		uuids = append(uuids, uuid.New())
+		uid, _ = uuid.NewV7()
+		uuids = append(uuids, uid)
 	}
 
 	// for every scope, it should dispatch its
