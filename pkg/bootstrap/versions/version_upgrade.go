@@ -8,6 +8,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+func MustGetLatestReadyVersion(
+	txn executor.TxnExecutor) (string, error) {
+	sql := fmt.Sprintf(`select version from %s 
+			where state = %d 
+			order by create_at desc limit 1`,
+		catalog.MOUpgradeTable,
+		StateReady)
+
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+
+	version := ""
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		version = executor.GetStringRows(cols[0])[0]
+		return true
+	})
+	if version == "" {
+		panic("missing latest ready version")
+	}
+	return version, nil
+}
+
 func GetUpgradeVersions(
 	finalVersion string,
 	txn executor.TxnExecutor,
@@ -41,7 +66,7 @@ func GetUpgradeVersions(
 	return values, nil
 }
 
-func GetUpgradeTenantVersions(txn executor.TxnExecutor) (VersionUpgrade, bool, error) {
+func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, error) {
 	sql := fmt.Sprintf(`select 
 			id,
 			from_version, 
@@ -54,7 +79,7 @@ func GetUpgradeTenantVersions(txn executor.TxnExecutor) (VersionUpgrade, bool, e
 			total_tenant,
 			ready_tenant,
 			from %s 
-			where state = '%d' 
+			where state = %d 
 			order by upgrade_order asc`,
 		catalog.MOUpgradeTable,
 		StateUpgradingTenant)
@@ -71,11 +96,39 @@ func GetUpgradeTenantVersions(txn executor.TxnExecutor) (VersionUpgrade, bool, e
 	return values[0], true, nil
 }
 
+func GetUpgradeVersionForUpdateByID(
+	id uint64,
+	txn executor.TxnExecutor) (VersionUpgrade, error) {
+	sql := fmt.Sprintf(`select 
+			id,
+			from_version, 
+			to_version, 
+			final_version, 
+			state, 
+			upgrade_order,
+			upgrade_cluster,
+			upgrade_tenant,
+			total_tenant,
+			ready_tenant,
+			from %s 
+			where id = %d`,
+		catalog.MOUpgradeTable,
+		id)
+	values, err := getVersionUpgradesBySQL(sql, txn)
+	if err != nil {
+		return VersionUpgrade{}, err
+	}
+	if len(values) != 1 {
+		panic(fmt.Sprintf("BUG: can not get version upgrade by primary key: %d", id))
+	}
+	return values[0], nil
+}
+
 func AddVersionUpgrades(
 	values []VersionUpgrade,
 	txn executor.TxnExecutor) error {
 	for _, v := range values {
-		res, err := txn.Exec(GetVersionUpgradeSQL(v))
+		res, err := txn.Exec(GetVersionUpgradeSQL(v), executor.StatementOption{})
 		if err != nil {
 			return err
 		}
@@ -93,7 +146,7 @@ func UpdateVersionUpgradeState(
 		state,
 		upgrade.FinalVersion,
 		upgrade.UpgradeOrder)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
@@ -115,7 +168,7 @@ func UpdateVersionUpgradeTasks(
 		state,
 		upgrade.FinalVersion,
 		upgrade.UpgradeOrder)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
@@ -140,7 +193,7 @@ func GetVersionUpgradeSQL(v VersionUpgrade) string {
 func getVersionUpgradesBySQL(
 	sql string,
 	txn executor.TxnExecutor) ([]VersionUpgrade, error) {
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return nil, err
 	}

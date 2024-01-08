@@ -46,12 +46,47 @@ func AddVersion(
 		catalog.MOVersionTable,
 		version,
 		state)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
 	res.Close()
 	return nil
+}
+
+func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
+	sql := fmt.Sprintf(`select version, state from %s where order by create_at desc limit 1`, catalog.MOVersionTable)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return Version{}, err
+	}
+	defer res.Close()
+
+	var version Version
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		version.Version = executor.GetStringRows(cols[0])[0]
+		version.State = executor.GetFixedRows[int32](cols[1])[0]
+		return true
+	})
+	return version, nil
+}
+
+func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
+	sql := fmt.Sprintf(`select version from %s where state != %d order by create_at desc limit 1`,
+		catalog.MOVersionTable,
+		StateReady)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return Version{}, err
+	}
+	defer res.Close()
+
+	var version Version
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		version.Version = executor.GetStringRows(cols[0])[0]
+		return true
+	})
+	return version, nil
 }
 
 func GetVersionStateForUpdate(
@@ -61,10 +96,10 @@ func GetVersionStateForUpdate(
 			state, 
 			from %s 
 			where version = '%s' for update`,
-		catalog.MOUpgradeTable,
+		catalog.MOVersionTable,
 		version)
 
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return 0, false, err
 	}
@@ -85,31 +120,6 @@ func GetVersionStateForUpdate(
 	return state, loaded, nil
 }
 
-func MustGetLatestReadyVersion(
-	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf(`select version from %s 
-			where state = %d 
-			order by create_at desc limit 1`,
-		catalog.MOUpgradeTable,
-		StateReady)
-
-	res, err := txn.Exec(sql)
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-
-	version := ""
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		version = executor.GetStringRows(cols[0])[0]
-		return true
-	})
-	if version == "" {
-		panic("missing latest ready version")
-	}
-	return version, nil
-}
-
 func UpdateVersionState(
 	version string,
 	state int32,
@@ -118,7 +128,7 @@ func UpdateVersionState(
 		catalog.MOVersionTable,
 		state,
 		version)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}

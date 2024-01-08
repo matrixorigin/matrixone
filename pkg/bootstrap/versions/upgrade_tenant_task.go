@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -21,7 +23,7 @@ func AddUpgradeTenantTask(
 		fromAccountID,
 		toAccountID,
 		No)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
@@ -37,7 +39,7 @@ func UpdateUpgradeTenantTaskState(
 		catalog.MOUpgradeTenantTable,
 		state,
 		taskID)
-	res, err := txn.Exec(sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
@@ -57,7 +59,7 @@ func GetUpgradeTenantTasks(
 			after,
 			upgradeID,
 			No)
-		res, err := txn.Exec(sql)
+		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return 0, nil, err
 		}
@@ -76,7 +78,7 @@ func GetUpgradeTenantTasks(
 
 		sql = fmt.Sprintf("select account_id from mo_account where account_id >= %d and account_id <= %d for update",
 			from, to)
-		res, err = txn.Exec(sql)
+		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
 			if isConflictError(err) {
 				after = to + 1
@@ -94,5 +96,5 @@ func GetUpgradeTenantTasks(
 }
 
 func isConflictError(err error) bool {
-	return false
+	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
 }

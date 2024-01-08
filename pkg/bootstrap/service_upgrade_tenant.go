@@ -6,10 +6,97 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+// MaybeUpgradeTenant used to check the tenant need upgrade or not. If need upgrade, it will
+// upgrade the tenant immediately in current txn.
+func (s *service) MaybeUpgradeTenant(
+	ctx context.Context,
+	tenantFetchFunc func() (int32, string, error),
+	txnOp client.TxnOperator) (bool, error) {
+	upgraded := false
+	opts := executor.Options{}.WithTxn(txnOp)
+	err := s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txn.Use(catalog.MO_CATALOG)
+			tenantID, version, err := tenantFetchFunc()
+			if err != nil {
+				return err
+			}
+
+			// tenant create at current cn, can work correctly
+			currentCN := getFinalVersionHandle().Metadata()
+			if currentCN.Version == version {
+				return nil
+			} else if versions.Compare(currentCN.Version, version) < 0 {
+				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
+				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
+					version, currentCN.Version)
+			}
+
+			// arrive here means tenant version < current cn version, need upgrade.
+			// and currentCN.Version == last cluster version
+
+			latestVersion, err := versions.GetLatestVersion(txn)
+			if err != nil {
+				return err
+			}
+			if latestVersion.Version != currentCN.Version {
+				panic("BUG: current cn's version(" +
+					currentCN.Version +
+					") must equal cluster latest version(" +
+					latestVersion.Version +
+					")")
+			}
+
+			upgraded = true
+			for {
+				// upgrade completed
+				ready := finalVersionCompleted.Load()
+				if ready {
+					break
+				}
+
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false)
+				if err != nil {
+					return err
+				}
+				// latest cluster is already upgrade completed
+				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant {
+					break
+				}
+
+				time.Sleep(time.Second)
+			}
+
+			// upgrade in current goroutine
+			from := version
+			for _, v := range handles {
+				if versions.Compare(v.Metadata().Version, from) > 0 &&
+					v.Metadata().CanDirectUpgrade(from) {
+					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
+						return err
+					}
+					from = v.Metadata().Version
+				}
+			}
+			return nil
+		},
+		opts)
+	if err != nil {
+		return false, err
+	}
+	return upgraded, nil
+}
+
+// asyncUpgradeTenantTask is a task to execute the tenant upgrade logic in
+// parallel based on the grouped tenant batch.
 func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	fn := func() error {
 		opts := executor.Options{}.
@@ -18,7 +105,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		return s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				upgrade, ok, err := versions.GetUpgradeTenantVersions(txn)
+				upgrade, ok, err := versions.GetUpgradingTenantVersion(txn)
 				if err != nil {
 					return err
 				}
@@ -30,18 +117,20 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				// no upgrade logic on current cn, skip
-				v := getFinalUpgradeHandle().Metadata().Version
+				v := getFinalVersionHandle().Metadata().Version
 				if versions.Compare(upgrade.ToVersion, v) > 0 {
 					return nil
 				}
 
-				// select need upgrade tenants for update
+				// select task and tenants for update
 				taskID, tenants, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
 				if err != nil {
 					return err
 				}
-
-				h := getUpgradeHandle(upgrade.ToVersion)
+				if len(tenants) == 0 {
+					return nil
+				}
+				h := getVersionHandle(upgrade.ToVersion)
 				for _, id := range tenants {
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						return err
@@ -51,6 +140,11 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					return err
 				}
 
+				// update count, we need using select for update to avoid concurrent update
+				upgrade, err = versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
+				if err != nil {
+					return err
+				}
 				upgrade.ReadyTenant += int32(len(tenants))
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
 					panic("BUG: invalid upgrade tenant")
@@ -68,6 +162,10 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			if finalVersionCompleted.Load() {
+				return
+			}
+
 			if err := fn(); err != nil {
 				continue
 			}
@@ -87,7 +185,7 @@ func fetchTenants(
 		sql := fmt.Sprintf("select account_id from mo_account where account_id > %d order by account_id limit %d",
 			last,
 			batch)
-		res, err := txn.Exec(sql)
+		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
@@ -106,4 +204,23 @@ func fetchTenants(
 			return err
 		}
 	}
+}
+
+func getTenantVersion(txn executor.TxnExecutor, tenantID int32) (string, error) {
+	res, err := txn.Exec(fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID),
+		executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+
+	version := ""
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		version = executor.GetStringRows(cols[0])[0]
+		return false
+	})
+	if version == "" {
+		panic("invalid tenant create version")
+	}
+	return version, nil
 }

@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	handles = []UpgradeHandle{}
+	handles = []VersionHandle{}
 )
 
 // All versions need create a upgrade handle in pkg/bootstrap/versions
@@ -28,11 +28,11 @@ func init() {
 	handles = append(handles, v1_2_0.Handler)
 }
 
-func getFinalUpgradeHandle() UpgradeHandle {
+func getFinalVersionHandle() VersionHandle {
 	return handles[len(handles)-1]
 }
 
-func getUpgradeHandle(version string) UpgradeHandle {
+func getVersionHandle(version string) VersionHandle {
 	for _, h := range handles {
 		if h.Metadata().Version == version {
 			return h

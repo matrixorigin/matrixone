@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -25,13 +26,37 @@ import (
 )
 
 var (
-	upgradeTenantBatch         = 512
+	upgradeTenantBatch         = 256
 	checkUpgradeDuration       = time.Second * 5
 	checkUpgradeTenantDuration = time.Second * 10
 	upgradeTenantTasks         = 4
+	finalVersionCompleted      atomic.Bool
 )
 
 func (s *service) upgrade(ctx context.Context) error {
+	// MO's upgrade framework is automated, requiring no manual execution of any
+	// upgrade commands, and supports cross-version upgrades. All upgrade processes
+	// are executed at the CN node. Currently, rollback upgrade is not supported.
+	//
+	// When a new version of the CN node is started, it will first get the current
+	// version of the cluster running, and determine the upgrade route before this
+	// version and the current new version of the CN. When upgrading across versions,
+	// this upgrade route will go through multiple versions of upgrades, and finally
+	// upgrade to the current version of the CN.
+	//
+	// Each version upgrade, for the previous version, contains 2 parts, one is to
+	// upgrade the cluster metadata and the other is to upgrade the tenant metadata.
+	//
+	// For upgrading cluster metadata, it is usually very fast, usually it is creating
+	// some new metadata tables or updating the structure of some metadata tables, and
+	// this process is performed on one CN.
+	//
+	// For upgrading tenant metadata, the time consuming upgrade depends on the number
+	// of tenants, and since MO is a meta-native multi-tenant database, our default
+	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
+	// be grouped for all tenants and concurrently executed on multiple CNs at the same
+	// time.
+
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		return err
 	}
@@ -46,6 +71,12 @@ func (s *service) upgrade(ctx context.Context) error {
 	return nil
 }
 
+// doCheckUpgrade get the current version of the cluster running, and determine the upgrade
+// route before this version and the current new version of the CN.
+//
+// Note that this logic will execute concurrently if more than one CN starts at the same
+// time, but it doesn't matter, we use select for update to make it so that only one CN can
+// create the upgrade step.
 func (s *service) doCheckUpgrade(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
@@ -53,24 +84,39 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			// first version as a genesis version, always need to be PREPARE.
+			// First version as a genesis version, always need to be PREPARE.
 			// Because the first version need to init upgrade framework tables.
 			if len(handles) == 1 {
 				return handles[0].Prepare(ctx, txn)
 			}
 
-			final := getFinalUpgradeHandle().Metadata()
+			final := getFinalVersionHandle().Metadata()
+			v, err := versions.GetLatestUpgradeVersion(txn)
+			if err != nil {
+				return err
+			}
+			if v.Version != "" && v.Version != final.Version {
+				panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
+					final.Version,
+					v.Version))
+			}
 
-			// check upgrade has 3 step:
+			// check upgrade has 2 step:
 			// 1: already checked, version exists
-			// 2: add new final version
-			// 3: add upgrades from latest version to final version
+			// 2: add upgrades from latest version to final version
 			checker := func() (bool, error) {
-				_, ok, err := versions.GetVersionStateForUpdate(final.Version, txn)
+				state, ok, err := versions.GetVersionStateForUpdate(final.Version, txn)
+				if err == nil && ok && state == versions.StateReady {
+					finalVersionCompleted.Store(true)
+				}
 				return ok, err
 			}
 
 			addUpgradesToFinalVersion := func() error {
+				if err := versions.AddVersion(final.Version, versions.StateCreated, txn); err != nil {
+					return err
+				}
+
 				latest, err := versions.MustGetLatestReadyVersion(txn)
 				if err != nil {
 					return err
@@ -95,7 +141,8 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				} else {
 					from := latest
 					for _, v := range handles {
-						if v.Metadata().CanDirectUpgrade(from) {
+						if versions.Compare(v.Metadata().Version, from) > 0 &&
+							v.Metadata().CanDirectUpgrade(from) {
 							append(v.Metadata())
 							from = v.Metadata().Version
 						}
@@ -110,41 +157,28 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			// step 2
-			if err := versions.AddVersion(final.Version, versions.StateCreated, txn); err != nil {
-				return err
-			}
-
-			// step 3
 			return addUpgradesToFinalVersion()
 		},
 		opts)
 }
 
+// asyncUpgradeTask is a task that executes the upgrade logic step by step
+// according to the created upgrade steps
 func (s *service) asyncUpgradeTask(ctx context.Context) {
-	fn := func() error {
+	fn := func() (bool, error) {
 		var err error
-		var state int32
+		var completed bool
 		opts := executor.Options{}.
 			WithMinCommittedTS(s.now()).
 			WithWaitCommittedLogApplied()
 		err = s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				state, err = s.upgradeTask(ctx, txn)
+				completed, err = s.performUpgrade(ctx, txn)
 				return err
 			},
 			opts)
-		if err != nil {
-			return err
-		}
-
-		switch state {
-		case versions.StateCreated:
-		case versions.StateUpgradingTenant:
-		default:
-			panic(fmt.Sprintf("BUG: invalid state %d", state))
-		}
-		return nil
+		return completed, err
 	}
 
 	timer := time.NewTimer(checkUpgradeDuration)
@@ -155,39 +189,65 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := fn(); err != nil {
-				continue
+			if finalVersionCompleted.Load() {
+				return
+			}
+
+			completed, err := fn()
+			if err == nil && completed {
+				finalVersionCompleted.Store(true)
+				return
 			}
 			timer.Reset(checkUpgradeDuration)
 		}
 	}
 }
 
-func (s *service) upgradeTask(
+func (s *service) performUpgrade(
 	ctx context.Context,
-	txn executor.TxnExecutor) (int32, error) {
-	final := getFinalUpgradeHandle().Metadata()
+	txn executor.TxnExecutor) (bool, error) {
+	final := getFinalVersionHandle().Metadata()
 
-	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true)
+	// make sure only one cn can execute upgrade logic
+	state, ok, err := versions.GetVersionStateForUpdate(final.Version, txn)
 	if err != nil {
-		return 0, err
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if state == versions.StateReady {
+		return true, nil
 	}
 
-	var state int32
+	// get upgrade steps, and perform upgrade one by one
+	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true)
+	if err != nil {
+		return false, err
+	}
+
 	for _, u := range upgrades {
-		state, err = s.doUpgrade(ctx, u, txn)
+		state, err := s.doUpgrade(ctx, u, txn)
 		if err != nil {
-			return 0, err
+			return false, err
 		}
 		switch state {
 		case versions.StateReady:
+			// upgrade was completed
 		case versions.StateUpgradingTenant:
-			return state, nil
+			// we must wait all tenant upgrade completed, and then upgrade to
+			// next version
+			return false, nil
 		default:
 			panic(fmt.Sprintf("BUG: invalid state %d", state))
 		}
 	}
-	return state, nil
+
+	// all upgrades completed, update final version to ready state.
+	if err := versions.UpdateVersionState(final.Version, versions.StateReady, txn); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *service) doUpgrade(
@@ -207,8 +267,9 @@ func (s *service) doUpgrade(
 		return versions.StateReady, nil
 	}
 
+	// upgrade need to
 	state := versions.StateReady
-	h := getUpgradeHandle(upgrade.ToVersion)
+	h := getVersionHandle(upgrade.ToVersion)
 	if err := h.Prepare(ctx, txn); err != nil {
 		return 0, err
 	}

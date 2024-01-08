@@ -48,9 +48,9 @@ type Locker interface {
 	Get(ctx context.Context, key string) (bool, error)
 }
 
-// UpgradeHandle every version that needs to be upgraded with cluster metadata needs to
-// have an UpgradeHandle implementation!
-type UpgradeHandle interface {
+// VersionHandle every version that needs to be upgraded with cluster metadata needs to
+// have an VersionHandle implementation!
+type VersionHandle interface {
 	// Metadata version metadata
 	Metadata() versions.Version
 	// Prepare prepare upgrade. This upgrade will be executed before cluster and tenant upgrade.

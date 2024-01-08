@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	Handler = &upgradeHandle{
+	Handler = &versionHandle{
 		metadata: versions.Version{
 			Version:           "1.2.0",
 			MinUpgradeVersion: "1.1.0",
@@ -21,45 +21,52 @@ var (
 	}
 )
 
-type upgradeHandle struct {
+type versionHandle struct {
 	metadata versions.Version
 }
 
-func (u *upgradeHandle) Metadata() versions.Version {
-	return u.metadata
+func (v *versionHandle) Metadata() versions.Version {
+	return v.metadata
 }
 
-func (u *upgradeHandle) Prepare(
+func (v *versionHandle) Prepare(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
 	txn.Use(catalog.MO_CATALOG)
-	created, err := u.isFrameworkTablesCreated(txn)
+	created, err := v.isFrameworkTablesCreated(txn)
 	if err != nil {
 		return err
 	}
 	if !created {
 		// Many cn maybe create framework tables parallel, only one can create success.
 		// Just return error, and upgrade framework will retry.
-		return u.createFrameworkTables(txn)
+		return v.createFrameworkTables(txn)
 	}
 	return nil
 }
 
-func (u *upgradeHandle) HandleTenantUpgrade(
+func (v *versionHandle) HandleCreateTenant(
+	ctx context.Context,
+	txn executor.TxnExecutor) error {
+	// TODO: move create tenant logic here
+	return nil
+}
+
+func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
 	return nil
 }
 
-func (u *upgradeHandle) HandleClusterUpgrade(
+func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
 	return nil
 }
 
-func (u *upgradeHandle) isFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
-	res, err := txn.Exec("show tables")
+func (v *versionHandle) isFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
+	res, err := txn.Exec("show tables", executor.StatementOption{})
 	if err != nil {
 		return false, err
 	}
@@ -78,20 +85,20 @@ func (u *upgradeHandle) isFrameworkTablesCreated(txn executor.TxnExecutor) (bool
 	return false, nil
 }
 
-func (u *upgradeHandle) createFrameworkTables(txn executor.TxnExecutor) error {
+func (v *versionHandle) createFrameworkTables(txn executor.TxnExecutor) error {
 	values := append(versions.FrameworkInitSQLs,
-		u.metadata.GetInsertSQL(),
+		v.metadata.GetInsertSQL(),
 		versions.GetVersionUpgradeSQL(versions.VersionUpgrade{
-			FromVersion:    u.metadata.MinUpgradeVersion,
-			ToVersion:      u.metadata.Version,
-			FinalVersion:   u.metadata.Version,
+			FromVersion:    v.metadata.MinUpgradeVersion,
+			ToVersion:      v.metadata.Version,
+			FinalVersion:   v.metadata.Version,
 			UpgradeOrder:   0,
-			UpgradeCluster: u.metadata.UpgradeCluster,
-			UpgradeTenant:  u.metadata.UpgradeTenant,
+			UpgradeCluster: v.metadata.UpgradeCluster,
+			UpgradeTenant:  v.metadata.UpgradeTenant,
 			State:          versions.StateCreated,
 		}))
 	for _, sql := range values {
-		r, err := txn.Exec(sql)
+		r, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
 		}

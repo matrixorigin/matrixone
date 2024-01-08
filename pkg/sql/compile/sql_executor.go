@@ -310,6 +310,40 @@ func (exec *txnExecutor) Exec(
 	return result, nil
 }
 
+func (exec *txnExecutor) LockTable(table string) error {
+	txnOp := exec.opts.Txn()
+	ctx := exec.ctx
+
+	dbSource, err := exec.s.eng.Database(ctx, exec.opts.Database(), txnOp)
+	if err != nil {
+		return err
+	}
+	rel, err := dbSource.Relation(ctx, table, nil)
+	if err != nil {
+		return err
+	}
+	proc := process.New(
+		ctx,
+		exec.s.mp,
+		exec.s.txnClient,
+		txnOp,
+		exec.s.fs,
+		exec.s.ls,
+		exec.s.qs,
+		exec.s.hakeeper,
+		exec.s.us,
+		exec.s.aicm,
+	)
+	proc.SetVectorPoolSize(0)
+	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.SessionInfo.Buf = exec.s.buf
+	defer func() {
+		proc.CleanValueScanBatchs()
+		proc.FreeVectors()
+	}()
+	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
 func (exec *txnExecutor) commit() error {
 	if exec.opts.ExistsTxn() {
 		return nil

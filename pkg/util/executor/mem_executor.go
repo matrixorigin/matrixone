@@ -64,6 +64,10 @@ func (te *memTxnExecutor) Use(db string) {
 
 }
 
+func (te *memTxnExecutor) LockTable(table string) error {
+	return nil
+}
+
 // MemResult used to test. Construct a Result from memory.
 type MemResult struct {
 	cols  int
