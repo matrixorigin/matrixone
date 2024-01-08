@@ -365,22 +365,24 @@ func (r *blockReader) Read(
 		r.fs, mp, vp,
 	)
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		part, _ := r.table.getPartitionState(ctx)
-		aObjs := ""
-		iter := part.NewObjectsIterForTest()
-		defer iter.Close()
-		for iter.Next() {
-			obj := iter.Entry()
-			segId := obj.Location().ShortName().Segmentid().ToString()
-			aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
-				aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
-				obj.CreateTime.ToTimestamp().DebugString(),
-				obj.DeleteTime.ToTimestamp().DebugString())
+		if r.table != nil {
+			part, _ := r.table.getPartitionState(ctx)
+			aObjs := ""
+			iter := part.NewObjectsIterForTest()
+			defer iter.Close()
+			for iter.Next() {
+				obj := iter.Entry()
+				segId := obj.Location().ShortName().Segmentid().ToString()
+				aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
+					aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
+					obj.CreateTime.ToTimestamp().DebugString(),
+					obj.DeleteTime.ToTimestamp().DebugString())
+			}
+			logutil.Fatalf("xxxx blockReader.Read: err:%s, txn:%s, all objects in partition state:[%s]",
+				err.Error(),
+				r.table.db.txn.op.Txn().DebugString(),
+				aObjs)
 		}
-		logutil.Fatalf("xxxx blockReader.Read: err:%s, txn:%s, all objects in partition state:[%s]",
-			err.Error(),
-			r.table.db.txn.op.Txn().DebugString(),
-			aObjs)
 	}
 	if err != nil {
 		return nil, err
