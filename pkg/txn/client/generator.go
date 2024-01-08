@@ -28,6 +28,6 @@ func newUUIDTxnIDGenerator() TxnIDGenerator {
 }
 
 func (gen *uuidTxnIDGenerator) Generate() []byte {
-	id := uuid.New()
+	id, _ := uuid.NewV7()
 	return id[:]
 }
