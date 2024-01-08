@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"runtime/debug"
 	"strconv"
 	"sync"
 
@@ -183,6 +184,8 @@ func (c *compilerContext) GetAccountId() uint32 {
 	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
 		return v.(uint32)
 	}
+	debug.PrintStack()
+	panic("no account id 10")
 	return 0
 }
 

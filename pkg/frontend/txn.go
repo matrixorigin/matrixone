@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/google/uuid"
@@ -83,6 +84,9 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 
 	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
+	} else {
+		debug.PrintStack()
+		panic("no account id 3")
 	}
 	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey{}, v)

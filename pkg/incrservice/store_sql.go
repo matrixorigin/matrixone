@@ -17,6 +17,7 @@ package incrservice
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -70,6 +71,11 @@ func (s *sqlStore) SelectAll(
 	}
 	defer res.Close()
 
+	x := ctx.Value(defines.TenantIDKey{})
+	if x == nil {
+		debug.PrintStack()
+		panic("no account id 7")
+	}
 	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
 		ctx.Value(defines.TenantIDKey{}), txnOp.Txn().DebugString())
 	res.ReadRows(func(cols []*vector.Vector) bool {
@@ -153,6 +159,11 @@ func (s *sqlStore) Allocate(
 				res.Close()
 
 				if rows != 1 {
+					x := ctx.Value(defines.TenantIDKey{})
+					if x == nil {
+						debug.PrintStack()
+						panic("no account id 8")
+					}
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
@@ -181,6 +192,11 @@ func (s *sqlStore) Allocate(
 				if res.AffectedRows == 1 {
 					ok = true
 				} else {
+					x := ctx.Value(defines.TenantIDKey{})
+					if x == nil {
+						debug.PrintStack()
+						panic("no account id 9")
+					}
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
 						zap.Any("account", ctx.Value(defines.TenantIDKey{})),

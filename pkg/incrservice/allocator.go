@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"runtime/debug"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -208,5 +209,7 @@ func getAccountID(ctx context.Context) uint32 {
 	if v != nil {
 		return v.(uint32)
 	}
+	debug.PrintStack()
+	panic("no account id 1")
 	return 0
 }

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -78,6 +79,11 @@ func (txn *txnImpl) UnsafeGetRelation(dbId, id uint64) (rel handle.Relation, err
 func (txn *txnImpl) bindCtxInfo(ctx context.Context) {
 	if ctx == nil {
 		return
+	}
+	x := ctx.Value(defines.TenantIDKey{})
+	if x == nil {
+		debug.PrintStack()
+		panic("no account id 19")
 	}
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
 	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)

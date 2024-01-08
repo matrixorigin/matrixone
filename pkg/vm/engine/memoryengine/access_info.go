@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
@@ -29,6 +30,9 @@ type AccessInfo struct {
 func getAccessInfo(ctx context.Context) (info AccessInfo) {
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
 		info.AccountID = v.(uint32)
+	} else {
+		debug.PrintStack()
+		panic("no account id 17")
 	}
 	if v := ctx.Value(defines.UserIDKey{}); v != nil {
 		info.UserID = v.(uint32)

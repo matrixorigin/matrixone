@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1133,6 +1134,9 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
 		accountId = v.(uint32)
+	} else {
+		debug.PrintStack()
+		panic("no account id 16")
 	}
 	if v := ctx.Value(defines.UserIDKey{}); v != nil {
 		userId = v.(uint32)

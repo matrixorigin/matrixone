@@ -17,6 +17,7 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -429,6 +430,9 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
 	initMysqlTables(ctx, ieFactory)
 	initInformationSchemaTables(ctx, ieFactory)
 	return nil

@@ -23,6 +23,8 @@ package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync/atomic"
 	"time"
 
@@ -150,6 +152,10 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
+
 	c := &GetTracerProvider().tracerProviderConfig
 	WithSQLExecutor(sqlExecutor).apply(c)
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {

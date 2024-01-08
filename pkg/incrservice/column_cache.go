@@ -17,6 +17,7 @@ package incrservice
 import (
 	"context"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 
@@ -423,6 +424,11 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
+		x := ctx.Value(defines.TenantIDKey{})
+		if x == nil {
+			debug.PrintStack()
+			panic("no account id 6")
+		}
 		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
 			tableID,
 			col.cfg.CountPerAllocate,

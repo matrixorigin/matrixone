@@ -25,6 +25,7 @@ import (
 	"math/bits"
 	"os"
 	"path"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -3369,6 +3370,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if tenantInfo == nil {
+		x := ctx.Value(defines.TenantIDKey{})
+		if x == nil {
+			debug.PrintStack()
+			panic("no account id 2")
+		}
 		if ctx.Value(defines.TenantIDKey{}) != nil {
 			value := ctx.Value(defines.TenantIDKey{})
 			if tenantId, ok := value.(uint32); ok {
