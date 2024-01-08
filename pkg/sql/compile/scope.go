@@ -701,11 +701,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:           arg.Aggs,
-						Exprs:          arg.Exprs,
-						Types:          arg.Types,
-						MultiAggs:      arg.MultiAggs,
-						PartialResults: arg.PartialResults,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}
