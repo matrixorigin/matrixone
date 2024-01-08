@@ -38,9 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type BlockT[T common.IRef] interface {
@@ -856,21 +854,6 @@ func (blk *baseBlock) MutationInfo() string {
 	return s
 }
 
-func (blk *baseBlock) BuildCompactionTaskFactory() (
-	factory tasks.TxnTaskFactory,
-	taskType tasks.TaskType,
-	scopes []common.ID,
-	err error) {
-
-	if !blk.impl.PrepareCompact() {
-		return
-	}
-
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt)
-	taskType = tasks.DataCompactionTask
-	scopes = append(scopes, *blk.meta.AsCommonID())
-	return
-}
 
 func (blk *baseBlock) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
@@ -881,4 +864,8 @@ func (blk *baseBlock) CollectAppendInRange(
 func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader,blkID uint16,deltaLoc objectio.Location)(bool,txnif.TxnEntry,error){
 	mvcc:=blk.mvcc.GetOrCreateDeleteChain(blkID)
 	return mvcc.UpdateDeltaLoc(txn,deltaLoc)
+}
+
+func (blk *baseBlock) GetDeltaPersistedTS() types.TS{
+	return blk.mvcc.GetDeltaPersistedTS()
 }

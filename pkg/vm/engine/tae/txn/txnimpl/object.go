@@ -233,18 +233,13 @@ func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.Del
 		}
 		pkVec.Append(pkVal, false)
 	}
-	return obj.Txn.GetStore().RangeDelete(obj.entry.AsCommonID(), start, end, pkVec, dt)
+	id := obj.entry.AsCommonID()
+	id.SetBlockOffset(blkID)
+	return obj.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }
 func (obj *txnObject) GetMeta() any           { return obj.entry }
 func (obj *txnObject) String() string         { return obj.entry.String() }
 func (obj *txnObject) GetID() *types.Objectid { return &obj.entry.ID }
-func (obj *txnObject) MakeBlockIt() (it handle.BlockIt) {
-	return newBlockIt(obj.table, obj.entry)
-}
-
-func (obj *txnObject) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return obj.Txn.GetStore().CreateNonAppendableBlock(obj.entry.AsCommonID(), opts)
-}
 
 func (obj *txnObject) IsUncommitted() bool {
 	return obj.entry.IsLocal
@@ -260,17 +255,6 @@ func (obj *txnObject) SoftDeleteBlock(id types.Blockid) (err error) {
 
 func (obj *txnObject) GetRelation() (rel handle.Relation) {
 	return newRelation(obj.table)
-}
-
-func (obj *txnObject) GetBlock(id types.Blockid) (blk handle.Block, err error) {
-	fp := obj.entry.AsCommonID()
-	fp.BlockID = id
-	return obj.Txn.GetStore().GetBlock(fp)
-}
-
-func (obj *txnObject) CreateBlock(is1PC bool) (blk handle.Block, err error) {
-	id := obj.entry.AsCommonID()
-	return obj.Txn.GetStore().CreateBlock(id, is1PC)
 }
 
 func (obj *txnObject) UpdateStats(stats objectio.ObjectStats) error {
@@ -345,4 +329,10 @@ func (blk *txnObject) GetColumnDataByNames(
 		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, attrIds, mp)
 	}
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, blkID, attrIds, mp)
+}
+
+func (blk *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
+	id := blk.entry.AsCommonID()
+	id.SetBlockOffset(blkID)
+	return blk.table.store.UpdateDeltaLoc(id, deltaLoc)
 }

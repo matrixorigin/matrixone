@@ -625,7 +625,7 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 			uint32(subtask.delta.Length()),
 			subtask.blocks[1].GetID())
 
-		if err = task.ablksHandles[i].UpdateDeltaLoc(deltaLoc); err != nil {
+		if err = task.ablksHandles[i].UpdateDeltaLoc(0, deltaLoc); err != nil {
 			return err
 		}
 	}

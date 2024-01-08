@@ -21,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -44,14 +43,12 @@ type InsertNode interface {
 	FillColumnView(*containers.ColumnView, *mpool.MPool) error
 	Window(start, end uint32) (*containers.Batch, error)
 	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
-	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
-	GetPersistedLoc() (objectio.Location, objectio.Location)
 }
 
 type appendInfo struct {

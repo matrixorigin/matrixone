@@ -137,9 +137,10 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	blkID:=objectio.NewBlockidWithObjectID(&n.meta.ID,0)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
-		&n.meta.ID, startRow, length,
+		blkID, startRow, length,
 		col.GetAllocator(),
 	); err != nil {
 		col.Close()
@@ -165,10 +166,6 @@ func (n *anode) FillColumnView(view *containers.ColumnView, mp *mpool.MPool) (er
 	view.SetData(orig.CloneWindow(0, orig.Length(), mp))
 	view.DeleteMask = n.data.Deletes
 	return
-}
-
-func (n *anode) GetSpace() uint32 {
-	return MaxNodeRows - n.rows
 }
 
 func (n *anode) Compact() {

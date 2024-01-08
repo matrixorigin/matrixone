@@ -324,7 +324,7 @@ func (c *manualyIgnorePrepareCompactArg) Run() error {
 type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	blk     *catalog.BlockEntry
+	blk     *catalog.ObjectEntry
 	verbose common.PPLevel
 }
 
@@ -383,7 +383,7 @@ func (c *infoArg) Run() error {
 	}
 	if c.blk != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
+		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetBlockData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
 		rows := c.blk.GetBlockData().Rows()
 		dels := c.blk.GetBlockData().GetTotalChanges()
@@ -437,7 +437,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
 		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable() || obj.GetNextObjectIndex() != 1 {
+			if !obj.IsActive() || obj.IsAppendable()  {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
 			objs = append(objs, obj)
@@ -667,7 +667,7 @@ func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
 	rootCmd.Execute()
 }
 
-func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
+func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, error) {
 	if address == "" {
 		return nil, nil
 	}
@@ -689,15 +689,11 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	sentry, err := tbl.GetObjectByID(objid)
+	oentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
 		return nil, err
 	}
-	bentry, err := sentry.GetBlockEntryByID(bid)
-	if err != nil {
-		return nil, err
-	}
-	return bentry, nil
+	return oentry, nil
 }
 
 func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {

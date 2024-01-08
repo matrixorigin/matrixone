@@ -382,6 +382,16 @@ func (n *ObjectMVCCHandle) UpgradeAllDeleteChain() {
 		deletes.upgradeDeleteChain()
 	}
 }
+func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
+	persisted := types.TS{}
+	for _, deletes := range n.deletes {
+		ts := deletes.getDeltaPersistedTS()
+		if ts.Greater(persisted) {
+			persisted = ts
+		}
+	}
+	return persisted
+}
 
 func (n *ObjectMVCCHandle) UpgradeDeleteChain(blkID uint16) {
 	deletes := n.deletes[blkID]
@@ -495,6 +505,18 @@ func (n *MVCCHandle) EstimateMemSizeLocked() (dsize int) {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
+func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
+	persisted := types.TS{}
+	n.deltaloc.LoopChain(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+
 func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
 	if n.persistedTS.Equal(flushed) {
 		return
@@ -505,14 +527,7 @@ func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
 }
 
 func (n *MVCCHandle) upgradeDeleteChain() {
-	persisted := types.TS{}
-	n.deltaloc.LoopChain(func(m *catalog.MVCCNode[*catalog.MetadataMVCCNode]) bool {
-		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
-			persisted = m.GetStart()
-			return false
-		}
-		return true
-	})
+	persisted := n.getDeltaPersistedTS()
 	n.upgradeDeleteChainByTS(persisted)
 }
 
@@ -543,10 +558,6 @@ func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	return n.deletes.AddNodeLocked(txn, deleteType)
-}
-
-func (n *MVCCHandle) CreatePersistedDeleteNode(txn txnif.AsyncTxn, deltaloc objectio.Location) txnif.DeleteNode {
-	return n.deletes.AddPersistedNodeLocked(txn, deltaloc)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {

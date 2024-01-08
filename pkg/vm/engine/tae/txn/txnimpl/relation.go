@@ -197,10 +197,6 @@ func (h *txnRelation) MakeObjectIt() handle.ObjectIt {
 	return newObjectIt(h.table)
 }
 
-func (h *txnRelation) MakeBlockIt() handle.BlockIt {
-	return newRelationBlockIt(h)
-}
-
 func (h *txnRelation) GetByFilter(
 	ctx context.Context, filter *handle.Filter,
 ) (*common.ID, uint32, error) {

@@ -29,14 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointUnit interface {
 	MutationInfo() string
 	RunCalibration() int
 	// EstimateScore(time.Duration, bool) int
-	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
 
 type BlockAppender interface {
@@ -72,6 +70,7 @@ type Block interface {
 	IsAppendable() bool
 	PrepareCompact() bool
 	PrepareCompactInfo() (bool, string)
+	GetDeltaPersistedTS() types.TS
 
 	Rows() int
 	GetColumnDataById(

@@ -104,7 +104,7 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
-			blkid := objectio.NewBlockid(entry.createdBlkHandles, uint16(dst.Idx))
+			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.Idx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.Row)))
 		}
 		entry.rt.TransferTable.AddPage(page)
@@ -233,13 +233,13 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 
 // ApplyCommit Gc in memory deletes and update table compact status
 func (entry *flushTableTailEntry) ApplyCommit() (err error) {
-	for i, blk := range entry.ablksMetas {
+	for _, blk := range entry.ablksMetas {
 		_ = blk.GetBlockData().TryUpgrade()
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.ablksHandles[i].GetDeltaPersistedTS())
+		blk.GetBlockData().UpgradeAllDeleteChain()
 	}
 
-	for i, blk := range entry.delSrcMetas {
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.delSrcHandles[i].GetDeltaPersistedTS())
+	for _, blk := range entry.delSrcMetas {
+		blk.GetBlockData().UpgradeAllDeleteChain()
 	}
 
 	tbl := entry.tableEntry
