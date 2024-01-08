@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -39,6 +40,11 @@ import (
 type Service interface {
 	// Bootstrap try to bootstrap and upgrade mo cluster
 	Bootstrap(ctx context.Context) error
+	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
+	MaybeUpgradeTenant(
+		ctx context.Context,
+		tenantFetchFunc func() (int32, string, error),
+		txnOp client.TxnOperator) (bool, error)
 }
 
 // Locker locker is used to get lock to bootstrap. Only one cn can get lock to bootstrap.

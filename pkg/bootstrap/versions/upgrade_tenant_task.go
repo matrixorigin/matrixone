@@ -49,9 +49,10 @@ func UpdateUpgradeTenantTaskState(
 
 func GetUpgradeTenantTasks(
 	upgradeID uint64,
-	txn executor.TxnExecutor) (uint64, []int32, error) {
+	txn executor.TxnExecutor) (uint64, []int32, []string, error) {
 	taskID := uint64(0)
 	tenants := make([]int32, 0)
+	versions := make([]string, 0)
 	after := int32(0)
 	for {
 		sql := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
@@ -61,7 +62,7 @@ func GetUpgradeTenantTasks(
 			No)
 		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		from := int32(-1)
 		to := int32(-1)
@@ -73,10 +74,10 @@ func GetUpgradeTenantTasks(
 		})
 		res.Close()
 		if from == -1 {
-			return 0, nil, nil
+			return 0, nil, nil, nil
 		}
 
-		sql = fmt.Sprintf("select account_id from mo_account where account_id >= %d and account_id <= %d for update",
+		sql = fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
 			from, to)
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
@@ -84,15 +85,36 @@ func GetUpgradeTenantTasks(
 				after = to + 1
 				continue
 			}
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		res.ReadRows(func(cols []*vector.Vector) bool {
 			tenants = append(tenants, executor.GetFixedRows[int32](cols[0])[0])
+			versions = append(versions, executor.GetStringRows(cols[1])[0])
 			return true
 		})
 		res.Close()
-		return taskID, tenants, nil
+		return taskID, tenants, versions, nil
 	}
+}
+
+func GetTenantCreateVersionForUpdate(
+	tenantID int32,
+	txn executor.TxnExecutor) (string, error) {
+	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", tenantID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+	version := ""
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		version = executor.GetStringRows(cols[0])[0]
+		return true
+	})
+	if version == "" {
+		panic(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+	}
+	return version, nil
 }
 
 func isConflictError(err error) bool {

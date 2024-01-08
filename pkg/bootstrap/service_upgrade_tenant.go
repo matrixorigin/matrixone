@@ -58,8 +58,7 @@ func (s *service) MaybeUpgradeTenant(
 			upgraded = true
 			for {
 				// upgrade completed
-				ready := finalVersionCompleted.Load()
-				if ready {
+				if finalVersionCompleted.Load() {
 					break
 				}
 
@@ -68,14 +67,19 @@ func (s *service) MaybeUpgradeTenant(
 					return err
 				}
 				// latest cluster is already upgrade completed
-				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant {
+				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
+					upgrades[len(upgrades)-1].State == versions.StateReady {
 					break
 				}
 
 				time.Sleep(time.Second)
 			}
 
-			// upgrade in current goroutine
+			// upgrade in current goroutine immediately
+			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
+			if err != nil {
+				return err
+			}
 			from := version
 			for _, v := range handles {
 				if versions.Compare(v.Metadata().Version, from) > 0 &&
@@ -99,7 +103,11 @@ func (s *service) MaybeUpgradeTenant(
 // parallel based on the grouped tenant batch.
 func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	fn := func() error {
+		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
+		defer cancel()
+
 		opts := executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
 			WithWaitCommittedLogApplied()
 		return s.exec.ExecTxn(
@@ -123,7 +131,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				// select task and tenants for update
-				taskID, tenants, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
+				taskID, tenants, createVersions, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
 				if err != nil {
 					return err
 				}
@@ -131,7 +139,15 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					return nil
 				}
 				h := getVersionHandle(upgrade.ToVersion)
-				for _, id := range tenants {
+				for i, id := range tenants {
+					createVersion := createVersions[i]
+					// createVersion >= upgrade.ToVersion already upgrade
+					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
+						continue
+					}
+					if !h.Metadata().CanDirectUpgrade(createVersion) {
+						panic("BUG: invalid upgrade")
+					}
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						return err
 					}
@@ -204,23 +220,4 @@ func fetchTenants(
 			return err
 		}
 	}
-}
-
-func getTenantVersion(txn executor.TxnExecutor, tenantID int32) (string, error) {
-	res, err := txn.Exec(fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID),
-		executor.StatementOption{})
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-
-	version := ""
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		version = executor.GetStringRows(cols[0])[0]
-		return false
-	})
-	if version == "" {
-		panic("invalid tenant create version")
-	}
-	return version, nil
 }

@@ -13,7 +13,7 @@ var (
 			state               int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		);`, catalog.MOVersionTable),
+		)`, catalog.MOVersionTable),
 
 		fmt.Sprintf(`create table %s (
 			id                  bigint unsigned not null primary key auto_increment,
@@ -28,7 +28,7 @@ var (
 			ready_tenant        int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		);`, catalog.MOUpgradeTable),
+		)`, catalog.MOUpgradeTable),
 
 		fmt.Sprintf(`create table %s ( 
 			id                  bigint unsigned not null primary key auto_increment,
@@ -39,7 +39,9 @@ var (
 			ready               int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		);`, catalog.MOUpgradeTenantTable),
+		)`, catalog.MOUpgradeTenantTable),
+
+		`alter table mo_account add column create_version varchar(50) default '1.2.0' after suspended_time`,
 	}
 )
 

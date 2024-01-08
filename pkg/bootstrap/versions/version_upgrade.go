@@ -47,8 +47,7 @@ func GetUpgradeVersions(
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
-			ready_tenant,
-			from %s 
+			ready_tenant from %s 
 			where final_version = '%s' 
 			order by upgrade_order asc`,
 		catalog.MOUpgradeTable,
@@ -142,7 +141,7 @@ func UpdateVersionUpgradeState(
 	state int32,
 	txn executor.TxnExecutor) error {
 	sql := fmt.Sprintf("update %s set state = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
-		catalog.MOVersionTable,
+		catalog.MOUpgradeTable,
 		state,
 		upgrade.FinalVersion,
 		upgrade.UpgradeOrder)
@@ -177,7 +176,17 @@ func UpdateVersionUpgradeTasks(
 }
 
 func GetVersionUpgradeSQL(v VersionUpgrade) string {
-	return fmt.Sprintf(`insert into %s values ('%s', '%s', '%s', %d, %d, %d, %d, %d, %d, current_timestamp(), current_timestamp())`,
+	return fmt.Sprintf(`insert into %s (from_version, 
+		to_version, 
+		final_version, 
+		state, 
+		upgrade_cluster, 
+		upgrade_tenant, 
+		upgrade_order, 
+		total_tenant, 
+		ready_tenant, 
+		create_at, 
+		update_at) values ('%s', '%s', '%s', %d, %d, %d, %d, %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOUpgradeTable,
 		v.FromVersion,
 		v.ToVersion,

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -79,6 +80,7 @@ func (s *service) upgrade(ctx context.Context) error {
 // create the upgrade step.
 func (s *service) doCheckUpgrade(ctx context.Context) error {
 	opts := executor.Options{}.
+		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied()
 	return s.exec.ExecTxn(
@@ -166,9 +168,13 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 // according to the created upgrade steps
 func (s *service) asyncUpgradeTask(ctx context.Context) {
 	fn := func() (bool, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
+		defer cancel()
+
 		var err error
 		var completed bool
 		opts := executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
 			WithWaitCommittedLogApplied()
 		err = s.exec.ExecTxn(
