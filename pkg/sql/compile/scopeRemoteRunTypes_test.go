@@ -16,9 +16,10 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -70,7 +71,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
 
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	pipe := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
