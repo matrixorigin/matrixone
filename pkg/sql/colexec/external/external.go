@@ -68,8 +68,11 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
+const argName = "external"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("external output")
+	buf.WriteString(argName)
+	buf.WriteString(": external output")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

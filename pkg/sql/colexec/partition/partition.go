@@ -28,9 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "partition"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("partition([")
+	buf.WriteString(": partition([")
 	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
