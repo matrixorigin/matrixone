@@ -725,15 +725,17 @@ func (s *service) bootstrap() error {
 		s._txnClient,
 		v.(executor.SQLExecutor))
 
-	return s.stopper.RunTask(func(ctx context.Context) {
-		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-		defer cancel()
-		// bootstrap cannot fail. We panic here to make sure the service can not start.
-		// If bootstrap failed, need clean all data to retry.
-		if err := b.Bootstrap(ctx); err != nil {
-			panic(err)
-		}
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+	// bootstrap cannot fail. We panic here to make sure the service can not start.
+	// If bootstrap failed, need clean all data to retry.
+	if err := b.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
+	if err := b.BootstrapUpgrade(ctx); err != nil {
+		panic(err)
+	}
+	return nil
 }
 
 type locker struct {

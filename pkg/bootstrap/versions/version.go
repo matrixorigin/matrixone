@@ -89,12 +89,18 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 	return version, nil
 }
 
-func GetVersionStateForUpdate(
+func GetVersionState(
 	version string,
-	txn executor.TxnExecutor) (int32, bool, error) {
-	sql := fmt.Sprintf(`select state from %s where version = '%s' for update`,
+	txn executor.TxnExecutor,
+	forUpdate bool) (int32, bool, error) {
+	withForUpdate := ""
+	if forUpdate {
+		withForUpdate = "for update"
+	}
+	sql := fmt.Sprintf(`select state from %s where version = '%s' %s`,
 		catalog.MOVersionTable,
-		version)
+		version,
+		withForUpdate)
 
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {

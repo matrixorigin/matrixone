@@ -38,8 +38,10 @@ import (
 // 1. mo_indexes in mo_catalog
 // 2. task infrastructure database
 type Service interface {
-	// Bootstrap try to bootstrap and upgrade mo cluster
+	// Bootstrap try to bootstrap mo cluster
 	Bootstrap(ctx context.Context) error
+	// BootstrapUpgrade bootstrap upgrade framework
+	BootstrapUpgrade(ctx context.Context) error
 	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
 	MaybeUpgradeTenant(
 		ctx context.Context,

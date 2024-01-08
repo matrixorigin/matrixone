@@ -34,7 +34,7 @@ var (
 	finalVersionCompleted      atomic.Bool
 )
 
-func (s *service) upgrade(ctx context.Context) error {
+func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// MO's upgrade framework is automated, requiring no manual execution of any
 	// upgrade commands, and supports cross-version upgrades. All upgrade processes
 	// are executed at the CN node. Currently, rollback upgrade is not supported.
@@ -92,13 +92,26 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				return handles[0].Prepare(ctx, txn)
 			}
 
+			// lock version table
+			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
+				return nil
+			}
+
 			final := getFinalVersionHandle().Metadata()
-			v, err := versions.GetLatestUpgradeVersion(txn)
+			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				return err
 			}
-			if v.Version != "" && v.Version != final.Version {
+
+			// cluster is upgrading to v1, only v1's cn can start up.
+			if !v.IsReady() && v.Version != final.Version {
 				panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
+					final.Version,
+					v.Version))
+			}
+			// cluster is running at v1, cannot startup a old version to join cluster.
+			if v.IsReady() && versions.Compare(final.Version, v.Version) < 0 {
+				panic(fmt.Sprintf("cannot startup a old version %s to join cluster, current version is %s",
 					final.Version,
 					v.Version))
 			}
@@ -107,7 +120,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// 1: already checked, version exists
 			// 2: add upgrades from latest version to final version
 			checker := func() (bool, error) {
-				state, ok, err := versions.GetVersionStateForUpdate(final.Version, txn)
+				if v.Version == final.Version {
+					return true, nil
+				}
+
+				state, ok, err := versions.GetVersionState(final.Version, txn, false)
 				if err == nil && ok && state == versions.StateReady {
 					finalVersionCompleted.Store(true)
 				}
@@ -154,7 +171,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			// step 1
-			if checked, err := checker(); err != nil || checked {
+			if versionAdded, err := checker(); err != nil || versionAdded {
 				return err
 			}
 
@@ -215,7 +232,7 @@ func (s *service) performUpgrade(
 	final := getFinalVersionHandle().Metadata()
 
 	// make sure only one cn can execute upgrade logic
-	state, ok, err := versions.GetVersionStateForUpdate(final.Version, txn)
+	state, ok, err := versions.GetVersionState(final.Version, txn, true)
 	if err != nil {
 		return false, err
 	}
@@ -273,7 +290,6 @@ func (s *service) doUpgrade(
 		return versions.StateReady, nil
 	}
 
-	// upgrade need to
 	state := versions.StateReady
 	h := getVersionHandle(upgrade.ToVersion)
 	if err := h.Prepare(ctx, txn); err != nil {

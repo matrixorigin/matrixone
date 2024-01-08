@@ -117,6 +117,25 @@ func GetTenantCreateVersionForUpdate(
 	return version, nil
 }
 
+func UpgradeTenantVersion(
+	tenantID int32,
+	version string,
+	txn executor.TxnExecutor) error {
+	sql := fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d",
+		version,
+		tenantID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.AffectedRows != 1 {
+		panic(fmt.Sprintf("BUG: update tenant: %d failed with AffectedRows %d",
+			tenantID, res.AffectedRows))
+	}
+	return nil
+}
+
 func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
 }

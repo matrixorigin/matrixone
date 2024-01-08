@@ -87,6 +87,9 @@ func (s *service) MaybeUpgradeTenant(
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
+					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+						return err
+					}
 					from = v.Metadata().Version
 				}
 			}
@@ -102,15 +105,16 @@ func (s *service) MaybeUpgradeTenant(
 // asyncUpgradeTenantTask is a task to execute the tenant upgrade logic in
 // parallel based on the grouped tenant batch.
 func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
-	fn := func() error {
+	fn := func() (bool, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Hour*24)
 		defer cancel()
 
+		hasUpgradeTenants := false
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
 			WithWaitCommittedLogApplied()
-		return s.exec.ExecTxn(
+		err := s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
 				upgrade, ok, err := versions.GetUpgradingTenantVersion(txn)
@@ -138,6 +142,8 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				if len(tenants) == 0 {
 					return nil
 				}
+
+				hasUpgradeTenants = true
 				h := getVersionHandle(upgrade.ToVersion)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
@@ -149,6 +155,9 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						panic("BUG: invalid upgrade")
 					}
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
+						return err
+					}
+					if err := versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
 						return err
 					}
 				}
@@ -168,6 +177,10 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				return versions.UpdateVersionUpgradeTasks(upgrade, txn)
 			},
 			opts)
+		if err != nil {
+			return false, err
+		}
+		return hasUpgradeTenants, nil
 	}
 
 	timer := time.NewTimer(checkUpgradeTenantDuration)
@@ -182,7 +195,8 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				return
 			}
 
-			if err := fn(); err != nil {
+			if hasUpgradeTenants, err := fn(); err != nil ||
+				hasUpgradeTenants {
 				continue
 			}
 			timer.Reset(checkUpgradeTenantDuration)

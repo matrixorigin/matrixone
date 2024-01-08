@@ -178,45 +178,39 @@ func NewService(
 }
 
 func (s *service) Bootstrap(ctx context.Context) error {
-	bootstrap := func() error {
-		getLogger().Info("start to check bootstrap state")
+	getLogger().Info("start to check bootstrap state")
 
-		if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
-			getLogger().Info("mo already boostrapped")
-			return nil
-		} else if err != nil {
-			return err
-		}
-
-		ok, err := s.lock.Get(ctx, bootstrapKey)
-		if err != nil {
-			return err
-		}
-
-		// current node get the bootstrap privilege
-		if ok {
-			return s.execBootstrap(ctx)
-		}
-
-		// otherwise, wait bootstrap completed
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Second):
-			}
-			if ok, err := s.checkAlreadyBootstrapped(ctx); ok || err != nil {
-				getLogger().Info("waiting bootstrap completed",
-					zap.Bool("result", ok),
-					zap.Error(err))
-				return err
-			}
-		}
-	}
-	if err := bootstrap(); err != nil {
+	if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
+		getLogger().Info("mo already boostrapped")
+		return nil
+	} else if err != nil {
 		return err
 	}
-	return s.upgrade(ctx)
+
+	ok, err := s.lock.Get(ctx, bootstrapKey)
+	if err != nil {
+		return err
+	}
+
+	// current node get the bootstrap privilege
+	if ok {
+		return s.execBootstrap(ctx)
+	}
+
+	// otherwise, wait bootstrap completed
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+		if ok, err := s.checkAlreadyBootstrapped(ctx); ok || err != nil {
+			getLogger().Info("waiting bootstrap completed",
+				zap.Bool("result", ok),
+				zap.Error(err))
+			return err
+		}
+	}
 }
 
 func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
