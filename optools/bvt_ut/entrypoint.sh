@@ -49,7 +49,7 @@ function run_bvt() {
   else
     # use test/distributed/cases as default test cases
     echo "> test case: test/distributed/cases"
-    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases 2>&1
+    cd mo-tester && ./run.sh -n -g -p /matrixone-test/test/distributed/cases -e optimistic 2>&1
   fi
 }
 
