@@ -136,13 +136,6 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 	}, nil
 }
 
-// Normalize is required for spherical kmeans initialization.
-func (km *ElkanClusterer) Normalize() {
-	if km.normalize {
-		moarray.NormalizeGonumVectors(km.vectorList)
-	}
-}
-
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
 func (km *ElkanClusterer) InitCentroids() error {
 	var initializer Initializer
@@ -160,7 +153,9 @@ func (km *ElkanClusterer) InitCentroids() error {
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
-	km.Normalize() // spherical kmeans initialization
+	if km.normalize {
+		moarray.NormalizeGonumVectors(km.vectorList)
+	}
 
 	if km.vectorCnt == km.clusterCnt {
 		return moarray.ToMoArrays[float64](km.vectorList), nil
