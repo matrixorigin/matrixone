@@ -28,8 +28,14 @@ select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
 internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
 select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
 internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
-SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[116.666664, 44.666668, 70]
+[1, 2.35, 4.5]
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[0.8140391, 0.31670254, 0.4806907]
+[0.19485846, 0.45293573, 0.8673351]
 select a,c,normalize_l2(c) from t1;
 a    c    normalize_l2(c)
 2    [1, 2, 4, 4, 5]    [0.1270001270001905, 0.254000254000381, 0.508000508000762, 0.508000508000762, 0.6350006350009525]
@@ -46,8 +52,14 @@ select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
 internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
 select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
 internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
-SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
-internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[116.66666666666666, 44.666666666666664, 70, 80, 90]
+[1, 2.35, 4.5, 4, 5]
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627]
+[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785]
 drop table if exists tbl;
 create table tbl(id int primary key, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
