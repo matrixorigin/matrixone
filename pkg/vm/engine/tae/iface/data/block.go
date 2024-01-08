@@ -141,6 +141,7 @@ type Block interface {
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
 	FreezeAppend()
+	UpdateDeltaLoc(txn txnif.TxnReader,blkID uint16,deltaLoc objectio.Location)(bool,txnif.TxnEntry,error)
 
 	Close()
 }

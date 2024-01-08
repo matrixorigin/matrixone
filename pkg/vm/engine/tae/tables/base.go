@@ -877,3 +877,8 @@ func (blk *baseBlock) CollectAppendInRange(
 ) (*containers.BatchWithVersion, error) {
 	return nil, nil
 }
+
+func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader,blkID uint16,deltaLoc objectio.Location)(bool,txnif.TxnEntry,error){
+	mvcc:=blk.mvcc.GetOrCreateDeleteChain(blkID)
+	return mvcc.UpdateDeltaLoc(txn,deltaLoc)
+}

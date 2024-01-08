@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -292,4 +294,55 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 		}
 	}
 	return nil
+}
+
+func (blk *txnObject) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
+
+func (blk *txnObject) GetByFilter(
+	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
+) (blkID uint16, offset uint32, err error) {
+	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter, mp)
+}
+
+func (blk *txnObject) GetColumnDataById(
+	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
+) (*containers.ColumnView, error) {
+	if blk.entry.IsLocal {
+		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+	}
+	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), blkID, colIdx, mp)
+}
+
+func (blk *txnObject) GetColumnDataByIds(
+	ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool,
+) (*containers.BlockView, error) {
+	if blk.entry.IsLocal {
+		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, colIdxes, mp)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), blkID, colIdxes, mp)
+}
+
+func (blk *txnObject) GetColumnDataByName(
+	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
+) (*containers.ColumnView, error) {
+	schema := blk.table.GetLocalSchema()
+	colIdx := schema.GetColIdx(attr)
+	if blk.entry.IsLocal {
+		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+	}
+	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, blkID, colIdx, mp)
+}
+
+func (blk *txnObject) GetColumnDataByNames(
+	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
+) (*containers.BlockView, error) {
+	schema := blk.table.GetLocalSchema()
+	attrIds := make([]int, len(attrs))
+	for i, attr := range attrs {
+		attrIds[i] = schema.GetColIdx(attr)
+	}
+	if blk.entry.IsLocal {
+		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, attrIds, mp)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, blkID, attrIds, mp)
 }

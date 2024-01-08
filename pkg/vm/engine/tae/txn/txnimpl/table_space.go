@@ -92,9 +92,8 @@ func (space *tableSpace) isStatsExisted(o objectio.ObjectStats) bool {
 // register an appendable insertNode.
 func (space *tableSpace) registerANode() {
 	entry := space.entry
-	meta := catalog.NewStandaloneBlock(
+	meta := catalog.NewStandaloneObject(
 		entry,
-		objectio.NewBlockidWithObjectID(&entry.ID, uint16(len(space.nodes))),
 		space.table.store.txn.GetStartTS())
 	entry.AddEntryLocked(meta)
 	n := NewANode(

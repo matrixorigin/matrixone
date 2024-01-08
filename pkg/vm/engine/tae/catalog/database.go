@@ -647,3 +647,14 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 
 	return entry
 }
+
+func (e *DBEntry) GetBlockEntryByID(id *common.ID) (obj *ObjectEntry, err error) {
+	e.RLock()
+	table, err := e.GetTableEntryByID(id.TableID)
+	e.RUnlock()
+	if err != nil {
+		return
+	}
+	obj, err = table.GetObjectByID(id.ObjectID())
+	return
+}

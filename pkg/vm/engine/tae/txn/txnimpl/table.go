@@ -160,13 +160,12 @@ func (tbl *txnTable) TransferDeleteIntent(
 	entry, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.ObjectID(),
-		&id.BlockID)
+		id.ObjectID())
 	if err != nil {
 		panic(err)
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	if err = readWriteConfilictCheck(&entry.BaseEntryImpl, ts); err == nil {
+	if err = readWriteConfilictCheck(entry.BaseEntryImpl, ts); err == nil {
 		return
 	}
 	err = nil
@@ -446,8 +445,12 @@ func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.Create
 }
 
 func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	var factory catalog.BlockDataFactory
+	if tbl.store.dataFactory != nil {
+		factory = tbl.store.dataFactory.MakeBlockFactory()
+	}
 	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts); err != nil {
+	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts, factory); err != nil {
 		return
 	}
 	obj = newObject(tbl, meta)
@@ -457,23 +460,6 @@ func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *ob
 		meta.Set1PC()
 	}
 	tbl.txnEntries.Append(meta)
-	return
-}
-
-func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
-	var obj *catalog.ObjectEntry
-	if obj, err = tbl.entry.GetObjectByID(id.ObjectID()); err != nil {
-		return
-	}
-	meta, err := obj.DropBlockEntry(&id.BlockID, tbl.store.txn)
-	if err != nil {
-		return
-	}
-	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
-	if meta != nil {
-		tbl.txnEntries.Append(meta)
-	}
 	return
 }
 
@@ -490,62 +476,9 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 		tbl.store.warChecker.InsertByID(
 			tbl.entry.GetDB().ID,
 			id.TableID,
-			id.ObjectID(),
-			&id.BlockID)
+			id.ObjectID())
 	}
 	return
-}
-
-func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	meta, err := tbl.store.warChecker.CacheGet(
-		tbl.entry.GetDB().ID,
-		id.TableID,
-		id.ObjectID(),
-		&id.BlockID)
-	if err != nil {
-		return
-	}
-	blk = buildBlock(tbl, meta)
-	return
-}
-
-func (tbl *txnTable) CreateNonAppendableBlock(sid *types.Objectid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
-}
-
-func (tbl *txnTable) CreateBlock(sid *types.Objectid, is1PC bool) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC, nil)
-}
-
-func (tbl *txnTable) createBlock(
-	sid *types.Objectid,
-	state catalog.EntryState,
-	is1PC bool,
-	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var obj *catalog.ObjectEntry
-	if obj, err = tbl.entry.GetObjectByID(sid); err != nil {
-		return
-	}
-	if !obj.IsAppendable() && state == catalog.ES_Appendable {
-		err = moerr.NewInternalErrorNoCtx("not appendable")
-		return
-	}
-	var factory catalog.BlockDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeBlockFactory()
-	}
-	meta, err := obj.CreateBlock(tbl.store.txn, state, factory, opts)
-	if err != nil {
-		return
-	}
-	if is1PC {
-		meta.Set1PC()
-	}
-	tbl.store.IncreateWriteCnt()
-	id := meta.AsCommonID()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
-	tbl.txnEntries.Append(meta)
-	return buildBlock(tbl, meta), err
 }
 
 func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
@@ -811,13 +744,13 @@ func (tbl *txnTable) RangeDelete(
 
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
-		id.TableID, id.ObjectID(),
-		&id.BlockID)
+		id.TableID, id.ObjectID())
 	if err != nil {
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
+	_, blkOffset := id.BlockID.Offsets()
+	node2, err := blkData.RangeDelete(tbl.store.txn, blkOffset, start, end, pk, dt)
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
@@ -835,21 +768,15 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
-		id.TableID, id.ObjectID(),
-		&id.BlockID)
+		id.TableID, id.ObjectID())
 	if err != nil {
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, ok, err := blkData.TryDeleteByDeltaloc(tbl.store.txn, deltaloc)
+	_, blkOffset := id.BlockID.Offsets()
+	node2, ok, err := blkData.TryDeleteByDeltaloc(tbl.store.txn, blkOffset, deltaloc)
 	if err == nil && ok {
-		if err = tbl.UpdateDeltaLoc(id, deltaloc); err != nil {
-			err = node2.PrepareRollback()
-			return false, err
-		}
-		if err = tbl.AddDeleteNode(id, node2); err != nil {
-			return
-		}
+		tbl.txnEntries.Append(node2)
 		tbl.store.warChecker.Insert(blk)
 	}
 	return
@@ -899,13 +826,13 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.ObjectID(),
-		&id.BlockID)
+		id.ObjectID())
 	if err != nil {
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
+	_, blkOffset := id.BlockID.Offsets()
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), blkOffset, int(row), int(col), common.WorkspaceAllocator)
 }
 func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
 	meta, err := tbl.entry.GetObjectByID(id.ObjectID())
@@ -923,42 +850,22 @@ func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStat
 	return nil
 }
 
-func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	meta, err := tbl.store.warChecker.CacheGet(
-		tbl.entry.GetDB().ID,
-		id.TableID,
-		id.ObjectID(),
-		&id.BlockID)
-	if err != nil {
-		panic(err)
-	}
-	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaLoc)
-	if err != nil {
-		return
-	}
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
-	if isNewNode {
-		tbl.txnEntries.Append(meta)
-	}
-	return
-}
-
 func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.ObjectID(),
-		&id.BlockID)
+		id.ObjectID())
 	if err != nil {
 		panic(err)
 	}
-	isNewNode, err := meta.UpdateDeltaLoc(tbl.store.txn, deltaloc)
+	_, blkOffset := id.BlockID.Offsets()
+	isNewNode, entry, err := meta.GetBlockData().UpdateDeltaLoc(tbl.store.txn, blkOffset, deltaloc)
 	if err != nil {
 		return
 	}
 	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
-		tbl.txnEntries.Append(meta)
+		tbl.txnEntries.Append(entry)
 	}
 	meta.Is1PC()
 	return
@@ -1066,7 +973,7 @@ func (tbl *txnTable) updateDedupedObjectHintAndBlockID(hint uint64, id *types.Bl
 func (tbl *txnTable) quickSkipThisBlock(
 	ctx context.Context,
 	keysZM index.ZM,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 ) (ok bool, err error) {
 	zm, err := meta.GetPKZoneMap(ctx, tbl.store.rt.Fs.Service)
 	if err != nil {
@@ -1104,8 +1011,7 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, dedupAfterSnapshotTS bool) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
-	h := newRelation(tbl)
-	it := newRelationBlockItOnSnap(h)
+	it := newObjectItOnSnap(tbl)
 	maxObjectHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1118,16 +1024,12 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	)
 	maxBlockID := &types.Blockid{}
 	for it.Valid() {
-		blkH := it.GetBlock()
-		blk := blkH.GetMeta().(*catalog.BlockEntry)
+		blkH := it.GetObject()
+		blk := blkH.GetMeta().(*catalog.ObjectEntry)
 		blkH.Close()
-		ObjectHint := blk.GetObject().SortHint
+		ObjectHint := blk.SortHint
 		if ObjectHint > maxObjectHint {
 			maxObjectHint = ObjectHint
-			maxBlockID = &blk.ID
-		}
-		if blk.ID.Compare(*maxBlockID) > 0 {
-			maxBlockID = &blk.ID
 		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
@@ -1146,8 +1048,8 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
-		location := blk.FastGetMetaLoc()
-		if len(location) > 0 {
+		stats := blk.GetObjectStats()
+		if !stats.ObjectLocation().IsEmpty() {
 			var skip bool
 			if skip, err = tbl.quickSkipThisBlock(ctx, keysZM, blk); err != nil {
 				return
@@ -1158,13 +1060,13 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		if bf, err = tbl.tryGetCurrentObjectBF(
 			ctx,
-			location,
+			stats.ObjectLocation(),
 			bf,
 			&name,
 		); err != nil {
 			return
 		}
-		name = *objectio.ToObjectNameShort(&blk.ID)
+		name = *stats.ObjectShortName()
 
 		if err = blkData.BatchDedup(
 			ctx,
@@ -1193,17 +1095,12 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 	maxObjectHint := uint64(0)
 	maxBlockID := &types.Blockid{}
 	for i, loc := range metaLocs {
-		h := newRelation(tbl)
-		it := newRelationBlockItOnSnap(h)
+		it := newObjectItOnSnap(tbl)
 		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-			ObjectHint := blk.GetObject().SortHint
+			blk := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+			ObjectHint := blk.SortHint
 			if ObjectHint > maxObjectHint {
 				maxObjectHint = ObjectHint
-				maxBlockID = &blk.ID
-			}
-			if blk.ID.Compare(*maxBlockID) > 0 {
-				maxBlockID = &blk.ID
 			}
 			blkData := blk.GetBlockData()
 			if blkData == nil {
@@ -1299,50 +1196,29 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					continue
 				}
 			}
-			var shouldSkip bool
-			err = nil
-			blkIt := obj.MakeBlockIt(false)
-			for blkIt.Valid() {
-				blk := blkIt.Get().GetPayload()
-				if obj.SortHint == tbl.dedupedObjectHint {
-					if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
-						break
-					}
+			blkData := obj.GetBlockData()
+			var rowmask *roaring.Bitmap
+			if len(tbl.deleteNodes) > 0 {
+				if tbl.store.warChecker.HasConflict(obj.ID) {
+					continue
 				}
-				{
-					blk.RLock()
-					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-					blk.RUnlock()
-					if shouldSkip {
-						blkIt.Next()
-						continue
-					}
+				fp := obj.AsCommonID()
+				deleteNode := tbl.getNormalDeleteNode(*fp)
+				if deleteNode != nil {
+					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
-				blkData := blk.GetBlockData()
-				var rowmask *roaring.Bitmap
-				if len(tbl.deleteNodes) > 0 {
-					if tbl.store.warChecker.HasConflict(blk.ID) {
-						continue
-					}
-					fp := blk.AsCommonID()
-					deleteNode := tbl.getNormalDeleteNode(*fp)
-					if deleteNode != nil {
-						rowmask = deleteNode.GetRowMaskRefLocked()
-					}
-				}
-				if err = blkData.BatchDedup(
-					context.Background(),
-					tbl.store.txn,
-					pks,
-					pksZM,
-					rowmask,
-					true,
-					objectio.BloomFilter{},
-					common.WorkspaceAllocator,
-				); err != nil {
-					return
-				}
-				blkIt.Next()
+			}
+			if err = blkData.BatchDedup(
+				context.Background(),
+				tbl.store.txn,
+				pks,
+				pksZM,
+				rowmask,
+				true,
+				objectio.BloomFilter{},
+				common.WorkspaceAllocator,
+			); err != nil {
+				return
 			}
 			objIt.Next()
 		}
@@ -1386,50 +1262,30 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			pks = colV.Orphan()
 			defer pks.Close()
 		}
-		var shouldSkip bool
 		err = nil
-		blkIt := obj.MakeBlockIt(false)
-		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload()
-			if obj.SortHint == tbl.dedupedObjectHint {
-				if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
-					break
-				}
+		blkData := obj.GetBlockData()
+		var rowmask *roaring.Bitmap
+		if len(tbl.deleteNodes) > 0 {
+			if tbl.store.warChecker.HasConflict(obj.ID) {
+				continue
 			}
-			{
-				blk.RLock()
-				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-				blk.RUnlock()
-				if shouldSkip {
-					blkIt.Next()
-					continue
-				}
+			fp := obj.AsCommonID()
+			deleteNode := tbl.getNormalDeleteNode(*fp)
+			if deleteNode != nil {
+				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
-			blkData := blk.GetBlockData()
-			var rowmask *roaring.Bitmap
-			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(blk.ID) {
-					continue
-				}
-				fp := blk.AsCommonID()
-				deleteNode := tbl.getNormalDeleteNode(*fp)
-				if deleteNode != nil {
-					rowmask = deleteNode.GetRowMaskRefLocked()
-				}
-			}
-			if err = blkData.BatchDedup(
-				context.Background(),
-				tbl.store.txn,
-				pks,
-				nil,
-				rowmask,
-				true,
-				objectio.BloomFilter{},
-				common.WorkspaceAllocator,
-			); err != nil {
-				return err
-			}
-			blkIt.Next()
+		}
+		if err = blkData.BatchDedup(
+			context.Background(),
+			tbl.store.txn,
+			pks,
+			nil,
+			rowmask,
+			true,
+			objectio.BloomFilter{},
+			common.WorkspaceAllocator,
+		); err != nil {
+			return err
 		}
 		objIt.Next()
 	}

@@ -209,6 +209,11 @@ func (o *Objectid) Segment() *Segmentid {
 func (o *Objectid) String() string {
 	return fmt.Sprintf("%v-%d", o.Segment().ToString(), o.Offset())
 }
+func (b *Objectid) ShortStringEx() string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], b[:4])
+	return fmt.Sprintf("%s", string(shortuuid[:]))
+}
 func (o *Objectid) Offset() uint16 {
 	filen := DecodeUint16(o[UuidSize:ObjectBytesSize])
 	return filen

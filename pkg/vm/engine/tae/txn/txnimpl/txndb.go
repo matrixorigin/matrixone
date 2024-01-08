@@ -358,44 +358,6 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateNonAppendableBlock(id.ObjectID(), opts)
-}
-
-func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.GetBlock(id)
-}
-
-func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateBlock(id.ObjectID(), is1PC)
-}
-
-func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.SoftDeleteBlock(id)
-}
-func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.UpdateMetaLoc(id, metaLoc)
-}
 func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {

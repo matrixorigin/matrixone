@@ -38,7 +38,7 @@ type anode struct {
 // NewANode creates a InsertNode with data in memory.
 func NewANode(
 	tbl *txnTable,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, meta)

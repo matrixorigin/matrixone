@@ -15,7 +15,6 @@
 package updates
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"

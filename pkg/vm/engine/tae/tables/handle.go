@@ -15,11 +15,9 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type tableHandle struct {
@@ -42,8 +40,7 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
 	objMeta, _ := tableMeta.GetObjectByID(id.ObjectID())
-	blkMeta, _ := objMeta.GetBlockEntryByID(&id.BlockID)
-	h.block = blkMeta.GetBlockData().(*ablock)
+	h.block = objMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()
 	return h.appender
@@ -64,24 +61,11 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			err = data.ErrAppendableObjectNotFound
 			return
 		}
-		blkEntry := objEntry.LastAppendableBlock()
-		if blkEntry == nil {
-			err = data.ErrAppendableObjectNotFound
-			return
-		}
-		h.block = blkEntry.GetBlockData().(*ablock)
+		h.block = objEntry.GetBlockData().(*ablock)
 		h.appender, err = h.block.MakeAppender()
 		if err != nil {
 			panic(err)
 		}
-	}
-
-	// Instead in ThrowAppenderAndErr, check object index here because
-	// it is better to create new appendable early in some busy update workload case
-	if obj := h.block.meta; obj.GetNextObjectIndex() >= options.DefaultObjectPerSegment {
-		logutil.Infof("%s create new obj due to large object index %d",
-			obj.ID.String(), obj.GetNextObjectIndex())
-		return nil, data.ErrAppendableObjectNotFound
 	}
 
 	dropped := h.block.meta.HasDropCommitted()
