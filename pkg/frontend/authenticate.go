@@ -2969,7 +2969,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			//Option 1: alter the password of admin for the account
 			if aa.AuthOption.Exist {
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
-				accountCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(targetAccountId))
+				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
 				//1, check the admin exists or not
 				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
@@ -3297,7 +3297,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
 	}
 
-	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	//get pubAccountId from publication info
 	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
@@ -3341,7 +3341,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 
 	//check the publication is already exist or not
 
-	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accId))
+	newCtx = defines.AttachAccountId(ctx, uint32(accId))
 	sql, err = getSqlForPubInfoForSub(newCtx, pubName, true)
 	if err != nil {
 		return nil, err
@@ -3380,7 +3380,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			if tenantId, ok := value.(uint32); ok {
 				sql = getSqlForGetAccountName(tenantId)
 				bh.ClearExecResultSet()
-				newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+				newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 				err = bh.Exec(newCtx, sql)
 				if err != nil {
 					return nil, err
@@ -4161,7 +4161,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
 		//SWITCH TO THE CONTEXT of the deleted context
-		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+		deleteCtx = defines.AttachAccountId(ctx, uint32(accountId))
 
 		//step 2 : drop table mo_user
 		//step 3 : drop table mo_role
@@ -7498,9 +7498,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 		DefaultRoleID: moAdminRoleID,
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 
 	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
 	if err != nil {
@@ -7715,9 +7713,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
+	ctx = defines.AttachAccount(ctx, uint32(tenant.GetTenantID()), uint32(tenant.GetUserID()), uint32(tenant.GetDefaultRoleID()))
 
 	_, st := trace.Debug(ctx, "InitGeneralTenant.init_general_tenant")
 	mp, err = mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
@@ -7800,11 +7796,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
+		rtnErr = createTablesInSystemOfGeneralTenant(newTenantCtx, bh, newTenant)
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, newTenant)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7906,9 +7902,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		DefaultRoleID: accountAdminRoleID,
 	}
 	//with new tenant
-	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
-	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
-	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	newTenantCtx = defines.AttachAccount(ctx, uint32(newTenantID), uint32(newUserId), uint32(accountAdminRoleID))
 	return newTenant, newTenantCtx, err
 }
 
@@ -8024,10 +8018,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
-	//with new tenant
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0)
@@ -8054,9 +8044,6 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	defer span.End()
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
@@ -8097,9 +8084,7 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	}
 
 	//with new tenant
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+	ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
 
 	createSubscriptionFormat := `create database %s from sys publication %s;`
 	sqls := make([]string, 0, len(subscriptions))
@@ -8817,7 +8802,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		}
 
 		// step 1: check account exists or not
-		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 		isExist, rtnErr = checkTenantExistsOrNot(newCtx, bh, accountName)
 		if rtnErr != nil {
 			return rtnErr
@@ -9112,13 +9097,9 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9163,13 +9144,9 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege

@@ -17,12 +17,13 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"path"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -63,10 +64,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	var err error
 	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
 	defer span.End()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
-
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerName)
 	logger.Debug(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
@@ -118,9 +116,7 @@ func cleanStorageUsageMetric(logger *log.MOLogger, actor string) {
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	ctx, cancel := context.WithCancel(ctx)
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	logger.Info("started")

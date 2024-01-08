@@ -184,15 +184,15 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
 		if account != nil && account.GetTenantID() != sysAccountID {
-			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+			txnCtx = defines.AttachAccountId(txnCtx, sysAccountID)
 		}
 	}
 	if sub != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
 	//open database

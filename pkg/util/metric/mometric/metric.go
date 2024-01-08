@@ -17,13 +17,14 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -238,10 +239,7 @@ func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
-
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	initTables(ctx, ieFactory)
 	return nil
 }

@@ -176,6 +176,22 @@ func GetAccountId(ctx context.Context) uint32 {
 	return 0
 }
 
+func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {
+	return AttachRoleId(AttachUserId(AttachAccountId(ctx, accId), userId), roleId)
+}
+
+func AttachAccountId(ctx context.Context, accId uint32) context.Context {
+	return context.WithValue(ctx, TenantIDKey{}, accId)
+}
+
+func AttachUserId(ctx context.Context, userId uint32) context.Context {
+	return context.WithValue(ctx, UserIDKey{}, userId)
+}
+
+func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
+	return context.WithValue(ctx, RoleIDKey{}, roleId)
+}
+
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}
 

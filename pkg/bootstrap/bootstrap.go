@@ -17,9 +17,10 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -167,9 +168,7 @@ func NewBootstrapper(
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, catalog.System_User)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, catalog.System_Role)
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
 		getLogger().Info("mo already boostrapped")
 		return nil

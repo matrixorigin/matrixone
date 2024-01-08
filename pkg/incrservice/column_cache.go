@@ -429,7 +429,7 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 			debug.PrintStack()
 			panic("no account id 6")
 		}
-		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+		col.preAllocate(defines.AttachAccountId(context.Background(), ctx.Value(defines.TenantIDKey{}).(uint32)),
 			tableID,
 			col.cfg.CountPerAllocate,
 			txnOp)

@@ -15,7 +15,6 @@
 package function
 
 import (
-	"context"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -74,7 +73,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 						debug.PrintStack()
 						panic("no account id 13")
 					}
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -177,7 +176,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 						debug.PrintStack()
 						panic("no account id 14")
 					}
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -301,7 +300,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 						debug.PrintStack()
 						panic("no account id 15")
 					}
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx

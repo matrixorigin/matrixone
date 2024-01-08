@@ -83,16 +83,16 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	retTxnCtx := th.txnCtx
 
 	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
+		retTxnCtx = defines.AttachAccountId(retTxnCtx, v.(uint32))
 	} else {
 		debug.PrintStack()
 		panic("no account id 3")
 	}
 	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey{}, v)
+		retTxnCtx = defines.AttachUserId(retTxnCtx, v.(uint32))
 	}
 	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
+		retTxnCtx = defines.AttachRoleId(retTxnCtx, v.(uint32))
 	}
 	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
