@@ -377,7 +377,7 @@ func (r *blockReader) Read(
 				obj.CreateTime.ToTimestamp().DebugString(),
 				obj.DeleteTime.ToTimestamp().DebugString())
 		}
-		logutil.Fatalf("xxxx blockReader.Read: err:%s, txn:%s, all objs in partition state:[%s]",
+		logutil.Fatalf("xxxx blockReader.Read: err:%s, txn:%s, all objects in partition state:[%s]",
 			err.Error(),
 			r.table.db.txn.op.Txn().DebugString(),
 			aObjs)
