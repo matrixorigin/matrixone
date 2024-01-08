@@ -1408,6 +1408,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `prefix_between`
+	{
+		functionId: PREFIX_BETWEEN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixBetween
+				},
+			},
+		},
+	},
+
 	// function `encode`
 	{
 		functionId: ENCODE,
