@@ -89,11 +89,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
 			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
-				if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
-					if _, ok := proj.Expr.(*plan.Expr_Lit); !ok {
-						allColRef = false
-						break
-					}
+				if proj.GetCol() == nil {
+					allColRef = false
+					break
 				}
 			}
 		}
@@ -1129,4 +1127,18 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	node.BindingTags = node.BindingTags[:1]
 	node.ProjectList = node.GroupBy
 	node.GroupBy = nil
+}
+
+func (builder *QueryBuilder) pushdownLimit(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.pushdownLimit(childID)
+	}
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN {
+			child.Limit, child.Offset = node.Limit, node.Offset
+			node.Limit, node.Offset = nil, nil
+		}
+	}
 }

@@ -46,8 +46,8 @@ jobs:
 
           # add tencentyun docker image mirror and tencentyun apt mirror
           sed -i 's#^RUN apt-get update#RUN sed -i "s?http.*ubuntu\.com?http://mirrors\.tencentyun\.com?g" /etc/apt/sources.list  \&\& apt-get clean all \&\& apt-get update#g' optools/images/Dockerfile
-          sed -i 's#FROM golang:1.20.7-bookworm as builder#FROM ccr.ccs.tencentyun.com/cicd-runner/golang:1.20.7-bookworm as builder#g' optools/images/Dockerfile
-          sed -i 's#FROM ubuntu:latest#FROM ccr.ccs.tencentyun.com/cicd-runner/ubuntu:latest#g' optools/images/Dockerfile
+          sed -i 's#FROM golang:1.21.5-bookworm as builder#FROM ccr.ccs.tencentyun.com/cicd-runner/golang:1.21.5-bookworm as builder#g' optools/images/Dockerfile
+          sed -i 's#FROM ubuntu:22.04#FROM ccr.ccs.tencentyun.com/cicd-runner/ubuntu:22.04#g' optools/images/Dockerfile
 
           docker build -t $TAGS -f optools/images/Dockerfile . --build-arg GOPROXY='https://goproxy.cn,direct'
           docker push $TAGS
