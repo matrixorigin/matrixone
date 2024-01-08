@@ -305,3 +305,8 @@ type fuzzyCheck struct {
 
 	cnt int
 }
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
+}

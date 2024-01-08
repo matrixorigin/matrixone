@@ -123,7 +123,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	{
 		// 7.b invoke reindex for the new table, if it contains ivf index.
-		multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+		multiTableIndexes := make(map[string]*MultiTableIndex)
 		newTableRel, err := dbSource.Relation(c.ctx, qry.TableDef.Name, nil)
 		if err != nil {
 			return err
@@ -132,17 +132,19 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 		for _, indexDef := range newTableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-				indexAlgo := catalog.ToLower(indexDef.IndexAlgo)
-				if _, ok := multiTableIndexes[indexAlgo]; !ok {
-					multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
 				}
-				multiTableIndexes[indexAlgo][indexDef.IndexAlgoTableType] = indexDef
+				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 			}
 		}
-		for indexAlgoType, indexDefs := range multiTableIndexes {
-			switch catalog.ToLower(indexAlgoType) {
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				return err
