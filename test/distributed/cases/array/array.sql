@@ -161,6 +161,25 @@ INSERT INTO `t9` VALUES (3,'[8.5606893, 6.7903588, 821.977768]','[0.46323407, 23
 INSERT INTO `t9` VALUES (4,'[0.9260021, 0.26637346, 0.06567037]','[0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]');
 select cosine_similarity(b,b), cosine_similarity(c,c) from t9;
 
+-- Slice Vector
+create table t10(a int, b vecf32(3), c vecf64(3));
+insert into t10 values(1, "[1,2.4,3]", "[4.1,5,6]");
+insert into t10 values(2, "[3,4,5]", "[6,7.3,8]");
+insert into t10 values(3, "[5,6,7]", "[8,9,10]");
+select slice_vector(b, 1, 1) from t10;
+select slice_vector(b, 1, 2) from t10;
+select slice_vector(b, 1, 3) from t10;
+select slice_vector(b, 1, 4) from t10;
+select slice_vector(b, -1, 1) from t10;
+select slice_vector(b, -2, 1) from t10;
+select slice_vector(b, -3, 1) from t10;
+
+-- Scale Op
+select scalar_op(b,"+", 2.0) from t10;
+select scalar_op(b,"-", 2.0) from t10;
+select scalar_op(b,"*", 2.0) from t10;
+select scalar_op(b,"/", 2.0) from t10;
+
 -- Except
 select * from t8 except select * from t9;
 
