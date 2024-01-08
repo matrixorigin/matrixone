@@ -1546,9 +1546,15 @@ func Test_ExecRequest(t *testing.T) {
 
 		req := &Request{
 			cmd:  COM_SET_OPTION,
-			data: []byte("test anywhere"),
+			data: []byte("123"),
 		}
+		_, err = mce.ExecRequest(ctx, ses, req)
+		convey.So(err, convey.ShouldBeNil)
 
+		req = &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("1"),
+		}
 		_, err = mce.ExecRequest(ctx, ses, req)
 		convey.So(err, convey.ShouldBeNil)
 	})
