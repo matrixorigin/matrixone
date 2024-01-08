@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_order"
+
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
 	ctr.orderCols = append(ctr.orderCols, nil)
@@ -163,8 +165,9 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 }
 
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("mergeorder([")
+	buf.WriteString(": mergeorder([")
 	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
