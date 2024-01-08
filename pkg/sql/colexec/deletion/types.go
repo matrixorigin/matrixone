@@ -17,6 +17,7 @@ package deletion
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,6 +87,33 @@ type Argument struct {
 	children []vm.Operator
 
 	resBat *batch.Batch
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) Name() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

@@ -25,8 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" inner join ")
+	buf.WriteString(argName)
+	buf.WriteString(": inner join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
