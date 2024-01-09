@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_cte"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" merge cte ")
+	buf.WriteString(argName)
+	buf.WriteString(": merge cte ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

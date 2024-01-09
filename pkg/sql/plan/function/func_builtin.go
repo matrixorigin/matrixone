@@ -702,7 +702,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Uuid](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		val, err := uuid.NewUUID()
+		val, err := uuid.NewV7()
 		if err != nil {
 			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
 		}

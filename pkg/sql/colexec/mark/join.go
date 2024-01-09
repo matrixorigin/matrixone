@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "mark_join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" mark join ")
+	buf.WriteString(argName)
+	buf.WriteString(": mark join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

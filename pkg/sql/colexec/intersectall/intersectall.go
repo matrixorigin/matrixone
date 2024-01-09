@@ -29,8 +29,11 @@ const (
 	End
 )
 
+const argName = "intersect_all"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" intersect all ")
+	buf.WriteString(argName)
+	buf.WriteString(": intersect all ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

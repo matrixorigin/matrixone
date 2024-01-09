@@ -457,8 +457,8 @@ func TestGenerateSeriesCall(t *testing.T) {
 	proc := testutil.NewProc()
 	beforeCall := proc.Mp().CurrNB()
 	arg := &Argument{
-		Attrs: []string{"result"},
-		Name:  "generate_series",
+		Attrs:    []string{"result"},
+		FuncName: "generate_series",
 		info: &vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,

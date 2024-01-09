@@ -46,8 +46,11 @@ const (
 	FlushDeltaLoc
 )
 
+const argName = "deletion"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("delete rows")
+	buf.WriteString(argName)
+	buf.WriteString(": delete rows")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
