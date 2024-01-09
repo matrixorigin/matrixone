@@ -679,14 +679,7 @@ func (txn *Transaction) deleteTableWrites(
 				}
 			}
 			if len(sels) != len(vs) {
-				ds, ok := txn.batchSelectList[e.bat]
-				if !ok {
-					ds = &deleteSelectList{
-						createByStatementID: txn.statementID,
-						sels:                make([]int64, 0, len(sels)),
-					}
-				}
-				ds.sels = append(ds.sels, sels...)
+				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
 			}
 		}
 	}
@@ -715,8 +708,8 @@ func (txn *Transaction) genRowId() types.Rowid {
 func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
-			if ds, ok := txn.batchSelectList[e.bat]; ok {
-				e.bat.Shrink(ds.sels)
+			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				e.bat.Shrink(sels)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}
@@ -979,14 +972,6 @@ func (txn *Transaction) addCreateTable(
 	defer txn.Unlock()
 	value.createByStatementID = txn.statementID
 	txn.createMap.Store(key, value)
-}
-
-func (txn *Transaction) rollbackDeletes() {
-	for k, v := range txn.batchSelectList {
-		if v.createByStatementID == txn.statementID {
-			delete(txn.batchSelectList, k)
-		}
-	}
 }
 
 func (txn *Transaction) rollbackCreateTableLocked() {

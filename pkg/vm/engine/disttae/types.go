@@ -180,7 +180,7 @@ type Transaction struct {
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
 	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
-	batchSelectList map[*batch.Batch]*deleteSelectList
+	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
 
 	rollbackCount int
@@ -202,13 +202,6 @@ type Pos struct {
 	dbName    string
 	offset    int64
 	blkInfo   objectio.BlockInfo
-}
-
-// deleteSelectList is used to store the select list for delete
-type deleteSelectList struct {
-	sels []int64
-	// the statement id when the delete is generated, use for rollback statement
-	createByStatementID int
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -361,7 +354,6 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
-		txn.rollbackDeletes()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--

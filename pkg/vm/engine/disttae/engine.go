@@ -421,7 +421,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		},
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
-		batchSelectList:                 make(map[*batch.Batch]*deleteSelectList),
+		batchSelectList:                 make(map[*batch.Batch][]int64),
 		toFreeBatches:                   make(map[tableKey][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
