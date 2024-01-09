@@ -367,14 +367,14 @@ func (r *blockReader) Read(
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		if r.table != nil {
 			part, _ := r.table.getPartitionState(ctx)
-			aObjs := ""
+			objs := ""
 			iter := part.NewObjectsIterForTest()
 			defer iter.Close()
 			for iter.Next() {
 				obj := iter.Entry()
 				segId := obj.Location().ShortName().Segmentid().ToString()
-				aObjs = fmt.Sprintf("%s, %s %v %v %s %s",
-					aObjs, segId, obj.EntryState, obj.HasDeltaLoc,
+				objs = fmt.Sprintf("%s, %s %v %v %s %s",
+					objs, segId, obj.EntryState, obj.HasDeltaLoc,
 					obj.CreateTime.ToTimestamp().DebugString(),
 					obj.DeleteTime.ToTimestamp().DebugString())
 			}
@@ -397,7 +397,7 @@ func (r *blockReader) Read(
 				blockInfo.EntryState,
 				err.Error(),
 				r.table.db.txn.op.Txn().DebugString(),
-				aObjs)
+				objs)
 		}
 	}
 	if err != nil {
