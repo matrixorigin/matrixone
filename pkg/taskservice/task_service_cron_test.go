@@ -181,7 +181,7 @@ func waitJobsCount(t *testing.T, n int, s *taskService, timeout time.Duration) {
 	defer cancel()
 
 	defer func() {
-		require.Equal(t, n, len(s.crons.jobs))
+		require.Equal(t, n, len(s.crons.entries))
 	}()
 
 	for {
@@ -189,7 +189,7 @@ func waitJobsCount(t *testing.T, n int, s *taskService, timeout time.Duration) {
 		case <-ctx.Done():
 			return
 		default:
-			if len(s.crons.jobs) == n {
+			if len(s.crons.entries) == n {
 				return
 			}
 		}
