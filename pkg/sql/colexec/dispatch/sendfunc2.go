@@ -1,0 +1,241 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package dispatch
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// common sender: send to all LocalReceivers
+func (arg *Argument) sendToAllLocalReceivers(proc *process.Process, bat *batch.Batch) error {
+	list, err := dealRefers(bat, arg.ctr.localRegsCnt, arg.RecSink, proc)
+	if err != nil {
+		return err
+	}
+
+	if arg.RecSink {
+		for i, b := range list {
+			select {
+			case <-proc.Ctx.Done():
+			case <-arg.LocalRegs[i].Ctx.Done():
+			case arg.LocalRegs[i].Ch <- b:
+				continue
+			}
+
+			for j := i; j < len(list); j++ {
+				proc.PutBatch(list[j])
+			}
+			return nil
+		}
+
+	} else {
+		for i, reg := range arg.LocalRegs {
+			select {
+			case <-proc.Ctx.Done():
+				handleUnsentRefers(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				arg.ctr.stopSending()
+				return nil
+
+			case <-reg.Ctx.Done():
+				if arg.IsSink {
+					bat.AddCnt(-1)
+					continue
+				}
+				handleUnsentRefers(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				arg.ctr.stopSending()
+				return nil
+
+			case reg.Ch <- bat:
+			}
+		}
+	}
+
+	return nil
+}
+
+// common sender: send to all RemoteReceivers
+func (arg *Argument) sendToAllRemoteReceivers(proc *process.Process, bat *batch.Batch) error {
+	data, err := types.Encode(bat)
+	if err != nil {
+		return err
+	}
+
+	for _, receiver := range arg.ctr.remoteReceivers {
+		if err = sendBatchToClientSession(proc.Ctx, data, receiver); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// common sender: send to all RemoteReceivers and LocalReceivers
+func (arg *Argument) sendToAllReceivers(proc *process.Process, bat *batch.Batch) error {
+	if err := arg.sendToAllRemoteReceivers(proc, bat); err != nil {
+		return err
+	}
+	return arg.sendToAllLocalReceivers(proc, bat)
+}
+
+// common sender: send to any LocalReceiver
+// if the reg which you want to send to is closed, send it to the next one.
+// todo: just return may suit the situation better, because the receiver was closed, it means the query was canceled.
+func (arg *Argument) sendToAnyLocalReceiver(proc *process.Process, bat *batch.Batch) error {
+	bat.AddCnt(1)
+	for arg.ctr.aliveRegCnt > 0 {
+		idx := arg.ctr.sendCnt % arg.ctr.localRegsCnt
+		reg := arg.LocalRegs[idx]
+		select {
+		case <-proc.Ctx.Done():
+			bat.AddCnt(-1)
+			arg.ctr.stopSending()
+			return nil
+
+		case <-reg.Ctx.Done():
+			arg.LocalRegs = append(arg.LocalRegs[:idx], arg.LocalRegs[idx+1:]...)
+			arg.ctr.localRegsCnt--
+			arg.ctr.aliveRegCnt--
+			if arg.ctr.aliveRegCnt == 0 {
+				bat.AddCnt(-1)
+				arg.ctr.stopSending()
+				return nil
+			}
+
+		case reg.Ch <- bat:
+			arg.ctr.sendCnt++
+			return nil
+		}
+	}
+	return nil
+}
+
+// common sender: send to any RemoteReceiver
+// if the reg which you want to send to is closed, send it to the next one.
+// todo: same as the comment above for function `sendToAnyLocalReceiver`.
+func (arg *Argument) sendToAnyRemoteReceiver(proc *process.Process, bat *batch.Batch) error {
+	data, err := types.Encode(bat)
+	if err != nil {
+		return err
+	}
+
+	for {
+		idx := arg.ctr.sendCnt % arg.ctr.remoteRegsCnt
+		reg := arg.ctr.remoteReceivers[idx]
+
+		if err = sendBatchToClientSession(proc.Ctx, data, reg); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
+				arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers[:idx], arg.ctr.remoteReceivers[idx+1:]...)
+				arg.ctr.remoteRegsCnt--
+				arg.ctr.aliveRegCnt--
+				if arg.ctr.aliveRegCnt == 0 {
+					arg.ctr.stopSending()
+					return nil
+				}
+				continue
+			}
+			return err
+		}
+		arg.ctr.sendCnt++
+		return nil
+	}
+}
+
+func (arg *Argument) sendToAnyReceiver(proc *process.Process, bat *batch.Batch) error {
+	toLocal := (arg.ctr.sendCnt % arg.ctr.aliveRegCnt) < arg.ctr.localRegsCnt
+
+	if toLocal {
+		if err := arg.sendToAnyLocalReceiver(proc, bat); err != nil {
+			return err
+		}
+		if arg.ctr.isStopSending() {
+			arg.ctr.startSending()
+			return arg.sendToAnyRemoteReceiver(proc, bat)
+		}
+	} else {
+		if err := arg.sendToAnyRemoteReceiver(proc, bat); err != nil {
+			return err
+		}
+		if arg.ctr.isStopSending() {
+			arg.ctr.startSending()
+			return arg.sendToAnyLocalReceiver(proc, bat)
+		}
+	}
+
+	return nil
+}
+
+func dealRefers(
+	bat *batch.Batch,
+	localReceiverCnt int, isRecSink bool,
+	proc *process.Process) (batchList []*batch.Batch, err error) {
+	defer func() {
+		if err != nil {
+			for _, b := range batchList {
+				proc.PutBatch(b)
+			}
+			if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+				jm.SetRef(1)
+				jm.SetDupCount(1)
+			}
+		}
+	}()
+
+	// todo: there is a bug about CTE, some operators will change the batch's data even if its
+	//       reference cnt is not 1, so we need to copy the batch here
+	if isRecSink {
+		batchList = make([]*batch.Batch, localReceiverCnt)
+		if len(batchList) > 0 {
+			bat.AddCnt(1)
+			batchList[0] = bat
+		}
+
+		mp := proc.Mp()
+		for i := 1; i < len(batchList); i++ {
+			batchList[i], err = bat.Dup(mp)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return batchList, err
+	}
+
+	bat.AddCnt(localReceiverCnt)
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		// set the reference of join map as the count of local receivers.
+		jm.SetRef(int64(localReceiverCnt))
+		jm.SetDupCount(int64(localReceiverCnt))
+	}
+
+	return batchList, err
+}
+
+func handleUnsentRefers(
+	bat *batch.Batch,
+	isRecSink bool,
+	localReceiverCnt int, succeedCnt int) {
+	if isRecSink {
+		return
+	}
+
+	cntSub := succeedCnt - localReceiverCnt
+	bat.AddCnt(cntSub)
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		jm.IncRef(int64(cntSub))
+		jm.IncDupCount(int64(cntSub))
+	}
+}

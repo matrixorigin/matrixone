@@ -41,6 +41,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	ap := arg
 	ctr := new(container)
 	ap.ctr = ctr
+	ctr.startSending()
 	ctr.localRegsCnt = len(ap.LocalRegs)
 	ctr.remoteRegsCnt = len(ap.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt

@@ -39,7 +39,16 @@ const (
 	ShuffleToAllFunc
 )
 
+type senderStatus int
+
+const (
+	normalSending senderStatus = iota
+	stopSending
+)
+
 type container struct {
+	sendStatus senderStatus
+
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []process.WrapCs
 	// sendFunc is the rule you want to send batch
@@ -61,6 +70,18 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
+}
+
+func (ctr *container) startSending() {
+	ctr.sendStatus = normalSending
+}
+
+func (ctr *container) stopSending() {
+	ctr.sendStatus = stopSending
+}
+
+func (ctr *container) isStopSending() bool {
+	return ctr.sendStatus == stopSending
 }
 
 type Argument struct {
