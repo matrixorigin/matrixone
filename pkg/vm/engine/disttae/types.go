@@ -180,7 +180,7 @@ type Transaction struct {
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
 	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
-	batchSelectList map[*batch.Batch][]int64
+	batchSelectList map[*batch.Batch]*deleteSelectList
 	toFreeBatches   map[tableKey][]*batch.Batch
 
 	rollbackCount int
@@ -202,6 +202,13 @@ type Pos struct {
 	dbName    string
 	offset    int64
 	blkInfo   objectio.BlockInfo
+}
+
+// deleteSelectList is used to store the select list for delete
+type deleteSelectList struct {
+	sels []int64
+	// the statement id when the delete is generated, use for rollback statement
+	createByStatementID int
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -303,11 +310,18 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	return txn.handleRCSnapshot(ctx, commit)
 }
 
-// Adjust adjust writes order
-func (txn *Transaction) Adjust() error {
+// writeOffset returns the offset of the first write in the workspace
+func (txn *Transaction) WriteOffset() uint64 {
 	txn.Lock()
 	defer txn.Unlock()
-	if err := txn.adjustUpdateOrderLocked(); err != nil {
+	return uint64(len(txn.writes))
+}
+
+// Adjust adjust writes order
+func (txn *Transaction) Adjust(writeOffset uint64) error {
+	txn.Lock()
+	defer txn.Unlock()
+	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
 		return err
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
@@ -318,23 +332,20 @@ func (txn *Transaction) Adjust() error {
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
 // may be the order of insert+delete that needs to be adjusted.
-func (txn *Transaction) adjustUpdateOrderLocked() error {
+func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	if txn.statementID > 0 {
-		start := txn.statements[txn.statementID-1]
-		writes := make([]Entry, 0, len(txn.writes[start:]))
-		for i := start; i < len(txn.writes); i++ {
+		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
 			if txn.writes[i].typ == DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		for i := start; i < len(txn.writes); i++ {
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
 			if txn.writes[i].typ != DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		txn.writes = append(txn.writes[:start], writes...)
-		// restore the scope of the statement
-		txn.statements[txn.statementID-1] = len(txn.writes)
+		txn.writes = append(txn.writes[:writeOffset], writes...)
 	}
 	return nil
 }
@@ -350,6 +361,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.rollbackDeletes()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--

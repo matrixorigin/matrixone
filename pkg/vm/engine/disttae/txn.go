@@ -16,14 +16,15 @@ package disttae
 
 import (
 	"context"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"math"
-	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -454,7 +455,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 		}
 		txn.writes = writes
-		txn.statements[txn.statementID-1] = len(txn.writes)
 	} else {
 		txn.workspaceSize -= size
 		txn.pkCount -= pkCount
@@ -679,8 +679,14 @@ func (txn *Transaction) deleteTableWrites(
 				}
 			}
 			if len(sels) != len(vs) {
-				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
-
+				ds, ok := txn.batchSelectList[e.bat]
+				if !ok {
+					ds = &deleteSelectList{
+						createByStatementID: txn.statementID,
+						sels:                make([]int64, 0, len(sels)),
+					}
+				}
+				ds.sels = append(ds.sels, sels...)
 			}
 		}
 	}
@@ -709,8 +715,8 @@ func (txn *Transaction) genRowId() types.Rowid {
 func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
-			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				e.bat.Shrink(sels)
+			if ds, ok := txn.batchSelectList[e.bat]; ok {
+				e.bat.Shrink(ds.sels)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}
@@ -973,6 +979,14 @@ func (txn *Transaction) addCreateTable(
 	defer txn.Unlock()
 	value.createByStatementID = txn.statementID
 	txn.createMap.Store(key, value)
+}
+
+func (txn *Transaction) rollbackDeletes() {
+	for k, v := range txn.batchSelectList {
+		if v.createByStatementID == txn.statementID {
+			delete(txn.batchSelectList, k)
+		}
+	}
 }
 
 func (txn *Transaction) rollbackCreateTableLocked() {
