@@ -277,6 +277,21 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			}
 		}
 		buf.WriteString(" END")
+	case function.BETWEEN_AND_EXPRESSION:
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" BETWEEN ")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" AND ")
+		err = describeExpr(ctx, funcExpr.F.Args[2], options, buf)
+		if err != nil {
+			return err
+		}
 	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")

@@ -27,7 +27,7 @@ func ParseUuid(str string) (Uuid, error) {
 }
 
 func BuildUuid() (Uuid, error) {
-	gUuid, err := uuid.NewUUID()
+	gUuid, err := uuid.NewV7()
 	if err != nil {
 		return Uuid{}, err
 	}

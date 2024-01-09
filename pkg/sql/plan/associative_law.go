@@ -116,10 +116,10 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 
 func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	nodeID = builder.applyAssociativeLawRule1(nodeID)
-	builder.applySwapRuleByStats(nodeID, true)
+	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule2(nodeID)
-	builder.applySwapRuleByStats(nodeID, true)
+	builder.determineBuildAndProbeSide(nodeID, true)
 	nodeID = builder.applyAssociativeLawRule3(nodeID)
-	builder.applySwapRuleByStats(nodeID, true)
+	builder.determineBuildAndProbeSide(nodeID, true)
 	return nodeID
 }

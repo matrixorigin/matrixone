@@ -23,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "table_scan"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" table_scan ")
+	buf.WriteString(argName)
+	buf.WriteString(": table_scan ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

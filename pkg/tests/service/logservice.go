@@ -159,7 +159,8 @@ func buildLogConfig(
 	index int, opt Options, address serviceAddresses,
 ) logservice.Config {
 	cfg := logservice.DefaultConfig()
-	cfg.UUID = uuid.New().String()
+	uid, _ := uuid.NewV7()
+	cfg.UUID = uid.String()
 	cfg.FS = vfs.NewStrictMem()
 	cfg.DeploymentID = defaultDeploymentID
 	cfg.RTTMillisecond = defaultRTTMillisecond
