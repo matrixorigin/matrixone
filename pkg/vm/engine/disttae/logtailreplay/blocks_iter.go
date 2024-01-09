@@ -170,23 +170,16 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
-	iter := p.blockDeltas.Copy().Iter()
-	defer iter.Release()
-
-	if ok := iter.Seek(BlockDeltaEntry{
+	if e, ok := p.blockDeltas.Get(BlockDeltaEntry{
 		BlockID: bid,
 	}); ok {
-		e := iter.Item()
 		return e.DeltaLoc, e.CommitTs, true
 	}
 	return catalog.ObjectLocation{}, types.TS{}, false
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	iter := p.dataObjects.Copy().Iter()
-	defer iter.Release()
-
-	if ok := iter.Seek(ObjectEntry{
+	if _, ok := p.dataObjects.Get(ObjectEntry{
 		ShortObjName: *objectio.ShortName(&blockID),
 	}); ok {
 		return true
@@ -195,13 +188,10 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjects.Copy().Iter()
-	defer iter.Release()
-
-	if ok := iter.Seek(ObjectEntry{
+	if e, ok := p.dataObjects.Get(ObjectEntry{
 		ShortObjName: name,
 	}); ok {
-		return iter.Item().ObjectInfo, true
+		return e.ObjectInfo, true
 	}
 	return ObjectInfo{}, false
 }
