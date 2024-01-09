@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -136,6 +135,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = emptyBatchbatchForHashMap
 			return result, nil
 		case SendBatch:
+			ctr.state = End
 			result.Batch = ctr.bat
 			return result, nil
 		default:

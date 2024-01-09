@@ -16,8 +16,8 @@ package rightanti
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -138,8 +138,6 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 	}
 	if bat != nil {
 		ctr.mp = bat.DupJmAuxData()
-		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(int64(bat.RowCount()))
 		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
@@ -156,6 +154,8 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 			ctr.bat = nil
 		}
 		ctr.bat = bat
+		ctr.matched = &bitmap.Bitmap{}
+		ctr.matched.InitWithSize(int64(bat.RowCount()))
 	}
 	return nil
 }
