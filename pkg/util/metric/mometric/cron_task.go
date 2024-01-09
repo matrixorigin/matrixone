@@ -156,12 +156,15 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		logger.Debug("query storage size")
-		showAccounts := func(ctx context.Context) ie.InternalExecResult {
+		showAccounts := func(ctx context.Context) (ie.InternalExecResult, error) {
 			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage", trace.WithHungThreshold(time.Minute))
 			defer spanQ.End()
 			return sqlExecutor().Query(ctx, ShowAllAccountSQL, queryOpts)
 		}
-		result := showAccounts(ctx)
+		result, err := showAccounts(ctx)
+		if err != nil {
+			return err
+		}
 		err = result.Error()
 		if err != nil {
 			return err
@@ -245,7 +248,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		// more details in pkg/frontend/authenticate.go, function frontend.createTablesInMoCatalog
 		sql := fmt.Sprintf("select account_name, created_time from mo_catalog.mo_account where created_time >= %q;",
 			table.Time2DatetimeString(lastCheckTime.UTC()))
-		getNewAccounts := func(ctx context.Context, sql string, lastCheck, now time.Time) ie.InternalExecResult {
+		getNewAccounts := func(ctx context.Context, sql string, lastCheck, now time.Time) (ie.InternalExecResult, error) {
 			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getNewAccounts")
 			defer spanQ.End()
 			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheck))
@@ -253,7 +256,10 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			logger.Debug("query new account", zap.String("sql", sql))
 			return executor.Query(ctx, sql, opts)
 		}
-		result := getNewAccounts(ctx, sql, lastCheckTime, now)
+		result, err := getNewAccounts(ctx, sql, lastCheckTime, now)
+		if err != nil {
+			goto nextL
+		}
 		lastCheckTime = now
 		err = result.Error()
 		if err != nil {
@@ -281,14 +287,17 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 			// query single account's storage
 			showSql := fmt.Sprintf(ShowAccountSQL, account)
-			getOneAccount := func(ctx context.Context, sql string) ie.InternalExecResult {
+			getOneAccount := func(ctx context.Context, sql string) (ie.InternalExecResult, error) {
 				ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getOneAccount")
 				defer spanQ.End()
 				spanQ.AddExtraFields(zap.String("account", account))
 				logger.Debug("query one account", zap.String("sql", sql))
 				return executor.Query(ctx, sql, opts)
 			}
-			showRet := getOneAccount(ctx, showSql)
+			showRet, err := getOneAccount(ctx, showSql)
+			if err != nil {
+				continue
+			}
 			err = showRet.Error()
 			if err != nil {
 				logger.Error("failed to exec query sql",

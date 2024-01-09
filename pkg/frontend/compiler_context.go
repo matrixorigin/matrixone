@@ -118,8 +118,8 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
 }
 
-func (tcc *TxnCompilerContext) GetAccountId() uint32 {
-	return tcc.ses.accountId
+func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
+	return tcc.ses.accountId, nil
 }
 
 func (tcc *TxnCompilerContext) GetContext() context.Context {
@@ -344,7 +344,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh, err := ses.GetBackgroundExec(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -527,7 +530,10 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
-	bh := ses.GetBackgroundExec(ctx)
+	bh, err := ses.GetBackgroundExec(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

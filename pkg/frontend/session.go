@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -541,16 +540,20 @@ func (e *errInfo) length() int {
 
 func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	gSysVars *GlobalSystemVariables, isNotBackgroundSession bool,
-	aicm *defines.AutoIncrCacheManager, sharedTxnHandler *TxnHandler) *Session {
+	aicm *defines.AutoIncrCacheManager, sharedTxnHandler *TxnHandler) (*Session, error) {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnCtx context.Context
 	var txnOp TxnOperator
+	var err error
 	if sharedTxnHandler != nil {
 		if !sharedTxnHandler.IsValidTxnOperator() {
 			panic("shared txn is invalid")
 		}
-		txnCtx, txnOp = sharedTxnHandler.GetTxnOperator()
+		txnCtx, txnOp, err = sharedTxnHandler.GetTxnOperator()
+		if err != nil {
+			return nil, err
+		}
 	}
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient, txnCtx, txnOp)
 
@@ -600,8 +603,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
 	ses.SetAutoIncrCacheManager(aicm)
-
-	var err error
 	if ses.mp == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -631,7 +632,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
 	})
-	return ses
+	return ses, nil
 }
 
 func (ses *Session) Close() {
@@ -699,18 +700,22 @@ type BackgroundSession struct {
 }
 
 // NewBackgroundSession generates an independent background session executing the sql
-func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, shareTxn bool) *BackgroundSession {
+func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.MPool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables, shareTxn bool) (*BackgroundSession, error) {
 	connCtx := upstream.GetConnectContext()
 	aicm := upstream.GetAutoIncrCacheManager()
 	var ses *Session
 	var sharedTxnHandler *TxnHandler
+	var err error
 	if shareTxn {
 		sharedTxnHandler = upstream.GetTxnHandler()
 		if sharedTxnHandler == nil || !sharedTxnHandler.IsValidTxnOperator() {
 			panic("invalid shared txn handler")
 		}
 	}
-	ses = NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm, sharedTxnHandler)
+	ses, err = NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm, sharedTxnHandler)
+	if err != nil {
+		return nil, err
+	}
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
@@ -730,7 +735,7 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 		cancel:   cancelBackgroundFunc,
 		shareTxn: shareTxn,
 	}
-	return backSes
+	return backSes, nil
 }
 
 func (bgs *BackgroundSession) isShareTxn() bool {
@@ -905,7 +910,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 }
 
 // GetBackgroundExec generates a background executor
-func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
+func (ses *Session) GetBackgroundExec(ctx context.Context) (BackgroundExec, error) {
 	return NewBackgroundHandler(
 		ctx,
 		ses,
@@ -915,26 +920,34 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
-func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
+func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) (BackgroundExec, error) {
+	bhSes, err := NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true)
+	if err != nil {
+		return nil, err
+	}
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
+		ses: bhSes,
 	}
 	//the derived statement execute in a shared transaction in background session
 	bh.ses.ReplaceDerivedStmt(true)
 	if newRawBatch {
 		bh.ses.SetOutputCallback(batchFetcher)
 	}
-	return bh
+	return bh, err
 }
 
-func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
+func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) (*BackgroundHandler, error) {
+	bhSes, err := NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, false)
+	if err != nil {
+		return nil, err
+	}
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, false),
+		ses: bhSes,
 	}
 	bh.ses.SetOutputCallback(batchFetcher)
-	return bh
+	return bh, err
 }
 
 func (ses *Session) GetIsInternal() bool {
@@ -1403,7 +1416,10 @@ func (ses *Session) GetTxnInfo() string {
 	if txnH == nil {
 		return ""
 	}
-	_, txnOp := txnH.GetTxnOperator()
+	_, txnOp, err := txnH.GetTxnOperator()
+	if err != nil {
+		return ""
+	}
 	if txnOp == nil {
 		return ""
 	}
@@ -1964,10 +1980,13 @@ func executeSQLInBackgroundSession(
 	mp *mpool.MPool,
 	pu *config.ParameterUnit,
 	sql string) ([]ExecResult, error) {
-	bh := NewBackgroundHandler(reqCtx, upstream, mp, pu)
+	bh, err := NewBackgroundHandler(reqCtx, upstream, mp, pu)
+	if err != nil {
+		return nil, err
+	}
 	defer bh.Close()
 	logutil.Debugf("background exec sql:%v", sql)
-	err := bh.Exec(reqCtx, sql)
+	err = bh.Exec(reqCtx, sql)
 	logutil.Debugf("background exec sql done")
 	if err != nil {
 		return nil, err
@@ -2024,12 +2043,16 @@ var NewBackgroundHandler = func(
 	reqCtx context.Context,
 	upstream *Session,
 	mp *mpool.MPool,
-	pu *config.ParameterUnit) BackgroundExec {
+	pu *config.ParameterUnit) (BackgroundExec, error) {
+	bhSes, err := NewBackgroundSession(reqCtx, upstream, mp, pu, GSysVariables, false)
+	if err != nil {
+		return nil, err
+	}
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
-		ses: NewBackgroundSession(reqCtx, upstream, mp, pu, GSysVariables, false),
+		ses: bhSes,
 	}
-	return bh
+	return bh, nil
 }
 
 func (bh *BackgroundHandler) UpdateAccount(acc *TenantInfo) {
@@ -2052,10 +2075,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	// 	debug.PrintStack()
 	// 	panic("need account info 1")
 	// }
-	x := ctx.Value(defines.TenantIDKey{})
-	if x == nil {
-		debug.PrintStack()
-		panic("need account info 2")
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -2101,10 +2123,9 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 	// 	debug.PrintStack()
 	// 	panic("need account info 3")
 	// }
-	x := ctx.Value(defines.TenantIDKey{})
-	if x == nil {
-		debug.PrintStack()
-		panic("need account info 4")
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -2164,7 +2185,10 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 		and committed outside this function.
 		!!!NOTE: wen can not execute the transaction statement(BEGIN,COMMIT,ROLLBACK,START TRANSACTION ect) here.
 	*/
-	bh := sh.ses.GetShareTxnBackgroundExec(ctx, false)
+	bh, err := sh.ses.GetShareTxnBackgroundExec(ctx, false)
+	if err != nil {
+		return nil, err
+	}
 	defer bh.Close()
 
 	bh.ClearExecResultSet()
@@ -2226,7 +2250,10 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (val interface{
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh, err := ses.GetBackgroundExec(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

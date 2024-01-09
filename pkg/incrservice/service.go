@@ -138,10 +138,14 @@ func (s *service) Reset(
 		return err
 	}
 	if len(cols) == 0 {
+		rows, err := s.store.SelectAll(ctx, oldTableID, txnOp)
+		if err != nil {
+			return err
+		}
 		s.logger.Info("no columns found",
 			zap.Uint64("table-id", oldTableID),
 			zap.String("txn", txnOp.Txn().DebugString()),
-			zap.String("rows", s.store.SelectAll(ctx, oldTableID, txnOp)))
+			zap.String("rows", rows))
 	}
 
 	if !keep {
@@ -176,10 +180,14 @@ func (s *service) Delete(
 		client.ClosedEvent,
 		s.txnClosed)
 
+	delCtx, err := newDeleteCtx(ctx, tableID)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], newDeleteCtx(ctx, tableID))
+	s.mu.deletes[key] = append(s.mu.deletes[key], delCtx)
 	if s.logger.Enabled(zap.InfoLevel) {
 		s.logger.Info("ready to delete auto increment table cache",
 			zap.Uint64("table-id", tableID),
@@ -272,7 +280,11 @@ func (s *service) getCommittedTableCache(
 		return nil, err
 	}
 	if len(cols) == 0 {
-		return nil, moerr.NewNoSuchTableNoCtx("", s.store.SelectAll(ctx, tableID, txnOp))
+		table, err := s.store.SelectAll(ctx, tableID, txnOp)
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewNoSuchTableNoCtx("", table)
 	}
 
 	c, err = newTableCache(
@@ -384,9 +396,13 @@ type deleteCtx struct {
 	tableID   uint64
 }
 
-func newDeleteCtx(ctx context.Context, tableID uint64) deleteCtx {
+func newDeleteCtx(ctx context.Context, tableID uint64) (deleteCtx, error) {
+	accountId, err := getAccountID(ctx)
+	if err != nil {
+		return deleteCtx{}, err
+	}
 	return deleteCtx{
 		tableID:   tableID,
-		accountID: getAccountID(ctx),
-	}
+		accountID: accountId,
+	}, err
 }

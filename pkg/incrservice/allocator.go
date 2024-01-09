@@ -16,7 +16,6 @@ package incrservice
 
 import (
 	"context"
-	"runtime/debug"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -60,7 +59,7 @@ func (a *allocator) allocate(
 	c := make(chan struct{})
 	var from, to uint64
 	var err error
-	a.asyncAllocate(
+	err = a.asyncAllocate(
 		ctx,
 		tableID,
 		key,
@@ -74,6 +73,9 @@ func (a *allocator) allocate(
 			err = e
 			close(c)
 		})
+	if err != nil {
+		return 0, 0, err
+	}
 	<-c
 	return from, to, err
 }
@@ -84,15 +86,20 @@ func (a *allocator) asyncAllocate(
 	col string,
 	count int,
 	txnOp client.TxnOperator,
-	apply func(uint64, uint64, error)) {
+	apply func(uint64, uint64, error)) error {
+	accountId, err := getAccountID(ctx)
+	if err != nil {
+		return err
+	}
 	a.c <- action{
 		txnOp:         txnOp,
-		accountID:     getAccountID(ctx),
+		accountID: accountId,
 		actionType:    allocType,
 		tableID:       tableID,
 		col:           col,
 		count:         count,
 		applyAllocate: apply}
+	return err
 }
 
 func (a *allocator) updateMinValue(
@@ -102,6 +109,11 @@ func (a *allocator) updateMinValue(
 	minValue uint64,
 	txnOp client.TxnOperator) error {
 	var err error
+	var accountId uint32
+	accountId, err = getAccountID(ctx)
+	if err != nil {
+		return err
+	}
 	c := make(chan struct{})
 	fn := func(e error) {
 		err = e
@@ -109,7 +121,7 @@ func (a *allocator) updateMinValue(
 	}
 	a.c <- action{
 		txnOp:       txnOp,
-		accountID:   getAccountID(ctx),
+		accountID: accountId,
 		actionType:  updateType,
 		tableID:     tableID,
 		col:         col,
@@ -204,12 +216,6 @@ type action struct {
 	applyUpdate   func(error)
 }
 
-func getAccountID(ctx context.Context) uint32 {
-	v := ctx.Value(defines.TenantIDKey{})
-	if v != nil {
-		return v.(uint32)
-	}
-	debug.PrintStack()
-	panic("no account id 1")
-	return 0
+func getAccountID(ctx context.Context) (uint32, error) {
+	return defines.GetAccountId(ctx)
 }

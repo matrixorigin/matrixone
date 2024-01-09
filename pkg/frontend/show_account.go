@@ -312,7 +312,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 	}()
 
-	bh := ses.GetRawBatchBackgroundExec(ctx)
+	bh, err := ses.GetRawBatchBackgroundExec(ctx)
+	if err != nil {
+		return err
+	}
 	defer bh.Close()
 
 	account := ses.GetTenantInfo()

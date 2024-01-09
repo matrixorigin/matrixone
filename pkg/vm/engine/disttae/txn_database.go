@@ -54,7 +54,11 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	tbls, _ := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.op.SnapshotTS())
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tbls, _ := db.txn.engine.catalog.Tables(accountId, db.databaseId, db.txn.op.SnapshotTS())
 	for _, tbl := range tbls {
 		//if the table is deleted, do not save it.
 		if _, exist := deleteTables[tbl]; !exist {
@@ -64,7 +68,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	return rels, nil
 }
 
-func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
+func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) (string, error) {
 	tblName := ""
 	//first check the tableID is deleted or not
 	deleted := false
@@ -78,7 +82,7 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 		return true
 	})
 	if deleted {
-		return ""
+		return "", nil
 	}
 	db.txn.createMap.Range(func(k, v any) bool {
 		key := k.(tableKey)
@@ -91,7 +95,12 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	})
 
 	if tblName == "" {
-		tbls, tblIds := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.op.SnapshotTS())
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		tbls, tblIds := db.txn.engine.catalog.Tables(accountId, db.databaseId, db.txn.op.SnapshotTS())
 		for idx, tblId := range tblIds {
 			if tblId == id {
 				tblName = tbls[idx]
@@ -99,16 +108,19 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 			}
 		}
 	}
-	return tblName
+	return tblName, nil
 }
 
-func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation) {
-	tblName := db.getTableNameById(ctx, id)
+func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+	tblName, err := db.getTableNameById(ctx, id)
+	if err != nil {
+		return "", nil, err
+	}
 	if tblName == "" {
-		return "", nil
+		return "", nil, err
 	}
 	rel, _ := db.Relation(ctx, tblName, nil)
-	return tblName, rel
+	return tblName, rel, nil
 }
 
 func (db *txnDatabase) RelationByAccountID(
@@ -209,8 +221,11 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
 	}
-
-	key := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	key := genTableKey(accountId, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
@@ -253,13 +268,13 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	item := &cache.TableItem{
 		Name:       name,
 		DatabaseId: db.databaseId,
-		AccountId:  defines.GetAccountId(ctx),
+		AccountId: accountId,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
-			defines.GetAccountId(ctx),
+			accountId,
 			db.databaseId)
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
@@ -296,7 +311,11 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
-	k := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	k := genTableKey(accountId, name, db.databaseId)
 	if v, ok := db.txn.createMap.Load(k); ok {
 		db.txn.createMap.Delete(k)
 		table := v.(*txnTable)
@@ -323,10 +342,14 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		rowid = table.rowid
 		rowids = table.rowids
 	} else {
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId:  defines.GetAccountId(ctx),
+			AccountId: accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -376,7 +399,11 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	k := genTableKey(defines.GetAccountId(ctx), name, db.databaseId)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, err
+	}
+	k := genTableKey(accountId, name, db.databaseId)
 	v, ok = db.txn.createMap.Load(k)
 	if !ok {
 		v, ok = db.txn.tableCache.tableMap.Load(k)
@@ -388,10 +415,14 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		txnTable.reset(newId)
 		rowid = txnTable.rowid
 	} else {
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return 0, err
+		}
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId:  defines.GetAccountId(ctx),
+			AccountId: accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -427,7 +458,10 @@ func (db *txnDatabase) IsSubscription(ctx context.Context) bool {
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
-	accountId, userId, roleId := getAccessInfo(ctx)
+	accountId, userId, roleId, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
 	tableId, err := db.txn.allocateID(ctx)
 	if err != nil {
 		return err

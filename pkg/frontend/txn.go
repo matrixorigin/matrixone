@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
 
 	"github.com/google/uuid"
@@ -73,7 +72,7 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.C
 	return h
 }
 
-func (th *TxnHandler) createTxnCtx() context.Context {
+func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 	if th.txnCtx == nil {
 		th.txnCtx, th.txnCtxCancel = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
@@ -82,12 +81,11 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
 
-	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
-		retTxnCtx = defines.AttachAccountId(retTxnCtx, v.(uint32))
-	} else {
-		debug.PrintStack()
-		panic("no account id 3")
+	accId, err := defines.GetAccountId(retTxnCtx)
+	if err != nil {
+		return nil, err
 	}
+	retTxnCtx = defines.AttachAccountId(retTxnCtx, accId)
 	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
 		retTxnCtx = defines.AttachUserId(retTxnCtx, v.(uint32))
 	}
@@ -107,13 +105,18 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	} else if th.ses.IfInitedTempEngine() {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 	}
-	return retTxnCtx
+	return retTxnCtx, nil
 }
 
-func (th *TxnHandler) AttachTempStorageToTxnCtx() {
+func (th *TxnHandler) AttachTempStorageToTxnCtx() error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+	ctx, err := th.createTxnCtx()
+	if err != nil {
+		return err
+	}
+	th.txnCtx = context.WithValue(ctx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+	return nil
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -151,7 +154,10 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		}
 	}
 
-	txnCtx := th.createTxnCtx()
+	txnCtx, err := th.createTxnCtx()
+	if err != nil {
+		return nil, nil, err
+	}
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
@@ -282,10 +288,14 @@ func (th *TxnHandler) SetTxnOperatorInvalid() {
 	th.txnCtx = nil
 }
 
-func (th *TxnHandler) GetTxnOperator() (context.Context, TxnOperator) {
+func (th *TxnHandler) GetTxnOperator() (context.Context, TxnOperator, error) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	return th.createTxnCtx(), th.txnOperator
+	ctx, err := th.createTxnCtx()
+	if err != nil {
+		return nil, nil, err
+	}
+	return ctx, th.txnOperator, nil
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -312,7 +322,10 @@ func (th *TxnHandler) CommitTxn() error {
 	}
 	ses := th.GetSession()
 	sessionInfo := ses.GetDebugString()
-	txnCtx, txnOp := th.GetTxnOperator()
+	txnCtx, txnOp, err := th.GetTxnOperator()
+	if err != nil {
+		return err
+	}
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
 		logError(ses, sessionInfo, "CommitTxn: txn operator is null")
@@ -336,7 +349,6 @@ func (th *TxnHandler) CommitTxn() error {
 	if val != nil {
 		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN{}, val.(int8))
 	}
-	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName()
@@ -383,7 +395,10 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	ses := th.GetSession()
 	sessionInfo := ses.GetDebugString()
-	txnCtx, txnOp := th.GetTxnOperator()
+	txnCtx, txnOp, err := th.GetTxnOperator()
+	if err != nil {
+		return err
+	}
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
 		logError(ses, ses.GetDebugString(),
@@ -402,7 +417,6 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName()
@@ -588,8 +602,8 @@ func (ses *Session) TxnCreate() (context.Context, TxnOperator, error) {
 		return ses.GetTxnHandler().NewTxn()
 	}
 	txnHandler := ses.GetTxnHandler()
-	txnCtx, txnOp := txnHandler.GetTxnOperator()
-	return txnCtx, txnOp, nil
+	txnCtx, txnOp, err := txnHandler.GetTxnOperator()
+	return txnCtx, txnOp, err
 }
 
 /*

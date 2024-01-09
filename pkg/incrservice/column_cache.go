@@ -17,7 +17,6 @@ package incrservice
 import (
 	"context"
 	"math"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 
@@ -419,21 +418,21 @@ func (col *columnCache) allocateLocked(
 	return err
 }
 
-func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		x := ctx.Value(defines.TenantIDKey{})
-		if x == nil {
-			debug.PrintStack()
-			panic("no account id 6")
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
 		}
-		col.preAllocate(defines.AttachAccountId(context.Background(), ctx.Value(defines.TenantIDKey{}).(uint32)),
+		col.preAllocate(defines.AttachAccountId(context.Background(), accountId),
 			tableID,
 			col.cfg.CountPerAllocate,
 			txnOp)
 	}
+	return nil
 }
 
 func (col *columnCache) applyAllocate(

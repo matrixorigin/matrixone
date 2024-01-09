@@ -17,8 +17,9 @@ package defines
 import (
 	"context"
 	"math"
-	"runtime/debug"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -167,13 +168,12 @@ type UserIDKey struct{}
 type RoleIDKey struct{}
 type NodeIDKey struct{}
 
-func GetAccountId(ctx context.Context) uint32 {
+func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
-		return v.(uint32)
+		return v.(uint32), nil
+	} else {
+		return 0, moerr.NewInternalError(ctx, "no account id in context")
 	}
-	debug.PrintStack()
-	panic("no account id in context")
-	return 0
 }
 
 func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {

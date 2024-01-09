@@ -113,7 +113,10 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
-	accountId, userId, roleId := getAccessInfo(ctx)
+	accountId, userId, roleId, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
@@ -181,7 +184,11 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	if v, ok := txn.databaseMap.Load(genDatabaseKey(defines.GetAccountId(ctx), name)); ok {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := txn.databaseMap.Load(genDatabaseKey(accountId, name)); ok {
 		return v.(*txnDatabase), nil
 	}
 	if name == catalog.MO_CATALOG {
@@ -192,9 +199,10 @@ func (e *Engine) Database(ctx context.Context, name string,
 		}
 		return db, nil
 	}
+
 	key := &cache.DatabaseItem{
 		Name:      name,
-		AccountId: defines.GetAccountId(ctx),
+		AccountId: accountId,
 		Ts:        txn.op.SnapshotTS(),
 	}
 	if ok := e.catalog.GetDatabase(key); !ok {
@@ -216,7 +224,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	if txn == nil {
 		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		if key.accountId == accountId {
@@ -224,7 +235,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 		}
 		return true
 	})
-	dbs = append(dbs, e.catalog.Databases(defines.GetAccountId(ctx), txn.op.SnapshotTS())...)
+	dbs = append(dbs, e.catalog.Databases(accountId, txn.op.SnapshotTS())...)
 	return dbs, nil
 }
 
@@ -233,7 +244,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	if txn == nil {
 		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -245,7 +259,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tblName = distDb.getTableNameById(ctx, key.id)
+			tblName, err = distDb.getTableNameById(ctx, key.id)
+			if err != nil {
+				return false
+			}
 			if tblName != "" {
 				return false
 			}
@@ -261,7 +278,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return "", "", err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err := distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", err
+			}
 			if rel != nil {
 				tblName = tableName
 				dbName = databaseName
@@ -282,7 +302,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", "", nil, err
+	}
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -294,7 +317,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return false
+			}
 			if rel != nil {
 				return false
 			}
@@ -310,7 +336,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return "", "", nil, err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", nil, err
+			}
 			if rel != nil {
 				break
 			}
@@ -334,14 +363,22 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	key := genDatabaseKey(defines.GetAccountId(ctx), name)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	key := genDatabaseKey(accountId, name)
 	if _, ok := txn.databaseMap.Load(key); ok {
 		txn.databaseMap.Delete(key)
 		return nil
 	} else {
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
 		key := &cache.DatabaseItem{
 			Name:      name,
-			AccountId: defines.GetAccountId(ctx),
+			AccountId: accountId,
 			Ts:        txn.op.SnapshotTS(),
 		}
 		if ok := e.catalog.GetDatabase(key); !ok {

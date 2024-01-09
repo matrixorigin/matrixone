@@ -16,7 +16,6 @@ package memoryengine
 
 import (
 	"context"
-	"runtime/debug"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -148,14 +147,8 @@ func (*CompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (c *CompilerContext) GetAccountId() uint32 {
-	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
-		return v.(uint32)
-	} else {
-		debug.PrintStack()
-		panic("no account id 18")
-	}
-	return 0
+func (c *CompilerContext) GetAccountId() (uint32, error) {
+	return defines.GetAccountId(c.ctx)
 }
 
 func (c *CompilerContext) GetContext() context.Context {
