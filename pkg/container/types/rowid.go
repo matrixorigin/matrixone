@@ -150,7 +150,7 @@ func (b Blockid) Great(than Blockid) bool {
 
 func RandomRowid() Rowid {
 	var r Rowid
-	u := uuid.New()
+	u, _ := uuid.NewV7()
 	copy(r[:], u[:])
 	return r
 }

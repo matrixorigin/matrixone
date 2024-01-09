@@ -29,6 +29,8 @@ var (
 	EstablishDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("establish")
 	UpgradeTLSDurationHistogram       = acceptConnDurationHistogram.WithLabelValues("upgradeTLS")
 	AuthenticateDurationHistogram     = acceptConnDurationHistogram.WithLabelValues("authenticate")
+	SendErrPacketDurationHistogram    = acceptConnDurationHistogram.WithLabelValues("send-err-packet")
+	SendOKPacketDurationHistogram     = acceptConnDurationHistogram.WithLabelValues("send-ok-packet")
 	CheckTenantDurationHistogram      = acceptConnDurationHistogram.WithLabelValues("check-tenant")
 	CheckUserDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("check-user")
 	CheckRoleDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("check-role")
