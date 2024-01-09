@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
 )
 
@@ -290,7 +291,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.LocalReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		LocalReadIODuration := time.Since(start)
+		statistic.StatsInfoFromContext(ctx).AddDiskAccessTimeConsumption(LocalReadIODuration)
+
+		v2.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
