@@ -161,7 +161,7 @@ INSERT INTO `t9` VALUES (3,'[8.5606893, 6.7903588, 821.977768]','[0.46323407, 23
 INSERT INTO `t9` VALUES (4,'[0.9260021, 0.26637346, 0.06567037]','[0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]');
 select cosine_similarity(b,b), cosine_similarity(c,c) from t9;
 
--- Slice Vector
+-- Sub Vector
 create table t10(a int, b vecf32(3), c vecf64(3));
 insert into t10 values(1, "[1,2.4,3]", "[4.1,5,6]");
 insert into t10 values(2, "[3,4,5]", "[6,7.3,8]");
@@ -183,7 +183,7 @@ select subvector(b, -3, 1) from t10;
 SELECT SUBVECTOR("[1,2,3]", 2);
 SELECT SUBVECTOR("[1,2,3]",2,1);
 
--- Scale Op
+-- Arithmetic Operators between Vector and Scalar
 select b + 2 from t10;
 select b - 2 from t10;
 select b * 2 from t10;
@@ -216,6 +216,8 @@ select 2.0 + cast("[1,2,3]" as vecf32(3));
 select 2.0 - cast("[1,2,3]" as vecf32(3));
 select 2.0 * cast("[1,2,3]" as vecf32(3));
 select 2.0 / cast("[1,2,3]" as vecf32(3));
+select cast("[1,2,3]" as vecf32(3)) / 0 ;
+select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 
 -- Except
 select * from t8 except select * from t9;
