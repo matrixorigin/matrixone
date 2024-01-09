@@ -138,6 +138,9 @@ type Operator interface {
 
 	//AppendChild append child to operator
 	AppendChild(child Operator)
+
+	//Release an operator
+	Release()
 }
 
 var CancelResult = CallResult{

@@ -29,7 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "restrict"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }

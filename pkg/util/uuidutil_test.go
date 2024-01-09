@@ -118,9 +118,9 @@ func TestSetUUIDNodeID(t *testing.T) {
 			t.Logf("local mac: %s", localMac)
 			t.Logf("mock  mac: %s", mockMac)
 			t.Logf("nodeUUID : %x", tt.args.nodeUuid)
-			id, _ := uuid.NewUUID()
+			id, _ := uuid.NewV7()
 			t.Logf("uuid 1: %s", id)
-			id, _ = uuid.NewUUID()
+			id, _ = uuid.NewV7()
 			t.Logf("uuid 2: %s", id)
 			require.Equal(t, false, bytes.Equal(id[10:13], dockerMacPrefix))
 			if stubs != nil {
