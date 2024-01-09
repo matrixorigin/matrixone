@@ -565,7 +565,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}

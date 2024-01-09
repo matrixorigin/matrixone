@@ -27,7 +27,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Set up Go
-        uses: ./head/.github/actions/setup_env
+        uses: ./upstream/.github/actions/setup_env
 
       - name: Build MatrixOne for head
         run: |

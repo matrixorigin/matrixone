@@ -23,7 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_limit"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
 	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
 }
