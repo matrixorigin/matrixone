@@ -566,7 +566,7 @@ const STD = 57888
 const STDDEV = 57889
 const MEDIAN = 57890
 const CLUSTER_CENTERS = 57891
-const SPHERICAL_KMEANS = 57892
+const KMEANS = 57892
 const STDDEV_POP = 57893
 const STDDEV_SAMP = 57894
 const SUBDATE = 57895
@@ -1187,7 +1187,7 @@ var yyToknames = [...]string{
 	"STDDEV",
 	"MEDIAN",
 	"CLUSTER_CENTERS",
-	"SPHERICAL_KMEANS",
+	"KMEANS",
 	"STDDEV_POP",
 	"STDDEV_SAMP",
 	"SUBDATE",
@@ -20171,7 +20171,7 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:8537
 		{
-			yyVAL.str = "1,vector_l2_ops,random"
+			yyVAL.str = "1,vector_l2_ops,random,false"
 		}
 	case 1400:
 		yyDollar = yyS[yypt-2 : yypt+1]

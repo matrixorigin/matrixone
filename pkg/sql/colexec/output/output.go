@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "output"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("sql output")
+	buf.WriteString(argName)
+	buf.WriteString(": sql output")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
