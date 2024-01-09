@@ -17,8 +17,6 @@ package taskservice
 import (
 	"context"
 	"fmt"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -32,44 +30,12 @@ var (
 	fetchInterval = time.Second * 3
 )
 
-type state struct {
-	sync.Mutex
-	started  bool
-	stopping bool
-}
-
-func (s *state) canStart() bool {
-	s.Lock()
-	defer s.Unlock()
-	if s.stopping || s.started {
-		return false
-	}
-	s.started = true
-	return true
-}
-
-func (s *state) canStop() bool {
-	s.Lock()
-	defer s.Unlock()
-	if !s.started || s.stopping {
-		return false
-	}
-	s.stopping = true
-	return true
-}
-
-func (s *state) endStop() {
-	s.Lock()
-	defer s.Unlock()
-	s.started = false
-	s.stopping = false
-}
-
 type crons struct {
-	state state
+	state cronServiceState
 
 	stopper *stopper.Stopper
 	cron    *cron.Cron
+	jobs    map[uint64]*cronJob
 	entries map[uint64]cron.EntryID
 }
 
@@ -79,6 +45,7 @@ func (s *taskService) StartScheduleCronTask() {
 	}
 
 	s.crons.stopper = stopper.NewStopper("cronTasks")
+	s.crons.jobs = make(map[uint64]*cronJob)
 	s.crons.entries = make(map[uint64]cron.EntryID)
 	s.crons.cron = cron.New(cron.WithParser(s.cronParser), cron.WithLogger(logutil.GetCronLogger(false)))
 	s.crons.cron.Start()
@@ -95,6 +62,7 @@ func (s *taskService) StopScheduleCronTask() {
 	s.crons.stopper.Stop()
 	<-s.crons.cron.Stop().Done()
 	s.crons.cron = nil
+	s.crons.jobs = nil
 	s.crons.entries = nil
 	s.crons.stopper = nil
 
@@ -128,8 +96,20 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 		// add new cron tasks to cron scheduler
 		for _, v := range tasks {
 			currentTasks[v.ID] = struct{}{}
-			if _, ok := s.crons.entries[v.ID]; !ok {
+			if job, ok := s.crons.jobs[v.ID]; !ok {
 				s.addCronTask(v)
+			} else {
+				if job.state.canUpdate() {
+					if job.task.TriggerTimes != v.TriggerTimes {
+						s.rt.Logger().Info("cron task updated",
+							zap.String("cause", "trigger-times changed"),
+							zap.Uint64("old-trigger-times", job.task.TriggerTimes),
+							zap.Uint64("new-trigger-times", v.TriggerTimes),
+							zap.String("task", v.DebugString()))
+						s.replaceCronTask(v)
+					}
+					job.state.endUpdate()
+				}
 			}
 		}
 
@@ -157,12 +137,25 @@ func (s *taskService) addCronTask(task task.CronTask) {
 	if err != nil {
 		panic(err)
 	}
+	s.crons.jobs[task.ID] = job
 	s.crons.entries[task.ID] = entryId
 }
 
 func (s *taskService) removeCronTask(id uint64) {
 	s.crons.cron.Remove(s.crons.entries[id])
 	delete(s.crons.entries, id)
+}
+
+func (s *taskService) replaceCronTask(v task.CronTask) {
+	s.crons.cron.Remove(s.crons.entries[v.ID])
+
+	job := newCronJob(v, s)
+	entryId, err := s.crons.cron.AddJob(v.CronExpr, job)
+	if err != nil {
+		panic(err)
+	}
+	s.crons.jobs[v.ID] = job
+	s.crons.entries[v.ID] = entryId
 }
 
 func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
@@ -174,13 +167,13 @@ func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
 }
 
 type cronJob struct {
-	running  atomic.Bool
+	state    cronJobState
 	s        *taskService
 	schedule cron.Schedule
 	task     task.CronTask
 }
 
-func newCronJob(task task.CronTask, s *taskService) cron.Job {
+func newCronJob(task task.CronTask, s *taskService) *cronJob {
 	schedule, err := s.cronParser.Parse(task.CronExpr)
 	if err != nil {
 		panic(err)
@@ -193,10 +186,12 @@ func newCronJob(task task.CronTask, s *taskService) cron.Job {
 }
 
 func (j *cronJob) Run() {
-	if !j.running.CompareAndSwap(false, true) {
+	if !j.state.canRun() {
 		return
 	}
-	defer j.running.Store(false)
+	defer func() {
+		j.state.endRun()
+	}()
 
 	if j.task.Metadata.Options.Concurrency != 0 && !j.checkConcurrency() {
 		return
@@ -217,10 +212,10 @@ func (j *cronJob) doRun() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	cronTask.TriggerTimes++
 	asyncTask := newTaskFromMetadata(cronTask.Metadata)
 	asyncTask.ParentTaskID = asyncTask.Metadata.ID
 	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
+	cronTask.TriggerTimes++
 
 	_, err := j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
