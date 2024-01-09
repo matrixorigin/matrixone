@@ -172,28 +172,38 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
-	if e, ok := p.blockDeltas.Get(BlockDeltaEntry{
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(BlockDeltaEntry{
 		BlockID: bid,
 	}); ok {
+		e := iter.Item()
 		return e.DeltaLoc, e.CommitTs, true
 	}
 	return catalog.ObjectLocation{}, types.TS{}, false
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	e := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&e.ObjectStats, objectio.ShortName(&blockID))
-	if _, ok := p.dataObjects.Get(e); ok {
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	if ok := iter.Seek(pivot); ok {
 		return true
 	}
 	return false
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	e := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&e.ObjectStats, &name)
-	if _, ok := p.dataObjects.Get(e); ok {
-		return e.ObjectInfo, true
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, &name)
+	if ok := iter.Seek(pivot); ok {
+		return iter.Item().ObjectInfo, true
 	}
 	return ObjectInfo{}, false
 }
