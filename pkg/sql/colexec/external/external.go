@@ -68,8 +68,11 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
+const argName = "external"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("external output")
+	buf.WriteString(argName)
+	buf.WriteString(": external output")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -119,7 +122,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		Name2ColIndex: name2ColIndex,
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.exprMono = plan2.CheckExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
@@ -739,7 +742,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.CheckExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
+	if isMonoExpr := plan2.ExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
 		cnt := plan2.AssignAuxIdForExpr(expr, 0)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
@@ -759,7 +762,7 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return makeBatch(param, 0, proc)
 	}
 
-	if param.Filter.exprMono {
+	if param.Filter.zonemappable {
 		for !needRead(ctx, param, proc) {
 			param.Zoneparam.offset++
 		}
@@ -889,8 +892,8 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 			res = append(res, NULL_FLAG)
 			continue
 		}
-		if idx > len(cols) {
-			return nil, moerr.NewWrongValueCountOnRow(ctx, 0)
+		if idx >= len(cols) {
+			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {

@@ -33,7 +33,7 @@ import (
 
 var (
 	defaultRPCTimeout    = time.Second * 10
-	defaultHandleWorkers = 4
+	defaultHandleWorkers = 16
 )
 
 func acquireRequest() *pb.Request {
@@ -332,6 +332,11 @@ func (s *server) onMessage(
 
 func (s *server) handle(ctx context.Context) {
 	fn := func(ctx requestCtx) {
+		start := time.Now()
+		defer func() {
+			v2.TxnLockWorkerHandleDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
+
 		req := ctx.req
 		defer releaseRequest(req)
 		resp := getResponse(req)
@@ -376,7 +381,7 @@ func writeResponse(
 			zap.String("response", detail))
 	}
 	// after write, response will be released by rpc
-	if err := cs.Write(ctx, resp); err != nil {
+	if err := cs.AsyncWrite(resp); err != nil {
 		getLogger().Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))

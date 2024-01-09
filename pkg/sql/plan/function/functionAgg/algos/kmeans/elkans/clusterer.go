@@ -57,9 +57,10 @@ type ElkanClusterer struct {
 	clusterCnt int // k in paper
 	vectorCnt  int // n in paper
 
-	distFn   kmeans.DistanceFunction
-	initType kmeans.InitType
-	rand     *rand.Rand
+	distFn    kmeans.DistanceFunction
+	initType  kmeans.InitType
+	rand      *rand.Rand
+	normalize bool
 }
 
 // vectorMeta holds required information for Elkan's kmeans pruning.
@@ -79,6 +80,7 @@ var _ kmeans.Clusterer = new(ElkanClusterer)
 func NewKMeans(vectors [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType kmeans.DistanceType, initType kmeans.InitType,
+	normalize bool,
 ) (kmeans.Clusterer, error) {
 
 	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
@@ -129,13 +131,9 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		clusterCnt: clusterCnt,
 		vectorCnt:  len(vectors),
 
-		rand: rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
+		rand:      rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
+		normalize: normalize,
 	}, nil
-}
-
-// Normalize is required for spherical kmeans initialization.
-func (km *ElkanClusterer) Normalize() {
-	//moarray.NormalizeGonumVectors(km.vectorList)
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
@@ -155,7 +153,9 @@ func (km *ElkanClusterer) InitCentroids() error {
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
-	//km.Normalize() // spherical kmeans initialization
+	if km.normalize {
+		moarray.NormalizeGonumVectors(km.vectorList)
+	}
 
 	if km.vectorCnt == km.clusterCnt {
 		return moarray.ToMoArrays[float64](km.vectorList), nil
@@ -287,18 +287,13 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 // This is the place where most of the "distance computation skipping" happens.
 func (km *ElkanClusterer) assignData() int {
 
-	var distToCurrentCentroid float64 // u(x) in the paper
-	var assignedCentroid int          // c(x) in the paper
 	changes := 0
 
 	for currVector := range km.vectorList {
 
-		distToCurrentCentroid = km.vectorMetas[currVector].upper
-		assignedCentroid = km.assignments[currVector]
-
 		// step 2
 		// u(x) <= s(c(x))
-		if distToCurrentCentroid <= km.minHalfInterCentroidDist[assignedCentroid] {
+		if km.vectorMetas[currVector].upper <= km.minHalfInterCentroidDist[km.assignments[currVector]] {
 			continue
 		}
 
@@ -308,18 +303,30 @@ func (km *ElkanClusterer) assignData() int {
 			// (i) c != c(x) and
 			// (ii) u(x)>l(x, c) and
 			// (iii) u(x)> 0.5 x d(c(x), c)
-			if c != assignedCentroid &&
-				distToCurrentCentroid > km.vectorMetas[currVector].lower[c] &&
-				distToCurrentCentroid > km.halfInterCentroidDistMatrix[assignedCentroid][c] {
+			if c != km.assignments[currVector] &&
+				km.vectorMetas[currVector].upper > km.vectorMetas[currVector].lower[c] &&
+				km.vectorMetas[currVector].upper > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
 
 				//step 3.a - Bounds update
-				// If r(x) then compute d(x, c(x)) and assign r(x)= false. Otherwise, d(x, c(x))=u(x).
-				dxcx := distToCurrentCentroid // d(x, c(x)) in the paper ie distToCentroid
+				// If r(x) then compute d(x, c(x)) and assign r(x)= false.
+				var dxcx float64
 				if km.vectorMetas[currVector].recompute {
-					dxcx = km.distFn(km.vectorList[currVector], km.centroids[assignedCentroid])
-					km.vectorMetas[currVector].upper = dxcx
-					km.vectorMetas[currVector].lower[assignedCentroid] = dxcx
 					km.vectorMetas[currVector].recompute = false
+
+					dxcx = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
+					km.vectorMetas[currVector].upper = dxcx
+					km.vectorMetas[currVector].lower[km.assignments[currVector]] = dxcx
+
+					if km.vectorMetas[currVector].upper <= km.vectorMetas[currVector].lower[c] {
+						continue // Pruned by triangle inequality on lower bound.
+					}
+
+					if km.vectorMetas[currVector].upper <= km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+						continue // Pruned by triangle inequality on cluster distances.
+					}
+
+				} else {
+					dxcx = km.vectorMetas[currVector].upper //  Otherwise, d(x, c(x))=u(x).
 				}
 
 				//step 3.b - Update
@@ -327,15 +334,13 @@ func (km *ElkanClusterer) assignData() int {
 				// Compute d(x, c)
 				// If d(x, c)<d(x, c(x)) then assign c(x)=c.
 				if dxcx > km.vectorMetas[currVector].lower[c] ||
-					dxcx > km.halfInterCentroidDistMatrix[assignedCentroid][c] {
+					dxcx > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
 
 					dxc := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
 					km.vectorMetas[currVector].lower[c] = dxc
 					if dxc < dxcx {
 						km.vectorMetas[currVector].upper = dxc
-
-						assignedCentroid = c
-						km.assignments[currVector] = assignedCentroid
+						km.assignments[currVector] = c
 						changes++
 					}
 				}
@@ -364,15 +369,20 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 	// means of the clusters = sum of all the members of the cluster / number of members in the cluster
 	for c := range newCentroids {
 		if membersCount[c] == 0 {
-			// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
-			randVector := make([]float64, km.vectorList[0].Len())
-			for l := range randVector {
-				randVector[l] = 10 * (km.rand.Float64() - 0.5)
-			}
-			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
+			// pick a vector randomly from existing vectors as the new centroid
+			newCentroids[c] = km.vectorList[km.rand.Intn(km.vectorCnt)]
+
+			//// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
+			//randVector := make([]float64, km.vectorList[0].Len())
+			//for l := range randVector {
+			//	randVector[l] = km.rand.Float64()
+			//}
+			//newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
-			//moarray.NormalizeGonumVector(newCentroids[c])
+			if km.normalize {
+				moarray.NormalizeGonumVector(newCentroids[c])
+			}
 		} else {
 			// find the mean of the cluster members
 			// note: we don't need to normalize here, since the vectors are already normalized

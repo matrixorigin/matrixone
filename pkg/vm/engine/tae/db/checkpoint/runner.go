@@ -924,7 +924,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		asize, dsize := r.EstimateTableMemSize(table, dirtyTree)
 
-		stats := &table.Stats
+		stats := table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 

@@ -26,7 +26,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,7 +126,7 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 type BlockEntry struct {
-	catalog.BlockInfo
+	objectio.BlockInfo
 
 	CreateTime types.TS
 	DeleteTime types.TS
@@ -141,7 +140,7 @@ type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
 	CommitTs types.TS
-	DeltaLoc catalog.ObjectLocation
+	DeltaLoc objectio.ObjectLocation
 }
 
 func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
@@ -354,7 +353,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObjectInsert(entry.Bat)
+			p.HandleObjectInsert(entry.Bat, fs)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -398,7 +397,7 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 	}
 }
 
-func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
+func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileService) {
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
@@ -407,6 +406,11 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
 
 	for idx := 0; idx < len(stateCol); idx++ {
+		p.shared.Lock()
+		if t := commitTSCol[idx]; t.Greater(p.shared.lastFlushTimestamp) {
+			p.shared.lastFlushTimestamp = t
+		}
+		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -428,6 +432,10 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 				IsAppendable: objEntry.EntryState,
 			}
 			p.objectIndexByTS.Set(e)
+		}
+		//prefetch the object meta
+		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+			logutil.Errorf("prefetch object meta failed. %v", err)
 		}
 
 		objEntry.EntryState = stateCol[idx]

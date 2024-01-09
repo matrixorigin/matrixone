@@ -66,7 +66,7 @@ const (
 	Replace
 )
 
-// Source contains information of a relation which will be used in execution,
+// Source contains information of a relation which will be used in execution.
 type Source struct {
 	PushdownId             uint64
 	PushdownAddr           string
@@ -304,4 +304,9 @@ type fuzzyCheck struct {
 	compoundCols []*plan.ColDef
 
 	cnt int
+}
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
 }

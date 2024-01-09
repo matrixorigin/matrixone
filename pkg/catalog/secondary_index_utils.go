@@ -67,17 +67,26 @@ const (
 
 const (
 	KmeansSamplePerList = 50
+	MaxSampleCount      = 10_000
 )
 
 // CalcSampleCount is used to calculate the sample count for Kmeans index.
 func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
-	sampleCnt = totalCnt
-	if sampleCnt > lists*KmeansSamplePerList {
+
+	if totalCnt > lists*KmeansSamplePerList {
 		sampleCnt = lists * KmeansSamplePerList
+	} else {
+		sampleCnt = totalCnt
 	}
-	if totalCnt > 10_000 && sampleCnt < 10_000 {
-		sampleCnt = 10_000
+
+	if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
+		sampleCnt = MaxSampleCount
 	}
+
+	if sampleCnt > MaxSampleCount {
+		sampleCnt = MaxSampleCount
+	}
+
 	return sampleCnt
 }
 
@@ -157,12 +166,10 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList < 0 {
-			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be >= 0")
-		} else if def.IndexOption.AlgoParamList > 0 {
-			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		if def.IndexOption.AlgoParamList <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
 		} else {
-			res[IndexAlgoParamLists] = "1" // set lists = 1 as default
+			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
