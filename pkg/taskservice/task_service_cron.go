@@ -143,6 +143,7 @@ func (s *taskService) addCronTask(task task.CronTask) {
 
 func (s *taskService) removeCronTask(id uint64) {
 	s.crons.cron.Remove(s.crons.entries[id])
+	delete(s.crons.jobs, id)
 	delete(s.crons.entries, id)
 }
 
