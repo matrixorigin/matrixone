@@ -16,7 +16,7 @@ var (
 			Version:           "1.2.0",
 			MinUpgradeVersion: "1.1.0",
 			UpgradeCluster:    versions.Yes,
-			UpgradeTenant:     versions.No,
+			UpgradeTenant:     versions.Yes,
 		},
 	}
 )

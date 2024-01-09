@@ -76,7 +76,7 @@ func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, 
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
-			ready_tenant,
+			ready_tenant
 			from %s 
 			where state = %d 
 			order by upgrade_order asc`,
@@ -108,7 +108,7 @@ func GetUpgradeVersionForUpdateByID(
 			upgrade_cluster,
 			upgrade_tenant,
 			total_tenant,
-			ready_tenant,
+			ready_tenant
 			from %s 
 			where id = %d`,
 		catalog.MOUpgradeTable,
@@ -160,8 +160,8 @@ func UpdateVersionUpgradeTasks(
 	if upgrade.TotalTenant == upgrade.ReadyTenant {
 		state = Yes
 	}
-	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, ready = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
-		catalog.MOVersionTable,
+	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, state = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
+		catalog.MOUpgradeTable,
 		upgrade.TotalTenant,
 		upgrade.ReadyTenant,
 		state,

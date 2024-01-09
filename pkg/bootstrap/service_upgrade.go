@@ -277,17 +277,20 @@ func (s *service) doUpgrade(
 	ctx context.Context,
 	upgrade versions.VersionUpgrade,
 	txn executor.TxnExecutor) (int32, error) {
-	if upgrade.State == versions.StateReady ||
-		upgrade.State == versions.StateUpgradingTenant {
+	if upgrade.State == versions.StateReady {
 		return upgrade.State, nil
 	}
 
-	if upgrade.UpgradeCluster == versions.No &&
-		upgrade.UpgradeTenant == versions.No {
+	if (upgrade.UpgradeCluster == versions.No && upgrade.UpgradeTenant == versions.No) ||
+		(upgrade.State == versions.StateUpgradingTenant && upgrade.TotalTenant == upgrade.ReadyTenant) {
 		if err := versions.UpdateVersionUpgradeState(upgrade, versions.StateReady, txn); err != nil {
 			return 0, err
 		}
 		return versions.StateReady, nil
+	}
+
+	if upgrade.State == versions.StateUpgradingTenant {
+		return upgrade.State, nil
 	}
 
 	state := versions.StateReady

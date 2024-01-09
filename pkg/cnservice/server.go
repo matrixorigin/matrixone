@@ -732,10 +732,13 @@ func (s *service) bootstrap() error {
 	if err := b.Bootstrap(ctx); err != nil {
 		panic(err)
 	}
-	if err := b.BootstrapUpgrade(ctx); err != nil {
-		panic(err)
-	}
-	return nil
+	return s.stopper.RunTask(func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+		defer cancel()
+		if err := b.BootstrapUpgrade(ctx); err != nil {
+			panic(err)
+		}
+	})
 }
 
 type locker struct {

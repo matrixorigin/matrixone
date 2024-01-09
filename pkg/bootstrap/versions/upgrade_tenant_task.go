@@ -16,7 +16,14 @@ func AddUpgradeTenantTask(
 	fromAccountID int32,
 	toAccountID int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("insert into %s values (%d, '%s', %d, %d, %d, current_timestamp(), current_timestamp())",
+	sql := fmt.Sprintf(`insert into %s (
+			upgrade_id, 
+			target_version, 
+			from_account_id, 
+			to_account_id, 
+			ready, 
+			create_at, 
+			update_at) values (%d, '%s', %d, %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOUpgradeTenantTable,
 		upgradeID,
 		version,

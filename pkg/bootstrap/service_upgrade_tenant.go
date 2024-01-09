@@ -121,11 +121,8 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				if err != nil {
 					return err
 				}
-				if !ok {
+				if !ok || upgrade.TotalTenant == upgrade.ReadyTenant {
 					return nil
-				}
-				if upgrade.TotalTenant == upgrade.ReadyTenant {
-					panic("BUG: invalid upgrade tenant")
 				}
 
 				// no upgrade logic on current cn, skip
@@ -208,7 +205,7 @@ func fetchTenants(
 	batch int,
 	fn func([]int32) error,
 	txn executor.TxnExecutor) error {
-	last := int32(0)
+	last := int32(-1)
 	var ids []int32
 	for {
 		ids = ids[:0]
