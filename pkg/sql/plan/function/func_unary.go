@@ -187,35 +187,6 @@ func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func ScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	vs := vector.GenerateFunctionStrParameter(ivecs[0])
-	op := vector.GenerateFunctionStrParameter(ivecs[1])
-	num := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
-
-	for i := uint64(0); i < uint64(length); i++ {
-		in, null1 := vs.GetStrValue(i)
-		operation, null2 := op.GetStrValue(i)
-		scalar, null3 := num.GetValue(i)
-
-		if null1 || null2 || null3 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			out, err := moarray.ScalarOp[T](types.BytesToArray[T](in), functionUtil.QuickBytesToStr(operation), float64(scalar))
-			if err != nil {
-				return err
-			}
-
-			if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0

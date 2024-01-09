@@ -66,6 +66,27 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		setTargetScaleFromSource(&s1, &t1)
 		setTargetScaleFromSource(&s2, &t2)
 
+		if (t1.Oid.IsArrayRelate() && t2.IsNumeric()) || (t1.IsNumeric() && t2.Oid.IsArrayRelate()) {
+			// Vector <Op> Scalar or
+			// Scalar <Op> Vector
+			if t1.Oid.IsArrayRelate() {
+				switch t1.Oid {
+				case types.T_array_float32:
+					return true, s1, types.T_float32.ToType()
+				case types.T_array_float64:
+					return true, s1, types.T_float64.ToType()
+				}
+
+			} else {
+				switch t1.Oid {
+				case types.T_array_float32:
+					return true, s2, types.T_float32.ToType()
+				case types.T_array_float64:
+					return true, s2, types.T_float64.ToType()
+				}
+			}
+		}
+
 		return true, t1, t2
 	}
 	return false, s1, s2
@@ -914,6 +935,32 @@ func initFixed1() {
 		{types.T_array_float32, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
+
+		/** VEC <Op> Scalar => VEC **/
+		// VECF32 <Op> Scalar => VECF32
+		{types.T_array_float32, types.T_int32, types.T_array_float32, types.T_float32},
+		{types.T_array_float32, types.T_int64, types.T_array_float32, types.T_float32},
+		{types.T_array_float32, types.T_float32, types.T_array_float32, types.T_float32},
+		{types.T_array_float32, types.T_float64, types.T_array_float32, types.T_float32},
+		{types.T_array_float32, types.T_decimal64, types.T_array_float32, types.T_float32},
+		// VECF64 <Op> Scalar => VECF64
+		{types.T_array_float64, types.T_int32, types.T_array_float64, types.T_float64},
+		{types.T_array_float64, types.T_int64, types.T_array_float64, types.T_float64},
+		{types.T_array_float64, types.T_float32, types.T_array_float64, types.T_float64},
+		{types.T_array_float64, types.T_float64, types.T_array_float64, types.T_float64},
+		{types.T_array_float64, types.T_decimal64, types.T_array_float64, types.T_float64},
+		// Scalar <Op> VECF32 => VECF32
+		{types.T_int32, types.T_array_float32, types.T_float32, types.T_array_float32},
+		{types.T_int64, types.T_array_float32, types.T_float32, types.T_array_float32},
+		{types.T_float32, types.T_array_float32, types.T_float32, types.T_array_float32},
+		{types.T_float64, types.T_array_float32, types.T_float32, types.T_array_float32},
+		{types.T_decimal64, types.T_array_float32, types.T_float32, types.T_array_float32},
+		// Scalar <Op> VECF64 => VECF64
+		{types.T_int32, types.T_array_float64, types.T_float64, types.T_array_float64},
+		{types.T_int64, types.T_array_float64, types.T_float64, types.T_array_float64},
+		{types.T_float32, types.T_array_float64, types.T_float64, types.T_array_float64},
+		{types.T_float64, types.T_array_float64, types.T_float64, types.T_array_float64},
+		{types.T_decimal64, types.T_array_float64, types.T_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {

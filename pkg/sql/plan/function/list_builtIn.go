@@ -2035,36 +2035,6 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
-	// function `scalar_op`
-	{
-		functionId: SCALAR_OP,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_array_float32, types.T_varchar, types.T_float32},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return ScalarOp[float32]
-				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_array_float64, types.T_varchar, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return ScalarOp[float64]
-				},
-			},
-		},
-	},
 }
 
 var supportedMathBuiltIns = []FuncNew{
