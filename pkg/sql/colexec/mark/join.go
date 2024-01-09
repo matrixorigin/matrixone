@@ -137,14 +137,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
-
 	if bat != nil {
-		var err error
+		ctr.mp = bat.DupJmAuxData()
+		anal.Alloc(ctr.mp.Size())
+	}
+	return nil
+}
+
+func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
+	if bat != nil {
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
 		if err != nil {
@@ -158,17 +168,17 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
-		}
 		ctr.bat = bat
-		ctr.mp = bat.DupJmAuxData()
-		//ctr.bat = bat
-		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
-		//anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
+}
+
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(ap, proc, anal)
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
