@@ -372,26 +372,124 @@ subvector(b, -3, 1)
 [1]
 [3]
 [5]
-select scalar_op(b,"+", 2.0) from t10;
-scalar_op(b, +, 2.0)
+SELECT SUBVECTOR("[1,2,3]", 2);
+subvector([1,2,3], 2)
+[2, 3]
+SELECT SUBVECTOR("[1,2,3]",2,1);
+subvector([1,2,3], 2, 1)
+[2]
+select b + 2 from t10;
+b + 2
 [3, 4.4, 5]
 [5, 6, 7]
 [7, 8, 9]
-select scalar_op(b,"-", 2.0) from t10;
-scalar_op(b, -, 2.0)
+select b - 2 from t10;
+b - 2
 [-1, 0.4000001, 1]
 [1, 2, 3]
 [3, 4, 5]
-select scalar_op(b,"*", 2.0) from t10;
-scalar_op(b, *, 2.0)
+select b * 2 from t10;
+b * 2
 [2, 4.8, 6]
 [6, 8, 10]
 [10, 12, 14]
-select scalar_op(b,"/", 2.0) from t10;
-scalar_op(b, /, 2.0)
+select b / 2 from t10;
+b / 2
 [0.5, 1.2, 1.5]
 [1.5, 2, 2.5]
 [2.5, 3, 3.5]
+select 2 + b from t10;
+2 + b
+[3, 4.4, 5]
+[5, 6, 7]
+[7, 8, 9]
+select 2 - b from t10;
+invalid argument operator -, bad value [BIGINT VECF32]
+select 2 * b from t10;
+2 * b
+[2, 4.8, 6]
+[6, 8, 10]
+[10, 12, 14]
+select 2 / b from t10;
+invalid argument operator /, bad value [BIGINT VECF32]
+select b + 2.0 from t10;
+b + 2.0
+[3, 4.4, 5]
+[5, 6, 7]
+[7, 8, 9]
+select b - 2.0 from t10;
+b - 2.0
+[-1, 0.4000001, 1]
+[1, 2, 3]
+[3, 4, 5]
+select b * 2.0 from t10;
+b * 2.0
+[2, 4.8, 6]
+[6, 8, 10]
+[10, 12, 14]
+select b / 2.0 from t10;
+b / 2.0
+[0.5, 1.2, 1.5]
+[1.5, 2, 2.5]
+[2.5, 3, 3.5]
+select 2.0 + b from t10;
+2.0 + b
+[3, 4.4, 5]
+[5, 6, 7]
+[7, 8, 9]
+select 2.0 - b from t10;
+invalid argument operator -, bad value [DECIMAL64 VECF32]
+select 2.0 * b from t10;
+2.0 * b
+[2, 4.8, 6]
+[6, 8, 10]
+[10, 12, 14]
+select 2.0 / b from t10;
+invalid argument operator /, bad value [DECIMAL64 VECF32]
+select cast("[1,2,3]" as vecf32(3)) + 2;
+cast([1,2,3] as vecf32(3)) + 2
+[3, 4, 5]
+select cast("[1,2,3]" as vecf32(3)) - 2;
+cast([1,2,3] as vecf32(3)) - 2
+[-1, 0, 1]
+select cast("[1,2,3]" as vecf32(3)) * 2;
+cast([1,2,3] as vecf32(3)) * 2
+[2, 4, 6]
+select cast("[1,2,3]" as vecf32(3)) / 2;
+cast([1,2,3] as vecf32(3)) / 2
+[0.5, 1, 1.5]
+select 2 + cast("[1,2,3]" as vecf32(3));
+2 + cast([1,2,3] as vecf32(3))
+[3, 4, 5]
+select 2 - cast("[1,2,3]" as vecf32(3));
+invalid argument operator -, bad value [BIGINT VECF32]
+select 2 * cast("[1,2,3]" as vecf32(3));
+2 * cast([1,2,3] as vecf32(3))
+[2, 4, 6]
+select 2 / cast("[1,2,3]" as vecf32(3));
+invalid argument operator /, bad value [BIGINT VECF32]
+select cast("[1,2,3]" as vecf32(3)) + 2.0;
+cast([1,2,3] as vecf32(3)) + 2.0
+[3, 4, 5]
+select cast("[1,2,3]" as vecf32(3)) - 2.0;
+cast([1,2,3] as vecf32(3)) - 2.0
+[-1, 0, 1]
+select cast("[1,2,3]" as vecf32(3)) * 2.0;
+cast([1,2,3] as vecf32(3)) * 2.0
+[2, 4, 6]
+select cast("[1,2,3]" as vecf32(3)) / 2.0;
+cast([1,2,3] as vecf32(3)) / 2.0
+[0.5, 1, 1.5]
+select 2.0 + cast("[1,2,3]" as vecf32(3));
+2.0 + cast([1,2,3] as vecf32(3))
+[3, 4, 5]
+select 2.0 - cast("[1,2,3]" as vecf32(3));
+invalid argument operator -, bad value [DECIMAL64 VECF32]
+select 2.0 * cast("[1,2,3]" as vecf32(3));
+2.0 * cast([1,2,3] as vecf32(3))
+[2, 4, 6]
+select 2.0 / cast("[1,2,3]" as vecf32(3));
+invalid argument operator /, bad value [DECIMAL64 VECF32]
 select * from t8 except select * from t9;
 a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]

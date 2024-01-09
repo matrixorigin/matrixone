@@ -180,12 +180,42 @@ select subvector(b, 1, 4) from t10;
 select subvector(b, -1, 1) from t10;
 select subvector(b, -2, 1) from t10;
 select subvector(b, -3, 1) from t10;
+SELECT SUBVECTOR("[1,2,3]", 2);
+SELECT SUBVECTOR("[1,2,3]",2,1);
 
 -- Scale Op
-select scalar_op(b,"+", 2.0) from t10;
-select scalar_op(b,"-", 2.0) from t10;
-select scalar_op(b,"*", 2.0) from t10;
-select scalar_op(b,"/", 2.0) from t10;
+select b + 2 from t10;
+select b - 2 from t10;
+select b * 2 from t10;
+select b / 2 from t10;
+select 2 + b from t10;
+select 2 - b from t10;
+select 2 * b from t10;
+select 2 / b from t10;
+select b + 2.0 from t10;
+select b - 2.0 from t10;
+select b * 2.0 from t10;
+select b / 2.0 from t10;
+select 2.0 + b from t10;
+select 2.0 - b from t10;
+select 2.0 * b from t10;
+select 2.0 / b from t10;
+select cast("[1,2,3]" as vecf32(3)) + 2;
+select cast("[1,2,3]" as vecf32(3)) - 2;
+select cast("[1,2,3]" as vecf32(3)) * 2;
+select cast("[1,2,3]" as vecf32(3)) / 2;
+select 2 + cast("[1,2,3]" as vecf32(3));
+select 2 - cast("[1,2,3]" as vecf32(3));
+select 2 * cast("[1,2,3]" as vecf32(3));
+select 2 / cast("[1,2,3]" as vecf32(3));
+select cast("[1,2,3]" as vecf32(3)) + 2.0;
+select cast("[1,2,3]" as vecf32(3)) - 2.0;
+select cast("[1,2,3]" as vecf32(3)) * 2.0;
+select cast("[1,2,3]" as vecf32(3)) / 2.0;
+select 2.0 + cast("[1,2,3]" as vecf32(3));
+select 2.0 - cast("[1,2,3]" as vecf32(3));
+select 2.0 * cast("[1,2,3]" as vecf32(3));
+select 2.0 / cast("[1,2,3]" as vecf32(3));
 
 -- Except
 select * from t8 except select * from t9;
