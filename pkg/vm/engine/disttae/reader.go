@@ -378,7 +378,23 @@ func (r *blockReader) Read(
 					obj.CreateTime.ToTimestamp().DebugString(),
 					obj.DeleteTime.ToTimestamp().DebugString())
 			}
-			logutil.Fatalf("xxxx blockReader.Read: err:%s, txn:%s, all objects in partition state:[%s]",
+			blockDeltas := ""
+			biter := part.NewBlocksDeltaIter()
+			defer biter.Close()
+			for biter.Next() {
+				e := biter.Entry()
+				blockDeltas = fmt.Sprintf("%s, %s %s %s",
+					blockDeltas,
+					e.BlockID.String(),
+					e.CommitTs.ToTimestamp().DebugString(),
+					e.DeltaLocation().Name().String())
+			}
+			logutil.Infof("xxxx blockReader.Read:all block deltas in partition state:[%s]", blockDeltas)
+			logutil.Fatalf("xxxx blockReader.Read want to read block:[%s,%s,%s,%v], err:%s, txn:%s, all objects in partition state:[%s]",
+				blockInfo.MetaLocation().Name().String(),
+				blockInfo.DeltaLocation().Name().String(),
+				blockInfo.BlockID.String(),
+				blockInfo.EntryState,
 				err.Error(),
 				r.table.db.txn.op.Txn().DebugString(),
 				aObjs)

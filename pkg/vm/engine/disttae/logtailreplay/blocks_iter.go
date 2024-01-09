@@ -142,6 +142,42 @@ type BlocksIter interface {
 	Entry() types.Blockid
 }
 
+// add for test
+type BlocksDeltaIter struct {
+	iter        btree.IterG[BlockDeltaEntry]
+	firstCalled bool
+}
+
+func (p *PartitionState) NewBlocksDeltaIter() *BlocksDeltaIter {
+	iter := p.blockDeltas.Copy().Iter()
+	ret := &BlocksDeltaIter{
+		iter: iter,
+	}
+	return ret
+}
+
+func (b *BlocksDeltaIter) Next() bool {
+	if !b.firstCalled {
+		if !b.iter.First() {
+			return false
+		}
+		b.firstCalled = true
+		return true
+	}
+	return b.iter.Next()
+}
+
+func (b *BlocksDeltaIter) Entry() BlockDeltaEntry {
+	return b.iter.Item()
+}
+
+func (b *BlocksDeltaIter) Close() error {
+	b.iter.Release()
+	return nil
+}
+
+//test end
+
 type dirtyBlocksIter struct {
 	iter        btree.IterG[types.Blockid]
 	firstCalled bool
