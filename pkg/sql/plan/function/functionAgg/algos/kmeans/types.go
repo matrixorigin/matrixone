@@ -19,7 +19,6 @@ import "gonum.org/v1/gonum/mat"
 const DefaultRandSeed = 1
 
 type Clusterer interface {
-	Normalize()
 	InitCentroids() error
 	Cluster() ([][]float64, error)
 	SSE() float64

@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "insert"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("insert")
+	buf.WriteString(argName)
+	buf.WriteString(": insert")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
