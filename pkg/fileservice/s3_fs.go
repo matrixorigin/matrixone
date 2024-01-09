@@ -565,7 +565,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			closeFunc: func() error {
 				s3ReadIODuration := time.Since(t0)
 				statistic.StatsInfoFromContext(ctx).AddS3AccessTimeConsumption(s3ReadIODuration)
-				
+
 				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 				return r.Close()
