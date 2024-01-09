@@ -94,7 +94,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil && ap.RecSink {
-		bat = makeEndBatch(proc)
+		var err error
+		bat, err = makeEndBatch(proc)
+		if err != nil {
+			return process.ExecNext, err
+		}
 	} else if bat == nil {
 		return process.ExecStop, nil
 	}
@@ -119,16 +123,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 }
 
-func makeEndBatch(proc *process.Process) *batch.Batch {
+func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
 	b := batch.NewWithSize(1)
 	b.Attrs = []string{
 		"recursive_col",
 	}
 	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	if err != nil {
+		return nil, err
+	}
 	batch.SetLength(b, 1)
 	b.SetEnd()
-	return b
+	return b, nil
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
@@ -147,12 +154,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 
 		case csinfo := <-proc.DispatchNotifyCh:
 			timeoutCancel()
-			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
-				msgId:  csinfo.MsgId,
-				cs:     csinfo.Cs,
-				uuid:   csinfo.Uid,
-				doneCh: csinfo.DoneCh,
-			})
+			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, csinfo)
 			cnt--
 		}
 	}
@@ -163,7 +165,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 func (arg *Argument) prepareRemote(proc *process.Process) {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
-	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
+	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
 	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
 	for i, rr := range arg.RemoteRegs {
 		if arg.FuncId == ShuffleToAllFunc {

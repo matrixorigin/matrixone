@@ -67,11 +67,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if err := ctr.build(ap, proc, analyze); err != nil {
 				return process.ExecNext, err
 			}
-			if ctr.mp == nil {
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
@@ -137,6 +133,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
+
+	if ctr.matched == nil {
+		return false, nil
+	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {

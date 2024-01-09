@@ -41,7 +41,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-type TestFlushBailout struct{}
+type TestFlushBailoutPos1 struct{}
+type TestFlushBailoutPos2 struct{}
 
 var FlushTableTailTaskFactory = func(
 	metas []*catalog.BlockEntry, rt *dbutils.Runtime, endTs types.TS, /* end of dirty range*/
@@ -237,7 +238,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 
-	if v := ctx.Value(TestFlushBailout{}); v != nil {
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		err = moerr.NewInternalErrorNoCtx("test merge bail out")
 		return
 	}
@@ -615,11 +616,13 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 
 // waitFlushAblkForSnapshot waits all io tasks about flushing ablock for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, subtasks []*flushBlkTask) (err error) {
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
 	for i, subtask := range subtasks {
 		if subtask == nil {
 			continue
 		}
-		if err = subtask.WaitDone(); err != nil {
+		if err = subtask.WaitDone(ictx); err != nil {
 			return
 		}
 		metaLocABlk := blockio.EncodeLocation(
@@ -692,7 +695,9 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 	if subtask == nil {
 		return
 	}
-	if err = subtask.WaitDone(); err != nil {
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
+	if err = subtask.WaitDone(ictx); err != nil {
 		return err
 	}
 	task.createdDeletesObjectName = subtask.name.String()
@@ -723,7 +728,13 @@ func makeDeletesTempBatch(template *containers.Batch, pool *containers.VectorPoo
 
 func relaseFlushDelTask(task *flushDeletesTask, err error) {
 	if err != nil && task != nil {
-		task.WaitDone()
+		logutil.Infof("[FlushTabletail] release flush del task bat because of err %v", err)
+		ictx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second, /*6*time.Minute,*/
+		)
+		defer cancel()
+		task.WaitDone(ictx)
 	}
 	if task != nil && task.delta != nil {
 		task.delta.Close()
@@ -732,11 +743,16 @@ func relaseFlushDelTask(task *flushDeletesTask, err error) {
 
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 	if err != nil {
-		logutil.Infof("[FlushTabletail] release flush task bat because of err %v", err)
+		logutil.Infof("[FlushTabletail] release flush ablk bat because of err %v", err)
+		ictx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second, /*6*time.Minute,*/
+		)
+		defer cancel()
 		for _, subtask := range subtasks {
 			if subtask != nil {
 				// wait done, otherwise the data might be released before flush, and cause data race
-				subtask.WaitDone()
+				subtask.WaitDone(ictx)
 			}
 		}
 	}

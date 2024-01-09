@@ -460,9 +460,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		if node.JoinType == plan.Node_INNER {
-			//only inner join can deduce new predicate
+		switch node.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_RIGHT:
+			//right join can deduce new predicate only from right side to left
+			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_LEFT:
+			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 
@@ -897,4 +904,65 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		node.Stats.HashmapStats.HashOnPK = true
 	}
 
+}
+
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteDistinctToAGG(child)
+		}
+	}
+	if node.NodeType != plan.Node_DISTINCT {
+		return
+	}
+	project := builder.qry.Nodes[node.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return
+	}
+	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+		return
+	}
+
+	node.NodeType = plan.Node_AGG
+	node.GroupBy = project.ProjectList
+	node.BindingTags = project.BindingTags
+	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.Children[0] = project.Children[0]
+}
+
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteEffectlessAggToProject(child)
+		}
+	}
+	if node.NodeType != plan.Node_AGG {
+		return
+	}
+	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+		return
+	}
+	scan := builder.qry.Nodes[node.Children[0]]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	if scan.TableDef.Pkey == nil {
+		return
+	}
+	groupCol := make([]int32, 0)
+	for _, expr := range node.GroupBy {
+		col, ok := expr.Expr.(*plan.Expr_Col)
+		if ok {
+			groupCol = append(groupCol, col.Col.ColPos)
+		}
+	}
+	if !containsAllPKs(groupCol, scan.TableDef) {
+		return
+	}
+	node.NodeType = plan.Node_PROJECT
+	node.BindingTags = node.BindingTags[:1]
+	node.ProjectList = node.GroupBy
+	node.GroupBy = nil
 }

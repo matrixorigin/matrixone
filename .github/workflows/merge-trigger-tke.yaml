@@ -13,7 +13,7 @@ on:
 
 jobs:
   docker_image_build:
-    runs-on: amd64-tke-dind
+    runs-on: amd64-mo-guangzhou-dind
     if: ${{ github.event.pull_request.merged == true }}
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
@@ -55,7 +55,7 @@ jobs:
   setup_mo_test_env:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
-    runs-on: amd64-tke-mo
+    runs-on: amd64-mo-guangzhou-medium8
     timeout-minutes: 90
     name: SETUP MO TEST ENV
     outputs:
@@ -85,9 +85,9 @@ jobs:
           echo '${{ needs.docker_image_build.outputs.version }}'
           cd $GITHUB_WORKSPACE/matrixone
           sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
-          sed -i 's/s3pathformocheckin/mo-checkin-regression-1308875761\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
-          sed -i 's/regionformocheckin/ap-chengdu/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
-          sed -i 's@endpointformocheckin@https://cos.ap-chengdu.myqcloud.com@g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's/s3pathformocheckin/mo-checkin-gz-1308875761\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's/regionformocheckin/ap-guangzhou/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's@endpointformocheckin@https://cos.ap-guangzhou.myqcloud.com@g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
           sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
          
           cat $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
@@ -189,7 +189,7 @@ jobs:
   bvt_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST
-    runs-on: amd64-tke-mo
+    runs-on: amd64-mo-guangzhou-medium8
     needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone MO-Tester
@@ -241,7 +241,7 @@ jobs:
   ssb_and_tpch_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
-    runs-on: amd64-tke-large
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -251,7 +251,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: main
+          ref: change_cos_bucket
 
       - name: Clone mo-ssb Repo
         if: ${{ always() && !cancelled() }}
@@ -290,7 +290,7 @@ jobs:
       - name: Modify Tool's Setting And Set PATH
         run: |
           cd $GITHUB_WORKSPACE/mo-load-data
-          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-chengdu.myqcloud.com"' access.yml
+          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-guangzhou.myqcloud.com"' access.yml
           sed -i '/.*ACCESS_KEY_ID: ""*/c\ACCESS_KEY_ID: "${{secrets.TENCENT_AK}}"' access.yml
           sed -i '/.*SECRET_ACCESS_KEY: ""*/c\SECRET_ACCESS_KEY: "${{secrets.TENCENT_SK}}"' access.yml
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
@@ -298,7 +298,7 @@ jobs:
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
         id: step_ssb_test
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -344,7 +344,7 @@ jobs:
       # start tpch test
       - name: Load TPCH 10G Test Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 10
+        timeout-minutes: 20
         id: load_tpch_data
         run: |
           set -uo pipefail
@@ -448,7 +448,7 @@ jobs:
   sysbench_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: SYSBENCH TEST
-    runs-on: amd64-tke-large
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load Repo
@@ -472,8 +472,7 @@ jobs:
         timeout-minutes: 2
         id: account_for_sysbench
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
-          echo "sysbench_account=sysbench_test:admin" >> $GITHUB_OUTPUT
+          echo "sysbench_account=dump" >> $GITHUB_OUTPUT
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
@@ -543,7 +542,7 @@ jobs:
   tpcc_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success'}}
     name: TPCC TEST
-    runs-on: amd64-tke-large
+    runs-on: amd64-mo-guangzhou-2xlarge16
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -553,7 +552,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: main
+          ref: change_cos_bucket
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}
@@ -584,7 +583,7 @@ jobs:
       - name: Modify Tool's Setting And Set PATH
         run: |
           cd $GITHUB_WORKSPACE/mo-load-data
-          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-chengdu.myqcloud.com"' access.yml
+          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-guangzhou.myqcloud.com"' access.yml
           sed -i '/.*ACCESS_KEY_ID: ""*/c\ACCESS_KEY_ID: "${{secrets.TENCENT_AK}}"' access.yml
           sed -i '/.*SECRET_ACCESS_KEY: ""*/c\SECRET_ACCESS_KEY: "${{secrets.TENCENT_SK}}"' access.yml
 
@@ -593,7 +592,7 @@ jobs:
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 10
+        timeout-minutes: 20
         id: load_tpcc_data
         run: |
           set -uo pipefail
@@ -668,7 +667,7 @@ jobs:
   clean_up_env:
     if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
-    runs-on: amd64-tke-mo
+    runs-on: amd64-mo-guangzhou-medium8
     needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
     steps:
       - name: Check and Recreate Namespace

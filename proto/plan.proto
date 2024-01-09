@@ -831,6 +831,7 @@ message DeleteCtx {
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
+	TableDef table_def 	= 10;
 }
 
 message Query {
@@ -1018,6 +1019,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {

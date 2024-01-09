@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"math"
@@ -1255,12 +1256,22 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 }
 
 func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
+	ses := mp.GetSession()
+	ses.timestampMap[TSAuthenticateStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSAuthenticateEnd] = time.Now()
+		v2.AuthenticateDurationHistogram.Observe(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Seconds())
+	}()
+
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		errorCode, sqlState, msg := RewriteError(err, mp.username)
+		ses.timestampMap[TSSendErrPacketStart] = time.Now()
 		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
+		ses.timestampMap[TSSendErrPacketEnd] = time.Now()
+		v2.SendErrPacketDurationHistogram.Observe(ses.timestampMap[TSSendErrPacketEnd].Sub(ses.timestampMap[TSSendErrPacketStart]).Seconds())
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return err2
@@ -1270,7 +1281,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	mp.incDebugCount(2)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
+	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {

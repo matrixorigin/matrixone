@@ -66,6 +66,9 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
+						if ap.PartialResults != nil {
+							agg.SetPartialResult(ap.PartialResults[i])
+						}
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
