@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "loop_semi"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" ⨝ ")
+	buf.WriteString(argName)
+	buf.WriteString(": ⨝ ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

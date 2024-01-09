@@ -1041,7 +1041,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		uid, _ := uuid.NewV7()
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext())
@@ -1468,4 +1469,94 @@ func Test_getStmtExecutor(t *testing.T) {
 		_, err = getStmtExecutor(nil, nil, &baseStmtExecutor{}, stmt)
 		require.Nil(t, err)
 	}
+}
+
+func Test_ExecRequest(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("boot mce succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
+
+		srStub := gostub.Stub(&parsers.HandleSqlForRecord, func(sql string) []string {
+			return make([]string, 7)
+		})
+		defer srStub.Reset()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), txnOperator).Return(nil, nil).AnyTimes()
+
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
+		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
+		if err != nil {
+			t.Error(err)
+		}
+		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+
+		runner := mock_frontend.NewMockComputationRunner(ctrl)
+		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		convey.So(err, convey.ShouldBeNil)
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
+		proto.SetSession(ses)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
+		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
+
+		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+
+		// A mock autoincrcache manager.
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		mce := NewMysqlCmdExecutor()
+		mce.SetRoutineManager(rm)
+		mce.SetSession(ses)
+
+		req := &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("123"),
+		}
+		_, err = mce.ExecRequest(ctx, ses, req)
+		convey.So(err, convey.ShouldBeNil)
+
+		req = &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("1"),
+		}
+		_, err = mce.ExecRequest(ctx, ses, req)
+		convey.So(err, convey.ShouldBeNil)
+	})
 }
