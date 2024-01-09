@@ -120,6 +120,7 @@ func (proc *Process) SendMessage(m *Message) {
 		mb.Messages = append(mb.Messages, m)
 	} else {
 		//todo: send message to other CN
+		panic("unsupported message yet!")
 	}
 }
 
