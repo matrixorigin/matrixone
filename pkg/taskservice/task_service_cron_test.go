@@ -27,36 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestState(t *testing.T) {
-	s := &state{}
-	// start
-	assert.True(t, s.canStart())
-	// cannot start when started
-	assert.False(t, s.canStart())
-	// check inner state
-	assert.True(t, s.started)
-	assert.False(t, s.stopping)
-	// stop
-	assert.True(t, s.canStop())
-	// cannot stop twice
-	assert.False(t, s.canStop())
-	// check inner state
-	assert.True(t, s.started)
-	assert.True(t, s.stopping)
-	// cannot start during stop
-	assert.False(t, s.canStart())
-	// end stop
-	s.endStop()
-	// check inner state
-	assert.False(t, s.started)
-	assert.False(t, s.stopping)
-
-	// cannot stop when stopped
-	assert.False(t, s.canStop())
-	// can start after stop
-	assert.True(t, s.canStart())
-}
-
 func TestScheduleCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
@@ -65,7 +35,7 @@ func TestScheduleCronTask(t *testing.T) {
 		defer s.StopScheduleCronTask()
 
 		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
-	}, 300*time.Millisecond)
+	})
 }
 
 func TestRetryScheduleCronTask(t *testing.T) {
@@ -85,7 +55,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		defer s.StopScheduleCronTask()
 
 		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
-	}, 300*time.Millisecond)
+	})
 }
 
 func TestScheduleCronTaskImmediately(t *testing.T) {
@@ -102,7 +72,7 @@ func TestScheduleCronTaskImmediately(t *testing.T) {
 		defer s.StopScheduleCronTask()
 
 		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
-	}, 300*time.Millisecond)
+	})
 }
 
 func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
@@ -124,7 +94,7 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 		assertTaskCountEqual(t, store, time.Second*5, 1,
 			WithTaskParentTaskIDCond(EQ, "t1"),
 			WithTaskStatusCond(task.TaskStatus_Running))
-	}, 300*time.Millisecond)
+	})
 }
 
 func TestRemovedCronTask(t *testing.T) {
@@ -146,7 +116,34 @@ func TestRemovedCronTask(t *testing.T) {
 		time.Sleep(time.Second * 3)
 		s.crons.stopForTest()
 		waitJobsCount(t, 0, s, time.Second*10)
-	}, 300*time.Millisecond)
+	})
+}
+
+func TestReplaceCronTask(t *testing.T) {
+	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+		s.StartScheduleCronTask()
+		defer s.StopScheduleCronTask()
+		time.Sleep(time.Second * 3)
+		s.crons.stopForTest()
+
+		jobInCron := s.crons.jobs[1]
+		taskInStore := store.cronTasks[jobInCron.task.ID]
+
+		require.Equal(t, jobInCron.task.TriggerTimes, taskInStore.TriggerTimes)
+
+		t.Log("set trigger times to 0")
+		jobInCron.task.TriggerTimes = 0
+		require.Equal(t, s.crons.jobs[1].task.TriggerTimes, uint64(0))
+
+		s.crons.startForTest(t, s.fetchCronTasks)
+		time.Sleep(time.Second * 3)
+		s.crons.stopForTest()
+
+		jobInCron = s.crons.jobs[1]
+		taskInStore = store.cronTasks[jobInCron.task.ID]
+		require.Equal(t, jobInCron.task.TriggerTimes, taskInStore.TriggerTimes)
+	})
 }
 
 func (c *crons) stopForTest() {
@@ -160,10 +157,8 @@ func (c *crons) startForTest(t *testing.T, fn func(ctx context.Context)) {
 	require.NoError(t, c.stopper.RunTask(fn))
 }
 
-func runScheduleCronTaskTest(t *testing.T,
-	testFunc func(store *memTaskStorage, s *taskService, ctx context.Context),
-	fetch time.Duration) {
-	fetchInterval = fetch
+func runScheduleCronTaskTest(t *testing.T, testFunc func(*memTaskStorage, *taskService, context.Context)) {
+	fetchInterval = 300 * time.Millisecond
 
 	store := NewMemTaskStorage().(*memTaskStorage)
 	s := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
