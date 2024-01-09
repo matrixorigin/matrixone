@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -159,6 +160,11 @@ type service struct {
 	client  client.TxnClient
 	exec    executor.SQLExecutor
 	stopper *stopper.Stopper
+
+	mu struct {
+		sync.RWMutex
+		tenants map[int32]bool
+	}
 }
 
 // NewService create service to bootstrap mo database
@@ -174,6 +180,7 @@ func NewService(
 		client:  client,
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
 	}
+	s.mu.tenants = make(map[int32]bool)
 	return s
 }
 

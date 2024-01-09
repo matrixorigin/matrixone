@@ -19,17 +19,24 @@ func (s *service) MaybeUpgradeTenant(
 	ctx context.Context,
 	tenantFetchFunc func() (int32, string, error),
 	txnOp client.TxnOperator) (bool, error) {
+	tenantID, version, err := tenantFetchFunc()
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.RLock()
+	checked := s.mu.tenants[tenantID]
+	s.mu.RUnlock()
+	if checked {
+		return false, nil
+	}
+
 	upgraded := false
 	opts := executor.Options{}.WithTxn(txnOp)
-	err := s.exec.ExecTxn(
+	err = s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txn.Use(catalog.MO_CATALOG)
-			tenantID, version, err := tenantFetchFunc()
-			if err != nil {
-				return err
-			}
-
 			// tenant create at current cn, can work correctly
 			currentCN := getFinalVersionHandle().Metadata()
 			if currentCN.Version == version {
@@ -99,6 +106,9 @@ func (s *service) MaybeUpgradeTenant(
 	if err != nil {
 		return false, err
 	}
+	s.mu.Lock()
+	s.mu.tenants[tenantID] = true
+	s.mu.Unlock()
 	return upgraded, nil
 }
 
