@@ -991,9 +991,7 @@ var supportedOperators = []FuncNew{
 					}
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return plusFnVectorScalar(parameters, result, proc, length)
-					}
+					return plusFnVectorScalar
 				},
 			},
 		},
@@ -1060,9 +1058,7 @@ var supportedOperators = []FuncNew{
 
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return minusFnVectorScalar(parameters, result, proc, length)
-					}
+					return minusFnVectorScalar
 				},
 			},
 		},
@@ -1128,9 +1124,7 @@ var supportedOperators = []FuncNew{
 					}
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return multiFnVectorScalar(parameters, result, proc, length)
-					}
+					return multiFnVectorScalar
 				},
 			},
 		},
@@ -1188,9 +1182,8 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return divFnVectorScalar(parameters, result, proc, length)
-					}
+					return divFnVectorScalar
+
 				},
 			},
 		},
