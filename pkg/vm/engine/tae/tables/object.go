@@ -20,4 +20,3 @@ import (
 )
 
 type BlockDataFactory = func(meta *catalog.ObjectEntry) data.Block
-

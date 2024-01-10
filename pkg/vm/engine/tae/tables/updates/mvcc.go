@@ -338,6 +338,7 @@ func NewObjectMVCCHandle(meta *catalog.ObjectEntry) *ObjectMVCCHandle {
 		meta:    meta,
 		deletes: make(map[uint16]*MVCCHandle),
 	}
+	node.UpgradeAllDeleteChain()
 	return node
 }
 func (n *ObjectMVCCHandle) GetOrCreateDeleteChain(blkID uint16) *MVCCHandle {

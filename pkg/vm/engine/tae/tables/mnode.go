@@ -365,7 +365,7 @@ func (node *memoryNode) GetRowByFilter(
 			continue
 		}
 		var deleted bool
-		deleted, err = node.block.mvcc.IsDeletedLocked(row, txn, 0)
+		deleted, err = node.block.getMVCC().IsDeletedLocked(row, txn, 0)
 		if err != nil {
 			return
 		}
@@ -426,7 +426,7 @@ func (node *memoryNode) checkConflictAndDupClosure(
 		if appendnode.IsAborted() || !visible {
 			return nil
 		}
-		mvcc := node.block.mvcc.TryGetDeleteChain(0)
+		mvcc := node.block.getMVCC().TryGetDeleteChain(0)
 		if mvcc == nil {
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
@@ -461,16 +461,16 @@ func (node *memoryNode) checkConflictAandVisibility(
 		needWait := n.IsCommitting()
 		if needWait {
 			txn := n.GetTxn()
-			node.block.mvcc.RUnlock()
+			node.block.getMVCC().RUnlock()
 			txn.GetTxnState(true)
-			node.block.mvcc.RLock()
+			node.block.getMVCC().RLock()
 		}
 	} else {
 		needWait, txn := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
-			node.block.mvcc.RUnlock()
+			node.block.getMVCC().RUnlock()
 			txn.GetTxnState(true)
-			node.block.mvcc.RLock()
+			node.block.getMVCC().RLock()
 		}
 	}
 	if err = n.CheckConflict(txn); err != nil {
@@ -606,7 +606,7 @@ func (node *memoryNode) getInMemoryValue(
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
 	node.block.RLock()
-	mvcc := node.block.mvcc.TryGetDeleteChain(0)
+	mvcc := node.block.getMVCC().TryGetDeleteChain(0)
 	deleted := false
 	if mvcc != nil {
 		deleted, err = mvcc.IsDeletedLocked(uint32(row), txn)

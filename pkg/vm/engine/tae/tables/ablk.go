@@ -77,7 +77,7 @@ func newABlock(
 ) *ablock {
 	blk := &ablock{}
 	blk.baseBlock = newBaseBlock(blk, meta, rt)
-	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	blk.getMVCC().SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
 		pnode := newPersistedNode(blk.baseBlock)
 		node := NewNode(pnode)
@@ -394,7 +394,7 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 		return
 	}
 
-	if blk.mvcc.GetChangeIntentionCnt() == 0 && rows == 0 {
+	if blk.getMVCC().GetChangeIntentionCnt() == 0 && rows == 0 {
 		score = 0
 	} else {
 		score = 1
@@ -444,7 +444,7 @@ func (blk *ablock) EstimateMemSize() (int, int) {
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	dsize := blk.mvcc.EstimateMemSizeLocked()
+	dsize := blk.getMVCC().EstimateMemSizeLocked()
 	asize := blk.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()

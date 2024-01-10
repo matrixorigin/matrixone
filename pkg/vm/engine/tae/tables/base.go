@@ -48,12 +48,15 @@ type BlockT[T common.IRef] interface {
 	GetID() *common.ID
 }
 
+func DefaultTOmbstoneFactory(meta *catalog.ObjectEntry) data.Tombstone {
+	return updates.NewObjectMVCCHandle(meta)
+}
+
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
 	rt         *dbutils.Runtime
 	meta       *catalog.ObjectEntry
-	mvcc       *updates.ObjectMVCCHandle
 	appendMVCC *updates.AppendMVCCHandle
 	impl       data.Block
 
@@ -70,8 +73,6 @@ func newBaseBlock(
 		rt:   rt,
 		meta: meta,
 	}
-	blk.mvcc = updates.NewObjectMVCCHandle(meta)
-	blk.mvcc.UpgradeAllDeleteChain()
 	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
 	blk.RWMutex = meta.RWMutex
 	return blk
@@ -99,13 +100,15 @@ func (blk *baseBlock) PinNode() *Node {
 	}
 	return n
 }
-
+func (blk *baseBlock) getMVCC() *updates.ObjectMVCCHandle {
+	return blk.meta.GetTable().GetOrCreateTombstone(blk.meta, DefaultTOmbstoneFactory).(*updates.ObjectMVCCHandle)
+}
 func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
-	blk.mvcc.UpgradeDeleteChainByTS(ts)
+	blk.getMVCC().UpgradeDeleteChainByTS(ts)
 }
 
 func (blk *baseBlock) UpgradeAllDeleteChain() {
-	blk.mvcc.UpgradeAllDeleteChain()
+	blk.getMVCC().UpgradeAllDeleteChain()
 }
 
 func (blk *baseBlock) Rows() int {
@@ -167,7 +170,7 @@ func (blk *baseBlock) fillInMemoryDeletesLocked(
 	view *containers.BaseView,
 	rwlocker *sync.RWMutex,
 ) (err error) {
-	deleteHandle := blk.mvcc.TryGetDeleteChain(blkID)
+	deleteHandle := blk.getMVCC().TryGetDeleteChain(blkID)
 	if deleteHandle == nil {
 		return
 	}
@@ -254,7 +257,7 @@ func (blk *baseBlock) loadPersistedDeletes(
 	blkID uint16,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
-	location, deltalocCommitTS := blk.mvcc.GetDeltaLocAndCommitTS(blkID)
+	location, deltalocCommitTS := blk.getMVCC().GetDeltaLocAndCommitTS(blkID)
 	if location.IsEmpty() {
 		return
 	}
@@ -606,7 +609,7 @@ func (blk *baseBlock) getPersistedValue(
 func (blk *baseBlock) DeletesInfo() string {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.mvcc.StringLocked()
+	return blk.getMVCC().StringLocked()
 }
 
 func (blk *baseBlock) RangeDelete(
@@ -617,7 +620,7 @@ func (blk *baseBlock) RangeDelete(
 	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
-	blkMVCC := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	blkMVCC := blk.getMVCC().GetOrCreateDeleteChain(blkID)
 	if err = blkMVCC.CheckNotDeleted(start, end, txn.GetStartTS()); err != nil {
 		return
 	}
@@ -633,7 +636,7 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if blk.meta.IsAppendable() {
 		return
 	}
-	blkMVCC := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	blkMVCC := blk.getMVCC().GetOrCreateDeleteChain(blkID)
 	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc)
 }
 
@@ -641,7 +644,7 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
 	if level >= common.PPL1 {
 		blk.RLock()
-		s2 := blk.mvcc.StringLocked()
+		s2 := blk.getMVCC().StringLocked()
 		blk.RUnlock()
 		if s2 != "" {
 			s = fmt.Sprintf("%s\n%s", s, s2)
@@ -653,7 +656,7 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.mvcc.HasDeleteIntentsPreparedIn(from, to)
+	return blk.getMVCC().HasDeleteIntentsPreparedIn(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(
@@ -671,7 +674,7 @@ func (blk *baseBlock) CollectChangesInRange(
 func (blk *baseBlock) inMemoryCollectDeletesInRange(blkID uint16, start, end types.TS) (deletes *nulls.Bitmap, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
-	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
+	mvcc := blk.getMVCC().TryGetDeleteChain(blkID)
 	if mvcc == nil {
 		return
 	}
@@ -735,7 +738,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	mp *mpool.MPool,
 ) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
-	mvcc := blk.mvcc.TryGetDeleteChain(blkID)
+	mvcc := blk.getMVCC().TryGetDeleteChain(blkID)
 	if mvcc == nil {
 		blk.RUnlock()
 		return
@@ -828,7 +831,7 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 }
 
 func (blk *baseBlock) OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error) {
-	blk.mvcc.GetOrCreateDeleteChain(blkID).OnReplayDeleteNode(node)
+	blk.getMVCC().GetOrCreateDeleteChain(blkID).OnReplayDeleteNode(node)
 	err = node.OnApply()
 	return
 }
@@ -846,14 +849,14 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *baseBlock) GetTotalChanges() int {
-	return int(blk.mvcc.GetDeleteCnt())
+	return int(blk.getMVCC().GetDeleteCnt())
 }
 
 func (blk *baseBlock) IsAppendable() bool { return false }
 
 func (blk *baseBlock) MutationInfo() string {
 	rows := blk.Rows()
-	deleteCnt := blk.mvcc.GetDeleteCnt()
+	deleteCnt := blk.getMVCC().GetDeleteCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
 		deleteCnt,
@@ -868,10 +871,10 @@ func (blk *baseBlock) CollectAppendInRange(
 }
 
 func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
-	mvcc := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	mvcc := blk.getMVCC().GetOrCreateDeleteChain(blkID)
 	return mvcc.UpdateDeltaLoc(txn, deltaLoc)
 }
 
 func (blk *baseBlock) GetDeltaPersistedTS() types.TS {
-	return blk.mvcc.GetDeltaPersistedTS()
+	return blk.getMVCC().GetDeltaPersistedTS()
 }

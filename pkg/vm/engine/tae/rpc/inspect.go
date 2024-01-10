@@ -437,7 +437,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
 		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable()  {
+			if !obj.IsActive() || obj.IsAppendable() {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
 			objs = append(objs, obj)

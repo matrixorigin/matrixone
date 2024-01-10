@@ -56,6 +56,8 @@ type TableEntry struct {
 	DeletedDirties []*ObjectEntry
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
+
+	deleteList map[types.Objectid]data.Tombstone
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -81,11 +83,12 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		ID: tableId,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:        db,
-		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		db:         db,
+		TableNode:  &TableNode{},
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: make(map[types.Objectid]data.Tombstone),
+		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -100,11 +103,12 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:        db,
-		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		db:         db,
+		TableNode:  &TableNode{},
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: make(map[types.Objectid]data.Tombstone),
+		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
@@ -127,9 +131,10 @@ func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		link:    common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries: make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:   common.NewTableCompactStat(),
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: make(map[types.Objectid]data.Tombstone),
+		Stats:      common.NewTableCompactStat(),
 	}
 	return e
 }
@@ -141,12 +146,34 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		TableNode: node,
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		TableNode:  node,
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: make(map[types.Objectid]data.Tombstone),
+		Stats:      common.NewTableCompactStat(),
 	}
 }
+
+func (entry *TableEntry) TryGetTombstone(oid types.Objectid) data.Tombstone {
+	return entry.deleteList[oid]
+}
+
+func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
+	tombstone, ok := entry.deleteList[obj.ID]
+	if ok {
+		return tombstone
+	}
+	tombstone = entry.CreateTombstone(obj, factory)
+	entry.deleteList[obj.ID] = tombstone
+	return tombstone
+}
+
+func (entry *TableEntry) CreateTombstone(obj *ObjectEntry, tombstoneFactory TombstoneFactory) data.Tombstone {
+	tombstone := tombstoneFactory(obj)
+	entry.deleteList[obj.ID] = tombstone
+	return tombstone
+}
+
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
 func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {

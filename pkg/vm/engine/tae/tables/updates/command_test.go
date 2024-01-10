@@ -67,9 +67,9 @@ func TestDeleteNodeCmd(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil)
-	objHandle:=NewObjectMVCCHandle(obj)
+	objHandle := NewObjectMVCCHandle(obj)
 
-	controller := NewMVCCHandle(objHandle,0)
+	controller := NewMVCCHandle(objHandle, 0)
 
 	node := NewDeleteNode(nil, handle.DT_Normal,
 		IOET_WALTxnCommand_DeleteNode_CurrVer)

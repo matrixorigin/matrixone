@@ -44,7 +44,7 @@ func newBlock(
 ) *block {
 	blk := &block{}
 	blk.baseBlock = newBaseBlock(blk, meta, rt)
-	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
+	blk.getMVCC().SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)
 	node.Ref()
@@ -182,7 +182,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.mvcc.GetChangeIntentionCnt() == 0 {
+	if blk.getMVCC().GetChangeIntentionCnt() == 0 {
 		// No deletes found
 		score = 0
 	} else {
@@ -249,10 +249,10 @@ func (blk *block) getPersistedRowByFilter(
 		}
 		offset = uint32(off)
 
-		blk.mvcc.RLock()
-		defer blk.mvcc.RUnlock()
+		blk.getMVCC().RLock()
+		defer blk.getMVCC().RUnlock()
 		var deleted bool
-		deleted, err = blk.mvcc.IsDeletedLocked(offset, txn, blkID)
+		deleted, err = blk.getMVCC().IsDeletedLocked(offset, txn, blkID)
 		if err != nil {
 			return
 		}
@@ -278,7 +278,7 @@ func (blk *block) EstimateMemSize() (int, int) {
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	dsize := blk.mvcc.EstimateMemSizeLocked()
+	dsize := blk.getMVCC().EstimateMemSizeLocked()
 	return 0, dsize
 }
 

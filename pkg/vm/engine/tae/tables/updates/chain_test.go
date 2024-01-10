@@ -46,9 +46,9 @@ func TestDeleteChain1(t *testing.T) {
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil)
-	objHandle:=NewObjectMVCCHandle(obj)
+	objHandle := NewObjectMVCCHandle(obj)
 
-	controller := NewMVCCHandle(objHandle,0)
+	controller := NewMVCCHandle(objHandle, 0)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), types.TS{})
@@ -154,8 +154,8 @@ func TestDeleteChain1(t *testing.T) {
 func TestDeleteChain2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	objHandle:=NewObjectMVCCHandle(catalog.NewStandaloneObject(nil, types.TS{}))
-	controller := NewMVCCHandle(objHandle,0)
+	objHandle := NewObjectMVCCHandle(catalog.NewStandaloneObject(nil, types.TS{}))
+	controller := NewMVCCHandle(objHandle, 0)
 	chain := NewDeleteChain(nil, controller)
 	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
 	for i := 0; i < 13; i++ {
