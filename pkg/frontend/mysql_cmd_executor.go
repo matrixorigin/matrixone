@@ -3845,7 +3845,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	singleStatement := len(cws) == 1
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
-		return moerr.NewNotSupported(requestCtx, "muti statement for prepare")
+		return moerr.NewNotSupported(requestCtx, "prepare multi statements")
 	}
 
 	defer func() {
