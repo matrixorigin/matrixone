@@ -49,3 +49,7 @@ func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 		}
 	}
 }
+
+func (factory *DataFactory) MakeTombstoneFactory() catalog.TombstoneFactory {
+	return DefaultTOmbstoneFactory
+}

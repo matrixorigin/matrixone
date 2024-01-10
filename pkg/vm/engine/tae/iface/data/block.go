@@ -162,4 +162,5 @@ type Tombstone interface {
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)
 	UpgradeDeleteChainByTS(ts types.TS)
+	ReplayDeltaLoc(any, uint16)
 }

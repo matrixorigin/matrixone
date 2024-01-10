@@ -449,12 +449,21 @@ func (n *ObjectMVCCHandle) HasDeleteIntentsPreparedIn(from, to types.TS) (found,
 	return
 }
 
+func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
+	mvccNode := vMVCCNode.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
+	mvcc := n.GetOrCreateDeleteChain(blkID)
+	mvcc.ReplayDeltaLoc(mvccNode)
+}
+
 type DeltalocChain struct {
+	mvcc *MVCCHandle
 	*catalog.BaseEntryImpl[*catalog.MetadataMVCCNode]
 }
 
-func (d *DeltalocChain) Is1PC() bool                                         { return false }
-func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) { panic("todo") }
+func (d *DeltalocChain) Is1PC() bool { return false }
+func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
+	return catalog.NewDeltalocCmd(id, catalog.IOET_WALTxnCommand_Block, d.mvcc.GetID(), d.BaseEntryImpl), nil
+}
 func (d *DeltalocChain) PrepareRollback() error {
 	_, err := d.BaseEntryImpl.PrepareRollback()
 	return err
@@ -486,7 +495,11 @@ func NewMVCCHandle(meta *ObjectMVCCHandle, blkID uint16) *MVCCHandle {
 // *************** All common related APIs *****************
 // ==========================================================
 
-func (n *MVCCHandle) GetID() *common.ID              { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetID() *common.ID {
+	id := n.meta.AsCommonID()
+	id.SetBlockOffset(n.blkID)
+	return id
+}
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
 
 func (n *MVCCHandle) StringLocked() string {
@@ -742,4 +755,8 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 	}
 	node.BaseNode.Update(baseNode)
 	return
+}
+
+func (n *MVCCHandle) ReplayDeltaLoc(mvcc *catalog.MVCCNode[*catalog.MetadataMVCCNode]) {
+	n.deltaloc.Insert(mvcc)
 }

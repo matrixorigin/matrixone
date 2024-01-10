@@ -62,6 +62,7 @@ const (
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
 	MakeBlockFactory() BlockDataFactory
+	MakeTombstoneFactory() TombstoneFactory
 }
 
 type Catalog struct {
@@ -702,6 +703,15 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
+	if !cmd.mvccNode.BaseNode.DeltaLoc.IsEmpty() {
+		obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
+		if err != nil {
+			panic(err)
+		}
+		tombstone := tbl.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
+		_, blkOffset := cmd.ID.BlockID.Offsets()
+		tombstone.ReplayDeltaLoc(cmd.mvccNode, blkOffset)
+	}
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
