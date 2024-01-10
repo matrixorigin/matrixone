@@ -1232,7 +1232,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	tbl.constraint = ct
+	// add tbl.partition = partition
+
 	tbl.tableDef = nil
+
+	// update TableDef
 	tbl.GetTableDef(ctx)
 	return nil
 }

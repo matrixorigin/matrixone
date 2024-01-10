@@ -276,6 +276,7 @@ enum AlterKind {
     UpdateComment    = 4;
     UpdateConstraint = 5;
     UpdatePolicy     = 6;
+    AddPartition     = 7;
 }
 
 message AlterTablePolicy {
@@ -304,6 +305,10 @@ message AlterTableAddColumn {
                                 // the column will be added to the last
 }
 
+message AlterTableAddPartition {
+    plan.PartitionByDef  partition_def  = 1;
+}
+
 message AlterTableDropColumn {
     uint32 logical_idx  = 1;
     uint32 sequence_num = 2;  // used to double check
@@ -315,12 +320,13 @@ message AlterTableReq {
     AlterKind kind  = 3;
 
     oneof operation {
-        AlterTableAddColumn add_column     = 4;
-        AlterTableDropColumn drop_column   = 5;
-        AlterTableRenameTable rename_table = 6;
-        AlterTableComment update_comment   = 7;
-        AlterTableConstraint update_cstr   = 8;
-        AlterTablePolicy update_policy     = 9;
+        AlterTableAddColumn add_column       = 4;
+        AlterTableDropColumn drop_column     = 5;
+        AlterTableRenameTable rename_table   = 6;
+        AlterTableComment update_comment     = 7;
+        AlterTableConstraint update_cstr     = 8;
+        AlterTablePolicy update_policy       = 9;
+        AlterTableAddPartition add_partition = 10;
     }
 }
 

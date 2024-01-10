@@ -103,6 +103,17 @@ func String(node NodeFormatter, dialectType dialect.DialectType) string {
 	return ctx.String()
 }
 
+// StringWithOpts Restore SQL and provide string formatting restore options
+func StringWithOpts(node NodeFormatter, dialectType dialect.DialectType, opts ...FmtCtxOption) string {
+	if node == nil {
+		return "<nil>"
+	}
+
+	ctx := NewFmtCtx(dialectType, opts...)
+	node.Format(ctx)
+	return ctx.String()
+}
+
 func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 	if precedenceFor(currentExpr) == Syntactic {
 		expr.Format(ctx)
