@@ -302,24 +302,16 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 	length = 0
-	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
 	// index meta for every created block
 	// Prepare new block placeholder
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 	batchs := make([]*containers.Batch, 0)
-	blockHandles := make([]handle.Block, 0)
 	phaseNumber = 2
-	for i, vec := range vecs {
+	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
-		blk, err = toObjEntry.CreateNonAppendableBlock(
-			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
-		if err != nil {
-			return err
-		}
-		blockHandles = append(blockHandles, blk)
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
 		vec.Close()
@@ -372,18 +364,11 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			return err
 		}
 	}
-	blocks, _, err := writer.Sync(ctx)
+	_, _, err = writer.Sync(ctx)
 	if err != nil {
 		return err
 	}
 	phaseNumber = 5
-	var metaLoc objectio.Location
-	for i, block := range blocks {
-		metaLoc = blockio.EncodeLocation(name, block.GetExtent(), uint32(batchs[i].Length()), block.GetID())
-		if err = blockHandles[i].UpdateMetaLoc(metaLoc); err != nil {
-			return err
-		}
-	}
 	if err = toObjEntry.UpdateStats(writer.Stats()); err != nil {
 		return err
 	}

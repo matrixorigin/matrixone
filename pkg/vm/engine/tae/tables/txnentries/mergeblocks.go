@@ -158,7 +158,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 
 	dataBlock := dropped.GetBlockData()
 
-	bat, err := dataBlock.CollectDeleteInRange(
+	bat,_, err := dataBlock.CollectDeleteInRange(
 		entry.txn.GetContext(),
 		entry.txn.GetStartTS().Next(),
 		entry.txn.GetPrepareTS(),

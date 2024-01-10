@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -685,7 +686,9 @@ func (blk *baseBlock) CollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
-) (bat *containers.Batch, err error) {
+) (bat *containers.Batch, emtpyDelBlkIdx *bitmap.Bitmap, err error) {
+	emtpyDelBlkIdx = &bitmap.Bitmap{}
+	emtpyDelBlkIdx.InitWithSize(int64(blk.meta.BlockCnt()))
 	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
 		deletes, minTS, err := blk.inMemoryCollectDeleteInRange(
 			ctx,
@@ -696,7 +699,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 			mp,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !minTS.IsEmpty() && end.Greater(minTS) {
 			end = minTS.Prev()
@@ -710,11 +713,15 @@ func (blk *baseBlock) CollectDeleteInRange(
 			withAborted,
 			mp,
 		)
-		if bat == nil {
-			bat = deletes
+		if deletes == nil || deletes.Length() == 0 {
+			emtpyDelBlkIdx.Add(uint64(blkID))
 		} else {
-			bat.Extend(deletes)
-			deletes.Close()
+			if bat == nil {
+				bat = deletes
+			} else {
+				bat.Extend(deletes)
+				deletes.Close()
+			}
 		}
 	}
 	return
@@ -854,18 +861,17 @@ func (blk *baseBlock) MutationInfo() string {
 	return s
 }
 
-
 func (blk *baseBlock) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (*containers.BatchWithVersion, error) {
 	return nil, nil
 }
 
-func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader,blkID uint16,deltaLoc objectio.Location)(bool,txnif.TxnEntry,error){
-	mvcc:=blk.mvcc.GetOrCreateDeleteChain(blkID)
-	return mvcc.UpdateDeltaLoc(txn,deltaLoc)
+func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
+	mvcc := blk.mvcc.GetOrCreateDeleteChain(blkID)
+	return mvcc.UpdateDeltaLoc(txn, deltaLoc)
 }
 
-func (blk *baseBlock) GetDeltaPersistedTS() types.TS{
+func (blk *baseBlock) GetDeltaPersistedTS() types.TS {
 	return blk.mvcc.GetDeltaPersistedTS()
 }

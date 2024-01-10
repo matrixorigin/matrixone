@@ -574,7 +574,7 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			continue
 		}
 		// do not close data, leave that to wait phase
-		if deletes, err = blkData.CollectDeleteInRange(
+		if deletes, _, err = blkData.CollectDeleteInRange(
 			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
 		); err != nil {
 			return
@@ -633,27 +633,25 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 }
 
 // flushAllDeletesFromDelSrc collects all deletes from blks and flush them into one block
-func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (subtask *flushDeletesTask, emtpyDelBlkIdx *bitmap.Bitmap, err error) {
+func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (subtask *flushDeletesTask, emtpyDelBlkIdx []*bitmap.Bitmap, err error) {
 	var bufferBatch *containers.Batch
 	defer func() {
 		if err != nil && bufferBatch != nil {
 			bufferBatch.Close()
 		}
 	}()
+	emtpyDelBlkIdx = make([]*bitmap.Bitmap, 0)
 	for i, blk := range task.delSrcMetas {
 		blkData := blk.GetBlockData()
 		var deletes *containers.Batch
-		if deletes, err = blkData.CollectDeleteInRange(
+		var emptyDelBlks *bitmap.Bitmap
+		if deletes, emptyDelBlks, err = blkData.CollectDeleteInRange(
 			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
 		); err != nil {
 			return
 		}
+		emtpyDelBlkIdx[i] = emptyDelBlks
 		if deletes == nil || deletes.Length() == 0 {
-			if emtpyDelBlkIdx == nil {
-				emtpyDelBlkIdx = &bitmap.Bitmap{}
-				emtpyDelBlkIdx.InitWithSize(int64(len(task.delSrcMetas)))
-			}
-			emtpyDelBlkIdx.Add(uint64(i))
 			continue
 		}
 		if bufferBatch == nil {
@@ -675,7 +673,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 }
 
 // waitFlushAllDeletesFromDelSrc waits all io tasks about flushing deletes from blks, update locations but skip those in emtpyDelBlkIdx
-func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Context, subtask *flushDeletesTask, emtpyDelBlkIdx *bitmap.Bitmap) (err error) {
+func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Context, subtask *flushDeletesTask, emtpyDelBlkIdx []*bitmap.Bitmap) (err error) {
 	if subtask == nil {
 		return
 	}
@@ -695,11 +693,14 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 	v2.TaskFlushDeletesSizeHistogram.Observe(float64(deltaLoc.Extent().End()))
 	logutil.Infof("[FlushTabletail] task %d update %s for approximate %d blks", task.ID(), deltaLoc, len(task.delSrcHandles))
 	for i, hdl := range task.delSrcHandles {
-		if emtpyDelBlkIdx != nil && emtpyDelBlkIdx.Contains(uint64(i)) {
-			continue
-		}
-		if err = hdl.UpdateDeltaLoc(deltaLoc); err != nil {
-			return err
+		for j := 0; j < hdl.GetMeta().(*catalog.ObjectEntry).BlockCnt(); j++ {
+			if emtpyDelBlkIdx[i] != nil && emtpyDelBlkIdx[i].Contains(uint64(j)) {
+				continue
+			}
+			if err = hdl.UpdateDeltaLoc(uint16(j), deltaLoc); err != nil {
+				return err
+			}
+
 		}
 	}
 	return
