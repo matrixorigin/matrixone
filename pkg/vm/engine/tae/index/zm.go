@@ -488,6 +488,18 @@ func (zm ZM) AnyLE(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) AnyBetween(lb, ub ZM) (res bool, ok bool) {
+	if !zm.compareCheck(lb) || !zm.compareCheck(ub) {
+		ok = false
+		return
+	}
+	// zm.max >= lb.min && zm.min <= ub.max
+	ok = true
+	res = compute.Compare(zm.GetMaxBuf(), lb.GetMinBuf(), zm.GetType(), zm.GetScale(), lb.GetScale()) >= 0 &&
+		compute.Compare(zm.GetMinBuf(), ub.GetMaxBuf(), zm.GetType(), zm.GetScale(), ub.GetScale()) <= 0
+	return
+}
+
 func (zm ZM) FastIntersect(o ZM) (res bool) {
 	t := zm.GetType()
 	// zm.max >= o.min && zm.min <= v2.max
@@ -558,6 +570,13 @@ func (zm ZM) PrefixEq(s []byte) bool {
 	zmax := zm.GetMaxBuf()
 
 	return PrefixCompare(zmin, s) <= 0 && PrefixCompare(s, zmax) <= 0
+}
+
+func (zm ZM) PrefixBetween(lb, ub []byte) bool {
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+
+	return PrefixCompare(lb, zmax) <= 0 && PrefixCompare(zmin, ub) <= 0
 }
 
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {

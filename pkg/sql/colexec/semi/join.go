@@ -25,8 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "semi"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" semi join ")
+	buf.WriteString(argName)
+	buf.WriteString(": semi join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {

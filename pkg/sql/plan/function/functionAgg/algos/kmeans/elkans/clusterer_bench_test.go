@@ -27,11 +27,11 @@ date : 2023-10-31
 goos: darwin
 goarch: arm64
 cpu: Apple M2 Pro
-row count: 10_000
+row count: 15_000
 dims: 1024
-k: 10
-Benchmark_kmeans/Spherical_Elkan_Random-10         	1000000000	         0.8271 ns/op
-Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       	 1		 1913628958 ns/op
+k: 15
+Benchmark_kmeans/Spherical_Elkan_Random-10         	       1	10842563917 ns/op
+Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       1	13850015875 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
@@ -39,9 +39,9 @@ func Benchmark_kmeans(b *testing.B) {
 		Format: "console",
 	})
 
-	rowCnt := 10_000
+	rowCnt := 15_000
 	dims := 1024
-	k := 10
+	k := 15
 
 	data := make([][]float64, rowCnt)
 	populateRandData(rowCnt, dims, data)
@@ -50,7 +50,7 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.Random)
+			kmeans.L2Distance, kmeans.Random, true)
 		_, err := clusterRand.Cluster()
 		if err != nil {
 			panic(err)
@@ -64,7 +64,7 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		kmeansPlusPlus, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.KmeansPlusPlus)
+			kmeans.L2Distance, kmeans.KmeansPlusPlus, true)
 		_, err := kmeansPlusPlus.Cluster()
 		if err != nil {
 			panic(err)
