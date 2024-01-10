@@ -329,12 +329,12 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	if txn.statementID > 0 {
 		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
 		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-			if txn.writes[i].typ == DELETE {
+			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
 		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-			if txn.writes[i].typ != DELETE {
+			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
@@ -443,6 +443,13 @@ func (e *Entry) isGeneratedByTruncate() bool {
 		e.databaseId == catalog.MO_CATALOG_ID &&
 		e.tableId == catalog.MO_TABLES_ID &&
 		e.truncate
+}
+
+// isCatalog denotes the entry is apply the tree tables
+func (e *Entry) isCatalog() bool {
+	return e.tableId == catalog.MO_TABLES_ID ||
+		e.tableId == catalog.MO_COLUMNS_ID ||
+		e.tableId == catalog.MO_DATABASE_ID
 }
 
 // txnDatabase represents an opened database in a transaction
