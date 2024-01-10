@@ -587,6 +587,7 @@ type blockReader struct {
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
 	buffer []int64
+	table  *txnTable
 }
 
 type blockMergeReader struct {

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -268,6 +269,7 @@ func (r *emptyReader) Read(_ context.Context, _ []string,
 
 func newBlockReader(
 	ctx context.Context,
+	tbl *txnTable,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
 	blks []*catalog.BlockInfo,
@@ -283,7 +285,8 @@ func newBlockReader(
 			proc:     proc,
 			tableDef: tableDef,
 		},
-		blks: blks,
+		blks:  blks,
+		table: tbl,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -364,6 +367,33 @@ func (r *blockReader) Read(
 		filter,
 		r.fs, mp, vp,
 	)
+
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidPath) {
+		if r.table != nil {
+			part, _ := r.table.getPartitionState(ctx)
+			blockDeltas := ""
+			biter := part.NewBlocksDeltaIter()
+			defer biter.Close()
+			for biter.Next() {
+				e := biter.Entry()
+				blockDeltas = fmt.Sprintf("%s, %s %s %s",
+					blockDeltas,
+					e.BlockID.String(),
+					e.CommitTs.ToTimestamp().DebugString(),
+					e.DeltaLocation().Name().String())
+			}
+
+			logutil.Infof("xxxx blockReader.Read:all block deltas in partition state:[%s]", blockDeltas)
+
+			logutil.Fatalf("xxxx blockReader.Read want to read block:[%s,%s,%s,%v], txn:%s",
+				blockInfo.MetaLocation().Name().String(),
+				blockInfo.DeltaLocation().Name().String(),
+				blockInfo.BlockID.String(),
+				blockInfo.EntryState,
+				r.table.db.txn.op.Txn().DebugString())
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -425,6 +455,7 @@ func newBlockMergeReader(
 		table: txnTable,
 		blockReader: newBlockReader(
 			ctx,
+			txnTable,
 			txnTable.GetTableDef(ctx),
 			ts,
 			dirtyBlks,

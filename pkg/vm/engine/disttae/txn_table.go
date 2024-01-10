@@ -1740,6 +1740,7 @@ func (tbl *txnTable) newBlockReader(
 		for i, blk := range blkInfos {
 			rds[i] = newBlockReader(
 				ctx,
+				tbl,
 				tableDef,
 				ts,
 				[]*catalog.BlockInfo{blk},
@@ -1763,6 +1764,7 @@ func (tbl *txnTable) newBlockReader(
 	}
 	blockReaders := newBlockReaders(
 		ctx,
+		tbl,
 		fs,
 		tableDef,
 		tbl.primarySeqnum,
@@ -1876,6 +1878,7 @@ func (tbl *txnTable) newReader(
 	//create readerNumber-1 blockReaders
 	blockReaders := newBlockReaders(
 		ctx,
+		tbl,
 		fs,
 		tbl.tableDef,
 		-1,
