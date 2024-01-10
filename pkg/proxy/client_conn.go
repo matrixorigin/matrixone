@@ -363,7 +363,7 @@ func (c *clientConn) handlePrepare(e *prepareEvent) error {
 
 // handleUse handles the use event.
 func (c *clientConn) handleInitDB(e *initDBEvent) error {
-	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: "use " + e.db})
+	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: e.db})
 	return nil
 }
 
