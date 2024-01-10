@@ -940,7 +940,9 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if plusOperatorSupports(t1, t2) {
+					if plusOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if plusOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -978,6 +980,20 @@ var supportedOperators = []FuncNew{
 					return plusFn
 				},
 			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector + Scalar) or (Scalar + Vector) => Vector
+					if parameters[0].Oid.IsArrayRelate() {
+						return parameters[0]
+					} else {
+						return parameters[1]
+					}
+				},
+				newOp: func() executeLogicOfOverload {
+					return plusFnVectorScalar
+				},
+			},
 		},
 	},
 
@@ -991,7 +1007,9 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if minusOperatorSupports(t1, t2) {
+					if minusOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if minusOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1032,6 +1050,17 @@ var supportedOperators = []FuncNew{
 					return minusFn
 				},
 			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector - Scalar) => Vector
+					return parameters[0]
+
+				},
+				newOp: func() executeLogicOfOverload {
+					return minusFnVectorScalar
+				},
+			},
 		},
 	},
 
@@ -1045,7 +1074,9 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if multiOperatorSupports(t1, t2) {
+					if multiOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if multiOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1082,6 +1113,20 @@ var supportedOperators = []FuncNew{
 					return multiFn
 				},
 			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector * Scalar) or (Scalar * Vector) => Vector
+					if parameters[0].Oid.IsArrayRelate() {
+						return parameters[0]
+					} else {
+						return parameters[1]
+					}
+				},
+				newOp: func() executeLogicOfOverload {
+					return multiFnVectorScalar
+				},
+			},
 		},
 	},
 
@@ -1095,7 +1140,9 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
-					if divOperatorSupports(t1, t2) {
+					if divOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if divOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1126,6 +1173,17 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return divFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// Vector / Scalar => Vector
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return divFnVectorScalar
+
 				},
 			},
 		},
