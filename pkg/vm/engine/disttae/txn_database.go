@@ -268,7 +268,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	item := &cache.TableItem{
 		Name:       name,
 		DatabaseId: db.databaseId,
-		AccountId: accountId,
+		AccountId:  accountId,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -345,7 +345,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId: accountId,
+			AccountId:  accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -414,7 +414,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId: accountId,
+			AccountId:  accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {

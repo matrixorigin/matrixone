@@ -93,7 +93,7 @@ func (a *allocator) asyncAllocate(
 	}
 	a.c <- action{
 		txnOp:         txnOp,
-		accountID: accountId,
+		accountID:     accountId,
 		actionType:    allocType,
 		tableID:       tableID,
 		col:           col,
@@ -121,7 +121,7 @@ func (a *allocator) updateMinValue(
 	}
 	a.c <- action{
 		txnOp:       txnOp,
-		accountID: accountId,
+		accountID:   accountId,
 		actionType:  updateType,
 		tableID:     tableID,
 		col:         col,
