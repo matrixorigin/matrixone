@@ -16,11 +16,13 @@ package testengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"testing"
 )
 
 func TestTestEngine(t *testing.T) {
-	engine, client, compilerCtx := New(context.Background())
+	engine, client, compilerCtx := New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	_ = engine
 	_ = client
 	_ = compilerCtx

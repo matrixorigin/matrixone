@@ -1734,6 +1734,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 }
 
 func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
+	if plan2 == nil {
+		return true
+	}
 	checkFn := func(db string, def *plan.TableDef) bool {
 		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, def.Name)
 		if tableDef == nil {
@@ -1798,6 +1801,10 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			if tcw.plan == nil {
+				modify = true
+				break
+			}
 			if checkModify(tcw.plan, proc, ses) {
 				modify = true
 				break

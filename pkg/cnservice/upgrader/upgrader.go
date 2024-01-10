@@ -335,6 +335,9 @@ func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
 			continue
 			//return err
 		}
+		if currentSchema == nil {
+			continue
+		}
 		if ok := sql.modified(currentSchema); ok {
 			continue
 		}
