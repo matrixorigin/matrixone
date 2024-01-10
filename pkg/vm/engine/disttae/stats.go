@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
