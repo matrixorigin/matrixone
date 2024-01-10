@@ -180,12 +180,12 @@ func (s *service) Delete(
 		client.ClosedEvent,
 		s.txnClosed)
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delCtx, err := newDeleteCtx(ctx, tableID)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := string(txnOp.Txn().ID)
 	s.mu.deletes[key] = append(s.mu.deletes[key], delCtx)
 	if s.logger.Enabled(zap.InfoLevel) {
