@@ -45,23 +45,18 @@ func (v *versionHandle) Prepare(
 	return nil
 }
 
-func (v *versionHandle) HandleCreateTenant(
-	ctx context.Context,
-	txn executor.TxnExecutor) error {
-	// TODO: move create tenant logic here
-	return nil
-}
-
 func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
+
 	return nil
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
+
 	return nil
 }
 
