@@ -118,6 +118,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
