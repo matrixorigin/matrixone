@@ -2048,10 +2048,6 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	} else {
 		bh.ses.SetRequestContext(ctx)
 	}
-	// if bh.ses.GetTenantInfo() == nil {
-	// 	debug.PrintStack()
-	// 	panic("need account info 1")
-	// }
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -2096,10 +2092,6 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 	} else {
 		bh.ses.SetRequestContext(ctx)
 	}
-	// if bh.ses.GetTenantInfo() == nil {
-	// 	debug.PrintStack()
-	// 	panic("need account info 3")
-	// }
 	_, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err

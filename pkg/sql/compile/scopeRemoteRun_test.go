@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -282,7 +284,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
-		Ctx:         context.TODO(),
+		Ctx: defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		TxnOperator: txnOperator,
 		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{

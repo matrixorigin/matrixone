@@ -361,7 +361,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
 	var err error
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			// 简化获取TxnOperator 逻辑, 详见 https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
+			// simplify the logic of TxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
 			_, txn, err = handler.GetTxnOperator()
 			if err != nil {
 				return err
@@ -2853,9 +2853,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		// Call a defer function -- if TxnCommitSingleStatement paniced, we
 		// want to catch it and convert it to an error.
 		defer func() {
-			//if r := recover(); r != nil {
-			//	retErr = moerr.ConvertPanicError(requestCtx, r)
-			//}
+			if r := recover(); r != nil {
+				retErr = moerr.ConvertPanicError(requestCtx, r)
+			}
 		}()
 
 		//load data handle txn failure internally
@@ -2870,9 +2870,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	//finish the transaction
 	finishTxnFunc := func() error {
 		// First recover all panics.   If paniced, we will abort.
-		//if r := recover(); r != nil {
-		//	err = moerr.ConvertPanicError(requestCtx, r)
-		//}
+		if r := recover(); r != nil {
+			err = moerr.ConvertPanicError(requestCtx, r)
+		}
 
 		if err == nil {
 			err = commitTxnFunc()
@@ -2901,9 +2901,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	defer func() {
 		// move finishTxnFunc() out to another defer so that if finishTxnFunc
 		// paniced, the following is still called.
-		_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
+		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
 		if err != nil {
-			///TODO
 			return
 		}
 		if txnOp != nil && !ses.IsDerivedStmt() {
@@ -4090,17 +4089,17 @@ func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Re
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
-	//defer func() {
-	//	if e := recover(); e != nil {
-	//		moe, ok := e.(*moerr.Error)
-	//		if !ok {
-	//			err = moerr.ConvertPanicError(requestCtx, e)
-	//			resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), err)
-	//		} else {
-	//			resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), moe)
-	//		}
-	//	}
-	//}()
+	defer func() {
+		if e := recover(); e != nil {
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = moerr.ConvertPanicError(requestCtx, e)
+				resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), err)
+			} else {
+				resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), moe)
+			}
+		}
+	}()
 
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.ExecRequest",
