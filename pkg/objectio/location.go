@@ -83,6 +83,10 @@ func (l Location) IsEmpty() bool {
 	return len(l) < LocationLen || types.DecodeInt64(l[:ObjectNameLen]) == 0
 }
 
+func (l Location) IsExtentEmpty() bool {
+	return len(l) < LocationLen || types.DecodeInt64(l[ExtentOff:ExtentOff+ExtentLen]) == 0
+}
+
 func (l Location) String() string {
 	if len(l) == 0 {
 		return ""

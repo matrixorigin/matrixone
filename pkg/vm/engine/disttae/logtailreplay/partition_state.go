@@ -416,10 +416,6 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 
-		if objEntry.ObjectLocation().IsEmpty() {
-			panic("object location is empty")
-		}
-
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
@@ -449,6 +445,13 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
 		objEntry.Sorted = sortedCol[idx]
+
+		if objEntry.ObjectLocation().IsEmpty() {
+			logutil.Infof("xxxx object stats's location is empty. %s", objEntry.String())
+		}
+		//if objEntry.ObjectLocation().IsExtentEmpty() {
+		//	logutil.Infof("xxxx handleObjInsert: extent is empty. %s", objEntry.String())
+		//}
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
@@ -734,8 +737,11 @@ func (p *PartitionState) HandleMetadataInsert(
 				objPivot := ObjectEntry{}
 				metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i))
 				if metaLoc.IsEmpty() {
-					panic("meta location is empty")
+					logutil.Infof("xxxx handleMetaInsert : meta location is empty")
 				}
+				//if metaLoc.IsExtentEmpty() {
+				//	logutil.Infof("xxxx handleMetaInsert: extent is empty, metaloc:%s", metaLoc.String())
+				//}
 				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
