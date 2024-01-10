@@ -114,7 +114,7 @@ func TestString(t *testing.T) {
 	for _, tc := range tcs {
 		buf := new(bytes.Buffer)
 		tc.arg.String(buf)
-		require.Equal(t, " fuzzy check duplicate constraint", buf.String())
+		require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
 	}
 }
 

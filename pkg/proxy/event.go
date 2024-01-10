@@ -104,6 +104,8 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 			return makeSetVarEvent(sql), false
 		case *tree.PrepareString:
 			return makePrepareEvent(sql), false
+		case *tree.Use:
+			return makeInitDBEvent(s.Name.Origin()), false
 		default:
 			return nil, false
 		}
@@ -111,7 +113,7 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		return makeInitDBEvent(getStatement(msg)), false
 	} else if isCmdStmtPrepare(msg) && b != nil {
 		b.setPrepared(true)
-	} else if isCmdStmtExecute(msg) && b != nil {
+	} else if isCmdStmtClose(msg) && b != nil {
 		b.setPrepared(false)
 	}
 	return nil, false

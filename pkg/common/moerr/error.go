@@ -154,6 +154,7 @@ const (
 	ErrDependentByPartitionFunction             uint16 = 20465
 	ErrAlterOperationNotSupportedReasonFkRename uint16 = 20466
 	ErrPrimaryCantHaveNull                      uint16 = 20467
+	ErrPartitionMgmtOnNonpartitioned            uint16 = 20468
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -248,6 +249,7 @@ const (
 	ErrMaxvalueInValuesIn                  uint16 = 20821
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
+	ErrTooManyParameter                    uint16 = 20824
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -377,6 +379,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
+	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -453,6 +456,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMaxvalueInValuesIn:                  {ER_MAXVALUE_IN_VALUES_IN, []string{MySQLDefaultSqlState}, "Cannot use MAXVALUE as value in VALUES IN"},
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
+	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -1282,6 +1286,10 @@ func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
 	return newError(ctx, ErrPrimaryCantHaveNull)
 }
 
+func NewErrPartitionMgmtOnNonpartitioned(ctx context.Context) *Error {
+	return newError(ctx, ErrPartitionMgmtOnNonpartitioned)
+}
+
 func NewErrUnsupportedOption(ctx context.Context, option string) *Error {
 	return newError(ctx, ErrUnsupportedOption, option)
 }
@@ -1304,6 +1312,10 @@ func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
 
 func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
 	return newError(ctx, ErrTaskNotFound, taskID)
+}
+
+func NewErrTooManyParameter(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyParameter)
 }
 
 var contextFunc atomic.Value

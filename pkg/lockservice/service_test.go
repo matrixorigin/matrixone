@@ -26,6 +26,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1513,6 +1514,34 @@ func TestRangeLockWithFailFast(t *testing.T) {
 				})
 		})
 	}
+}
+
+func TestIssue14008(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s1 := ss[0]
+			alloc.server.RegisterMethodHandler(pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cf context.CancelFunc,
+					r1 *pb.Request,
+					r2 *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, cf, r2, ErrTxnNotFound, cs)
+				})
+			var wg sync.WaitGroup
+			for i := 0; i < 20; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := s1.getLockTableWithCreate(0, 10, nil, pb.Sharding_None)
+					require.Error(t, err)
+				}()
+			}
+			wg.Wait()
+		})
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {

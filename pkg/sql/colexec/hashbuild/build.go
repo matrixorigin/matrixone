@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,8 +30,11 @@ import (
 
 const batchSize = 8192
 
+const argName = "hash_build"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" hash build ")
+	buf.WriteString(argName)
+	buf.WriteString(": hash build ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -389,11 +391,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := int64(plan.InFilterCardLimit)
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
-	if ok {
-		inFilterCardLimit = v.(int64)
-	}
+	inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
 	//if ok {
