@@ -549,7 +549,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 		for i, vec := range outvecs {
 			writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
-			defer vecs[i].Close()
+			defer vec.Close()
 		}
 	}
 
