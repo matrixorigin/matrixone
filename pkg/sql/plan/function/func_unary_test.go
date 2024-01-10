@@ -331,6 +331,199 @@ func TestL2NormArray(t *testing.T) {
 	}
 }
 
+func initSubVectorTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{}},
+				[]bool{false}),
+		},
+		{
+			info: "2",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{1, 2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{2, 3}},
+				[]bool{false}),
+		},
+		{
+			info: "3",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{1, 2}},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestSubVector(t *testing.T) {
+	testCases := initSubVectorTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			switch tc.info {
+			case "2":
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
+			case "3":
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
+			}
+		case types.T_array_float64:
+			switch tc.info {
+			case "2":
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
+			case "3":
+				fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
+			}
+		}
+
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initAsciiStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
