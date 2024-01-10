@@ -82,7 +82,7 @@ func (s *sqlStore) SelectAll(
 			executor.GetFixedRows[uint64](cols[1])[0])
 		return true
 	})
-	return str, err
+	return str, nil
 }
 
 func (s *sqlStore) Create(

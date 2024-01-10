@@ -160,6 +160,7 @@ func (e *Engine) DatabaseByAccountID(
 		}
 		return db, nil
 	}
+
 	key := &cache.DatabaseItem{
 		Name:      name,
 		AccountId: accountID,
@@ -372,13 +373,9 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		txn.databaseMap.Delete(key)
 		return nil
 	} else {
-		accountId, err := defines.GetAccountId(ctx)
-		if err != nil {
-			return err
-		}
 		key := &cache.DatabaseItem{
 			Name:      name,
-			AccountId: accountId,
+			AccountId: key.accountId,
 			Ts:        txn.op.SnapshotTS(),
 		}
 		if ok := e.catalog.GetDatabase(key); !ok {

@@ -81,17 +81,13 @@ func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
 
-	accId, err := defines.GetAccountId(reqCtx)
+	accountId, err := defines.GetAccountId(reqCtx)
 	if err != nil {
 		return nil, err
 	}
-	retTxnCtx = defines.AttachAccountId(retTxnCtx, accId)
-	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
-		retTxnCtx = defines.AttachUserId(retTxnCtx, v.(uint32))
-	}
-	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
-		retTxnCtx = defines.AttachRoleId(retTxnCtx, v.(uint32))
-	}
+	retTxnCtx = defines.AttachAccountId(retTxnCtx, accountId)
+	retTxnCtx = defines.AttachUserId(retTxnCtx, defines.GetUserId(reqCtx))
+	retTxnCtx = defines.AttachRoleId(retTxnCtx, defines.GetRoleId(reqCtx))
 	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
 	}

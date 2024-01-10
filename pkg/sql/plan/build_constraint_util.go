@@ -277,15 +277,15 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	accId, err := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
 	if err != nil {
 		return err
 	}
-	if isClusterTable && accId != catalog.System_Account {
+	if isClusterTable && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && accId != catalog.System_Account {
+	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 	if obj.PubInfo != nil {

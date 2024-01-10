@@ -272,13 +272,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	canTruncate := delCtx.isDeleteWithoutFilters
 
-	accId, err := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
 	if err != nil {
 		return err
 	}
 	if len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accId != catalog.System_Account) ||
+		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
 		canTruncate = false
 	}

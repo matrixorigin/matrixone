@@ -41,10 +41,8 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	query := fmt.Sprintf("SELECT COLUMN_NAME, DATA_TYPE FROM `information_schema`.columns WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'", database, tbl)
 
 	// Execute the query
-	result, err := exec.Query(ctx, query, ie.NewOptsBuilder().Finish())
-	if err != nil {
-		return nil, err
-	}
+	result := exec.Query(ctx, query, ie.NewOptsBuilder().Finish())
+
 	// Check for errors
 	if err := result.Error(); err != nil {
 		return nil, err
@@ -437,10 +435,7 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context, tenants []*fronte
 	}
 
 	ifEmpty := func(sql string, opts *ie.OptsBuilder) (bool, error) {
-		result, err := exec.Query(ctx, sql, opts.Finish())
-		if err != nil {
-			return false, err
-		}
+		result := exec.Query(ctx, sql, opts.Finish())
 
 		if err := result.Error(); err != nil {
 			return false, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err.Error())
@@ -532,10 +527,7 @@ func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecu
 	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where account_id = current_account_id() and reldatabase = '%s' and relname = '%s'", database, tbl)
 
 	// Execute the query
-	result, err := exec.Query(ctx, query, opts.Finish())
-	if err != nil {
-		return false, err
-	}
+	result := exec.Query(ctx, query, opts.Finish())
 
 	// Check for errors
 	if err := result.Error(); err != nil {
@@ -558,10 +550,7 @@ func (u *Upgrader) CheckViewDefineIsValid(ctx context.Context, exec ie.InternalE
 	query := fmt.Sprintf("select rel_createsql from mo_catalog.mo_tables where account_id = current_account_id() and relkind = 'v' and reldatabase = '%s' and relname = '%s'", dbName, viewName)
 
 	// Execute the query
-	result, err := exec.Query(ctx, query, opts.Finish())
-	if err != nil {
-		return false, err
-	}
+	result := exec.Query(ctx, query, opts.Finish())
 
 	// Check for errors
 	if err := result.Error(); err != nil {
@@ -600,11 +589,7 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 		DefaultRoleID: frontend.GetDefaultRoleId(),
 		DefaultRole:   frontend.GetDefaultRole(),
 	}
-	//ctx = attachAccount(ctx, sysAcc)
-	result, err := exec.Query(ctx, query, makeOptions(sysAcc).Finish())
-	if err != nil {
-		return nil, err
-	}
+	result := exec.Query(ctx, query, makeOptions(sysAcc).Finish())
 
 	errors := []error{}
 	for i := uint64(0); i < result.RowCount(); i++ {

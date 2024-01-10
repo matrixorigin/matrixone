@@ -153,10 +153,7 @@ func (res *internalExecResult) Float64ValueByName(ctx context.Context, ridx uint
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
 	ie.Lock()
 	defer ie.Unlock()
-	sess, err := ie.newCmdSession(ctx, opts)
-	if err != nil {
-		return err
-	}
+	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
@@ -166,24 +163,21 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 
-func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (ie.InternalExecResult, error) {
+func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()
-	sess, err := ie.newCmdSession(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
+	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err = ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+	err := ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
-	return res, err
+	return res
 }
 
-func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) (*Session, error) {
+func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
 	// Use the Mid configuration for session. We can make Mid a configuration
 	// param, or, compute from GuestMmuLimitation.   Lazy.
 	//
@@ -198,10 +192,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess, err := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm, nil)
-	if err != nil {
-		return nil, err
-	}
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm, nil)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
 
@@ -213,7 +204,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	//make sure init tasks can see the prev task's data
 	now, _ := runtime.ProcessLevelRuntime().Clock().Now()
 	sess.lastCommitTS = now
-	return sess, err
+	return sess
 }
 
 func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {

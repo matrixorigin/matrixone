@@ -2750,10 +2750,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		return err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	user = au.Users[0]
@@ -2912,11 +2909,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	}
 
 	alterAccountFunc := func() (rtnErr error) {
-		var bh BackgroundExec
-		bh, rtnErr = ses.GetBackgroundExec(ctx)
-		if rtnErr != nil {
-			return rtnErr
-		}
+		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -3125,10 +3118,7 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 	roleName = publicRoleName
 
 	// step1:get all roles expect public
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -3195,11 +3185,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		//step1 : check the role exists or not;
 
 		switchRoleFunc := func() (rtnErr error) {
-			var bh BackgroundExec
-			bh, rtnErr = ses.GetBackgroundExec(ctx)
-			if rtnErr != nil {
-				return rtnErr
-			}
+			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")
@@ -3294,10 +3280,7 @@ func isSubscriptionValid(accountList string, accName string) bool {
 }
 
 func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return nil, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
 		sql, accStatus, accountList, databaseName string
@@ -3462,10 +3445,7 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 }
 
 func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
 		sql     string
@@ -3553,10 +3533,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// check create stage priv
@@ -3623,10 +3600,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 		return err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -3709,10 +3683,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	//var err error
 	var stageExist bool
 	var credentials string
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// check create stage priv
@@ -3804,10 +3775,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	var sql string
 	//var err error
 	var stageExist bool
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// check create stage priv
@@ -3848,10 +3816,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 }
 
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	const allTable = true
 	var (
@@ -3939,10 +3904,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 }
 
 func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublication) (err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
 		allAccount     bool
@@ -4059,10 +4021,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 }
 
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	bh.ClearExecResultSet()
 	var (
@@ -4116,10 +4075,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err error) {
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//set backgroundHandler's default schema
@@ -4416,10 +4372,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -4503,10 +4456,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -4574,10 +4524,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var funcId int64
 	var erArray []ExecResult
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// a database must be selected or specified as qualifier when create a function
@@ -4680,10 +4627,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	var procId int64
 	var erArray []ExecResult
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	if dp.Name.HasNoNameQualifier() {
@@ -4756,10 +4700,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	}
 
 	account := ses.GetTenantInfo()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
@@ -5028,18 +4969,12 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 
 	account := ses.GetTenantInfo()
 	if account == nil {
-		ctxUserId := ctx.Value(defines.UserIDKey{})
-		if id, ok := ctxUserId.(uint32); ok {
-			userId = id
-		}
+		userId = defines.GetUserId(ctx)
 	} else {
 		userId = account.GetUserID()
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//Get primary keys
@@ -5191,10 +5126,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	}
 
 	account := ses.GetTenantInfo()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -5354,10 +5286,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step1 : check Roles exists or not
@@ -6430,10 +6359,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	}
 
 	tenant := ses.GetTenantInfo()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	if ses.tStmt != nil {
@@ -6727,10 +6653,7 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	//step2: decide the current user
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//put it into the single transaction
@@ -6889,10 +6812,7 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	// current user
 	currentUser := tenantInfo.GetUserID()
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// getOwner of the table
@@ -6968,10 +6888,7 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	// current user
 	currentUser := tenantInfo.GetUserID()
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// getOwner of the database
@@ -7251,10 +7168,7 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	//step1: normalize the names of roles and users
 	//step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return false, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
@@ -7590,10 +7504,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 		seqCurValues:         make(map[uint64]string),
 		seqLastValue:         new(string),
 	}
-	bh, err := NewBackgroundHandler(ctx, upstream, mp, pu)
-	if err != nil {
-		return err
-	}
+	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -7803,10 +7714,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	st.End()
 	defer mpool.DeleteMPool(mp)
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	createNewAccount := func() (rtnErr error) {
@@ -8212,10 +8120,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -8413,10 +8318,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -8566,10 +8468,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// format return type
@@ -8719,10 +8618,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		dbName = string(cp.Name.Name.SchemaName)
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// build argmap and marshal as json
@@ -8796,11 +8692,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	currentRole = tenantInfo.GetDefaultRoleID()
 
 	updateConfigForDatabase := func() (rtnErr error) {
-		var bh BackgroundExec
-		bh, rtnErr = ses.GetBackgroundExec(ctx)
-		if rtnErr != nil {
-			return rtnErr
-		}
+		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -8888,11 +8780,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	update_config := stmt.UpdateConfig
 
 	updateConfigForAccount := func() (rtnErr error) {
-		var bh BackgroundExec
-		bh, rtnErr = ses.GetBackgroundExec(ctx)
-		if rtnErr != nil {
-			return rtnErr
-		}
+		bh := ses.GetBackgroundExec(ctx)
 		defer bh.Close()
 
 		rtnErr = bh.Exec(ctx, "begin")
@@ -8959,11 +8847,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 		}
 
 		insertRecordFunc := func() (rtnErr error) {
-			var bh BackgroundExec
-			bh, rtnErr = ses.GetBackgroundExec(ctx)
-			if err != nil {
-				return err
-			}
+			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin")
@@ -9018,11 +8902,7 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		}
 
 		deleteRecordFunc := func() (rtnErr error) {
-			var bh BackgroundExec
-			bh, rtnErr = ses.GetBackgroundExec(ctx)
-			if rtnErr != nil {
-				return rtnErr
-			}
+			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin")
@@ -9054,10 +8934,7 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	var resultConfig string
 	defaultConfig := "0.7"
 	variableName := "version_compatibility"
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return "", err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin")
@@ -9121,10 +8998,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return nil, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	bh.ClearExecResultSet()
@@ -9235,10 +9109,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
 
-	bh, err := ses.GetBackgroundExec(tenantCtx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
 	err = bh.Exec(tenantCtx, sql)
@@ -9285,10 +9156,7 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
 	}
 
-	bh, err := ses.GetBackgroundExec(tenantCtx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
 	err = bh.Exec(tenantCtx, sql)
@@ -9309,10 +9177,7 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 	tenantInfo := ses.GetTenantInfo()
 
 	sysVars = make(map[string]interface{})
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return nil, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -9378,11 +9243,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		}
 
 		setGlobalFunc := func() (rtnErr error) {
-			var bh BackgroundExec
-			bh, rtnErr = ses.GetBackgroundExec(ctx)
-			if rtnErr != nil {
-				return rtnErr
-			}
+			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 
 			rtnErr = bh.Exec(ctx, "begin;")

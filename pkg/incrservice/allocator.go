@@ -99,7 +99,7 @@ func (a *allocator) asyncAllocate(
 		col:           col,
 		count:         count,
 		applyAllocate: apply}
-	return err
+	return nil
 }
 
 func (a *allocator) updateMinValue(

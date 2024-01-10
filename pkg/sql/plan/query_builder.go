@@ -2901,14 +2901,14 @@ func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
 	selectList tree.SelectExprs, exprs ...tree.SelectExpr) (tree.SelectExprs, error) {
-	accId, err := builder.compCtx.GetAccountId()
+	accountId, err := builder.compCtx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
 	for _, selectExpr := range exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accId == catalog.System_Account)
+			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
 			if err != nil {
 				return nil, err
 			}
@@ -2954,7 +2954,7 @@ func appendSelectList(
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], accId == catalog.System_Account)
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], accountId == catalog.System_Account)
 				if err != nil {
 					return nil, err
 				}

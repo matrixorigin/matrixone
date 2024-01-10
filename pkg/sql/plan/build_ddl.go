@@ -1891,11 +1891,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 
 		//non-sys account can not truncate the cluster table
-		accId, err := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
 		if err != nil {
 			return nil, err
 		}
-		if truncateTable.GetClusterTable().GetIsClusterTable() && accId != catalog.System_Account {
+		if truncateTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
@@ -1986,11 +1986,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		//non-sys account can not drop the cluster table
-		accId, err := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
 		if err != nil {
 			return nil, err
 		}
-		if dropTable.GetClusterTable().GetIsClusterTable() && accId != catalog.System_Account {
+		if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 

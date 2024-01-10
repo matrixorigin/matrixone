@@ -70,10 +70,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 	var createSql string
 	var ast []tree.Statement
 	var sql string
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

@@ -344,10 +344,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return nil, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
@@ -530,10 +527,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
-	bh, err := ses.GetBackgroundExec(ctx)
-	if err != nil {
-		return nil, err
-	}
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

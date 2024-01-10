@@ -117,7 +117,7 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 		return "", nil, err
 	}
 	if tblName == "" {
-		return "", nil, err
+		return "", nil, nil
 	}
 	rel, _ := db.Relation(ctx, tblName, nil)
 	return tblName, rel, nil
@@ -342,14 +342,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		rowid = table.rowid
 		rowids = table.rowids
 	} else {
-		accountId, err := defines.GetAccountId(ctx)
-		if err != nil {
-			return err
-		}
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId: accountId,
+			AccountId: k.accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -415,14 +411,10 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		txnTable.reset(newId)
 		rowid = txnTable.rowid
 	} else {
-		accountId, err := defines.GetAccountId(ctx)
-		if err != nil {
-			return 0, err
-		}
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId: accountId,
+			AccountId: k.accountId,
 			Ts:         db.txn.op.SnapshotTS(),
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {

@@ -156,7 +156,6 @@ type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
 	ExecStmt(context.Context, tree.Statement) error
-	UpdateAccount(*TenantInfo)
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
 

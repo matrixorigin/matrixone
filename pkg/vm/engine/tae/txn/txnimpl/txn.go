@@ -83,14 +83,13 @@ func (txn *txnImpl) bindCtxInfo(ctx context.Context) (err error) {
 	if ctx == nil {
 		return
 	}
-
 	tid, err = defines.GetAccountId(ctx)
 	if err != nil {
 		return
 	}
 
-	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)
-	rid, _ := ctx.Value(defines.RoleIDKey{}).(uint32)
+	uid := defines.GetUserId(ctx)
+	rid := defines.GetRoleId(ctx)
 	txn.BindAccessInfo(tid, uid, rid)
 	return err
 }

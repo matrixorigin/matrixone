@@ -31,11 +31,7 @@ func getAccessInfo(ctx context.Context) (info AccessInfo, err error) {
 	if err != nil {
 		return
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		info.UserID = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		info.RoleID = v.(uint32)
-	}
+	info.UserID = defines.GetUserId(ctx)
+	info.RoleID = defines.GetRoleId(ctx)
 	return
 }

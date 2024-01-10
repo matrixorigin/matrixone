@@ -172,9 +172,24 @@ func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
 		return v.(uint32), nil
 	} else {
-		panic("no account id in context")
 		return 0, moerr.NewInternalError(ctx, "no account id in context")
 	}
+}
+
+func GetUserId(ctx context.Context) uint32 {
+	if v := ctx.Value(UserIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	//zero means root user
+	return 0
+}
+
+func GetRoleId(ctx context.Context) uint32 {
+	if v := ctx.Value(RoleIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	//zero means mo admin role
+	return 0
 }
 
 func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {

@@ -3840,12 +3840,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			return retErr
 		}
 		proc.SessionInfo.AccountId = accountId
-		if v := requestCtx.Value(defines.UserIDKey{}); v != nil {
-			proc.SessionInfo.UserId = v.(uint32)
-		}
-		if v := requestCtx.Value(defines.RoleIDKey{}); v != nil {
-			proc.SessionInfo.RoleId = v.(uint32)
-		}
+		proc.SessionInfo.UserId = defines.GetUserId(requestCtx)
+		proc.SessionInfo.RoleId = defines.GetRoleId(requestCtx)
 	}
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",

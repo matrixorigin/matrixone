@@ -135,13 +135,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
-		accId, err := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
 		if err != nil {
 			return nil, err
 		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			accId != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"

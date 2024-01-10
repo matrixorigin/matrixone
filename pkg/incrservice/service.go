@@ -404,5 +404,5 @@ func newDeleteCtx(ctx context.Context, tableID uint64) (deleteCtx, error) {
 	return deleteCtx{
 		tableID:   tableID,
 		accountID: accountId,
-	}, err
+	}, nil
 }

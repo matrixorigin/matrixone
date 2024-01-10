@@ -729,7 +729,6 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	ctx, span := trace.Start(ctx, "ETLMerge.CreateCronTask")
 	defer span.End()
 	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx)
 	logger.Info(fmt.Sprintf("init merge task with CronExpr: %s", MergeTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID), MergeTaskCronExpr); err != nil {

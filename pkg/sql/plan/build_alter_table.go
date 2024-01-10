@@ -43,11 +43,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	accId, err := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
-	if isClusterTable && accId != catalog.System_Account {
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
@@ -209,13 +209,13 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
-		accId, err := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
 		if err != nil {
 			return "", err
 		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			accId != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -605,11 +605,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	accId, err := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
-	if isClusterTable && accId != catalog.System_Account {
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
