@@ -2027,6 +2027,9 @@ func (tbl *txnTable) updateDeleteInfo(
 		for _, name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
+				if location.IsEmpty() {
+					panic("location is empty")
+				}
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
 					&location,

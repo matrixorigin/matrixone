@@ -415,6 +415,11 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
+
+		if objEntry.ObjectLocation().IsEmpty() {
+			panic("object location is empty")
+		}
+
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
@@ -728,6 +733,9 @@ func (p *PartitionState) HandleMetadataInsert(
 			{
 				objPivot := ObjectEntry{}
 				metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i))
+				if metaLoc.IsEmpty() {
+					panic("meta location is empty")
+				}
 				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
