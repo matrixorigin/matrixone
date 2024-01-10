@@ -110,7 +110,7 @@ func MergeColumn(
 		retvec[i] = ret[i].GetDownstreamVector()
 	}
 
-	Merge(columns, retvec, sortidx, mapping, fromLayout, toLayout, column[0].GetAllocator())
+	Merge(columns, retvec, sortidx, mapping, fromLayout, toLayout, ret[0].GetAllocator())
 
 	for _, v := range column {
 		v.Close()
@@ -136,7 +136,7 @@ func ShuffleColumn(
 		retvec[i] = ret[i].GetDownstreamVector()
 	}
 
-	Multiplex(columns, retvec, sortedIdx, fromLayout, toLayout, column[0].GetAllocator())
+	Multiplex(columns, retvec, sortedIdx, fromLayout, toLayout, ret[0].GetAllocator())
 
 	for _, v := range column {
 		v.Close()
@@ -160,7 +160,7 @@ func ReshapeColumn(
 		retvec[i] = ret[i].GetDownstreamVector()
 	}
 
-	Reshape(columns, retvec, fromLayout, toLayout, column[0].GetAllocator())
+	Reshape(columns, retvec, fromLayout, toLayout, ret[0].GetAllocator())
 
 	for _, v := range column {
 		v.Close()
