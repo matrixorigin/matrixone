@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -94,7 +95,6 @@ func (arg *Argument) sendToAllReceivers(proc *process.Process, bat *batch.Batch)
 
 // common sender: send to any LocalReceiver
 // if the reg which you want to send to is closed, send it to the next one.
-// todo: just return may suit the situation better, because the receiver was closed, it means the query was canceled.
 func (arg *Argument) sendToAnyLocalReceiver(proc *process.Process, bat *batch.Batch) error {
 	bat.AddCnt(1)
 	for arg.ctr.aliveRegCnt > 0 {
@@ -126,7 +126,6 @@ func (arg *Argument) sendToAnyLocalReceiver(proc *process.Process, bat *batch.Ba
 
 // common sender: send to any RemoteReceiver
 // if the reg which you want to send to is closed, send it to the next one.
-// todo: same as the comment above for function `sendToAnyLocalReceiver`.
 func (arg *Argument) sendToAnyRemoteReceiver(proc *process.Process, bat *batch.Batch) error {
 	data, err := types.Encode(bat)
 	if err != nil {
@@ -177,6 +176,126 @@ func (arg *Argument) sendToAnyReceiver(proc *process.Process, bat *batch.Batch) 
 	}
 
 	return nil
+}
+
+func sendToRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	for i, reg := range arg.LocalRegs {
+		if uint32(arg.ShuffleRegIdxLocal[i]) == regIndex {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
+				select {
+				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+
+	for _, r := range arg.ctr.remoteReceivers {
+		if uint32(arg.ctr.remoteToIdx[r.Uid]) == regIndex {
+			if bat.RowCount() != 0 {
+				data, err := types.Encode(bat)
+				if err != nil {
+					return err
+				}
+				if err = sendBatchToClientSession(proc.Ctx, data, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func sendToLocalMatchedRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	cnt := uint32(arg.ctr.localRegsCnt)
+
+	for i, reg := range arg.LocalRegs {
+		if regIndex%cnt == uint32(arg.ShuffleRegIdxLocal[i])%cnt {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
+				select {
+				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func sendToAllMatchedRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	cnt := uint32(arg.ctr.localRegsCnt)
+
+	for i, reg := range arg.LocalRegs {
+		if uint32(arg.ShuffleRegIdxLocal[i])%cnt == regIndex%cnt {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
+				select {
+				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+
+	for _, r := range arg.ctr.remoteReceivers {
+		if uint32(arg.ctr.remoteToIdx[r.Uid])%cnt == regIndex%cnt {
+			if bat.RowCount() != 0 {
+				data, err := types.Encode(bat)
+				if err != nil {
+					return err
+				}
+				if err = sendBatchToClientSession(proc.Ctx, data, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (arg *Argument) shuffleToAllReceivers(proc *process.Process, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+	arg.ctr.batchCnt[bat.ShuffleIDX]++
+	arg.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
+	if arg.ShuffleType == plan2.ShuffleToRegIndex {
+		return sendToRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
+	} else if arg.ShuffleType == plan2.ShuffleToLocalMatchedReg {
+		return sendToLocalMatchedRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
+	} else {
+		return sendToAllMatchedRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
+	}
 }
 
 func dealRefers(
