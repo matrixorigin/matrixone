@@ -364,6 +364,31 @@ func (r *blockReader) Read(
 		filter,
 		r.fs, mp, vp,
 	)
+
+	if moerr.IsMoErrCode(err, moerr.ErrInvalidPath) {
+		part, _ := r.table.getPartitionState(ctx)
+		blockDeltas := ""
+		biter := part.NewBlocksDeltaIter()
+		defer biter.Close()
+		for biter.Next() {
+			e := biter.Entry()
+			blockDeltas = fmt.Sprintf("%s, %s %s %s",
+				blockDeltas,
+				e.BlockID.String(),
+				e.CommitTs.ToTimestamp().DebugString(),
+				e.DeltaLocation().Name().String())
+		}
+
+		logutil.Infof("xxxx blockReader.Read:all block deltas in partition state:[%s]", blockDeltas)
+
+		logutil.Fatalf("xxxx blockReader.Read want to read block:[%s,%s,%s,%v], txn:%s",
+			blockInfo.MetaLocation().Name().String(),
+			blockInfo.DeltaLocation().Name().String(),
+			blockInfo.BlockID.String(),
+			blockInfo.EntryState,
+			r.table.db.txn.op.Txn().DebugString())
+	}
+
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		if r.table != nil {
 			part, _ := r.table.getPartitionState(ctx)

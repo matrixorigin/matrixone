@@ -16,8 +16,10 @@ package fileservice
 
 import (
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"unicode"
 
@@ -75,6 +77,7 @@ func ParsePath(s string) (path Path, err error) {
 			continue
 		}
 		err = moerr.NewInvalidPathNoCtx(path.File)
+		logutil.Infof("xxxx invlaid path %s, stack:%s", path.File, string(debug.Stack()))
 		return
 	}
 
