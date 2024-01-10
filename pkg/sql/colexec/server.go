@@ -41,7 +41,8 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	return Srv
 }
 
-// GetProcByUuid used the uuid to get a process from the srv, decrease its referenceCount by 1.
+// GetProcByUuid used the uuid to get a process from the srv.
+// if the process is nil, it means the process has done.
 // if forcedDelete, do an action to avoid another routine to put a new item.
 func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
@@ -55,7 +56,6 @@ func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Proce
 	}
 
 	result := p.proc
-	// if a proc is nil or its referenceCount is 0, it means the process hash done.
 	if p.proc == nil {
 		delete(srv.uuidCsChanMap.mp, u)
 	} else {
