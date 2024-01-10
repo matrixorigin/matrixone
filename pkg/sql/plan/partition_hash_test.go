@@ -344,7 +344,7 @@ func Test_hash_buildEvalPartitionExpression(t *testing.T) {
 	partDef := &PartitionByDef{}
 
 	hpb := &hashPartitionBuilder{}
-	err = hpb.buildEvalPartitionExpression(context.TODO(), pb, one.(*tree.CreateTable), partDef)
+	err = hpb.buildEvalPartitionExpression(context.TODO(), pb, one.(*tree.CreateTable).PartitionOption, partDef)
 	require.Nil(t, err)
 	require.NotNil(t, partDef.PartitionExpression)
 }

@@ -17,12 +17,10 @@ package taskservice
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/robfig/cron/v3"
 )
@@ -32,17 +30,7 @@ type taskService struct {
 	cronParser cron.Parser
 	rt         runtime.Runtime
 
-	crons struct {
-		sync.Mutex
-
-		started  bool
-		stopping bool
-		stopper  *stopper.Stopper
-		cron     *cron.Cron
-		retryC   chan task.CronTask
-		jobs     map[uint64]*cronJob
-		entryIDs map[uint64]cron.EntryID
-	}
+	crons crons
 }
 
 // NewTaskService create a task service based on a task storage.
