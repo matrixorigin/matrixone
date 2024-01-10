@@ -16,7 +16,6 @@ package loopjoin
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -104,11 +103,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-	//skip first batch. it's an empty batch for hashmap
-	bat, _, err = ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}

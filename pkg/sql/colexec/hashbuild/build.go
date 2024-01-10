@@ -116,13 +116,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case SendHashMap:
-			emptyBatchbatchForHashMap := batch.NewWithSize(0)
+			result.Batch = batch.NewWithSize(0)
 			if ctr.bat != nil && ctr.inputBatchRowCount != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						emptyBatchbatchForHashMap.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						emptyBatchbatchForHashMap.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
 				}
 				ctr.intHashMap = nil
@@ -132,7 +132,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.cleanHashMap()
 			}
 			ctr.state = SendBatch
-			result.Batch = emptyBatchbatchForHashMap
 			return result, nil
 		case SendBatch:
 			ctr.state = End

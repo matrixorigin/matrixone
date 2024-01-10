@@ -101,11 +101,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err != nil {
 		return err
 	}
-	//skip first batch. it's an empty batch for hashmap
-	bat, _, err = ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
 
 	if bat != nil {
 		if ctr.bat != nil {
