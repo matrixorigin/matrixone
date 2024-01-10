@@ -81,7 +81,7 @@ func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
 
-	accId, err := defines.GetAccountId(retTxnCtx)
+	accId, err := defines.GetAccountId(reqCtx)
 	if err != nil {
 		return nil, err
 	}

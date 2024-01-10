@@ -172,6 +172,7 @@ func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
 		return v.(uint32), nil
 	} else {
+		panic("no account id in context")
 		return 0, moerr.NewInternalError(ctx, "no account id in context")
 	}
 }
