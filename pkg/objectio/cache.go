@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/maphash"
 	"sync"
 
 	"github.com/shirou/gopsutil/v3/mem"
@@ -91,13 +92,19 @@ func metaCacheSize() int64 {
 	return 2 * mpool.GB
 }
 
+var hashSeed = maphash.MakeSeed()
+
+func shardMetaCacheKey(key mataCacheKey) uint8 {
+	return uint8(maphash.Bytes(hashSeed, key[:]))
+}
+
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](int(metaCacheSize()), nil)
+	metaCache = fifocache.New[mataCacheKey, []byte](int(metaCacheSize()), nil, shardMetaCacheKey)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](int(size), nil)
+		metaCache = fifocache.New[mataCacheKey, []byte](int(size), nil, shardMetaCacheKey)
 	})
 }
 
