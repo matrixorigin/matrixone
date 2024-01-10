@@ -1713,7 +1713,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
-		ret.NeedHashMap = true
+		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
