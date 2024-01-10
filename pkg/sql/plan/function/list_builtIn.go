@@ -2006,6 +2006,56 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `subvector`
+	{
+		functionId: SUB_VECTOR,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubVectorWith2Args[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubVectorWith2Args[float64]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubVectorWith3Args[float32]
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SubVectorWith3Args[float64]
+				},
+			},
+		},
+	},
 }
 
 var supportedMathBuiltIns = []FuncNew{

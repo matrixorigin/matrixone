@@ -125,6 +125,68 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	})
 }
 
+func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r []T
+			if s > 0 {
+				r = moarray.SubArrayFromLeft[T](types.BytesToArray[T](v), s-1)
+			} else if s < 0 {
+				r = moarray.SubArrayFromRight[T](types.BytesToArray[T](v), -s)
+			} else {
+				r = []T{}
+			}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		in, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r []T
+			if s > 0 {
+				r = moarray.SubArrayFromLeftWithLength[T](types.BytesToArray[T](in), s-1, l)
+			} else if s < 0 {
+				r = moarray.SubArrayFromRightWithLength[T](types.BytesToArray[T](in), -s, l)
+			} else {
+				r = []T{}
+			}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0
