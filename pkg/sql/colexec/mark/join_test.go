@@ -162,7 +162,7 @@ func BenchmarkMark(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
+			bats := hashBuild(t, tc)
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -171,7 +171,8 @@ func BenchmarkMark(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
+			tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
+			tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
@@ -277,17 +278,20 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	return c
 }
 
-func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
+func hashBuild(t *testing.T, tc markTestCase) []*batch.Batch {
 	err := tc.barg.Prepare(tc.proc)
 	require.NoError(t, err)
 	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil
 	}
-	ok, err := tc.barg.Call(tc.proc)
+	ok1, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
-	require.Equal(t, true, ok)
-	return ok.Batch
+	require.Equal(t, false, ok1.Status == vm.ExecStop)
+	ok2, err := tc.barg.Call(tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, false, ok2.Status == vm.ExecStop)
+	return []*batch.Batch{ok1.Batch, ok2.Batch}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
