@@ -17,19 +17,31 @@ package moarray
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/shopspring/decimal"
 	"gonum.org/v1/gonum/mat"
 )
 
 func ToGonumVector[T types.RealNumbers](arr1 []T) *mat.VecDense {
 
+	if len(arr1) == 0 {
+		return mat.NewVecDense(0, make([]float64, 0))
+	}
+
 	n := len(arr1)
 	_arr1 := make([]float64, n)
 
-	//TODO: @arjun optimize this cast to retain float32 precision in float64 array
-	// if float64, just copy
-	// if float32, convert to float64 without losing precision
-	for i := 0; i < n; i++ {
-		_arr1[i] = float64(arr1[i])
+	switch any(arr1).(type) {
+	case []float32:
+		for i := 0; i < n; i++ {
+			// float32 to float64
+			// decimal is used to solve this issue: https://github.com/matrixorigin/matrixone/issues/11718#issuecomment-1881960802
+			_arr1[i], _ = decimal.NewFromFloat32(float32(arr1[i])).Float64()
+		}
+	case []float64:
+		for i := 0; i < n; i++ {
+			// float64 to float64
+			_arr1[i] = float64(arr1[i])
+		}
 	}
 
 	return mat.NewVecDense(n, _arr1)
@@ -59,6 +71,10 @@ func ToGonumVectors[T types.RealNumbers](arrays ...[]T) (res []*mat.VecDense, er
 
 func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T) {
 	n := vec.Len()
+	if n == 0 {
+		return make([]T, 0)
+	}
+
 	arr = make([]T, n)
 	for i := 0; i < n; i++ {
 		//TODO: @arjun optimize this cast

@@ -22,7 +22,8 @@ import (
 
 func Test_ToGonumVectors(t *testing.T) {
 	type args struct {
-		vectors [][]float64
+		vectorsF32 [][]float32
+		vectorsF64 [][]float64
 	}
 	tests := []struct {
 		name string
@@ -32,19 +33,56 @@ func Test_ToGonumVectors(t *testing.T) {
 		{
 			name: "Test1",
 			args: args{
-				vectors: [][]float64{{1, 2, 3}, {4, 5, 6}},
+				vectorsF32: [][]float32{{1, 2, 3}, {4, 5, 6}},
 			},
 			want: []*mat.VecDense{
 				mat.NewVecDense(3, []float64{1, 2, 3}),
 				mat.NewVecDense(3, []float64{4, 5, 6}),
 			},
 		},
+		{
+			name: "Test2",
+			args: args{
+				vectorsF32: [][]float32{{1.3344, 2.4, 3}, {4, 5, 6}},
+			},
+			want: []*mat.VecDense{
+				mat.NewVecDense(3, []float64{1.3344, 2.4, 3}),
+				mat.NewVecDense(3, []float64{4, 5, 6}),
+			},
+		},
+		{
+			name: "Test3",
+			args: args{
+				vectorsF64: [][]float64{{1, 2, 3}, {4, 5, 6}},
+			},
+			want: []*mat.VecDense{
+				mat.NewVecDense(3, []float64{1, 2, 3}),
+				mat.NewVecDense(3, []float64{4, 5, 6}),
+			},
+		},
+		{
+			name: "Test4",
+			args: args{
+				vectorsF64: [][]float64{{1.3344, 2.4, 3}, {4, 5, 6}},
+			},
+			want: []*mat.VecDense{
+				mat.NewVecDense(3, []float64{1.3344, 2.4, 3}),
+				mat.NewVecDense(3, []float64{4, 5, 6}),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, _ := ToGonumVectors[float64](tt.args.vectors...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ToGonumVectors() = %v, want %v", got, tt.want)
+			if tt.args.vectorsF32 != nil {
+				if got, _ := ToGonumVectors[float32](tt.args.vectorsF32...); !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("ToGonumVectors() = %v, wantF32 %v", got, tt.want)
+				}
+			} else if tt.args.vectorsF64 != nil {
+				if got, _ := ToGonumVectors[float64](tt.args.vectorsF64...); !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("ToGonumVectors() = %v, wantF64 %v", got, tt.want)
+				}
 			}
+
 		})
 	}
 }
@@ -54,26 +92,44 @@ func Test_ToMoArrays(t *testing.T) {
 		vectors []*mat.VecDense
 	}
 	tests := []struct {
-		name string
-		args args
-		want [][]float64
+		name    string
+		args    args
+		wantF32 [][]float32
+		wantF64 [][]float64
 	}{
 		{
 			name: "Test1",
 			args: args{
 				vectors: []*mat.VecDense{
-					mat.NewVecDense(3, []float64{1, 2, 3}),
+					mat.NewVecDense(3, []float64{1.445, 2.9999, 3}),
 					mat.NewVecDense(3, []float64{4, 5, 6}),
 				},
 			},
-			want: [][]float64{{1, 2, 3}, {4, 5, 6}},
+			wantF32: [][]float32{{1.445, 2.9999, 3}, {4, 5, 6}},
+		},
+		{
+			name: "Test2",
+			args: args{
+				vectors: []*mat.VecDense{
+					mat.NewVecDense(3, []float64{1.445, 2.9999, 3}),
+					mat.NewVecDense(3, []float64{4, 5, 6}),
+				},
+			},
+			wantF64: [][]float64{{1.445, 2.9999, 3}, {4, 5, 6}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ToMoArrays[float64](tt.args.vectors); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ToMoArrays() = %v, want %v", got, tt.want)
+			if tt.wantF32 != nil {
+				if got := ToMoArrays[float32](tt.args.vectors); !reflect.DeepEqual(got, tt.wantF32) {
+					t.Errorf("ToMoArrays() = %v, wantF32 %v", got, tt.wantF64)
+				}
+			} else if tt.wantF64 != nil {
+				if got := ToMoArrays[float64](tt.args.vectors); !reflect.DeepEqual(got, tt.wantF64) {
+					t.Errorf("ToMoArrays() = %v, wantF64 %v", got, tt.wantF64)
+				}
 			}
+
 		})
 	}
 }
