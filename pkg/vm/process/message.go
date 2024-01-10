@@ -191,7 +191,6 @@ func (mr *MessageReceiver) receiverMessageNonBlock(result []*Message) {
 			result = append(result, DeepCopyMessage(message))
 		}
 	}
-	return
 }
 
 func (mr *MessageReceiver) ReceiverMessage() []*Message {
