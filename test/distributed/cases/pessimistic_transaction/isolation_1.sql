@@ -310,6 +310,7 @@ select * from test_11;
 -- @session}
 
 begin;
+-- @wait:1:commit
 drop table test_11;
 select * from test_11;
 -- @session:id=1{

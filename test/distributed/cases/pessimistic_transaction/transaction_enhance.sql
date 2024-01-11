@@ -88,6 +88,7 @@ drop table atomic_table_11;
 drop table atomic_table_11;
 commit;
 
+-- @bvt:issue#10316
 --alter table
 drop table if exists atomic_table_12;
 create table atomic_table_12(c1 int,c2 varchar(25));
@@ -183,10 +184,12 @@ alter table atomic_table_12_5 drop index key1;
 -- @session:id=1{
 use transaction_enhance;
 show create table atomic_table_12_5;
+-- @wait:0:commit
 select * from atomic_table_12_5;
 -- @session}
 commit;
 show index from atomic_table_12_5;
+-- @bvt:issue
 
 -- w-w conflict
 drop table if exists atomic_table_14;
@@ -218,6 +221,7 @@ drop table atomic_table_15;
 select * from atomic_table_15;
 commit;
 select * from atomic_table_15;
+-- @bvt:issue
 
 drop table if exists atomic_table_16;
 create table atomic_table_16(c1 int,c2 varchar(25));
@@ -238,8 +242,8 @@ begin;
 insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
 -- @session:id=1{
-use transaction_enhance;
 -- @wait:0:commit
+use transaction_enhance;
 alter table atomic_table_17 add constraint unique key (c1);
 update atomic_table_17 set c1=8 where c2="b";
 -- @session}
@@ -276,6 +280,7 @@ select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 commit;
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 
+-- @bvt:issue#10316
 -- autocommit
 drop table if exists atomic_table_18;
 create table atomic_table_18(c1 int,c2 varchar(25));
@@ -317,6 +322,7 @@ commit;
 select * from atomic_table_18;
 set autocommit=1;
 drop account if exists trans_acc1;
+-- @bvt:issue
 
 -- alter table modify column primary key
 drop table if exists alter01;
@@ -327,7 +333,6 @@ begin;
 alter table alter01 modify col1 float;
 -- @session:id=1{
 -- @wait:0:commit
-use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
@@ -344,7 +349,6 @@ begin;
 alter table alter01 modify col1 float;
 -- @session:id=1{
 -- @wait:0:commit
-use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
@@ -352,6 +356,7 @@ insert into alter01 values (6,"h");
 commit;
 select * from alter01;
 
+-- @bvt:issue#10316
 -- alter table change column
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -367,6 +372,7 @@ show create table atomic_table_12_5;
 select * from atomic_table_12_5;
 -- @session}
 show create table atomic_table_12_5;
+-- @bvt:issue
 
 -- alter table change primary key column
 drop table if exists alter01;
@@ -376,13 +382,13 @@ begin;
 alter table alter01 change col1 col1New float;
 -- @session:id=1{
 -- @wait:0:commit
-use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
 
+-- @bvt:issue#10316
 -- alter table rename column
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -398,6 +404,7 @@ show create table atomic_table_12_5;
 select * from atomic_table_12_5;
 -- @session}
 show create table atomic_table_12_5;
+-- @bvt:issue
 
 -- alter table rename primary key column
 drop table if exists alter01;
@@ -407,7 +414,6 @@ begin;
 alter table alter01 rename column col1 to col1New;
 -- @session:id=1{
 -- @wait:0:commit
-use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session

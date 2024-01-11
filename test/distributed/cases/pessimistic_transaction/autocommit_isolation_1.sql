@@ -326,18 +326,20 @@ Insert into test_11 values(1,1);
 Insert into test_11 values(2,2);
 select * from test_11;
 -- @session:id=1{
+use autocommit_isolation_1;
 set autocommit=0;
 select * from test_11;
 -- @session}
 
 set autocommit=0;
+-- @wait:1:commit
 drop table test_11;
-select * from test_11;
 -- @session:id=1{
 select * from test_11;
--- @session}
-
 commit;
+-- @session}
+commit;
+select * from test_11;
 set autocommit=1;
 select * from test_11;
 -- @session:id=1{
