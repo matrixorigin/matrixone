@@ -294,7 +294,7 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 			}
 			ai := int64(v) - 1
 
-			if !ap.HashOnPK {
+			if !ap.HashOnPK && ap.NeedAllocateSels {
 				if ctr.multiSels[ai] == nil {
 					ctr.multiSels[ai] = make([]int32, 0)
 				}
