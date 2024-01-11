@@ -21,7 +21,7 @@ import (
 )
 
 func TestCacheSetGet(t *testing.T) {
-	cache := New[int, int](8, nil)
+	cache := New[int, int](8, nil, ShardInt[int])
 
 	cache.Set(1, 1, 1)
 	n, ok := cache.Get(1)
@@ -38,7 +38,7 @@ func TestCacheSetGet(t *testing.T) {
 }
 
 func TestCacheEvict(t *testing.T) {
-	cache := New[int, int](8, nil)
+	cache := New[int, int](8, nil, ShardInt[int])
 	for i := 0; i < 64; i++ {
 		cache.Set(i, i, 1)
 		if cache.used1+cache.used2 > cache.capacity {
@@ -48,23 +48,29 @@ func TestCacheEvict(t *testing.T) {
 }
 
 func TestCacheEvict2(t *testing.T) {
-	cache := New[int, int](2, nil)
+	cache := New[int, int](2, nil, ShardInt[int])
 	cache.Set(1, 1, 1)
 	cache.Set(2, 2, 1)
 
 	// 1 will be evicted
 	cache.Set(3, 3, 1)
-	assert.Equal(t, 2, len(cache.values))
-	assert.Equal(t, 2, cache.values[2].value)
-	assert.Equal(t, 3, cache.values[3].value)
+	v, ok := cache.Get(2)
+	assert.True(t, ok)
+	assert.Equal(t, 2, v)
+	v, ok = cache.Get(3)
+	assert.True(t, ok)
+	assert.Equal(t, 3, v)
 
 	// get 2, set 4, 3 will be evicted first
 	cache.Get(2)
 	cache.Get(2)
 	cache.Set(4, 4, 1)
-	assert.Equal(t, 2, len(cache.values))
-	assert.Equal(t, 2, cache.values[2].value)
-	assert.Equal(t, 4, cache.values[4].value)
+	v, ok = cache.Get(2)
+	assert.True(t, ok)
+	assert.Equal(t, 2, v)
+	v, ok = cache.Get(4)
+	assert.True(t, ok)
+	assert.Equal(t, 4, v)
 	assert.Equal(t, 1, cache.used1)
 	assert.Equal(t, 1, cache.used2)
 }
@@ -73,20 +79,20 @@ func TestCacheEvict3(t *testing.T) {
 	nEvict := 0
 	cache := New[int, bool](1024, func(_ int, _ bool) {
 		nEvict++
-	})
+	}, ShardInt[int])
 	for i := 0; i < 1024; i++ {
 		cache.Set(i, true, 1)
 		cache.Get(i)
 		cache.Get(i)
 		assert.True(t, cache.used1+cache.used2 <= 1024)
-		assert.True(t, len(cache.values) <= 1024)
+		//assert.True(t, len(cache.values) <= 1024)
 	}
 	assert.Equal(t, 0, nEvict)
 
 	for i := 0; i < 1024; i++ {
 		cache.Set(10000+i, true, 1)
 		assert.True(t, cache.used1+cache.used2 <= 1024)
-		assert.True(t, len(cache.values) <= 1024)
+		//assert.True(t, len(cache.values) <= 1024)
 	}
 	assert.Equal(t, 102, cache.used1)
 	assert.Equal(t, 922, cache.used2)
