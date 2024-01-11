@@ -60,7 +60,7 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 		return err
 	}
 
-	err = hpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionDef)
+	err = hpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt.PartitionOption, partitionDef)
 	if err != nil {
 		return err
 	}
@@ -87,9 +87,8 @@ func (hpb *hashPartitionBuilder) checkPartitionIntegrity(ctx context.Context, pa
 }
 
 func (hpb *hashPartitionBuilder) buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder,
-	stmt *tree.CreateTable, partitionDef *plan.PartitionByDef) error {
-	partitionOp := stmt.PartitionOption
-	partitionType := partitionOp.PartBy.PType.(*tree.HashType)
+	stmt *tree.PartitionOption, partitionDef *plan.PartitionByDef) error {
+	partitionType := stmt.PartBy.PType.(*tree.HashType)
 	// For the Hash partition, convert the partition information into the expression,such as: abs (hash_value (expr)) % partitionNum
 	hashExpr := partitionType.Expr
 	partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionDef.PartitionNum))
