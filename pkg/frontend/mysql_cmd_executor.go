@@ -2908,8 +2908,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	defer func() {
 		// move finishTxnFunc() out to another defer so that if finishTxnFunc
 		// paniced, the following is still called.
-		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
-		if err != nil {
+		var err3 error
+		_, txnOp, err3 = ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
 		if txnOp != nil && !ses.IsDerivedStmt() {
