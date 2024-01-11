@@ -156,7 +156,7 @@ jobs:
           done
 
       - name: generate upload files
-        if: ${{ always() }}
+        if: ${{ failure() && !cancelled() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
@@ -166,7 +166,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
-        if: ${{ failure() || cancelled()}}
+        if: ${{ failure() && !cancelled() }}
         continue-on-error: true
         with:
           name: multi-cn-e2e-linux-x86-reports

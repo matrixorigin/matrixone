@@ -9,6 +9,8 @@ run:
   # Include test files or not.
   # Default: true
   tests: true
+  skip-dirs:
+    - musl
   skip-files:
     - pkg/sql/parsers/goyacc/goyacc.go
   

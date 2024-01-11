@@ -49,6 +49,14 @@ LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git describe --always --tags $(shell git rev-list --tags --max-count=1))
 GO_MODULE=$(shell go list -m)
+MUSL_DIR=$(ROOT_DIR)/musl
+MUSL_CC=$(MUSL_DIR)/bin/musl-gcc
+BUILD_CC=$(CC)
+
+# check platform to choose build cc is gcc or musl-gcc
+ifeq ($(UNAME_S),Linux)
+    BUILD_CC:=$(MUSL_CC)
+endif
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -78,6 +86,15 @@ vendor-build:
 config:
 	$(info [Create build config])
 	@go mod tidy
+ifeq ("$(UNAME_S)","Linux")
+ ifeq ("$(wildcard $(MUSL_CC))","")
+	@rm -rf /tmp/musl-1.2.4.tar.gz
+	@curl -SfL 'https://musl.libc.org/releases/musl-1.2.4.tar.gz' -o /tmp/musl-1.2.4.tar.gz
+	@tar -zxf /tmp/musl-1.2.4.tar.gz -C $(ROOT_DIR)
+	@cd musl-1.2.4 && ./configure --prefix=$(MUSL_DIR) --syslibdir=$(MUSL_DIR)/syslib && $(MAKE) && $(MAKE) install
+	@rm -rf musl-1.2.4 /tmp/musl-1.2.4.tar.gz
+ endif
+endif
 
 .PHONY: generate-pb
 generate-pb:
@@ -95,22 +112,29 @@ pb: vendor-build generate-pb fmt
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
+
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm" CC=$(BUILD_CC)
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+GO_TAGS :=
+
+ifeq ("$(UNAME_S)","Linux")
+    GOLDFLAGS :=-ldflags="--linkmode 'external' --extldflags '-static' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+    GO_TAGS += -tags musl
+endif
 
 .PHONY: cgo
-cgo:
-	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
+cgo: config
+	@(cd cgo; CC=$(BUILD_CC) ${MAKE} ${CGO_DEBUG_OPT})
 
 # build mo-service binary
 .PHONY: build
-build: config cgo
+build: cgo
 	$(info [Build binary])
-	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(GO_TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-debug tool
 .PHONY: mo-debug
-mo-debug: config cgo
+mo-debug: cgo
 	$(info [Build mo-debug tool])
 	$(CGO_OPTS) go build -o mo-debug ./cmd/mo-debug
 
@@ -129,12 +153,12 @@ debug: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo
+ut: cgo
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && ./run_ut.sh $(BUILD_CC) UT $(SKIP_TEST)
 else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && timeout 60m ./run_ut.sh $(BUILD_CC) UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -189,6 +213,8 @@ clean:
 	@go clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
+	rm -rf $(MUSL_DIR)
+	rm -rf /tmp/musl-1.2.4.tar.gz
 	$(MAKE) -C cgo clean
 
 ###############################################################################

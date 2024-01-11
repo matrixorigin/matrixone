@@ -23,12 +23,21 @@ if (( $# == 0 )); then
     exit 1
 fi
 
-TEST_TYPE=$1
-if [[ $# == 2 ]]; then 
-    SKIP_TESTS=$2; 
+BUILD_CC=$1
+TEST_TYPE=$2
+if [[ $# == 3 ]]; then
+    SKIP_TESTS=$3;
 else
     SKIP_TESTS="";
 fi
+
+GO_TAGS="matrixone_test"
+GOLDFLAGS=""
+if [ "$(echo $BUILD_CC | grep -c musl)" -ne 0 ]; then
+  GO_TAGS="$GO_TAGS,musl";
+  GOLDFLAGS="--linkmode 'external' --extldflags '-static'"
+fi
+
 
 shopt -s expand_aliases
 source ./utilities.sh
@@ -70,7 +79,7 @@ function run_vet(){
 
     if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
     logger "INF" "Test is in progress... "
-    go vet -tags matrixone_test -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
+    go vet -tags ${GO_TAGS} -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
     logger "INF" "Refer to $SCA_REPORT for details"
 
 }
@@ -84,6 +93,8 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  BUILD CC:        $BUILD_CC"
+    echo "#  GO TAGS:         $GO_TAGS"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -96,14 +107,13 @@ function run_tests(){
     make cgo
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
-
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo -lm" CC=${BUILD_CC} go test -short -v -tags "${GO_TAGS}" -ldflags="${GOLDFLAGS}" -p "${UT_PARALLEL}" -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT;
     else
         logger "INF" "Run UT with race check"
-        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo" go test -short -v -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        CGO_CFLAGS="-I${BUILD_WKSP}/cgo" CGO_LDFLAGS="-L${BUILD_WKSP}/cgo -lmo -lm" CC=${BUILD_CC} go test -short -v -tags "${GO_TAGS}" -ldflags="${GOLDFLAGS}" -p "${UT_PARALLEL}" -timeout "${UT_TIMEOUT}m" -race  $test_scope | tee $UT_REPORT;
     fi
-    IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
-    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  $UT_REPORT > $UT_FILTER
+    IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" "$UT_REPORT")
+    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test|^\-\-\- SKIP: *Test'  "$UT_REPORT" > "$UT_FILTER"
     logger "INF" "Refer to $UT_REPORT for details"
 
 }
