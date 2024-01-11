@@ -2024,15 +2024,24 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
+
+		objShortNames := ""
 		for _, name := range createObjs {
+			objShortNames += name.String() + ","
+		}
+		logutil.Infof("xxxx updateDelInfo: all create obj short name:%s", objShortNames)
+		dataObjs := ""
+		objIter := state.NewDataObjsIterForTest()
+		defer objIter.Close()
+		for objIter.Next() {
+			e := objIter.Entry()
+			dataObjs += e.String() + ","
+		}
+		logutil.Infof("xxxx updateDelInfo: all data objs in partition state:%s", dataObjs)
+		for _, name := range createObjs {
+			logutil.Infof("xxxx updateDelInfo:obj short name:%s", name.String())
 			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
-				if location.IsEmpty() {
-					logutil.Fatalf("xxxx updateDelInfo:obj's location is empty, obj: %s", obj.String())
-				}
-				//if location.IsExtentEmpty() {
-				//	logutil.Fatalf("xxxx updateDelInfo:obj's extent is empty, obj: %s", obj.String())
-				//}
 				logutil.Infof("xxxx updateDelInfo:obj:%s", obj.String())
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,

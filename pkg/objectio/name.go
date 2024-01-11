@@ -61,6 +61,10 @@ func (s *ObjectNameShort) Equal(o []byte) bool {
 	return bytes.Equal(s[:], o)
 }
 
+func (s *ObjectNameShort) String() string {
+	return string(s[:NameStringOff])
+}
+
 func (o ObjectName) String() string {
 	return string(o[NameStringOff : NameStringOff+NameStringLen])
 }

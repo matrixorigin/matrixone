@@ -450,7 +450,7 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 			logutil.Infof("xxxx HandleObjectInsert: object stats's location is empty. %s", objEntry.String())
 		}
 
-		logutil.Infof("xxxx HandleObjectInsert: object stats:%s", objEntry.String())
+		//logutil.Infof("xxxx HandleObjectInsert: object stats:%s", objEntry.String())
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
@@ -738,7 +738,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				if metaLoc.IsEmpty() {
 					logutil.Infof("xxxx handleMetaInsert : meta location is empty")
 				}
-				logutil.Infof("xxxx handleMetaInsert:meta location is %s", metaLoc.String())
+				//logutil.Infof("xxxx handleMetaInsert:meta location is %s", metaLoc.String())
 
 				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
 				objEntry, ok := p.dataObjects.Get(objPivot)
