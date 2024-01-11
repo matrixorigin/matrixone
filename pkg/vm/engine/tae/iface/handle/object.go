@@ -50,6 +50,7 @@ type ObjectReader interface {
 
 	BatchDedup(pks containers.Vector) error
 	Prefetch(idxes []int) error
+	BlkCnt()int
 }
 
 type ObjectWriter interface {

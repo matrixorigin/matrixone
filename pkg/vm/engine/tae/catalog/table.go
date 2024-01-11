@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/tidwall/btree"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
@@ -57,7 +58,16 @@ type TableEntry struct {
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 
-	deleteList map[types.Objectid]data.Tombstone
+	deleteList *btree.BTreeG[DeleteEntry]
+}
+
+type DeleteEntry struct {
+	ObjectID objectio.ObjectId
+	data.Tombstone
+}
+
+func (d DeleteEntry) Less(o DeleteEntry) bool {
+	return bytes.Compare(d.ObjectID[:], o.ObjectID[:]) < 0
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -79,6 +89,9 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		ID: tableId,
 		BaseEntryImpl: NewBaseEntry(
@@ -87,7 +100,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		TableNode:  &TableNode{},
 		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		deleteList: make(map[types.Objectid]data.Tombstone),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
@@ -99,6 +112,9 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -107,7 +123,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		TableNode:  &TableNode{},
 		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		deleteList: make(map[types.Objectid]data.Tombstone),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
@@ -128,12 +144,15 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 }
 
 func NewReplayTableEntry() *TableEntry {
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		deleteList: make(map[types.Objectid]data.Tombstone),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
 	return e
@@ -142,6 +161,9 @@ func NewReplayTableEntry() *TableEntry {
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	node := &TableNode{}
 	node.schema.Store(schema)
+	opts := btree.Options{
+		Degree: 4,
+	}
 	return &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
@@ -149,31 +171,31 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode:  node,
 		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		deleteList: make(map[types.Objectid]data.Tombstone),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
 		Stats:      common.NewTableCompactStat(),
 	}
 }
-func (entry *TableEntry) GetDeleteList() map[types.Objectid]data.Tombstone {
-	return entry.deleteList
+func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
+	return entry.deleteList.Copy()
 }
-func (entry *TableEntry) TryGetTombstone(oid types.Objectid) data.Tombstone {
-	return entry.deleteList[oid]
+func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
+	pivot := DeleteEntry{ObjectID: oid}
+	tombstone, ok := entry.deleteList.Copy().Get(pivot)
+	if !ok {
+		return nil
+	}
+	return tombstone.Tombstone
 }
 
 func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
-	tombstone, ok := entry.deleteList[obj.ID]
+	pivot := DeleteEntry{ObjectID: obj.ID}
+	delete, ok := entry.deleteList.Copy().Get(pivot)
 	if ok {
-		return tombstone
+		return delete.Tombstone
 	}
-	tombstone = entry.CreateTombstone(obj, factory)
-	entry.deleteList[obj.ID] = tombstone
-	return tombstone
-}
-
-func (entry *TableEntry) CreateTombstone(obj *ObjectEntry, tombstoneFactory TombstoneFactory) data.Tombstone {
-	tombstone := tombstoneFactory(obj)
-	entry.deleteList[obj.ID] = tombstone
-	return tombstone
+	pivot.Tombstone = factory(obj)
+	entry.deleteList.Set(pivot)
+	return pivot.Tombstone
 }
 
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -477,7 +499,8 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		objIt.Next()
 	}
-	for _, deletes := range entry.deleteList {
+	tombstones:= entry.deleteList.Copy().Items()
+	for _, deletes := range tombstones {
 		processor.OnTombstone(deletes)
 	}
 	return

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -46,8 +45,6 @@ func TestCatalog1(t *testing.T) {
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
-	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
@@ -55,27 +52,22 @@ func TestCatalog1(t *testing.T) {
 	sobj, err := rel.GetObject(obj.GetID())
 	assert.Nil(t, err)
 	t.Log(sobj.String())
-	err = sobj.SoftDeleteBlock(blk.Fingerprint().BlockID)
-	assert.Nil(t, err)
 
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	blk2, err := sobj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
-	assert.Nil(t, err)
-	assert.NotNil(t, blk2)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	{
 		_, rel = testutil.GetDefaultRelation(t, db, schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		cnt := 0
 		for it.Valid() {
-			block := it.GetBlock()
+			object := it.GetObject()
 			cnt++
-			t.Log(block.GetMeta().(*catalog.BlockEntry).String())
+			t.Log(object.GetMeta().(*catalog.ObjectEntry).String())
 			it.Next()
 		}
-		assert.Equal(t, 1, cnt)
+		assert.Equal(t, 2, cnt)
 	}
 }
 
@@ -175,25 +167,16 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		obj, err := rel.CreateNonAppendableObject(false)
+		_, err := rel.CreateNonAppendableObject(false)
 		assert.Nil(t, err)
 		var id *common.ID
-		for i := 0; i < 30; i++ {
-			blk, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
-			if i == 2 {
-				id = blk.Fingerprint()
-			}
-			assert.Nil(t, err)
-		}
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 
 		txn, _ = tae.StartTxn(nil)
 		db, _ = txn.GetDatabase("db")
 		rel, _ = db.GetRelationByName(schema.Name)
-		obj, _ = rel.GetObject(id.ObjectID())
-		err = obj.SoftDeleteBlock(id.BlockID)
-		assert.Nil(t, err)
+		rel.GetObject(id.ObjectID())
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	for i := 0; i < 10; i++ {

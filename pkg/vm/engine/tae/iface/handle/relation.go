@@ -36,7 +36,6 @@ type Relation interface {
 	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeObjectIt() ObjectIt
 	MakeObjectItOnSnap() ObjectIt
-	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)

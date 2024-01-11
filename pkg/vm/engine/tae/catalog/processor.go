@@ -37,7 +37,7 @@ type LoopProcessor struct {
 	PostDatabaseFn func(*DBEntry) error
 	PostTableFn    func(*TableEntry) error
 	PostObjectFn   func(*ObjectEntry) error
-	TombstoneFn func(data.Tombstone)error
+	TombstoneFn    func(data.Tombstone) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
@@ -81,8 +81,9 @@ func (p *LoopProcessor) OnObject(Object *ObjectEntry) error {
 	}
 	return nil
 }
-func (p *LoopProcessor) OnTombstone(tombstone data.Tombstone) error{
-	if p.TombstoneFn!=nil{
+func (p *LoopProcessor) OnTombstone(tombstone data.Tombstone) error {
+	if p.TombstoneFn != nil {
 		return p.TombstoneFn(tombstone)
 	}
+	return nil
 }
