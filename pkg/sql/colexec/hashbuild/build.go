@@ -241,7 +241,9 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 			return err
 		}
 	} else {
-		ctr.multiSels = make([][]int32, count)
+		if ap.NeedAllocateSels {
+			ctr.multiSels = make([][]int32, count)
+		}
 	}
 
 	var (
