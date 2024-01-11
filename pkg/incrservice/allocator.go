@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -57,8 +58,10 @@ func (a *allocator) allocate(
 	count int,
 	txnOp client.TxnOperator) (uint64, uint64, error) {
 	c := make(chan struct{})
-	var from, to uint64
+	//UT test find race here
+	var from, to atomic.Uint64
 	var err error
+	var err2 atomic.Value
 	err = a.asyncAllocate(
 		ctx,
 		tableID,
@@ -68,16 +71,21 @@ func (a *allocator) allocate(
 		func(
 			v1, v2 uint64,
 			e error) {
-			from = v1
-			to = v2
-			err = e
+			from.Store(v1)
+			to.Store(v2)
+			if e != nil {
+				err2.Store(e)
+			}
 			close(c)
 		})
+	if err2.Load() != nil && err2.Load().(error) != nil {
+		err = err2.Load().(error)
+	}
 	if err != nil {
 		return 0, 0, err
 	}
 	<-c
-	return from, to, err
+	return from.Load(), to.Load(), err
 }
 
 func (a *allocator) asyncAllocate(
