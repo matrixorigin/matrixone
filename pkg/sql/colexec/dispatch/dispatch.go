@@ -37,7 +37,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": dispatch")
 }
 
-func (arg *Argument) Prepare(proc *process.Process) error {
+func (arg *Argument) PrepareOld(proc *process.Process) error {
 	ap := arg
 	ctr := new(container)
 	ap.ctr = ctr
@@ -108,7 +108,7 @@ func printShuffleResult(arg *Argument) {
 	}
 }
 
-func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+func (arg *Argument) CallOld(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}

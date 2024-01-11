@@ -54,6 +54,10 @@ type container struct {
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 
+	// sendFunc2 was responsible for sending batch to the receivers.
+	// this function should fill the reference count of the batch.
+	sendFunc2 func(proc *process.Process, bat *batch.Batch) error
+
 	// isRemote specify it is a remote receiver or not
 	isRemote bool
 	// prepared specify waiting remote receiver ready or not
@@ -141,7 +145,32 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.Children = append(arg.Children, child)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Free(proc *process.Process, executeFailed bool, err error) {
+	if arg.ctr != nil {
+		for _, r := range arg.ctr.remoteReceivers {
+			r.Err <- err
+		}
+
+		if arg.ctr.remoteRegsCnt > 0 {
+			uuids := make([]uuid.UUID, len(arg.RemoteRegs))
+			for i := range arg.RemoteRegs {
+				uuids[i] = arg.RemoteRegs[i].Uuid
+			}
+			colexec.Srv.DeleteUuids(uuids)
+		}
+	}
+
+	if !executeFailed {
+		for i := range arg.LocalRegs {
+			select {
+			case <-arg.LocalRegs[i].Ctx.Done():
+			case arg.LocalRegs[i].Ch <- nil:
+			}
+		}
+	}
+}
+
+func (arg *Argument) FreeOld(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
 			for _, r := range arg.ctr.remoteReceivers {
