@@ -469,6 +469,7 @@ func (d *DiskCache) DeletePaths(
 				return err
 			}
 		}
+		d.cache.Delete(diskPath)
 	}
 
 	return nil
