@@ -53,6 +53,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 		arg.ctr.batchCnt = make([]int, arg.ctr.aliveRegCnt)
 		arg.ctr.rowCnt = make([]int, arg.ctr.aliveRegCnt)
+		arg.ctr.sendFunc2 = arg.shuffleToAllReceivers
 
 	case SendToAnyFunc:
 		if arg.ctr.remoteRegsCnt == 0 {
