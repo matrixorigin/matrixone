@@ -1,7 +1,7 @@
 FROM golang:1.20.7-bookworm as builder
 
 # goproxy
-ARG GOPROXY="https://proxy.golang.org,direct"
+ARG GOPROXY="https://goproxy.cn,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone

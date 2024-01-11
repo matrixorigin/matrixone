@@ -8,7 +8,7 @@ x-mo-common: &mo-common
       context: ../../
       dockerfile: ./optools/images/Dockerfile
       args:
-        GOPROXY: "https://proxy.golang.org,direct"
+        GOPROXY: "https://goproxy.cn,direct"
     image: matrixorigin/matrixone:latest
     volumes:
       - ../../etc/launch-tae-compose/config:/config
