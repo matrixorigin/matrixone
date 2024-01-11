@@ -83,6 +83,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if bat == nil {
 				ctr.state = SendLast
+				ap.rbat = nil
 				continue
 			}
 			if bat.IsEmpty() {
@@ -102,17 +103,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 
 		case SendLast:
-			setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast, &result)
-			if err != nil {
-				return result, err
-			}
-
-			ctr.state = End
-			if setNil {
+			if ap.rbat == nil {
+				ap.lastpos = 0
+				setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast)
+				if err != nil {
+					return result, err
+				}
+				if setNil {
+					ctr.state = End
+				}
 				continue
+			} else {
+				if ap.lastpos >= len(ap.rbat) {
+					ctr.state = End
+					continue
+				}
+				result.Batch = ap.rbat[ap.lastpos]
+				ap.lastpos++
+				return result, nil
 			}
-
-			return result, nil
 
 		default:
 			result.Batch = nil
@@ -142,7 +151,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 	return nil
 }
 
-func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
 
 	if ap.NumCPU > 1 {
@@ -162,16 +171,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	if ctr.rbat != nil {
-		proc.PutBatch(ctr.rbat)
-		ctr.rbat = nil
-	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
-
-	for i, pos := range ap.Result {
-		ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
-	}
-
 	count := ctr.bat.RowCount() - ctr.matched.Count()
 	ctr.matched.Negate()
 	sels := make([]int32, 0, count)
@@ -181,16 +180,50 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		sels = append(sels, int32(r))
 	}
 
-	for j, pos := range ap.Result {
-		if err := ctr.rbat.Vecs[j].Union(ctr.bat.Vecs[pos], sels, proc.Mp()); err != nil {
-			return false, err
+	if len(sels) <= 8192 {
+		if ctr.rbat != nil {
+			proc.PutBatch(ctr.rbat)
+			ctr.rbat = nil
 		}
-	}
-	ctr.rbat.AddRowCount(len(sels))
+		ctr.rbat = batch.NewWithSize(len(ap.Result))
 
-	analyze.Output(ctr.rbat, isLast)
-	result.Batch = ctr.rbat
-	return false, nil
+		for i, pos := range ap.Result {
+			ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+		}
+		for j, pos := range ap.Result {
+			if err := ctr.rbat.Vecs[j].Union(ctr.bat.Vecs[pos], sels, proc.Mp()); err != nil {
+				return false, err
+			}
+		}
+		ctr.rbat.AddRowCount(len(sels))
+		analyze.Output(ctr.rbat, isLast)
+		ap.rbat = []*batch.Batch{ctr.rbat}
+		return false, nil
+	} else {
+		n := (len(sels)-1)/8192 + 1
+		ap.rbat = make([]*batch.Batch, n)
+		for k := range ap.rbat {
+			ap.rbat[k] = batch.NewWithSize(len(ap.Result))
+			for i, pos := range ap.Result {
+				ap.rbat[k].Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+			}
+			var newsels []int32
+			if (k+1)*8192 <= len(sels) {
+				newsels = sels[k*8192 : (k+1)*8192]
+			} else {
+				newsels = sels[k*8192:]
+			}
+			for j, pos := range ap.Result {
+				if err := ap.rbat[k].Vecs[j].Union(ctr.bat.Vecs[pos], newsels, proc.Mp()); err != nil {
+					return false, err
+				}
+			}
+			ap.rbat[k].SetRowCount(len(newsels))
+			analyze.Output(ap.rbat[k], isLast)
+		}
+		return false, nil
+	}
+
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) error {
