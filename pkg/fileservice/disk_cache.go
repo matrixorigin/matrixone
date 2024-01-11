@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -57,6 +58,9 @@ func NewDiskCache(
 	if err != nil {
 		return nil, err
 	}
+
+	hashSeed := maphash.MakeSeed()
+
 	ret = &DiskCache{
 		path:            path,
 		perfCounterSets: perfCounterSets,
@@ -70,6 +74,9 @@ func NewDiskCache(
 						set.FileService.Cache.Disk.Evict.Add(1)
 					}, perfCounterSets...)
 				}
+			},
+			func(key string) uint8 {
+				return uint8(maphash.String(hashSeed, key))
 			},
 		),
 	}

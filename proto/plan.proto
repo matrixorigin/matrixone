@@ -1154,6 +1154,12 @@ message AlterTableAlterReIndex {
 	int64 index_algo_param_list = 4;
 }
 
+message AlterTableAddPartition {
+	repeated PartitionItem definitions = 1;
+	repeated TableDef partition_tables = 2;
+	PartitionByDef PartitionDef = 3;
+}
+
 message AlterTableComment {
 	string new_comment = 1;
 }
@@ -1163,14 +1169,14 @@ message AlterTableName {
 	string new_name = 2;
 }
 
-message AlterAddCol {
+message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
 	Type type = 3;
 	int32 pos = 4;
 }
 
-message AlterDropCol {
+message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
 }
@@ -1190,9 +1196,10 @@ message AlterTable {
 			AlterTableAlterIndex alter_index = 4;
 			AlterTableComment alter_comment = 5;
 			AlterTableName alter_name = 6;
-			AlterAddCol add_col = 7;
-			AlterDropCol drop_col = 8;
+			AlterAddColumn add_column = 7;
+			AlterDropColumn drop_column = 8;
 			AlterTableAlterReIndex alter_reindex = 9;
+			AlterTableAddPartition addPartition = 10;
 		};
 	}
 	string database			      = 1;
