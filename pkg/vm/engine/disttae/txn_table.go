@@ -2033,8 +2033,7 @@ func (tbl *txnTable) updateDeleteInfo(
 				//if location.IsExtentEmpty() {
 				//	logutil.Fatalf("xxxx updateDelInfo:obj's extent is empty, obj: %s", obj.String())
 				//}
-				logutil.Infof("xxxx updateDelInfo:obj name:%s, extent:%s",
-					location.Name().String(), location.Extent().String())
+				logutil.Infof("xxxx updateDelInfo:obj:%s", obj.String())
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
 					&location,
