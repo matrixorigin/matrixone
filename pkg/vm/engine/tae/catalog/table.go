@@ -477,6 +477,9 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		objIt.Next()
 	}
+	for _, deletes := range entry.deleteList {
+		processor.OnTombstone(deletes)
+	}
 	return
 }
 

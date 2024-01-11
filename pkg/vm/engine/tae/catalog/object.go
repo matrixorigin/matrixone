@@ -95,6 +95,14 @@ func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
 	)
 }
 
+func (entry *ObjectEntry) InMemoryDeletesExisted() bool {
+	tombstone := entry.GetTable().TryGetTombstone(entry.ID)
+	if tombstone != nil {
+		return tombstone.InMemoryDeletesExisted()
+	}
+	return false
+}
+
 func NewObjectEntry(
 	table *TableEntry,
 	id *objectio.ObjectId,
@@ -191,6 +199,14 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 	}
 	e.ID = *bid.Object()
 	return e
+}
+
+func (entry *ObjectEntry) GetLocation() objectio.Location {
+	entry.RLock()
+	defer entry.RUnlock()
+	node := entry.GetLatestCommittedNode()
+	location := node.BaseNode.ObjectStats.ObjectLocation()
+	return location
 }
 func (entry *ObjectEntry) InitData(factory DataFactory) {
 	if factory == nil {

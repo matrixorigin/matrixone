@@ -164,4 +164,6 @@ type Tombstone interface {
 	UpgradeDeleteChainByTS(ts types.TS)
 	ReplayDeltaLoc(any, uint16)
 	VisitDeletes(ctx context.Context, start, end types.TS, bat *containers.Batch)(*containers.Batch,error)
+	GetObject()any
+	InMemoryDeletesExisted()bool
 }

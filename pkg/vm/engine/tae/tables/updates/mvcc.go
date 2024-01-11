@@ -456,7 +456,17 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvcc := n.GetOrCreateDeleteChain(blkID)
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
-
+func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
+	for _, deletes := range n.deletes {
+		if !deletes.deletes.mask.IsEmpty() {
+			return true
+		}
+	}
+	return false
+}
+func (n *ObjectMVCCHandle) GetObject() any {
+	return n.meta
+}
 func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch) (delBatch *containers.Batch, err error) {
 	n.RLock()
 	defer n.RUnlock()
@@ -540,7 +550,7 @@ func (d *DeltalocChain) Set1PC() {}
 func (d *DeltalocChain) GetBlockID() *objectio.Blockid {
 	return objectio.NewBlockidWithObjectID(&d.mvcc.meta.ID, d.mvcc.blkID)
 }
-func (d *DeltalocChain) GetMeta() *catalog.ObjectEntry{return d.mvcc.meta}
+func (d *DeltalocChain) GetMeta() *catalog.ObjectEntry { return d.mvcc.meta }
 
 type MVCCHandle struct {
 	*ObjectMVCCHandle
