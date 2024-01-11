@@ -16,6 +16,7 @@ package stopper
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,4 +68,36 @@ func TestRunTaskWithTimeout(t *testing.T) {
 	s.Stop()
 	assert.Equal(t, 1, len(names))
 	assert.Equal(t, "timeout", names[0])
+}
+
+func BenchmarkRunTask1000(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		runTasks(b, 1000)
+	}
+}
+
+func BenchmarkRunTask10000(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		runTasks(b, 10000)
+	}
+}
+
+func BenchmarkRunTask100000(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		runTasks(b, 100000)
+	}
+}
+
+func runTasks(b *testing.B, n int) {
+	s := NewStopper("BenchmarkRunTask")
+	defer s.Stop()
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		assert.NoError(b, s.RunTask(func(ctx context.Context) {
+			wg.Done()
+			<-ctx.Done()
+		}))
+	}
+	wg.Wait()
 }
