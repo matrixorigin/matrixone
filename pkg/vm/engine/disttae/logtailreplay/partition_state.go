@@ -447,11 +447,10 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 		objEntry.Sorted = sortedCol[idx]
 
 		if objEntry.ObjectLocation().IsEmpty() {
-			logutil.Infof("xxxx object stats's location is empty. %s", objEntry.String())
+			logutil.Infof("xxxx HandleObjectInsert: object stats's location is empty. %s", objEntry.String())
 		}
-		//if objEntry.ObjectLocation().IsExtentEmpty() {
-		//	logutil.Infof("xxxx handleObjInsert: extent is empty. %s", objEntry.String())
-		//}
+
+		logutil.Infof("xxxx HandleObjectInsert: object stats:%s", objEntry.String())
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
@@ -739,9 +738,8 @@ func (p *PartitionState) HandleMetadataInsert(
 				if metaLoc.IsEmpty() {
 					logutil.Infof("xxxx handleMetaInsert : meta location is empty")
 				}
-				//if metaLoc.IsExtentEmpty() {
-				//	logutil.Infof("xxxx handleMetaInsert: extent is empty, metaloc:%s", metaLoc.String())
-				//}
+				logutil.Infof("xxxx handleMetaInsert:meta location is %s", metaLoc.String())
+
 				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
