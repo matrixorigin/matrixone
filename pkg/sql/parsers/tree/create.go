@@ -1293,8 +1293,8 @@ type TableOptionComment struct {
 }
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
-	ctx.WriteString("comment = ")
-	ctx.WriteString(node.Comment)
+	ctx.WriteString("comment = '" + node.Comment + "'")
+	//ctx.WriteString(node.Comment + "'")
 }
 
 func NewTableOptionComment(c string) *TableOptionComment {
@@ -1969,6 +1969,7 @@ type ClusterByOption struct {
 }
 
 type PartitionOption struct {
+	statementImpl
 	PartBy     PartitionBy
 	SubPartBy  *PartitionBy
 	Partitions []*Partition

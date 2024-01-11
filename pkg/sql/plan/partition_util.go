@@ -374,6 +374,7 @@ func buildRangePartitionItem(binder *PartitionBinder, partitionDef *plan.Partiti
 	return nil
 }
 
+// 我认为这里的PartitionBinder是一个独立的binder，不需要表的上下文信息，可以单独实例化
 func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLessThan.ValueList
@@ -1022,4 +1023,21 @@ func getIntConstVal[T uint64 | int64](cExpr *plan.Expr_Lit) T {
 	default:
 		panic("the `expr` must be integral constant expression")
 	}
+}
+
+// deepCopyTableCols Deeply copy table's column definition information
+// Cols: Table column definitions
+// ignoreRowId: Whether to ignore the rowId column
+func deepCopyTableCols(Cols []*ColDef, ignoreRowId bool) []*ColDef {
+	if Cols == nil {
+		return nil
+	}
+	newCols := make([]*plan.ColDef, 0)
+	for _, col := range Cols {
+		if ignoreRowId && col.Name == catalog.Row_ID {
+			continue
+		}
+		newCols = append(newCols, DeepCopyColDef(col))
+	}
+	return newCols
 }
