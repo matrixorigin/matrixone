@@ -2027,9 +2027,10 @@ func (tbl *txnTable) updateDeleteInfo(
 
 		objShortNames := ""
 		for _, name := range createObjs {
-			objShortNames += name.String() + ","
+			objShortNames += name.Segmentid().ToString() + ","
 		}
-		logutil.Infof("xxxx updateDelInfo: all create obj short name:%s", objShortNames)
+		logutil.Infof("xxxx updateDelInfo: all create obj short name's seg:%s", objShortNames)
+
 		dataObjs := ""
 		objIter := state.NewDataObjsIterForTest()
 		defer objIter.Close()
@@ -2038,8 +2039,10 @@ func (tbl *txnTable) updateDeleteInfo(
 			dataObjs += e.String() + ","
 		}
 		logutil.Infof("xxxx updateDelInfo: all data objs in partition state:%s", dataObjs)
+
 		for _, name := range createObjs {
-			logutil.Infof("xxxx updateDelInfo:obj short name:%s", name.String())
+			logutil.Infof("xxxx updateDelInfo:obj short name's seg:%s",
+				name.Segmentid().ToString())
 			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
 				logutil.Infof("xxxx updateDelInfo:obj:%s", obj.String())
