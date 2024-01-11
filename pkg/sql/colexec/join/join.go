@@ -115,7 +115,7 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 	if err != nil {
 		return err
 	}
-	if bat != nil {
+	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
 		anal.Alloc(ctr.mp.Size())
 	}
