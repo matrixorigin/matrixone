@@ -294,16 +294,16 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	switch funcName {
 	case ">", ">=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (max - val) / (max - min)
+			return (max - val + 1) / (max - min)
 		}
 	case "<", "<=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (val - min) / (max - min)
+			return (val - min + 1) / (max - min)
 		}
 	case "between":
 		if lb, ok := getFloat64Value(typ, vals[0]); ok {
 			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				return (ub - lb) / (max - min)
+				return (ub - lb + 1) / (max - min)
 			}
 		}
 	}
@@ -377,7 +377,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		return 0.1
 	}
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
 	if col != nil && len(literals) > 0 {
 		typ := s.DataTypeMap[col.Name]
 		if !(typ.IsInteger() || typ.IsDateRelate()) {
@@ -392,7 +392,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			case types.T_date:
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), typ, literals)
+				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
 			}
