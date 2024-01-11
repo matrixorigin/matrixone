@@ -106,6 +106,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 		p.Cleanup(s.Proc, err != nil, err)
 	}()
 
+	for i := 0; i < len(s.Instructions); i++ {
+		s.Instructions[i].CnAddr = s.NodeInfo.Addr
+		s.Instructions[i].OperatorID = 0
+		s.Instructions[i].ParallelID = 0
+		s.Instructions[i].MaxParallel = 0
+	}
+
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
