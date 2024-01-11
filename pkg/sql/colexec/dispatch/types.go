@@ -157,12 +157,10 @@ func (arg *Argument) Free(proc *process.Process, executeFailed bool, err error) 
 		}
 	}
 
-	if !executeFailed {
-		for i := range arg.LocalRegs {
-			select {
-			case <-arg.LocalRegs[i].Ctx.Done():
-			case arg.LocalRegs[i].Ch <- nil:
-			}
+	for i := range arg.LocalRegs {
+		select {
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
 	}
 }
