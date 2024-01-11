@@ -47,27 +47,24 @@ const (
 )
 
 type container struct {
+	// the status of the container.
+	// if status is stopSending, the container can stop sending.
 	sendStatus senderStatus
 
-	// the clientsession info for the channel you want to dispatch
+	// the information of remote receivers.
 	remoteReceivers []process.WrapCs
-	// sendFunc is the rule you want to send batch
-	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 
 	// sendFunc2 was responsible for sending batch to the receivers.
 	// this function should fill the reference count of the batch.
 	sendFunc2 func(proc *process.Process, bat *batch.Batch) error
 
-	// isRemote specify it is a remote receiver or not
-	isRemote bool
-	// prepared specify waiting remote receiver ready or not
-	prepared bool
-
-	// for send-to-any function decide send to which reg
-	sendCnt       int
+	// the number of receivers.
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// for send-to-any function decide send to which reg
+	sendCnt int
 
 	remoteToIdx map[uuid.UUID]int
 	hasData     bool
@@ -167,31 +164,5 @@ func (arg *Argument) Free(proc *process.Process, executeFailed bool, err error) 
 			case arg.LocalRegs[i].Ch <- nil:
 			}
 		}
-	}
-}
-
-func (arg *Argument) FreeOld(proc *process.Process, pipelineFailed bool, err error) {
-	if arg.ctr != nil {
-		if arg.ctr.isRemote {
-			for _, r := range arg.ctr.remoteReceivers {
-				r.Err <- err
-			}
-
-			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
-			for i := range arg.RemoteRegs {
-				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
-			}
-			colexec.Srv.DeleteUuids(uuids)
-		}
-	}
-
-	for i := range arg.LocalRegs {
-		if !pipelineFailed {
-			select {
-			case <-arg.LocalRegs[i].Ctx.Done():
-			case arg.LocalRegs[i].Ch <- nil:
-			}
-		}
-		close(arg.LocalRegs[i].Ch)
 	}
 }
