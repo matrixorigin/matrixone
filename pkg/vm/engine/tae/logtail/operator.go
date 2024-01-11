@@ -16,7 +16,6 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -82,18 +81,10 @@ func (c *BoundTableOperator) processTableData() error {
 		if err = c.visitor.OnObject(obj); err != nil {
 			return err
 		}
-		for id := range dirtyObj.Blks {
-			bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
-			blk, err := obj.GetBlockEntryByID(bid)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					continue
-				}
-				return err
-			}
-			if err = c.visitor.OnBlock(blk); err != nil {
-				return err
-			}
+		deletes := tbl.TryGetTombstone(obj.ID)
+		err = c.visitor.OnTombstone(deletes)
+		if err != nil {
+			return err
 		}
 	}
 	return nil

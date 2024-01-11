@@ -15,6 +15,7 @@
 package updates
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -455,6 +457,71 @@ func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvcc.ReplayDeltaLoc(mvccNode)
 }
 
+func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch) (delBatch *containers.Batch, err error) {
+	n.RLock()
+	defer n.RUnlock()
+	for blkOffset, mvcc := range n.deletes {
+		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
+		blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
+		for _, node := range nodes {
+			VisitDeltaloc(deltalocBat, n.meta, blkID, node, node.End, node.CreatedAt)
+		}
+		newest := nodes[len(nodes)-1]
+		// block has newer delta data on s3, no need to collect data
+		skipData := newest.GetStart().GreaterEq(end)
+		if !skipData {
+			deletes := n.deletes[blkOffset]
+			delBat, _, err := deletes.InMemoryCollectDeleteInRange(ctx, newest.GetStart(), end, false, common.LogtailAllocator)
+			if err != nil {
+				if delBatch != nil {
+					delBatch.Close()
+				}
+				delBat.Close()
+				return nil, err
+			}
+			if delBat != nil && delBat.Length() > 0 {
+				if delBatch == nil {
+					delBatch = containers.NewBatch()
+					delBatch.AddVector(
+						catalog.AttrRowID,
+						containers.MakeVector(types.T_Rowid.ToType(), common.LogtailAllocator),
+					)
+					delBatch.AddVector(
+						catalog.AttrCommitTs,
+						containers.MakeVector(types.T_TS.ToType(), common.LogtailAllocator),
+					)
+					delBatch.AddVector(
+						delBat.Attrs[2],
+						containers.MakeVector(*delBat.Vecs[2].GetType(), common.LogtailAllocator),
+					)
+				}
+				delBatch.Extend(delBat)
+				// delBatch is freed, don't use anymore
+				delBat.Close()
+			}
+		}
+	}
+	return
+}
+
+func VisitDeltaloc(bat *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
+	is_sorted := false
+	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
+		is_sorted = true
+	}
+	bat.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(&blkID, false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(object.IsAppendable(), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(commitTS, false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*object.ID.Segment(), false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(node.Start, false)
+	bat.GetVectorByName(catalog.AttrCommitTs).Append(createTS, false)
+	bat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(blkID), false)
+	return
+}
+
 type DeltalocChain struct {
 	mvcc *MVCCHandle
 	*catalog.BaseEntryImpl[*catalog.MetadataMVCCNode]
@@ -469,6 +536,11 @@ func (d *DeltalocChain) PrepareRollback() error {
 	return err
 }
 func (d *DeltalocChain) Set1PC() {}
+
+func (d *DeltalocChain) GetBlockID() *objectio.Blockid {
+	return objectio.NewBlockidWithObjectID(&d.mvcc.meta.ID, d.mvcc.blkID)
+}
+func (d *DeltalocChain) GetMeta() *catalog.ObjectEntry{return d.mvcc.meta}
 
 type MVCCHandle struct {
 	*ObjectMVCCHandle
@@ -669,6 +741,45 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		}
 	}
 	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length(), containers.Options{Allocator: mp})
+	return
+}
+
+func (n *MVCCHandle) InMemoryCollectDeleteInRange(
+	ctx context.Context,
+	start, end types.TS,
+	withAborted bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, minTS types.TS, err error) {
+	n.RLock()
+	schema := n.meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
+	rowID, ts, pk, abort, abortedMap, deletes, minTS := n.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	n.RUnlock()
+	if rowID == nil {
+		return
+	}
+	// for deleteNode version less than 2, pk doesn't exist in memory
+	// collect pk by block.Foreach
+	if len(deletes) != 0 {
+		pkIdx := pkDef.Idx
+		data := n.meta.GetBlockData()
+		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {
+			pk.Append(v, false)
+			return nil
+		}, deletes, mp)
+	}
+	// batch: rowID, ts, pkVec, abort
+	bat = containers.NewBatch()
+	bat.AddVector(catalog.PhyAddrColumnName, rowID)
+	bat.AddVector(catalog.AttrCommitTs, ts)
+	bat.AddVector(pkDef.Name, pk)
+	if withAborted {
+		bat.AddVector(catalog.AttrAborted, abort)
+	} else {
+		abort.Close()
+		bat.Deletes = abortedMap
+		bat.Compact()
+	}
 	return
 }
 

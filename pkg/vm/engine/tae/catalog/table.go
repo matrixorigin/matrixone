@@ -153,7 +153,9 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		Stats:      common.NewTableCompactStat(),
 	}
 }
-
+func (entry *TableEntry) GetDeleteList() map[types.Objectid]data.Tombstone {
+	return entry.deleteList
+}
 func (entry *TableEntry) TryGetTombstone(oid types.Objectid) data.Tombstone {
 	return entry.deleteList[oid]
 }

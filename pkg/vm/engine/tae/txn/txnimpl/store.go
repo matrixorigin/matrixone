@@ -384,7 +384,7 @@ func (store *txnStore) ObserveTxn(
 				switch txnEntry := iTxnEntry.(type) {
 				case *catalog.ObjectEntry:
 					visitObject(txnEntry)
-				case *catalog.BlockEntry:
+				case *updates.DeltalocChain:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					visitDelete(store.ctx, txnEntry)

@@ -175,6 +175,10 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
+func (node *DeleteNode) GetBlockID() *objectio.Blockid {
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)
+}
+
 func (node *DeleteNode) RangeDeleteLocked(
 	start, end uint32, pk containers.Vector, mp *mpool.MPool,
 ) {

@@ -739,39 +739,11 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 ) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
 	mvcc := blk.getMVCC().TryGetDeleteChain(blkID)
-	if mvcc == nil {
-		blk.RUnlock()
-		return
-	}
-	schema := blk.meta.GetSchema()
-	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS := mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
 	blk.RUnlock()
-	if rowID == nil {
+	if mvcc == nil {
 		return
 	}
-	// for deleteNode version less than 2, pk doesn't exist in memory
-	// collect pk by block.Foreach
-	if len(deletes) != 0 {
-		pkIdx := pkDef.Idx
-		blk.Foreach(ctx, schema, blkID, pkIdx, func(v any, isNull bool, row int) error {
-			pk.Append(v, false)
-			return nil
-		}, deletes, mp)
-	}
-	// batch: rowID, ts, pkVec, abort
-	bat = containers.NewBatch()
-	bat.AddVector(catalog.PhyAddrColumnName, rowID)
-	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pk)
-	if withAborted {
-		bat.AddVector(catalog.AttrAborted, abort)
-	} else {
-		abort.Close()
-		bat.Deletes = abortedMap
-		bat.Compact()
-	}
-	return
+	return mvcc.InMemoryCollectDeleteInRange(ctx, start, end, withAborted, mp)
 }
 
 // collect the row if its committs is in [start,end]
