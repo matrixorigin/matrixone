@@ -259,7 +259,7 @@ func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocat
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	e := ObjectEntry{}
 	objectio.SetObjectStatsShortName(&e.ObjectStats, objectio.ShortName(&blockID))
-	if _, ok := p.dataObjects.Get(e); ok {
+	if _, ok := p.dataObjects.GetMut(e); ok {
 		return true
 	}
 	return false
@@ -268,7 +268,7 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
 	e := ObjectEntry{}
 	objectio.SetObjectStatsShortName(&e.ObjectStats, &name)
-	if _, ok := p.dataObjects.Get(e); ok {
+	if _, ok := p.dataObjects.GetMut(e); ok {
 		return e.ObjectInfo, true
 	}
 	return ObjectInfo{}, false
