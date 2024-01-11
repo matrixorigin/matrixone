@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -259,17 +260,30 @@ func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocat
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	e := ObjectEntry{}
 	objectio.SetObjectStatsShortName(&e.ObjectStats, objectio.ShortName(&blockID))
-	if _, ok := p.dataObjects.GetMut(e); ok {
+	if _, ok := p.dataObjects.Get(e); ok {
 		return true
 	}
 	return false
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	e := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&e.ObjectStats, &name)
-	if _, ok := p.dataObjects.GetMut(e); ok {
-		return e.ObjectInfo, true
+	//e := ObjectEntry{}
+	//objectio.SetObjectStatsShortName(&e.ObjectStats, &name)
+	//if _, ok := p.dataObjects.GetMut(e); ok {
+	//	return e.ObjectInfo, true
+	//}
+	//return ObjectInfo{}, false
+
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, &name)
+	if ok := iter.Seek(pivot); ok {
+		e := iter.Item()
+		if bytes.Equal(e.ObjectShortName()[:], name[:]) {
+			return iter.Item().ObjectInfo, true
+		}
 	}
 	return ObjectInfo{}, false
 }
