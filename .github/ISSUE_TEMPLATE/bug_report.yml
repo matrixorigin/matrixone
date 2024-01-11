@@ -2,6 +2,7 @@ name: Bug Report
 description: Create a bug report to improve MatrixOne
 title: "[Bug]: "
 labels: [kind/bug, needs-triage]
+
 assignees:
   - matrix-meow
 body:

@@ -112,6 +112,19 @@ func NewRemoveColumnReq(did, tid uint64, idx, seqnum uint32) *AlterTableReq {
 	}
 }
 
+func NewAddPartitionReq(did, tid uint64, partitionDef *plan.PartitionByDef) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_AddPartition,
+		Operation: &AlterTableReq_AddPartition{
+			AddPartition: &AlterTableAddPartition{
+				PartitionDef: partitionDef,
+			},
+		},
+	}
+}
+
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }

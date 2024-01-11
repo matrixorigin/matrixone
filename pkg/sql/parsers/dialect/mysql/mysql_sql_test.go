@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name='admin' identified by '123456';",
-		output: "create account 0b6d35cc_11ab_4da5_a5c5_c4c09917c11 admin_name 'admin' identified by '******'",
+		input:  "select ownership from t1",
+		output: "select ownership from t1",
 	}
 )
 
@@ -88,22 +88,25 @@ var (
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
 		input:  "select cluster_centers(a) from t1;",
-		output: "select cluster_centers(a, 1,vector_l2_ops,random) from t1",
+		output: "select cluster_centers(a, 1,vector_l2_ops,random,false) from t1",
 	}, {
-		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
+		input:  "select cluster_centers(a kmeans '5') from t1;",
 		output: "select cluster_centers(a, 5) from t1",
 	}, {
-		input:  "select cluster_centers(a spherical_kmeans '5,vector_l2_ops') from t1;",
+		input:  "select cluster_centers(a kmeans '5,vector_l2_ops') from t1;",
 		output: "select cluster_centers(a, 5,vector_l2_ops) from t1",
 	}, {
-		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops') from t1;",
+		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops) from t1",
 	}, {
-		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,kmeansplusplus') from t1;",
+		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,kmeansplusplus') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops,kmeansplusplus) from t1",
 	}, {
-		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,random') from t1;",
+		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,random') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops,random) from t1",
+	}, {
+		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,random,true') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops,random,true) from t1",
 	}, {
 		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
 		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",
@@ -262,7 +265,7 @@ var (
 		output: "create table t1 (a datetime on update current_timestamp(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
-		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
+		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = 'asdf'",
 	}, {
 		input:  "commit work",
 		output: "commit",
@@ -1000,7 +1003,7 @@ var (
 			output: "create table table11  (a int)",
 		}, {
 			input:  "create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT=\"asdf\"",
-			output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
+			output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = 'asdf'",
 		}, {
 			input:  "create temporary table table05 ( a int, b char(10));",
 			output: "create temporary table table05 (a int, b char(10))",
@@ -1071,7 +1074,7 @@ var (
 			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
 		}, {
 			input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
-			output: "create table a (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
+			output: "create table a (a int) engine = innodb row_format = dynamic comment = 'table A' compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
 		}, {
 			input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
 			output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
@@ -2215,7 +2218,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = 'aa'",
-			output: "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = aa",
+			output: "alter table tbl1 drop index idx_name, drop key idx_name, drop column col1, drop primary key, comment = 'aa'",
 		},
 		{
 			input: "alter table tbl1 drop key idx_name",
@@ -2231,7 +2234,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 checksum = 0, COMMENT = 'asdf'",
-			output: "alter table tbl1 checksum = 0, comment = asdf",
+			output: "alter table tbl1 checksum = 0, comment = 'asdf'",
 		},
 		{
 			input:  "alter table t1 alter index c visible",
@@ -2299,7 +2302,7 @@ var (
 		},
 		{
 			input:  "alter table t1 comment 'abc'",
-			output: "alter table t1 comment = abc",
+			output: "alter table t1 comment = 'abc'",
 		},
 		{
 			input: "alter table t1 rename to t2",
@@ -2341,6 +2344,10 @@ var (
 		{
 			input:  "ALTER TABLE titles partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
 			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
+		},
+		{
+			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
+			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},
 		{
 			input: "create publication pub1 database db1",
@@ -2735,6 +2742,45 @@ func TestValid(t *testing.T) {
 }
 
 var (
+	validStrSQL = []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table pt1 (id int, category varchar(50)) partition by list columns(category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
+			output: "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment = 'Category A and B', partition p2 values in ('C', 'D') comment = 'Category C and D')",
+		},
+		{
+			input:  "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+			output: "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+		},
+		{
+			input:  "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
+			output: "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
+		},
+	}
+)
+
+// Test whether strings in SQL can be restored in string format
+func TestSQLStringFmt(t *testing.T) {
+	ctx := context.TODO()
+	for _, tcase := range validStrSQL {
+		if tcase.output == "" {
+			tcase.output = tcase.input
+		}
+		ast, err := ParseOne(ctx, tcase.input, 1)
+		if err != nil {
+			t.Errorf("Parse(%q) err: %v", tcase.input, err)
+			continue
+		}
+		out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithSingleQuoteString())
+		if tcase.output != out {
+			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
+		}
+	}
+}
+
+var (
 	multiSQL = []struct {
 		input  string
 		output string
@@ -2871,6 +2917,15 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 TRUNCATE PARTITION ALL, p0",
+		},
+		{
+			input: "ALTER TABLE pt5 add column a INT NOT NULL, ADD PARTITION (PARTITION p4 VALUES LESS THAN (2022))",
+		},
+		{
+			input: "ALTER TABLE pt5 ADD PARTITION (PARTITION p4 VALUES LESS THAN (2022)),add column a INT NOT NULL",
+		},
+		{
+			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
 		},
 	}
 )

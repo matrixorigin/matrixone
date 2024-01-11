@@ -185,20 +185,20 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 			exec.ExecTxn(
 				ctx,
 				func(te executor.TxnExecutor) error {
-					res, err := te.Exec("create database zx")
+					res, err := te.Exec("create database zx", executor.StatementOption{})
 					require.NoError(t, err)
 					res.Close()
 
-					res, err = te.Exec("create table t1 (id int primary key, name varchar(255))")
+					res, err = te.Exec("create table t1 (id int primary key, name varchar(255))", executor.StatementOption{})
 					require.NoError(t, err)
 					res.Close()
 
-					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')")
+					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')", executor.StatementOption{})
 					require.NoError(t, err)
 					require.Equal(t, uint64(3), res.AffectedRows)
 					res.Close()
 
-					res, err = te.Exec("select id,name from t1 order by id")
+					res, err = te.Exec("select id,name from t1 order by id", executor.StatementOption{})
 					require.NoError(t, err)
 					var ids []int32
 					var names []string

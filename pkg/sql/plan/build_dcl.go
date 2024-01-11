@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -90,6 +92,9 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	schemas, paramTypes, err := ResetPreparePlan(ctx, preparePlan)
 	if err != nil {
 		return nil, err
+	}
+	if len(paramTypes) > math.MaxUint16 {
+		return nil, moerr.NewErrTooManyParameter(ctx.GetContext())
 	}
 
 	prepare := &plan.Prepare{

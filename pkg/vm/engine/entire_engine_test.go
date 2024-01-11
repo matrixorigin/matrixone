@@ -269,7 +269,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
+	_ *plan.Expr, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -328,6 +328,10 @@ func (o *testOperator) Snapshot() ([]byte, error) {
 
 func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
+}
+
+func (o *testOperator) PKDedupCount() int {
+	panic("should not call")
 }
 
 func (o *testOperator) SnapshotTS() timestamp.Timestamp {

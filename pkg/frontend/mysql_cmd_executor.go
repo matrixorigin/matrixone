@@ -246,7 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 		}
 	} else {
-		stmID = uuid.New()
+		stmID, _ = uuid.NewV7()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
@@ -3843,13 +3843,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		return retErr
 	}
 
+	singleStatement := len(cws) == 1
+	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
+		return moerr.NewNotSupported(requestCtx, "prepare multi statements")
+	}
+
 	defer func() {
 		ses.SetMysqlResultSet(nil)
 	}()
 
 	canCache := true
-
-	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
@@ -4186,6 +4189,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		return resp, nil
 
+	case COM_SET_OPTION:
+		data := req.GetData().([]byte)
+		err := mce.handleSetOption(requestCtx, data)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_SET_OPTION, mce.ses.GetServerStatus(), err)
+		}
+		return NewGeneralOkResponse(COM_SET_OPTION, mce.ses.GetServerStatus()), nil
+
 	default:
 		resp = NewGeneralErrorResponse(req.GetCmd(), mce.ses.GetServerStatus(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
@@ -4515,4 +4526,26 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
+}
+
+func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (err error) {
+	if len(data) < 2 {
+		return moerr.NewInternalError(ctx, "invalid cmd_set_option data length")
+	}
+	cap := mce.GetSession().GetMysqlProtocol().GetCapability()
+	switch binary.LittleEndian.Uint16(data[:2]) {
+	case 0:
+		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
+		// cap |= CLIENT_MULTI_STATEMENTS
+		// mce.GetSession().GetMysqlProtocol().SetCapability(cap)
+
+	case 1:
+		cap &^= CLIENT_MULTI_STATEMENTS
+		mce.GetSession().GetMysqlProtocol().SetCapability(cap)
+
+	default:
+		return moerr.NewInternalError(ctx, "invalid cmd_set_option data")
+	}
+
+	return nil
 }
