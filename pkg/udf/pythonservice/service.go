@@ -78,7 +78,7 @@ func (s *service) Start() error {
 			}
 		}()
 
-		cmd := exec.Command("python3", "-u", file, "--address="+s.cfg.Address)
+		cmd := exec.Command("python", "-u", file, "--address="+s.cfg.Address)
 		cmd.Stdout = s.log
 		cmd.Stderr = s.log
 		err = cmd.Run()
