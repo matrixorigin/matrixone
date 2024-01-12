@@ -627,9 +627,9 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 		case *plan.Literal_Dateval:
 			vec, err = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
 		case *plan.Literal_Timeval:
-			vec, err = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constTimeType, types.Time(con.GetTimeval()), 1, proc.Mp())
 		case *plan.Literal_Datetimeval:
-			vec, err = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constDatetimeType, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
 		case *plan.Literal_Decimal64Val:
 			cd64 := con.GetDecimal64Val()
 			d64 := types.Decimal64(cd64.A)

@@ -537,8 +537,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
+	col1, _, _ := extractColRefAndLiteralsInFilter(expr1)
+	col2, _, _ := extractColRefAndLiteralsInFilter(expr2)
 	if col1 == nil || col2 == nil {
 		return false
 	}
@@ -557,7 +557,7 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
+func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, literals []*Const, colFnName string) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return
@@ -583,11 +583,9 @@ func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType typ
 		if lit == nil {
 			return
 		}
-		litType = types.T(fn.Args[0].Typ.Id)
 		literals = []*Const{lit}
 
 	case "between":
-		litType = types.T(fn.Args[0].Typ.Id)
 		literals = []*Const{fn.Args[1].GetLit(), fn.Args[2].GetLit()}
 	}
 
@@ -1056,10 +1054,10 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
-func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
-	if elist := expr.GetList(); elist != nil {
-		exprList := elist.List
+	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
+		exprList := exprImpl.List.List
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
@@ -1081,7 +1079,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: e.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1091,31 +1089,31 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}, nil
 	}
 
-	fn := expr.GetF()
-	if fn == nil || proc == nil {
-		return expr, nil
+	ef, ok := e.Expr.(*plan.Expr_F)
+	if !ok || proc == nil {
+		return e, nil
 	}
 
-	overloadID := fn.Func.GetObj()
+	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
-	if fn.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
-		return expr, nil
+	if ef.F.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
+		return e, nil
 	}
-	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
+	for i := range ef.F.Args {
+		foldExpr, errFold := ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst)
 		if errFold != nil {
 			return nil, errFold
 		}
-		fn.Args[i] = foldExpr
+		ef.F.Args[i] = foldExpr
 	}
-	if !rule.IsConstant(expr, varAndParamIsConst) {
-		return expr, nil
+	if !rule.IsConstant(e, varAndParamIsConst) {
+		return e, nil
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{bat})
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
@@ -1124,11 +1122,11 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if !vec.IsConst() && vec.Length() > 1 {
 		data, err := vec.MarshalBinary()
 		if err != nil {
-			return expr, nil
+			return e, nil
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: e.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1140,13 +1138,13 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
-		return expr, nil
+		return e, nil
 	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	expr.Expr = ec
-	return expr, nil
+	e.Expr = ec
+	return e, nil
 }
 
 func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
