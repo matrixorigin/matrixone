@@ -241,7 +241,6 @@ var fixedCanImplicitCastRule [300]implicitTypeCastRule
 
 func setTargetScaleFromSource(source, target *types.Type) {
 	if source.Oid == target.Oid {
-		target.Width = source.Width
 		target.Scale = source.Scale
 		return
 	}

@@ -21,226 +21,232 @@ const (
 
 // All function IDs
 const (
-	EQUAL       = iota // =
-	NOT_EQUAL          // <>
-	GREAT_THAN         // >
-	GREAT_EQUAL        // >=
-	LESS_THAN          // <
-	LESS_EQUAL         // <=
-	BETWEEN
-	UNARY_PLUS  // UNARY_PLUS +
-	UNARY_MINUS // UNARY_MINUS -
-	UNARY_TILDE // UNARY_TILDE ~
-	PLUS        // +
-	MINUS       // -
-	MULTI       // *
-	DIV         // /
-	INTEGER_DIV // Div
-	MOD         // %
-	CONCAT      // ||
-	AND
-	OR
-	XOR
-	NOT
-	CAST
-	BIT_CAST
-	IS
-	ISNOT
-	ISNULL
-	ISNOTNULL
-	ISTRUE
-	ISNOTTRUE
-	ISFALSE
-	ISNOTFALSE
-	ISEMPTY
-	NOT_IN_ROWS
-	OP_BIT_AND         // &
-	OP_BIT_OR          // |
-	OP_BIT_XOR         // ^
-	OP_BIT_SHIFT_LEFT  // <<
-	OP_BIT_SHIFT_RIGHT // >>
+	EQUAL              = iota // =
+	NOT_EQUAL                 // <>
+	GREAT_THAN                // >
+	GREAT_EQUAL               // >=
+	LESS_THAN                 // <
+	LESS_EQUAL                // <=
+	BETWEEN                   // BETWEEN
+	UNARY_PLUS                // UNARY_PLUS +
+	UNARY_MINUS               // UNARY_MINUS -
+	UNARY_TILDE               // UNARY_TILDE ~
+	PLUS                      // +
+	MINUS                     // -
+	MULTI                     // *
+	DIV                       // /
+	INTEGER_DIV               // Div
+	MOD                       // %
+	CONCAT                    // ||
+	AND                       // AND
+	OR                        // OR
+	XOR                       // XOR
+	NOT                       // NOT
+	CAST                      // CAST
+	BIT_CAST                  // BIT_CAST
+	IS                        // IS
+	ISNOT                     // ISNOT
+	ISNULL                    // ISNULL
+	ISNOTNULL                 // ISNOTNULL
+	ISUNKNOWN                 // ISUNKNOWN
+	ISNOTUNKNOWN              // ISNOTUNKNOWN
+	ISTRUE                    // ISTRUE
+	ISNOTTRUE                 // ISNOTTRUE
+	ISFALSE                   // ISFALSE
+	ISNOTFALSE                // ISNOTTRUE
+	ISEMPTY                   // ISEMPTY
+	NOT_IN_ROWS               // NOT_IN_ROWS
+	OP_BIT_AND                // &
+	OP_BIT_OR                 // |
+	OP_BIT_XOR                // ^
+	OP_BIT_SHIFT_LEFT         // <<
+	OP_BIT_SHIFT_RIGHT        // >>
 
-	ABS
-	ACOS
-	ADDDATE
-	ADDTIME
-	AES_DECRYPT
-	AES_ENCRYPT
-	ANY_VALUE
-	APPROX_COUNT
-	ARRAY_AGG
-	ARRAY_APPEND
-	ARRAY_CAT
-	ARRAY_CONTAINS
-	ARRAY_POSITION
-	ARRAY_SIZE
-	ASCII
-	ASIN
-	ASSERT
-	ATAN
-	ATAN2
-	AVG
-	BASE64_DECODE
-	BASE64_ENCODE
-	BIT_AND
-	BIT_LENGTH
-	BIT_NOT
-	BIT_OR
-	BIT_XOR
-	BITAGG_AND
-	BITAGG_OR
-	BOOLAGG_AND
-	BOOLAGG_OR
-	CASE
-	CEIL
-	CHR
-	COALESCE
-	FIELD
+	ABS            // ABS
+	ACOS           // ACOS
+	ADDDATE        // ADDDATE
+	ADDTIME        // ADDTIME
+	AES_DECRYPT    // AES_DECRYPT
+	AES_ENCRYPT    // AES_ENCRYPT
+	ANY_VALUE      // ANY_VALUE
+	APPROX_COUNT   // APPROX_COUNT
+	ARRAY_AGG      // ARRAY_AGG
+	ARRAY_APPEND   // ARRAY_APPEND
+	ARRAY_CAT      // ARRAY_CAT
+	ARRAY_CONTAINS // ARRAY_CONTAINS
+	ARRAY_POSITION // ARRAY_POSITION
+	ARRAY_SIZE     // ARRAY_SIZE
+	ASCII          // ASCII
+	ASIN           // ASIN
+	ASSERT         // ASSERT
+	ATAN           // ATAN
+	ATAN2          // ATAN2
+	AVG            // AVG
+	BASE64_DECODE  // BASE64_DECODE
+	BASE64_ENCODE  // BASE64_ENCODE
+	BIT_AND        // BIT_AND
+	BIT_LENGTH     // BIT_LENGTH
+	BIT_NOT        // BIT_NOT
+	BIT_OR         // BIT_OR
+	BIT_XOR        // BIT_XOR
+	BITAGG_AND     // BITAGG_AND
+	BITAGG_OR      // BITAGG_OR
+	BOOLAGG_AND    // BOOLAGG_AND
+	BOOLAGG_OR     // BOOLAGG_OR
+	CASE           // CASE
+	CEIL           // CEIL
+	CHR            // CHR
+	COALESCE       // COALESCE
+	FIELD          // FIELD
 	CONCAT_WS
-	CONTAINS
-	CORR
-	COS
-	COT
-	COUNT
-	COUNT_IF
-	COVAR_POP
-	COVAR_SAMPLE
-	CONVERT_TZ
-	CUME_DIST
-	CURRENT_DATE
-	CURRENT_TIMESTAMP
-	DATE_FROM_PARTS
-	DATE_PART
-	DATEADD
-	DATEDIFF
-	TIMEDIFF
-	TIMESTAMPDIFF
-	DENSE_RANK
+	CONTAINS          // CONTAINS
+	CORR              // CORR
+	COS               // COS
+	COT               // COT
+	COUNT             // COUNT
+	COUNT_IF          // COUNT_IF
+	COVAR_POP         // COVAR_POP
+	COVAR_SAMPLE      // COVAR_SAMPLE
+	CONVERT_TZ        // CONVERT_TZ
+	CUME_DIST         // CUME_DIST
+	CURRENT_DATE      // CURRENT_DATE
+	CURRENT_TIMESTAMP // CURRENT_TIMESTAMP
+	DATE_FROM_PARTS   // DATE_FROM_PARTS
+	DATE_PART         // DATE_PART
+	DATEADD           // DATEADD
+	DATEDIFF          // DATEDIFF
+	TIMEDIFF          // TIMEDIFF
+	TIMESTAMPDIFF     // TIMESTAMPDIFF
+	DENSE_RANK        // DENSE_RANK
 	EMPTY
-	ENDSWITH
-	EXP
+	ENDSWITH // ENDSWITH
+	EXP      // EXP
 	FINDINSET
-	FIRST_VALUE
-	FLOOR
-	GREATEST
-	GROUPING_ID
-	HASH
-	HASH_AGG
-	HEX_DECODE
-	HEX_ENCODE
-	HEX
-	IFF
-	IFNULL
-	ILIKE
-	ILIKE_ALL
-	ILIKE_ANY
-	IN
-	LAG
-	LAST_VALUE
-	LEAD
-	LEAST
-	LEFT
-	LENGTH
+	FIRST_VALUE // FIRST_VALUE
+	FLOOR       // FLOOR
+	GREATEST    // GREATEST
+	GROUPING_ID // GROUPING_ID
+	HASH        // HASH
+	HASH_AGG    // HASH_AGG
+	HEX_DECODE  // HEX_DECODE
+	HEX_ENCODE  // HEX_ENCODE
+	HEX         // HEX
+	IFF         // IFF
+	IFNULL      // IFNULL
+	ILIKE       // ILIKE
+	ILIKE_ALL   // ILIKE_ALL
+	ILIKE_ANY   // ILIKE_ANY
+	IN          // IN
+	LAG         // LAG
+	LAST_VALUE  // LAST_VALUE
+	LEAD        // LEAD
+	LEAST       // LEAST
+	LEFT        // LEFT
+	LENGTH      // LENGTH
 	LENGTH_UTF8
-	LIKE
-	LIKE_ALL
-	LIKE_ANY
-	LN
-	NOT_IN
-	LOG
-	LOG2
-	LOG10
-	LOWER
-	LPAD
-	LTRIM
-	MAX
-	MEDIAN
-	MIN
-	MODE
+	LIKE     // LIKE
+	LIKE_ALL // LIKE_ALL
+	LIKE_ANY // LIKE_ANY
+	LN       // LN
+	NOT_IN   // NOT_IN
+	LOG      // LOG
+	LOG2     // LOG2
+	LOG10    // LOG10
+	LOWER    // LOWER
+	LPAD     // LPAD
+	LTRIM    // LTRIM
+	MAX      // MAX
+	MEDIAN   // MEDIAN
+	MIN      // MIN
+	MODE     // MODE
 	MONTH
-	NORMAL
-	NTH_VALUE
-	NTILE
-	NULLIF
-	PERCENT_RANK
-	PI
-	POSITION
-	POW
-	PREFIX_EQ
-	PREFIX_IN
-	PREFIX_BETWEEN
-	RADIAN
-	RANDOM
-	RANK
-	REGEXP
-	REGEXP_INSTR
-	REGEXP_LIKE
-	REGEXP_REPLACE
-	REGEXP_SUBSTR
-	REG_MATCH
-	NOT_REG_MATCH
-	REPEAT
-	REPLACE
+	NORMAL         // NORMAL
+	NTH_VALUE      // NTH_VALUE
+	NTILE          // NTILE
+	NULLIF         // NULLIF
+	PERCENT_RANK   // PERCENT_RANK
+	PI             // PI
+	POSITION       // POSITION
+	POW            // POW
+	PREFIX_EQ      // PREFIX_EQ
+	PREFIX_IN      // PREFIX_IN
+	PREFIX_BETWEEN // PREFIX_BETWEEN
+	RADIAN         // RADIAN
+	RANDOM         // RANDOM
+	RANK           // RANK
+	REGEXP         // REGEXP
+	REGEXP_INSTR   // REGEXP_INSTR
+	REGEXP_LIKE    // REGEXP_LIKE
+	REGEXP_REPLACE // REGEXP_REPLACE
+	REGEXP_SUBSTR  // REGEXP_SUBSTR
+	REG_MATCH      // REG_MATHCH
+	NOT_REG_MATCH  // NOT_REG_MATCH
+	REPEAT         // REPEAT
+	REPLACE        // REPLACE
 	REVERSE
-	RIGHT
-	ROUND
-	ROW_NUMBER
-	RPAD
-	RTRIM
-	SIGN
-	SIN
-	SINH
+	RIGHT      // RIGHT
+	ROUND      // ROUND
+	ROW_NUMBER // ROW_NUMBER
+	RPAD       // RPAD
+	RTRIM      // RTRIM
+	SIGN       // SIGN
+	SIN        // SIN
+	SINH       //SINH
 	SPACE
-	SPLIT
-	SPLIT_PART
-	SQRT
-	STARCOUNT
-	STARTSWITH
-	STDDEV_POP
-	STDDEV_SAMPLE
-	SUBSTR
-	SUM
+	SPLIT         // SPLIT
+	SPLIT_PART    // SPLIT_PART
+	SQRT          // SQRT
+	STARCOUNT     // STARTCOUNT
+	STARTSWITH    // STARTSWITH
+	STDDEV_POP    // STDDEV_POP
+	STDDEV_SAMPLE // STDDEV_SAMPLE
+	SUBSTR        // SUBSTR
+	SUM           // SUM
 	GROUP_CONCAT
-	TAN
+	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
-	TO_INTERVAL
-	TRANSLATE
-	TRIM
-	UNIFORM
-	SHA2
+	TO_INTERVAL // TO_INTERVAL
+	TRANSLATE   // TRANSLATE
+	TRIM        // TRIM
+	UNIFORM     // UNIFORM
+	SHA2        //SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
 	FROM_UNIXTIME
-	UPPER
-	VAR_POP
-	VAR_SAMPLE
+	UPPER      // UPPER
+	VAR_POP    // VAR_POP
+	VAR_SAMPLE // VAR_SAMPLE
 
-	DATE
-	TIME
-	DAY
-	DAYOFYEAR
-	INTERVAL
-	EXTRACT
+	EXISTS // EXISTS
+	ALL    // ALL
+	ANY    // ANY
+
+	DATE      // DATE
+	TIME      //TIME
+	DAY       //DAY
+	DAYOFYEAR // DAYOFYEAR
+	INTERVAL  // INTERVAL
+	EXTRACT   // EXTRACT
 	OCT
-	SUBSTRING
-	ENCODE
-	DECODE
-	SUBSTRING_INDEX
-	WEEK
+	SUBSTRING       // SUBSTRING
+	ENCODE          // ENCODE
+	DECODE          // DECODE
+	SUBSTRING_INDEX //SUBSTRING_INDEX
+	WEEK            //WEEK
 	WEEKDAY
-	YEAR
-	HOUR
-	MINUTE
-	SECOND
+	YEAR   // YEAR
+	HOUR   // HOUR
+	MINUTE // MINUTE
+	SECOND // SECOND
 	TO_DAYS
 	TO_SECONDS
 
-	DATE_ADD
-	DATE_SUB
-	APPROX_COUNT_DISTINCT
+	DATE_ADD              // DATE_ADD
+	DATE_SUB              // DATE_SUB
+	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
-	LOAD_FILE
+	LOAD_FILE // LOAD_FILE
 
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
@@ -266,20 +272,20 @@ const (
 	CURRENT_USER_ID
 	CURRENT_USER_NAME
 
-	TIMESTAMP
-	DATE_FORMAT
-	JSON_EXTRACT
-	JSON_QUOTE
-	JSON_UNQUOTE
-	FORMAT
-	SLEEP
+	TIMESTAMP    // TIMESTAMP
+	DATE_FORMAT  // DATE_FORMAT
+	JSON_EXTRACT // JSON_EXTRACT
+	JSON_QUOTE   // JSON_QUOTE
+	JSON_UNQUOTE // JSON_UNQUOTE
+	FORMAT       // FORMAT
+	SLEEP        // sleep for a while
 	INSTR
-	LOCATE
+	LOCATE // LOCATE
 
 	UUID
 	SERIAL
 	SERIAL_FULL
-	BIN
+	BIN //BIN
 
 	ENABLE_FAULT_INJECTION
 	DISABLE_FAULT_INJECTION
@@ -358,47 +364,48 @@ const (
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
-	"=":              EQUAL,
-	">":              GREAT_THAN,
-	">=":             GREAT_EQUAL,
-	"<":              LESS_THAN,
-	"<=":             LESS_EQUAL,
-	"<>":             NOT_EQUAL,
-	"!=":             NOT_EQUAL,
-	"not":            NOT,
-	"and":            AND,
-	"or":             OR,
-	"xor":            XOR,
-	"like":           LIKE,
-	"between":        BETWEEN,
-	"in":             IN,
-	"not_in":         NOT_IN,
-	"+":              PLUS,
-	"-":              MINUS,
-	"*":              MULTI,
-	"/":              DIV,
-	"div":            INTEGER_DIV,
-	"%":              MOD,
-	"mod":            MOD,
-	"unary_plus":     UNARY_PLUS,
-	"unary_minus":    UNARY_MINUS,
-	"unary_tilde":    UNARY_TILDE,
-	"unary_mark":     NOT,
-	"case":           CASE,
-	"coalesce":       COALESCE,
-	"cast":           CAST,
-	"bit_cast":       BIT_CAST,
-	"is":             IS,
-	"is_not":         ISNOT,
-	"isnot":          ISNOT,
-	"is_null":        ISNULL,
-	"isnull":         ISNULL,
-	"ifnull":         ISNULL,
-	"ilike":          ILIKE,
-	"is_not_null":    ISNOTNULL,
-	"isnotnull":      ISNOTNULL,
-	"isunknown":      ISNULL,
-	"isnotunknown":   ISNOTNULL,
+	"=":    EQUAL,
+	">":    GREAT_THAN,
+	">=":   GREAT_EQUAL,
+	"<":    LESS_THAN,
+	"<=":   LESS_EQUAL,
+	"<>":   NOT_EQUAL,
+	"!=":   NOT_EQUAL,
+	"not":  NOT,
+	"and":  AND,
+	"or":   OR,
+	"xor":  XOR,
+	"like": LIKE,
+	//"between":     BETWEEN,
+	"in":     IN,
+	"not_in": NOT_IN,
+	//"exists":      EXISTS,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"bit_cast":    BIT_CAST,
+	"is":          IS,
+	"is_not":      ISNOT,
+	"isnot":       ISNOT,
+	"is_null":     ISNULL,
+	"isnull":      ISNULL,
+	"ifnull":      ISNULL,
+	"ilike":       ILIKE,
+	"is_not_null": ISNOTNULL,
+	"isnotnull":   ISNOTNULL,
+	//"isunknown":    ISUNKNOWN,
+	//"isnotunknown": ISNOTUNKNOWN,
 	"istrue":         ISTRUE,
 	"isnottrue":      ISNOTTRUE,
 	"isfalse":        ISFALSE,
