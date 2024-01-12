@@ -375,6 +375,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
+func (c *Compile) allocOperatorID() int32 {
+	defer func() {
+		c.lastAllocID++
+	}()
+
+	return c.lastAllocID
+}
+
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	start := time.Now()
@@ -387,6 +395,10 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	for _, s := range c.scope {
+		s.SetOperatorInfoRecursively(c.allocOperatorID)
+	}
 
 	result = &util2.RunResult{}
 	var span trace.Span
