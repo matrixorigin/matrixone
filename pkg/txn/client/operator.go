@@ -552,7 +552,7 @@ func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	for _, l := range tc.mu.lockTables {
 		if l.Table == value.Table {
 			if l.Changed(value) {
-				return moerr.NewDeadLockDetectedNoCtx()
+				return moerr.NewLockTableBindChangedNoCtx()
 			}
 			return nil
 		}
