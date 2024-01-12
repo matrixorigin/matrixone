@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/exp/constraints"
 	"math"
 	"strconv"
 	"strings"
@@ -789,4 +790,71 @@ func Unpack(b []byte) (Tuple, error) {
 func UnpackWithSchema(b []byte) (Tuple, []T, error) {
 	t, _, schema, err := decodeTuple(b)
 	return t, schema, err
+}
+
+func CompareTuple(v1, v2 []byte) (int, error) {
+	t1, s1, _ := UnpackWithSchema(v1)
+	t2, s2, _ := UnpackWithSchema(v2)
+
+	if len(s1) != len(s2) {
+		return 0, moerr.NewInternalErrorNoCtx("unable to compare tuples with different schemas")
+	}
+	for i := 0; i < len(s1); i++ {
+		if s1[i] != s2[i] {
+			return 0, moerr.NewInternalErrorNoCtx("unable to compare tuples with different schemas")
+		}
+	}
+
+	var cmp int
+	for i := 0; i < len(s1); i++ {
+		switch s1[i] {
+		case T_int8:
+			cmp = compareGeneric[int8](t1[i], t2[i])
+		case T_int16:
+			cmp = compareGeneric[int16](t1[i], t2[i])
+		case T_int32:
+			cmp = compareGeneric[int32](t1[i], t2[i])
+		case T_int64:
+			cmp = compareGeneric[int64](t1[i], t2[i])
+		case T_uint8:
+			cmp = compareGeneric[uint8](t1[i], t2[i])
+		case T_uint16:
+			cmp = compareGeneric[uint16](t1[i], t2[i])
+		case T_uint32:
+			cmp = compareGeneric[uint32](t1[i], t2[i])
+		case T_uint64:
+			cmp = compareGeneric[uint64](t1[i], t2[i])
+		case T_float32:
+			cmp = compareGeneric[float32](t1[i], t2[i])
+		case T_float64:
+			cmp = compareGeneric[float64](t1[i], t2[i])
+		case T_date:
+			cmp = compareGeneric[Date](t1[i], t2[i])
+		case T_time:
+			cmp = compareGeneric[Time](t1[i], t2[i])
+		case T_datetime:
+			cmp = compareGeneric[Datetime](t1[i], t2[i])
+		case T_timestamp:
+			cmp = compareGeneric[Timestamp](t1[i], t2[i])
+		case T_decimal64:
+			cmp = Decimal64.Compare(t1[i].(Decimal64), t2[i].(Decimal64))
+		case T_decimal128:
+			cmp = t1[i].(Decimal128).Compare(t2[i].(Decimal128))
+		case T_varchar:
+			cmp = bytes.Compare(t1[i].([]byte), t2[i].([]byte))
+		}
+		if cmp != 0 {
+			return cmp, nil
+		}
+	}
+	return 0, nil
+}
+
+func compareGeneric[T constraints.Integer | constraints.Float | Date | Datetime | Timestamp](v1, v2 any) int {
+	if v1.(T) < v2.(T) {
+		return -1
+	} else if v1.(T) > v2.(T) {
+		return 1
+	}
+	return 0
 }
