@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -171,29 +172,47 @@ func (p *PartitionState) GetChangedObjsBetween(
 }
 
 func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLocation, types.TS, bool) {
-	e, ok := p.blockDeltas.Get(BlockDeltaEntry{
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	pivot := BlockDeltaEntry{
 		BlockID: bid,
-	})
-	if ok {
-		return e.DeltaLoc, e.CommitTs, true
+	}
+	if ok := iter.Seek(pivot); ok {
+		e := iter.Item()
+		if e.BlockID.Compare(bid) == 0 {
+			return e.DeltaLoc, e.CommitTs, true
+		}
 	}
 	return objectio.ObjectLocation{}, types.TS{}, false
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	e := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&e.ObjectStats, objectio.ShortName(&blockID))
-	if _, ok := p.dataObjects.Get(e); ok {
-		return true
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
+	if ok := iter.Seek(pivot); ok {
+		e := iter.Item()
+		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&blockID)[:]) {
+			return true
+		}
 	}
 	return false
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	e := ObjectEntry{}
-	objectio.SetObjectStatsShortName(&e.ObjectStats, &name)
-	if v, ok := p.dataObjects.Get(e); ok {
-		return v.ObjectInfo, true
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	pivot := ObjectEntry{}
+	objectio.SetObjectStatsShortName(&pivot.ObjectStats, &name)
+	if ok := iter.Seek(pivot); ok {
+		e := iter.Item()
+		if bytes.Equal(e.ObjectShortName()[:], name[:]) {
+			return iter.Item().ObjectInfo, true
+		}
 	}
 	return ObjectInfo{}, false
 }
