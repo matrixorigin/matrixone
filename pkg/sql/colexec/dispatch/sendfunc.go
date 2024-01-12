@@ -29,7 +29,7 @@ import (
 
 // common sender: send to all LocalReceivers
 func (arg *Argument) sendToAllLocalReceivers(proc *process.Process, bat *batch.Batch) error {
-	list, err := dealRefers(bat, arg.ctr.localRegsCnt, arg.RecSink, proc)
+	list, err := increaseReferenceBeforeSend(bat, arg.ctr.localRegsCnt, arg.RecSink, proc)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func (arg *Argument) sendToAllLocalReceivers(proc *process.Process, bat *batch.B
 		for i, reg := range arg.LocalRegs {
 			select {
 			case <-proc.Ctx.Done():
-				handleUnsentRefers(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				decreaseReferenceAfterSend(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
 				arg.ctr.stopSending()
 				return nil
 
@@ -62,7 +62,7 @@ func (arg *Argument) sendToAllLocalReceivers(proc *process.Process, bat *batch.B
 					bat.AddCnt(-1)
 					continue
 				}
-				handleUnsentRefers(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				decreaseReferenceAfterSend(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
 				arg.ctr.stopSending()
 				return nil
 
@@ -302,7 +302,7 @@ func (arg *Argument) shuffleToAllReceivers(proc *process.Process, bat *batch.Bat
 	}
 }
 
-func dealRefers(
+func increaseReferenceBeforeSend(
 	bat *batch.Batch,
 	localReceiverCnt int, isRecSink bool,
 	proc *process.Process) (batchList []*batch.Batch, err error) {
@@ -347,6 +347,22 @@ func dealRefers(
 	return batchList, err
 }
 
+func decreaseReferenceAfterSend(
+	bat *batch.Batch,
+	isRecSink bool,
+	localReceiverCnt int, succeedCnt int) {
+	if isRecSink {
+		return
+	}
+
+	cntSub := succeedCnt - localReceiverCnt
+	bat.AddCnt(cntSub)
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		jm.IncRef(int64(cntSub))
+		jm.IncDupCount(int64(cntSub))
+	}
+}
+
 func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs process.WrapCs) error {
 	checksum := crc32.ChecksumIEEE(encodeBatData)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
@@ -383,20 +399,4 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 		}
 	}
 	return nil
-}
-
-func handleUnsentRefers(
-	bat *batch.Batch,
-	isRecSink bool,
-	localReceiverCnt int, succeedCnt int) {
-	if isRecSink {
-		return
-	}
-
-	cntSub := succeedCnt - localReceiverCnt
-	bat.AddCnt(cntSub)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(int64(cntSub))
-		jm.IncDupCount(int64(cntSub))
-	}
 }
