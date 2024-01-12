@@ -35,7 +35,6 @@ type ObjectReader interface {
 	GetID() *types.Objectid
 	IsUncommitted() bool
 	IsAppendable() bool
-	MakeBlockIt() BlockIt
 	Fingerprint() *common.ID
 	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
