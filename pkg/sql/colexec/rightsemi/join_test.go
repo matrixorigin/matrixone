@@ -271,6 +271,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) jo
 				IsFirst: false,
 				IsLast:  false,
 			},
+			NeedAllocateSels: true,
 		},
 	}
 }
