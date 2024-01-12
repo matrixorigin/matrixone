@@ -834,7 +834,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Arg: merge.NewArgument(),
 
 					CnAddr:      in.CnAddr,
-					OperatorID:  in.OperatorID, //todo   要用 compile.AllocOperatorID()
+					OperatorID:  c.allocOperatorID(),
 					ParallelID:  0,
 					MaxParallel: 1,
 				}
