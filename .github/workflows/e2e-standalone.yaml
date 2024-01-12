@@ -8,7 +8,7 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64(LAUNCH)
-    timeout-minutes: 100
+    timeout-minutes: 90
     steps:
       - name: checkout head
         uses: actions/checkout@v3
