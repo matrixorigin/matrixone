@@ -43,7 +43,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	f := true
 	for i := len(ap.AggIds) - 1; i >= 0; i-- {
-		if ap.AggIds[i] == function.MAX || ap.AggIds[i] == function.MIN || ap.AggIds[i] == function.SUM || ap.AggIds[i] == function.AVG {
+		if ap.AggIds[i] == function.MAX || ap.AggIds[i] == function.MIN || ap.AggIds[i] == function.SUM || ap.AggIds[i] == function.AVG || ap.AggIds[i] == function.SERIAL_MIN {
 			ctr.colIdx = i
 			f = false
 			break

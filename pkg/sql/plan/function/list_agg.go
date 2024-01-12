@@ -62,6 +62,29 @@ var supportedAggregateFunctions = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: SERIAL_MIN,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && inputs[0].Oid == types.T_varchar {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggMinxReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "serial_min",
+					aggNew: functionAgg.NewAggMin,
+				},
+			},
+		},
+	},
 
 	{
 		functionId: SUM,
