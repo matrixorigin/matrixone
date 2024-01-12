@@ -1091,22 +1091,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].GetLit().GetSval())
+				s := []byte(args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval)
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
-				return zms[expr.AuxId]
-
-			case "prefix_between":
-				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
-				if !lhs.IsInited() {
-					zms[expr.AuxId].Reset()
-					return zms[expr.AuxId]
-				}
-
-				lb := []byte(args[1].GetLit().GetSval())
-				ub := []byte(args[2].GetLit().GetSval())
-
-				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
 			case "prefix_in":
@@ -1196,16 +1183,6 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
-					zms[expr.AuxId].Reset()
-				} else {
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
-				}
-
-			case "between":
-				if f() {
-					return zms[expr.AuxId]
-				}
-				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
