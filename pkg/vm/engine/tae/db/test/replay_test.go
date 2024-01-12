@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -68,13 +67,8 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				obj, err := rel.CreateNonAppendableObject(false)
+				_, err := rel.CreateNonAppendableObject(false)
 				assert.Nil(t, err)
-				blkCnt := rand.Intn(5) + 1
-				for j := 0; j < blkCnt; j++ {
-					_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
-					assert.Nil(t, err)
-				}
 			}
 			assert.Nil(t, txn.Commit(context.Background()))
 			if forceCkp || rand.Intn(100) > 80 {
@@ -134,12 +128,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateNonAppendableObject(false)
-	assert.Nil(t, err)
-	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
-	assert.Nil(t, err)
-	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
+	_, err = rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -162,10 +151,6 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
-	assert.Nil(t, err)
-	err = obj.SoftDeleteBlock(blk1Meta.ID)
-	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
@@ -173,9 +158,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject(false)
-	assert.Nil(t, err)
-	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -216,11 +199,6 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
-	assert.Nil(t, err)
-	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
-	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -241,10 +219,6 @@ func TestReplayCatalog3(t *testing.T) {
 	e, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
-	assert.Nil(t, err)
-	err = obj.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -301,9 +275,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateObject(false)
-	assert.Nil(t, err)
-	_, err = obj.CreateBlock(false)
+	_, err = rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	logutil.Infof("%d,%d", txn.GetStartTS(), txn.GetCommitTS())
@@ -436,11 +408,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	blkIterator := rel.MakeBlockIt()
-	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	obj, err := rel.GetObject(&blk.GetObject().ID)
-	assert.Nil(t, err)
-	err = obj.SoftDeleteBlock(blk.ID)
+	blkIterator := rel.MakeObjectIt()
+	blk := blkIterator.GetObject().GetMeta().(*catalog.ObjectEntry)
+	obj, err := rel.GetObject(&blk.ID)
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
@@ -465,9 +435,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	objEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
-	blkh, err := objEntry.GetBlockEntryByID(&blk.ID)
-	assert.Nil(t, err)
-	assert.True(t, blkh.HasDropCommittedLocked())
+	assert.True(t, objEntry.HasDropCommittedLocked())
 
 	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -505,8 +473,6 @@ func TestReplay2(t *testing.T) {
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	objEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
-	assert.Nil(t, err)
-	_, err = objEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -629,8 +595,8 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
 	rows += 1600
-	blkIterator := tbl.MakeBlockIt()
-	blkID := blkIterator.GetBlock().Fingerprint()
+	blkIterator := tbl.MakeObjectIt()
+	blkID := blkIterator.GetObject().Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
@@ -645,8 +611,8 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	rows += 1600
-	blkIterator = tbl.MakeBlockIt()
-	blkID = blkIterator.GetBlock().Fingerprint()
+	blkIterator = tbl.MakeObjectIt()
+	blkID = blkIterator.GetObject().Fingerprint()
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
@@ -1350,8 +1316,6 @@ func TestReplaySnapshots(t *testing.T) {
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
 	obj, err := rel.CreateObject(false)
-	assert.NoError(t, err)
-	_, err = obj.CreateBlock(false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
