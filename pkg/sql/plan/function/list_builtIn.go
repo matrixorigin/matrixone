@@ -1272,6 +1272,35 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `serial_extract`
+	{
+		functionId: SERIAL_EXTRACT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		//TODO: verify with @m-schen
+		//layout:     STANDARD_FUNCTION,
+		layout: CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				if inputs[0].Oid == types.T_varchar &&
+					inputs[1].Oid == types.T_int64 {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[2]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSerialExtract
+				},
+			},
+		},
+	},
+
 	// function `space`
 	{
 		functionId: SPACE,

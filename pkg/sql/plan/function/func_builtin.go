@@ -1241,6 +1241,149 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 	}
 }
 
+// builtInSerialExtract is used to extract a tupleElement from the serial vector.
+// For example:
+//
+//	serial_col = serial(floatCol, varchar3Col)
+//	serial_extract(serial_col, 1, varchar(3)) will return 2
+func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	resTyp := parameters[2].GetType()
+
+	switch resTyp.Oid {
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_date:
+		rs := vector.MustFunctionResult[types.Date](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_datetime:
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+	case types.T_timestamp:
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
+
+	case types.T_json, types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return serialExtractForString(p1, p2, rs, proc, length)
+	}
+	return moerr.NewInternalError(proc.Ctx, "not supported type %s", resTyp.String())
+
+}
+
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
+	p1 vector.FunctionParameterWrapper[types.Varlena],
+	p2 vector.FunctionParameterWrapper[int64],
+	result *vector.FunctionResult[T], proc *process.Process, length int) error {
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null || null2 {
+			var nilVal T
+			if err := result.Append(nilVal, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		tuple, err := types.Unpack(v1)
+		if err != nil {
+			return err
+		}
+
+		if int(v2) >= len(tuple) {
+			return moerr.NewInternalError(proc.Ctx, "index out of range")
+		}
+
+		if value, ok := tuple[v2].(T); ok {
+			if err := result.Append(value, false); err != nil {
+				return err
+			}
+		} else {
+			return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+		}
+	}
+
+	return nil
+}
+
+func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
+	p2 vector.FunctionParameterWrapper[int64],
+	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null || null2 {
+			if err := result.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		tuple, err := types.Unpack(v1)
+		if err != nil {
+			return err
+		}
+
+		if int(v2) >= len(tuple) {
+			return moerr.NewInternalError(proc.Ctx, "index out of range")
+		}
+
+		if value, ok := tuple[v2].([]byte); ok {
+			if err := result.AppendBytes(value, false); err != nil {
+				return err
+			}
+		} else {
+			return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+		}
+	}
+
+	return nil
+}
+
 // 24-hour seconds
 const SecondsIn24Hours = 86400
 

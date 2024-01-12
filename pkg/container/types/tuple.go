@@ -747,6 +747,10 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 		case b[i] == stringTypeCode:
 			el, off = decodeBytes(b[i+1:])
 			off += 1
+		case b[i] == enumCode:
+			//TODO: need to verify @YANGGMM
+			el, off = decodeUint(uint16Code, b[i+1:])
+			off += 1
 		default:
 			return nil, i, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
