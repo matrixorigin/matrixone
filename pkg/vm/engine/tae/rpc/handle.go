@@ -983,7 +983,7 @@ func (h *Handle) HandleWrite(
 		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
@@ -1059,7 +1059,7 @@ func (h *Handle) HandleWrite(
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}

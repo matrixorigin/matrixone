@@ -5738,7 +5738,7 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, err := types.DecodeTuple(value)
+										tuples, _, _, err := types.DecodeTuple(value)
 										scales := make([]int32, len(coltypes))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
