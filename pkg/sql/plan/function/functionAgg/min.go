@@ -16,7 +16,6 @@ package functionAgg
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -121,6 +120,7 @@ type sAggDecimal64Min struct{}
 type sAggDecimal128Min struct{}
 type sAggUuidMin struct{}
 type sAggStrMin struct{}
+type sAggSerialMin struct{}
 
 func (s *sAggMin[T]) Dup() agg.AggStruct {
 	return &sAggMin[T]{}
@@ -296,3 +296,53 @@ func (s *sAggStrMin) Eval(lastResult [][]byte) (result [][]byte, err error) {
 }
 func (s *sAggStrMin) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggStrMin) UnmarshalBinary([]byte) error   { return nil }
+
+// NewAggSerialMin returns the AggMin for serial_min.
+func NewAggSerialMin(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+	aggPriv := &sAggSerialMin{}
+	if dist {
+		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	}
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+}
+
+func (s *sAggSerialMin) Dup() agg.AggStruct {
+	return &sAggSerialMin{}
+}
+func (s *sAggSerialMin) Grows(_ int)         {}
+func (s *sAggSerialMin) Free(_ *mpool.MPool) {}
+func (s *sAggSerialMin) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) (newResult []byte, isStillEmpty bool, err error) {
+	if !isNull {
+		if isEmpty {
+			lastResult = make([]byte, len(values))
+			copy(lastResult, values)
+			return lastResult, false, nil
+		}
+		if cmp, err := types.CompareTuple(values, lastResult); err != nil {
+			return nil, false, err
+		} else if cmp < 0 {
+			lastResult = lastResult[:0]
+			lastResult = append(lastResult, values...)
+			return lastResult, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggSerialMin) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult []byte, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 {
+			if cmp, err := types.CompareTuple(result1, result2); err != nil {
+				return nil, false, err
+			} else if cmp < 0 {
+				return result1, false, nil
+			}
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggSerialMin) Eval(lastResult [][]byte) (result [][]byte, err error) {
+	return lastResult, nil
+}
+func (s *sAggSerialMin) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggSerialMin) UnmarshalBinary([]byte) error   { return nil }
