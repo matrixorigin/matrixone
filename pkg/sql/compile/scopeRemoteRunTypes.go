@@ -259,8 +259,8 @@ func (sender *messageSenderOnClient) close() {
 	_ = sender.streamSender.Close(true)
 }
 
-// messageReceiverOnServer is a structure
-// for processing received message and writing results back at cn-server.
+// messageReceiverOnServer is a structure in cn-server
+// for processing received message and writing results back.
 type messageReceiverOnServer struct {
 	ctx         context.Context
 	messageId   uint64
@@ -277,6 +277,7 @@ type messageReceiverOnServer struct {
 	scopeData       []byte
 
 	// XXX what's that. So confused.
+	// todo: this field can be removed.
 	sequence uint64
 
 	// result.

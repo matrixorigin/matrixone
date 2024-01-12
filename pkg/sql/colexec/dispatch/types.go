@@ -37,10 +37,13 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyFunc
 	ShuffleToAllFunc
+
+	argName = "dispatch"
 )
 
 type senderStatus int
 
+// the status of the sender.
 const (
 	normalSending senderStatus = iota
 	stopSending
@@ -54,16 +57,16 @@ type container struct {
 	// the information of remote receivers.
 	remoteReceivers []process.WrapCs
 
-	// sendFunc2 was responsible for sending batch to the receivers.
+	// sendFunc was responsible for sending batch to the receivers.
 	// this function should fill the reference count of the batch.
-	sendFunc2 func(proc *process.Process, bat *batch.Batch) error
+	sendFunc func(proc *process.Process, bat *batch.Batch) error
 
 	// the number of receivers.
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
 
-	// for send-to-any function decide send to which reg
+	// function `send to any` will use this field to determine which receiver to send.
 	sendCnt int
 
 	remoteToIdx map[uuid.UUID]int
