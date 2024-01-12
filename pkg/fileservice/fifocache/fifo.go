@@ -130,6 +130,14 @@ func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 	return item.value, true
 }
 
+func (c *Cache[K, V]) Delete(key K) {
+	shard := &c.shards[c.keyShardFunc(key)]
+	shard.Lock()
+	defer shard.Unlock()
+	delete(shard.values, key)
+	// we don't update queues
+}
+
 func (c *Cache[K, V]) evict() {
 	for c.used1+c.used2 > c.capacity {
 		if c.used1 > c.capacity1 {
