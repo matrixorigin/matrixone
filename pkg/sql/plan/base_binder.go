@@ -502,17 +502,14 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
 	if astExpr.Not {
 		// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
-		newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
+		newLefExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
 		newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
-		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLefExpr, newRightExpr}, depth)
 	} else {
-		if _, ok := astExpr.Left.(*tree.Tuple); ok {
-			newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
-			newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
-			return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-		}
-
-		return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+		// rewrite 'col between 1, 20 ' to ' col >= 1 and col <= 2'
+		newLefExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
+		newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
+		return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLefExpr, newRightExpr}, depth)
 	}
 }
 
@@ -1184,80 +1181,16 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
-	if err != nil {
-		return nil, err
-	}
-
-	switch retExpr.GetF().GetFunc().GetObjName() {
+	switch name {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in":
-		if proc != nil {
+		if err == nil && proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
 		}
-
-	case "between":
-		if proc == nil {
-			goto between_fallback
-		}
-
-		fnArgs := retExpr.GetF().Args
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false)
-		if err != nil {
-			goto between_fallback
-		}
-		fnArgs[1] = arg1
-
-		lit0 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit0 == nil {
-			goto between_fallback
-		}
-
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false)
-		if err != nil {
-			goto between_fallback
-		}
-		fnArgs[2] = arg2
-
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
-			goto between_fallback
-		}
-
-		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false)
-		rangeCheckVal := rangeCheckRes.GetLit()
-		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			goto between_fallback
-		}
-
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
 	}
-
-	return retExpr, nil
-
-between_fallback:
-	fnArgs := retExpr.GetF().Args
-	leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(fnArgs[0]), fnArgs[1]})
-	if err != nil {
-		return nil, err
-	}
-	rightFn, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{fnArgs[0], fnArgs[2]})
-	if err != nil {
-		return nil, err
-	}
-
-	retExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
-	if err != nil {
-		return nil, err
-	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false)
-	if err != nil {
-		return nil, err
-	}
-
-	return retExpr, nil
+	return retExpr, err
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -1521,23 +1454,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// get function definition
 	fGet, err := function.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
-		if name == "between" {
-			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
-			if err != nil {
-				return nil, err
-			}
-
-			rightFn, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{args[0], args[2]})
-			if err != nil {
-				return nil, err
-			}
-
-			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
-		}
-
 		return nil, err
 	}
-
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()

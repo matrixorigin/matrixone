@@ -524,8 +524,8 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 			continue
 		}
 		for _, filter := range filters {
-			col := extractColRefInFilter(filter)
-			if col != nil {
+			ret, col := CheckFilter(filter)
+			if ret && col != nil {
 				newExpr := DeepCopyExpr(filter)
 				if substituteMatchColumn(newExpr, col1, col2) {
 					newFilters = append(newFilters, newExpr)
@@ -537,103 +537,130 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 }
 
 func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
-	if col1 == nil || col2 == nil {
+	b1, col1, _, funcName1 := CheckStrictFilter(expr1)
+	b2, col2, _, funcName2 := CheckStrictFilter(expr2)
+	if !b1 || !b2 {
 		return false
 	}
 	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {
 		return false
 	}
-
-	fnName1 := expr1.GetF().Func.ObjName
-	fnName2 := expr2.GetF().Func.ObjName
-	if fnName1 == ">" || fnName1 == ">=" {
-		return fnName2 == "<" || fnName2 == "<="
+	if funcName1 == ">" || funcName1 == ">=" {
+		return funcName2 == "<" || funcName2 == "<="
 	}
-	if fnName1 == "<" || fnName1 == "<=" {
-		return fnName2 == ">" || fnName2 == ">="
+	if funcName1 == "<" || funcName1 == "<=" {
+		return funcName2 == ">" || funcName2 == ">="
 	}
 	return false
 }
 
-func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string) {
-	fn := expr.GetF()
-	if fn == nil || len(fn.Args) == 0 {
-		return
-	}
-
-	col = fn.Args[0].GetCol()
-	if col == nil {
-		if fn0 := fn.Args[0].GetF(); fn0 != nil {
-			switch fn0.Func.ObjName {
-			case "year":
-				colFnName = "year"
-				col = fn0.Args[0].GetCol()
+// function filter means func(col) compared to const. for example year(col1)>1991
+func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, childFuncName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_F:
+				childFuncName = child0.F.Func.ObjName
+				switch childFuncName {
+				case "year":
+					switch child := child0.F.Args[0].Expr.(type) {
+					case *plan.Expr_Col:
+						col = child.Col
+					}
+				}
+			default:
+				return false, nil, nil, childFuncName
 			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
+				b = true
+				return
+			default:
+				return false, nil, nil, childFuncName
+			}
+		default:
+			return false, nil, nil, childFuncName
 		}
+	default:
+		return false, nil, nil, childFuncName
 	}
-	if col == nil {
-		return
-	}
+}
 
-	switch fn.Func.ObjName {
-	case "=", ">", "<", ">=", "<=":
-		lit := fn.Args[1].GetLit()
-		if lit == nil {
-			return
+// strict filter means col compared to const. for example col1>1
+// func(col1)=1 is not strict
+func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName = exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_Col:
+				col = child0.Col
+			default:
+				return false, nil, nil, funcName
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_Lit:
+				constExpr = child1.Lit
+				b = true
+				return
+			default:
+				return false, nil, nil, funcName
+			}
+		default:
+			return false, nil, nil, funcName
 		}
-		litType = types.T(fn.Args[0].Typ.Id)
-		literals = []*Const{lit}
-
-	case "between":
-		litType = types.T(fn.Args[0].Typ.Id)
-		literals = []*Const{fn.Args[1].GetLit(), fn.Args[2].GetLit()}
+	default:
+		return false, nil, nil, funcName
 	}
-
-	return
 }
 
 // for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
 // and only 1 colRef is allowd in the filter
-func extractColRefInFilter(expr *plan.Expr) *ColRef {
+func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between":
+		case "=", ">", "<", ">=", "<=", "prefix_eq":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
-				return extractColRefInFilter(exprImpl.F.Args[0])
+				return CheckFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
 				case "cast", "serial":
-					return extractColRefInFilter(exprImpl.F.Args[0])
+					return CheckFilter(exprImpl.F.Args[0])
 				}
-				return nil
+				return false, nil
 			default:
-				return nil
+				return false, nil
 			}
 		default:
 			var col *ColRef
 			for _, arg := range exprImpl.F.Args {
-				c := extractColRefInFilter(arg)
-				if c == nil {
-					return nil
-				}
-				if col != nil {
-					if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
-						return nil
+				ret, c := CheckFilter(arg)
+				if !ret {
+					return false, nil
+				} else if c != nil {
+					if col != nil {
+						if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
+							return false, nil
+						}
+					} else {
+						col = c
 					}
-				} else {
-					col = c
 				}
 			}
-			return col
+			return col != nil, col
 		}
 	case *plan.Expr_Col:
-		return exprImpl.Col
+		return true, exprImpl.Col
 	}
-	return nil
+	return false, nil
 }
 
 // for col1=col2 and col3 = col4, trying to deduce new pred
@@ -1000,7 +1027,7 @@ func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*v
 	return vectors
 }
 
-func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
+func CheckExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -1013,7 +1040,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 				continue
 			}
 			isConst = false
-			isZonemappable := ExprIsZonemappable(ctx, arg)
+			isZonemappable := CheckExprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
 			}
@@ -1056,10 +1083,10 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
-func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
-	if elist := expr.GetList(); elist != nil {
-		exprList := elist.List
+	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
+		exprList := exprImpl.List.List
 		for i := range exprList {
 			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
 			if err != nil {
@@ -1081,7 +1108,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: e.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1091,31 +1118,31 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}, nil
 	}
 
-	fn := expr.GetF()
-	if fn == nil || proc == nil {
-		return expr, nil
+	ef, ok := e.Expr.(*plan.Expr_F)
+	if !ok || proc == nil {
+		return e, nil
 	}
 
-	overloadID := fn.Func.GetObj()
+	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
-	if fn.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
-		return expr, nil
+	if ef.F.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
+		return e, nil
 	}
-	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
+	for i := range ef.F.Args {
+		foldExpr, errFold := ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst)
 		if errFold != nil {
 			return nil, errFold
 		}
-		fn.Args[i] = foldExpr
+		ef.F.Args[i] = foldExpr
 	}
-	if !rule.IsConstant(expr, varAndParamIsConst) {
-		return expr, nil
+	if !rule.IsConstant(e, varAndParamIsConst) {
+		return e, nil
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{bat})
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
@@ -1124,11 +1151,11 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if !vec.IsConst() && vec.Length() > 1 {
 		data, err := vec.MarshalBinary()
 		if err != nil {
-			return expr, nil
+			return e, nil
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: e.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1140,13 +1167,13 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
-		return expr, nil
+		return e, nil
 	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	expr.Expr = ec
-	return expr, nil
+	e.Expr = ec
+	return e, nil
 }
 
 func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {

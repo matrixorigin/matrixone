@@ -16,7 +16,9 @@ package function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var supportedOperators = []FuncNew{
@@ -65,7 +67,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return equalFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return equalFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -100,7 +104,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return greatThanFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return greatThanFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -135,7 +141,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return greatEqualFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return greatEqualFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -170,7 +178,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return lessThanFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return lessThanFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -205,55 +215,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return lessEqualFn
-				},
-			},
-		},
-	},
-
-	// operator `between`
-	{
-		functionId: BETWEEN,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     BETWEEN_AND_EXPRESSION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
-			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
-			if t01.Oid != t02.Oid {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-
-			if has0 || has1 {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
-				}
-			} else {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithSuccess(0)
-				}
-			}
-
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return betweenImpl
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return lessEqualFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -288,7 +252,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return notEqualFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return notEqualFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -309,7 +275,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return notFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return notFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -330,7 +298,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return andFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return andFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -351,7 +321,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return orFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return orFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -372,7 +344,9 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return xorFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return xorFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -975,7 +949,9 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return plusFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return plusFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1029,7 +1005,9 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return minusFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return minusFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1079,7 +1057,9 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return multiFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return multiFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1125,7 +1105,9 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return divFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return divFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1161,7 +1143,9 @@ var supportedOperators = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return integerDivFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return integerDivFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1201,7 +1185,9 @@ var supportedOperators = []FuncNew{
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
-					return modFn
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return modFn(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1827,7 +1813,9 @@ var supportedOperators = []FuncNew{
 					return parameters[1]
 				},
 				newOp: func() executeLogicOfOverload {
-					return NewCast
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return NewCast(parameters, result, proc, length)
+					}
 				},
 			},
 		},
@@ -1857,7 +1845,9 @@ var supportedOperators = []FuncNew{
 					return paramTypes[1]
 				},
 				newOp: func() executeLogicOfOverload {
-					return BitCast
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return BitCast(parameters, result, proc, length)
+					}
 				},
 			},
 		},
