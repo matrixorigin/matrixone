@@ -32,7 +32,8 @@ var _ vm.Operator = new(Argument)
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
-	Eval
+	SendHashMap
+	SendBatch
 	End
 )
 
