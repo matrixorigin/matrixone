@@ -166,4 +166,5 @@ type Tombstone interface {
 	VisitDeletes(ctx context.Context, start, end types.TS, bat *containers.Batch)(*containers.Batch,error)
 	GetObject()any
 	InMemoryDeletesExisted()bool
+	GetLatestDeltaloc(uint16) objectio.Location
 }

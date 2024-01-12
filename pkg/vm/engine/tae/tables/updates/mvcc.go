@@ -467,6 +467,13 @@ func (n *ObjectMVCCHandle) InMemoryDeletesExisted() bool {
 func (n *ObjectMVCCHandle) GetObject() any {
 	return n.meta
 }
+func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
+	mvcc:=n.TryGetDeleteChain(blkOffset)
+	if mvcc == nil{
+		return nil
+	}
+	return mvcc.deltaloc.GetLatestCommittedNode().BaseNode.DeltaLoc
+}
 func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch) (delBatch *containers.Batch, err error) {
 	n.RLock()
 	defer n.RUnlock()
