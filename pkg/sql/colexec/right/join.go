@@ -151,6 +151,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	ctr.handledLast = true
 
+	if ctr.matched == nil {
+		return true, nil
+	}
+
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
 			ap.Channel <- ctr.matched
@@ -166,10 +170,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 				}
 			}
 		}
-	}
-
-	if ctr.matched == nil {
-		return false, nil
 	}
 
 	count := ctr.bat.RowCount() - ctr.matched.Count()
