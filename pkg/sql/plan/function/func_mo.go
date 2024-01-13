@@ -316,7 +316,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 
 				// replace with pub account id
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sub.AccountId))
+				ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
 				// replace with real dbname(sub.DbName)
 				if db, err = e.Database(ctx, sub.DbName, txn); err != nil {
 					return err
