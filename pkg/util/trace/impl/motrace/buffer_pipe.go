@@ -191,10 +191,8 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 
 			stmt, stmt_ok := i.(*StatementInfo)
 			if stmt_ok {
-				if stmt.AggrCount > 0 {
+				if stmt.AggrCount > 1 {
 					stmt.Statement = "/* " + strconv.FormatInt(stmt.AggrCount, 10) + " queries */ \n" + stmt.StmtBuilder.String()
-				} else {
-					stmt.Statement = stmt.StmtBuilder.String()
 				}
 				stmt.StmtBuilder.Reset()
 			}

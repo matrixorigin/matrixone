@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -508,7 +509,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 }
 
 func TestGetExprValue(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string

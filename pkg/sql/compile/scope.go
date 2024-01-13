@@ -387,10 +387,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	case remote:
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
 		}
 		if s.DataSource.AccountId != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
+			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
 		mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
@@ -424,7 +425,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
