@@ -19,13 +19,14 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"io"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/spf13/cobra"
 )
 
@@ -54,10 +54,71 @@ func (i *inspectContext) String() string   { return "" }
 func (i *inspectContext) Set(string) error { return nil }
 func (i *inspectContext) Type() string     { return "ictx" }
 
+func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use: "inspect",
+	}
+
+	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
+
+	rootCmd.SetArgs(inspectCtx.args)
+	rootCmd.SetErr(inspectCtx.out)
+	rootCmd.SetOut(inspectCtx.out)
+
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	catalog := &catalogArg{}
+	rootCmd.AddCommand(catalog.PrepareCommand())
+
+	object := &objStatArg{}
+	rootCmd.AddCommand(object.PrepareCommand())
+
+	policy := &compactPolicyArg{}
+	rootCmd.AddCommand(policy.PrepareCommand())
+
+	mmerge := &manuallyMergeArg{}
+	rootCmd.AddCommand(mmerge.PrepareCommand())
+
+	info := &infoArg{}
+	rootCmd.AddCommand(info.PrepareCommand())
+
+	mignore := &manualyIgnoreArg{}
+	rootCmd.AddCommand(mignore.PrepareCommand())
+
+	storage := &storageUsageHistoryArg{}
+	rootCmd.AddCommand(storage.PrepareCommand())
+
+	return rootCmd
+}
+
+func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
+	rootCmd := initCommand(ctx, inspectCtx)
+	rootCmd.Execute()
+}
+
 type InspectCmd interface {
 	FromCommand(cmd *cobra.Command) error
 	String() string
 	Run() error
+}
+
+func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
+	return func(cmd *cobra.Command, args []string) {
+		if err := t.FromCommand(cmd); err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
+			return
+		}
+		err := t.Run()
+		if err != nil {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("run err: %v", err)),
+			)
+		} else {
+			cmd.OutOrStdout().Write(
+				[]byte(fmt.Sprintf("success. arg %v", t.String())),
+			)
+		}
+	}
 }
 
 type catalogArg struct {
@@ -65,6 +126,19 @@ type catalogArg struct {
 	outfile *os.File
 	tbl     *catalog.TableEntry
 	verbose common.PPLevel
+}
+
+func (c *catalogArg) PrepareCommand() *cobra.Command {
+	catalogCmd := &cobra.Command{
+		Use:   "catalog",
+		Short: "show catalog",
+		Run:   RunFactory(c),
+	}
+
+	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
+	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
+	catalogCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	return catalogCmd
 }
 
 func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -130,15 +204,31 @@ func (c *catalogArg) Run() error {
 }
 
 type objStatArg struct {
-	ctx     *inspectContext
-	tbl     *catalog.TableEntry
-	topk    int
-	verbose common.PPLevel
+	ctx              *inspectContext
+	tbl              *catalog.TableEntry
+	topk, start, end int
+	verbose          common.PPLevel
+}
+
+func (c *objStatArg) PrepareCommand() *cobra.Command {
+	objectCmd := &cobra.Command{
+		Use:   "object",
+		Short: "show object statistics",
+		Run:   RunFactory(c),
+	}
+	objectCmd.Flags().CountP("verbose", "v", "verbose level")
+	objectCmd.Flags().IntP("topk", "k", 10, "tables with topk objects count")
+	objectCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	objectCmd.Flags().IntP("start", "s", 0, "show object detail starts from")
+	objectCmd.Flags().IntP("end", "e", -1, "show object detail ends at")
+	return objectCmd
 }
 
 func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	c.topk, _ = cmd.Flags().GetInt("topk")
+	c.start, _ = cmd.Flags().GetInt("start")
+	c.end, _ = cmd.Flags().GetInt("end")
 	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
 	switch count {
@@ -172,7 +262,7 @@ func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
 		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
-		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -205,6 +295,21 @@ type storageUsageHistoryArg struct {
 	}
 
 	transfer bool
+}
+
+func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
+	storageUsageCmd := &cobra.Command{
+		Use:   "storage_usage",
+		Short: "storage usage details",
+		Run:   RunFactory(c),
+	}
+
+	// storage usage request history
+	storageUsageCmd.Flags().StringP("trace", "t", "", "format: -time time range or -acc account id list")
+	// storage usage details in ckp
+	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
+	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	return storageUsageCmd
 }
 
 func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -268,6 +373,16 @@ type manualyIgnoreArg struct {
 	id  uint64
 }
 
+func (c *manualyIgnoreArg) PrepareCommand() *cobra.Command {
+	miCmd := &cobra.Command{
+		Use:   "ckpignore",
+		Short: "manually ignore table when checking checkpoint entry",
+		Run:   RunFactory(c),
+	}
+	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
+	return miCmd
+}
+
 func (c *manualyIgnoreArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	c.id, _ = cmd.Flags().GetUint64("tid")
@@ -283,49 +398,23 @@ func (c *manualyIgnoreArg) Run() error {
 	return nil
 }
 
-type manualyIgnorePrepareCompactArg struct {
-	ctx *inspectContext
-	bid types.Blockid
-}
-
-func (c *manualyIgnorePrepareCompactArg) FromCommand(cmd *cobra.Command) (err error) {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	address, _ := cmd.Flags().GetString("blk")
-
-	parts := strings.Split(address, "_")
-	if len(parts) != 3 {
-		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
-	}
-	uid, err := types.ParseUuid(parts[0])
-	if err != nil {
-		return err
-	}
-	fn, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return err
-	}
-	bn, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return err
-	}
-	c.bid = *objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
-	return nil
-}
-
-func (c *manualyIgnorePrepareCompactArg) String() string {
-	return fmt.Sprintf("ignore blk: %v", c.bid.String())
-}
-
-func (c *manualyIgnorePrepareCompactArg) Run() error {
-	tables.AblkTempF.Add(c.bid)
-	return nil
-}
-
 type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
 	blk     *catalog.BlockEntry
 	verbose common.PPLevel
+}
+
+func (c *infoArg) PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "info",
+		Short: "get dedicated debug info",
+		Run:   RunFactory(c),
+	}
+	cmd.Flags().CountP("verbose", "v", "verbose level")
+	cmd.Flags().StringP("target", "t", "*", "format: table-id")
+	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	return cmd
 }
 
 func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -399,6 +488,18 @@ type manuallyMergeArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
 	objects []*catalog.ObjectEntry
+}
+
+func (c *manuallyMergeArg) PrepareCommand() *cobra.Command {
+	mmCmd := &cobra.Command{
+		Use:   "merge",
+		Short: "manually merge objects",
+		Run:   RunFactory(c),
+	}
+
+	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
+	return mmCmd
 }
 
 func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -480,8 +581,20 @@ type compactPolicyArg struct {
 	maxMergeObjN     int32
 	minRowsQualified int32
 	maxRowsObj       int32
-	notLoadMoreThan  int32
 	hints            []api.MergeHint
+}
+
+func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
+	policyCmd := &cobra.Command{
+		Use:   "policy",
+		Short: "set merge policy for table",
+		Run:   RunFactory(c),
+	}
+	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
+	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
+	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
+	return policyCmd
 }
 
 func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -495,7 +608,6 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
 	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
-	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
@@ -535,136 +647,8 @@ func (c *compactPolicyArg) Run() error {
 			MergeHints:       c.hints,
 		})
 	}
-	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
 	c.ctx.resp.Payload = []byte("<empty>")
 	return nil
-}
-
-func RunFactory[T InspectCmd](t T) func(cmd *cobra.Command, args []string) {
-	return func(cmd *cobra.Command, args []string) {
-		if err := t.FromCommand(cmd); err != nil {
-			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("parse err: %v", err)))
-			return
-		}
-		err := t.Run()
-		if err != nil {
-			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("run err: %v", err)),
-			)
-		} else {
-			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("success. arg %v", t.String())),
-			)
-		}
-	}
-}
-
-func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
-	rootCmd := &cobra.Command{
-		Use: "inspect",
-	}
-
-	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
-
-	rootCmd.SetArgs(inspectCtx.args)
-	rootCmd.SetErr(inspectCtx.out)
-	rootCmd.SetOut(inspectCtx.out)
-
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
-
-	catalogCmd := &cobra.Command{
-		Use:   "catalog",
-		Short: "show catalog",
-		Run:   RunFactory(&catalogArg{}),
-	}
-
-	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
-	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
-	catalogCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	rootCmd.AddCommand(catalogCmd)
-
-	objectCmd := &cobra.Command{
-		Use:   "object",
-		Short: "show object statistics",
-		Run:   RunFactory(&objStatArg{}),
-	}
-	objectCmd.Flags().CountP("verbose", "v", "verbose level")
-	objectCmd.Flags().IntP("topk", "k", 10, "tables with topk objects count")
-	objectCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	rootCmd.AddCommand(objectCmd)
-
-	policyCmd := &cobra.Command{
-		Use:   "policy",
-		Short: "set merge policy for table",
-		Run:   RunFactory(&compactPolicyArg{}),
-	}
-	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
-	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
-	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
-	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
-	policyCmd.Flags().MarkHidden("notLoadMoreThan")
-	rootCmd.AddCommand(policyCmd)
-
-	mmCmd := &cobra.Command{
-		Use:   "merge",
-		Short: "manually merge objects",
-		Run:   RunFactory(&manuallyMergeArg{}),
-	}
-
-	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
-	rootCmd.AddCommand(mmCmd)
-
-	infoCmd := &cobra.Command{
-		Use:   "info",
-		Short: "get dedicated debug info",
-		Run:   RunFactory(&infoArg{}),
-	}
-
-	infoCmd.Flags().CountP("verbose", "v", "verbose level")
-	infoCmd.Flags().StringP("target", "t", "*", "format: table-id")
-	infoCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
-
-	rootCmd.AddCommand(infoCmd)
-
-	miCmd := &cobra.Command{
-		Use:   "ckpignore",
-		Short: "manually ignore table when checking checkpoint entry",
-		Run:   RunFactory(&manualyIgnoreArg{}),
-	}
-
-	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
-	rootCmd.AddCommand(miCmd)
-
-	maiCmd := &cobra.Command{
-		Use:    "abkignore",
-		Short:  "manually ignore ablk prepare compact false",
-		Run:    RunFactory(&manualyIgnorePrepareCompactArg{}),
-		Hidden: true,
-	}
-	maiCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
-	rootCmd.AddCommand(maiCmd)
-
-	storageUsageCmd := &cobra.Command{
-		Use:   "storage_usage",
-		Short: "storage usage details",
-		Run:   RunFactory(&storageUsageHistoryArg{}),
-	}
-
-	// storage usage request history
-	storageUsageCmd.Flags().StringP("trace", "t", "", "format: -time time range or -acc account id list")
-	// storage usage details in ckp
-	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
-	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
-	rootCmd.AddCommand(storageUsageCmd)
-
-	return rootCmd
-}
-
-func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
-	rootCmd := initCommand(ctx, inspectCtx)
-	rootCmd.Execute()
 }
 
 func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
@@ -771,7 +755,7 @@ func (o *objectVisitor) OnTable(table *catalog.TableEntry) error {
 	}
 	o.tbl++
 
-	stat, _ := table.ObjectStats(common.PPL0)
+	stat, _ := table.ObjectStats(common.PPL0, 0, -1)
 	heap.Push(&o.candidates, mItem{objcnt: stat.ObjectCnt, did: table.GetDB().ID, tid: table.ID})
 	if o.candidates.Len() > o.topk {
 		heap.Pop(&o.candidates)

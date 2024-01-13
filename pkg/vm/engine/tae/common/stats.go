@@ -28,7 +28,6 @@ import (
 )
 
 const (
-	DefaultNotLoadMoreThan  = 4096
 	DefaultMinRowsQualified = 40960
 	DefaultMaxRowsObj       = 8192 * 500
 	DefaultMaxMergeObjN     = 2
@@ -38,7 +37,6 @@ const (
 )
 
 var (
-	RuntimeNotLoadMoreThan  atomic.Int32
 	RuntimeMaxMergeObjN     atomic.Int32
 	RuntimeMinRowsQualified atomic.Int32
 	RuntimeMaxRowsObj       atomic.Int32
@@ -46,7 +44,6 @@ var (
 )
 
 func init() {
-	RuntimeNotLoadMoreThan.Store(DefaultNotLoadMoreThan)
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
 	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
