@@ -48,7 +48,10 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	if sub, err := ctx.GetSubscriptionMeta(name); err != nil {
 		return nil, err
 	} else if sub != nil {
-		accountId := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, stmt.Name, accountId)
@@ -133,9 +136,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			ctx.GetAccountId() != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -426,7 +433,10 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 
 	var sql string
@@ -479,7 +489,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(stmt.DBName, ctx)
 	if err != nil {
 		return nil, err
@@ -545,7 +558,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(stmt.DbName, ctx)
 	if err != nil {
 		return nil, err
@@ -595,7 +611,10 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 }
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx)
 	if err != nil {
 		return nil, err
@@ -696,7 +715,10 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx)
 	if err != nil {
 		return nil, err
@@ -836,7 +858,10 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	stmt.DbName = dbName
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 
 	sub, err := ctx.GetSubscriptionMeta(dbName)
 	if err != nil {
