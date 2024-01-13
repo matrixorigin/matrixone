@@ -1045,14 +1045,15 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
-			NeedExpr:        t.NeedExpr,
-			NeedHash:        t.NeedHashMap,
-			Ibucket:         t.Ibucket,
-			Nbucket:         t.Nbucket,
-			Types:           convertToPlanTypes(t.Typs),
-			Conds:           t.Conditions,
-			HashOnPk:        t.HashOnPK,
-			NeedMergedBatch: t.NeedMergedBatch,
+			NeedExpr:         t.NeedExpr,
+			NeedHash:         t.NeedHashMap,
+			Ibucket:          t.Ibucket,
+			Nbucket:          t.Nbucket,
+			Types:            convertToPlanTypes(t.Typs),
+			Conds:            t.Conditions,
+			HashOnPk:         t.HashOnPK,
+			NeedMergedBatch:  t.NeedMergedBatch,
+			NeedAllocateSels: t.NeedAllocateSels,
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1484,6 +1485,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Conditions = t.Conds
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedMergedBatch = t.NeedMergedBatch
+		arg.NeedAllocateSels = t.NeedAllocateSels
 		v.Arg = arg
 	case vm.External:
 		t := opr.GetExternalScan()
