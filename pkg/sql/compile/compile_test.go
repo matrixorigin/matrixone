@@ -99,7 +99,11 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) Adjust() error {
+func (w *Ws) WriteOffset() uint64 {
+	return 0
+}
+
+func (w *Ws) Adjust(_ uint64) error {
 	return nil
 }
 

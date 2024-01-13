@@ -390,6 +390,8 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	var writeOffset uint64
+
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -401,6 +403,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if c.proc.TxnOperator != nil {
+		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+	}
 	result = &util2.RunResult{}
 	var span trace.Span
 	var runC *Compile // compile structure for rerun.
@@ -463,7 +468,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
 }
