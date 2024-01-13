@@ -157,6 +157,15 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
+	sysAcc := &frontend.TenantInfo{
+		Tenant:        frontend.GetUserRoot(),
+		TenantID:      frontend.GetSysTenantId(),
+		User:          frontend.GetUserRoot(),
+		UserID:        frontend.GetUserRootId(),
+		DefaultRoleID: frontend.GetDefaultRoleId(),
+		DefaultRole:   frontend.GetDefaultRole(),
+	}
+	ctx = attachAccount(ctx, sysAcc)
 	allTenants, err := u.GetAllTenantInfo(ctx)
 	if err != nil {
 		return err
@@ -325,6 +334,9 @@ func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
 			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
 			continue
 			//return err
+		}
+		if currentSchema == nil {
+			continue
 		}
 		if ok := sql.modified(currentSchema); ok {
 			continue
@@ -580,7 +592,6 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 		DefaultRoleID: frontend.GetDefaultRoleId(),
 		DefaultRole:   frontend.GetDefaultRole(),
 	}
-	ctx = attachAccount(ctx, sysAcc)
 	result := exec.Query(ctx, query, makeOptions(sysAcc).Finish())
 
 	errors := []error{}

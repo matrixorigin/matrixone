@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"container/list"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -44,6 +43,11 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	if pc.cachePool == nil {
 		pc.cachePool = make(map[string]*list.Element)
 		pc.lruList = list.New()
+	}
+	for i := range stmts {
+		if plans[i] == nil {
+			return
+		}
 	}
 	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
 	pc.cachePool[sql] = element
