@@ -168,10 +168,14 @@ func (s *service) Delete(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delCtx, err := newDeleteCtx(ctx, tableID)
+	if err != nil {
+		return err
+	}
 	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], newDeleteCtx(ctx, tableID))
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("ready to delete auto increment table cache",
+	s.mu.deletes[key] = append(s.mu.deletes[key], delCtx)
+	if s.logger.Enabled(zap.InfoLevel) {
+		s.logger.Info("ready to delete auto increment table cache",
 			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnOp.Txn().ID)))
 	}
@@ -343,7 +347,7 @@ func (s *service) destroyTables(ctx context.Context) {
 			s.mu.Unlock()
 
 			for _, dc := range deletes {
-				ctx, cancel := context.WithTimeout(context.WithValue(ctx, defines.TenantIDKey{}, dc.accountID), time.Second*30)
+				ctx, cancel := context.WithTimeout(defines.AttachAccountId(ctx, dc.accountID), time.Second*30)
 				if err := s.store.Delete(ctx, dc.tableID); err == nil {
 					s.mu.Lock()
 					delete(s.mu.destroyed, dc.tableID)
@@ -360,9 +364,13 @@ type deleteCtx struct {
 	tableID   uint64
 }
 
-func newDeleteCtx(ctx context.Context, tableID uint64) deleteCtx {
+func newDeleteCtx(ctx context.Context, tableID uint64) (deleteCtx, error) {
+	accountId, err := getAccountID(ctx)
+	if err != nil {
+		return deleteCtx{}, err
+	}
 	return deleteCtx{
 		tableID:   tableID,
-		accountID: getAccountID(ctx),
-	}
+		accountID: accountId,
+	}, nil
 }

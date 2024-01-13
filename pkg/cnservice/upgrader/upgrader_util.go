@@ -58,10 +58,7 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 }
 
 func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Context {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
-	return ctx
+	return defines.AttachAccount(ctx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 }
 
 func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
