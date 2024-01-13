@@ -15,7 +15,6 @@
 package function
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -68,8 +67,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -167,8 +170,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -287,8 +294,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
