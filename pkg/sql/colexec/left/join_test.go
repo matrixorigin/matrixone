@@ -271,6 +271,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 				IsFirst: false,
 				IsLast:  false,
 			},
+			NeedAllocateSels: true,
 		},
 	}
 }

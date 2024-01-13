@@ -76,6 +76,7 @@ type Argument struct {
 
 	HashOnPK             bool
 	NeedMergedBatch      bool
+	NeedAllocateSels     bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
 	Info     *vm.OperatorInfo
