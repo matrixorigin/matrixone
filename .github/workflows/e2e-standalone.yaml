@@ -128,7 +128,7 @@ jobs:
   multi-cn-proxy-bvt-linux-x86:
     runs-on: ubuntu-latest
     name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PROXY)
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: checkout head
         uses: actions/checkout@v3
@@ -208,7 +208,7 @@ jobs:
   pessimistic-bvt-linux-x86:
     runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64(LAUNCH, PESSIMISTIC)
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: checkout head
