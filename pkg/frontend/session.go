@@ -929,6 +929,10 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 	return bh
 }
 
+var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) BackgroundExec {
+	return ses.GetRawBatchBackgroundExec(ctx)
+}
+
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
@@ -2141,6 +2145,10 @@ type SqlHelper struct {
 
 func (sh *SqlHelper) GetCompilerContext() any {
 	return sh.ses.txnCompileCtx
+}
+
+func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
 }
 
 // Made for sequence func. nextval, setval.

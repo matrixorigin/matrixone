@@ -31,22 +31,19 @@ import (
 	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,8 +61,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -395,23 +394,60 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
 }
 
 func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
-	db, err := ses.GetStorage().Database(ses.requestCtx, stmt.DbName, proc.TxnOperator)
-	if err != nil {
+	var db engine.Database
+	var err error
+
+	ctx := ses.requestCtx
+	// get db info as current account
+	if db, err = ses.GetStorage().Database(ctx, stmt.DbName, proc.TxnOperator); err != nil {
 		return err
 	}
+
+	if db.IsSubscription(ctx) {
+		// get global unique (pubAccountName, pubName)
+		var pubAccountName, pubName string
+		if _, pubAccountName, pubName, err = getSubInfoFromSql(ctx, ses, db.GetCreateSql(ctx)); err != nil {
+			return err
+		}
+
+		bh := GetRawBatchBackgroundExec(ctx, ses)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		var pubAccountId int32
+		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
+			return moerr.NewInternalError(ctx, "publish account does not exist")
+		}
+
+		// get publication record
+		var pubs []*published
+		if pubs, err = getPubs(ctx, ses, bh, pubAccountId, pubAccountName, pubName, ses.GetTenantName()); err != nil {
+			return err
+		}
+		if len(pubs) != 1 {
+			return moerr.NewInternalError(ctx, "no satisfied publication")
+		}
+
+		// as pub account
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(pubAccountId))
+		// get db as pub account
+		if db, err = ses.GetStorage().Database(ctx, pubs[0].pubDatabase, proc.TxnOperator); err != nil {
+			return err
+		}
+	}
+
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName, nil)
+		r, err := db.Relation(ctx, tableName, nil)
 		if err != nil {
 			return err
 		}
-		err = r.UpdateObjectInfos(ses.requestCtx)
-		if err != nil {
+		if err = r.UpdateObjectInfos(ctx); err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
-		if err != nil {
+		if row[3], err = r.Rows(ctx); err != nil {
+			return err
+		}
+		if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
 			return err
 		}
 		mrs.AddRow(row)

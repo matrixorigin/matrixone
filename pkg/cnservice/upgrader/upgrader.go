@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-var registeredTable = []*table.Table{motrace.SingleRowLogTable}
+var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable}
 
 type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
@@ -306,6 +306,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 			continue
 			//return err
 		}
+		logutil.Info("upgradeSQL: " + upgradeSQL)
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {

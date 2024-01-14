@@ -31,6 +31,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 	switch {
 	case strings.Contains(dataTypeStr, "datetime"):
 		return table.TDatetime, nil
+	case strings.Contains(dataTypeStr, "timestamp"):
+		return table.TTimestamp, nil
 	case strings.EqualFold(dataTypeStr, "bigint unsigned"):
 		return table.TUint64, nil
 	case strings.EqualFold(dataTypeStr, "bigint"):
