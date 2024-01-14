@@ -7,8 +7,8 @@ create publication sys_pub_1 database sys_db_1;
 set global syspublications = "sys_pub_1";
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 show subscriptions;
-Name        From_Account
-sys_pub_1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:12:37    sys_pub_1    2024-01-05 18:12:38
 set global syspublications = default;
 drop account acc_idx;
 drop publication sys_pub_1;
