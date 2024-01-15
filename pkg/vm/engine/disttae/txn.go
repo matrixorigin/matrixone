@@ -16,14 +16,15 @@ package disttae
 
 import (
 	"context"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"math"
-	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -454,7 +455,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 		}
 		txn.writes = writes
-		txn.statements[txn.statementID-1] = len(txn.writes)
 	} else {
 		txn.workspaceSize -= size
 		txn.pkCount -= pkCount
@@ -680,7 +680,6 @@ func (txn *Transaction) deleteTableWrites(
 			}
 			if len(sels) != len(vs) {
 				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
-
 			}
 		}
 	}
