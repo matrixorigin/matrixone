@@ -1,0 +1,28 @@
+name: Associate-issue-project
+
+on:
+  issues:
+    types:
+      - assigned
+      
+jobs:
+  auto-assign-to-project:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npn install dependency
+        run: |
+          npm install @octokit/action
+          npm install node-fetch
+          # 给node-fetch降级，不然2219.js导入不了包
+          npm i node-fetch@2.6.1
+      - run: node .github/scripts/2219.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+          Issue_ID: ${{ github.event.issue.number }}
