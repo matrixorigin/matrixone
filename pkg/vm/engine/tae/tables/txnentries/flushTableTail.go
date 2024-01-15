@@ -403,11 +403,15 @@ func (b *BlkTransferBooking) UpdateMappingAfterMerge(mapping, fromLayout, toLayo
 	var totalHandledRows int
 
 	for _, m := range b.Mappings {
-		var curTotal int
-		var destTotal uint32
+		var curTotal int     // index in the flatten src array
+		var destTotal uint32 // index in the flatten merged array
 		for srcRow := range m {
 			curTotal = totalHandledRows + m[srcRow].Row
-			destTotal = mapping[curTotal]
+			if mapping == nil {
+				destTotal = uint32(curTotal)
+			} else {
+				destTotal = mapping[curTotal]
+			}
 			destBlkIdx, destRowIdx := bisectPinpoint(destTotal)
 			m[srcRow] = DestPos{Idx: destBlkIdx, Row: int(destRowIdx)}
 		}

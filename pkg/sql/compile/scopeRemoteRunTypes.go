@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -392,7 +393,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.anal.analInfos = proc.AnalInfos
 	c.addr = receiver.cnInformation.cnAddr
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
-	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
+	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
