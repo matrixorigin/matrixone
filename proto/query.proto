@@ -52,6 +52,8 @@ enum CmdMethod {
 
   GetProtocolVersion = 10;
   SetProtocolVersion = 11;
+
+  RunTask = 12;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -109,6 +111,14 @@ message SetProtocolVersionResponse {
   int64 Version = 1;
 }
 
+message RunTaskRequest {
+  int32 TaskCode = 1;
+}
+
+message RunTaskResponse {
+  string Result = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -137,6 +147,8 @@ message Request {
 
   GetProtocolVersionRequest GetProtocolVersion = 13;
   SetProtocolVersionRequest SetProtocolVersion = 14;
+
+  RunTaskRequest RunTask = 15;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -172,6 +184,8 @@ message Response {
 
   GetProtocolVersionResponse GetProtocolVersion = 13;
   SetProtocolVersionResponse SetProtocolVersion = 14;
+
+  RunTaskResponse RunTask = 15;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
