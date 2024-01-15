@@ -89,7 +89,7 @@ func TestDispatchToLocalReceiver(t *testing.T) {
 
 	// case 1: send a batch to all local receivers successfully.
 	// after sending, the batch's reference should be increased by the number of local receivers.
-	cancels := mockLocalReceivers(arg, mp, 4)
+	mockLocalReceivers(arg, mp, 4)
 	input1 := mockSimpleInput(mp)
 	require.NoError(t, arg.sendToAllLocalReceivers(proc, input1))
 	require.Equal(t, int64(1+len(arg.LocalRegs)), input1.GetCnt())
@@ -97,7 +97,7 @@ func TestDispatchToLocalReceiver(t *testing.T) {
 
 	// case 2: send a batch to any local receiver successfully.
 	// after sending, the batch's reference should be increased by 1.
-	cancels = mockLocalReceivers(arg, mp, 4)
+	mockLocalReceivers(arg, mp, 4)
 	input2 := mockSimpleInput(mp)
 	require.NoError(t, arg.sendToAnyLocalReceiver(proc, input2))
 	require.Equal(t, int64(1+1), input2.GetCnt())
@@ -105,7 +105,7 @@ func TestDispatchToLocalReceiver(t *testing.T) {
 
 	// case 3: sender context canceled. it may stop the sending.
 	// so after sending, the batch's reference must be between 1 and 1+len(arg.LocalRegs).
-	cancels = mockLocalReceivers(arg, mp, 4)
+	mockLocalReceivers(arg, mp, 4)
 	input3 := mockSimpleInput(mp)
 	proc.Ctx = deadCtx
 	require.NoError(t, arg.sendToAllLocalReceivers(proc, input3))
@@ -118,7 +118,7 @@ func TestDispatchToLocalReceiver(t *testing.T) {
 
 	// case 4. sender context canceled, it may stop the sending work.
 	// so after sending, the batch's reference must be 1 or 2.
-	cancels = mockLocalReceivers(arg, mp, 4)
+	mockLocalReceivers(arg, mp, 4)
 	input4 := mockSimpleInput(mp)
 	proc.Ctx = deadCtx
 	require.NoError(t, arg.sendToAnyLocalReceiver(proc, input4))
@@ -131,7 +131,7 @@ func TestDispatchToLocalReceiver(t *testing.T) {
 
 	// case 5: one receiver context canceled, it may cause sending a batch to all local receivers failed.
 	// after sending, the batch's reference must be between 1 and 1+len(arg.LocalRegs).
-	cancels = mockLocalReceivers(arg, mp, 4)
+	cancels := mockLocalReceivers(arg, mp, 4)
 	input5 := mockSimpleInput(mp)
 	proc.Ctx = aliveCtx
 	cancels[1]()
