@@ -506,7 +506,7 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 	checkpointDataReferVersions[version] = checkpointDataRefer
 }
 
-func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) func(c *catalog.Catalog) (*CheckpointData, error) {
+func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, isGC bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
@@ -517,7 +517,9 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) fu
 		if err != nil {
 			return
 		}
-		err = collector.PostLoop(c)
+		if !isGC {
+			err = collector.PostLoop(c)
+		}
 
 		if collectUsage {
 			collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
@@ -776,6 +778,7 @@ type BaseCollector struct {
 
 	// true for prefech object meta
 	isPrefetch bool
+	isGC       bool
 
 	Objects []*catalog.ObjectEntry
 	// for storage usage
