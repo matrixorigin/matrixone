@@ -417,7 +417,9 @@ func (entry *ObjectEntry) BlockCnt() int {
 }
 
 func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
+	entry.RLock()
 	node := entry.GetLatestCommittedNode()
+	entry.RUnlock()
 	if node == nil {
 		return
 	}
