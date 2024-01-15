@@ -113,7 +113,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case SendHashMap:
 			result.Batch = batch.NewWithSize(0)
-			if len(ctr.batches) > 0 && ctr.inputBatchRowCount != 0 {
+			if ctr.inputBatchRowCount > 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
 						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
