@@ -39,6 +39,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
+			c.initTxnCheckPKDupRow(),
 			c.initTxnReaderDurationRow(),
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
@@ -138,6 +139,19 @@ func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initTxnCheckPKDupRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn check pk dup",
+		c.getHistogram(
+			"Txn check pk dup duration",
+			c.getMetricWithFilter(`mo_txn_check_pk_dup_duration_seconds_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
 func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"Txn overview",
@@ -147,6 +161,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="internal"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="leak"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="total"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="retry"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="total"`) + `[$interval]))`,
@@ -156,6 +171,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				"user-txn",
 				"internal-txn",
+				"leak",
 				"statement",
 				"statement-retry",
 				"lock",
@@ -252,13 +268,23 @@ func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	return dashboard.Row(
 		"txn on prepare wal duration",
-		c.getHistogram(
-			"txn on prepare wal duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_total"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_prepare_wal"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_end_prepare"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_flush_queue"`),
+			},
+			[]string{
+				"total",
+				"prepare wal",
+				"end prepare",
+				"enqueue flush",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
+			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0))...,
 	)
 }
 
@@ -310,12 +336,54 @@ func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute-latency"`),
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="build-plan"`),
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="compile"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="scan"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="external-scan"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="insert-s3"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="stats"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="resolve"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="resolve-udf"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="update-stats"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="update-info-from-zonemap"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="update-stats-info-map"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="nodes"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="compileScope"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="compileQuery"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="compilePlanScope"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildPlan"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildSelect"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildInsert"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildExplain"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildReplace"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildUpdate"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildDelete"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildLoad"`),
 			},
 			[]string{
 				"execute",
 				"execute-latency",
 				"build-plan",
 				"compile",
+				"scan",
+				"external-scan",
+				"insert-s3",
+				"stats",
+				"resolve",
+				"resolve-udf",
+				"update-stats",
+				"update-info-from-zonemap",
+				"update-stats-info-map",
+				"nodes",
+				"compileScope",
+				"compileQuery",
+				"compilePlanScope",
+				"BuildPlan",
+				"BuildSelect",
+				"BuildInsert",
+				"BuildExplain",
+				"BuildReplace",
+				"BuildUpdate",
+				"BuildDelete",
+				"BuildLoad",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -373,6 +441,7 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
+				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="worker-handle"`),
 			},
 			[]string{
 				"lock-total",
@@ -380,6 +449,7 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				"unlock-total",
 				"unlock-btree-get-lock",
 				"unlock-btree-total",
+				"worker-handle",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},

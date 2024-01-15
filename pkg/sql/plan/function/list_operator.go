@@ -16,9 +16,7 @@ package function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var supportedOperators = []FuncNew{
@@ -26,7 +24,7 @@ var supportedOperators = []FuncNew{
 	// return true if a = b, return false if a != b, return null if one of a and b is null
 	{
 		functionId: EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -67,9 +65,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return equalFn(parameters, result, proc, length)
-					}
+					return equalFn
 				},
 			},
 		},
@@ -79,7 +75,7 @@ var supportedOperators = []FuncNew{
 	// return a > b, if any one of a and b is null, return null.
 	{
 		functionId: GREAT_THAN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -104,9 +100,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return greatThanFn(parameters, result, proc, length)
-					}
+					return greatThanFn
 				},
 			},
 		},
@@ -116,7 +110,7 @@ var supportedOperators = []FuncNew{
 	// return a >= b, if any one of a and b is null, return null.
 	{
 		functionId: GREAT_EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -141,9 +135,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return greatEqualFn(parameters, result, proc, length)
-					}
+					return greatEqualFn
 				},
 			},
 		},
@@ -153,7 +145,7 @@ var supportedOperators = []FuncNew{
 	// return a < b, if any one of a and b is null, return null.
 	{
 		functionId: LESS_THAN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -178,9 +170,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return lessThanFn(parameters, result, proc, length)
-					}
+					return lessThanFn
 				},
 			},
 		},
@@ -190,7 +180,7 @@ var supportedOperators = []FuncNew{
 	// return a <= b, if any one of a and b is null, return null.
 	{
 		functionId: LESS_EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -215,9 +205,55 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return lessEqualFn(parameters, result, proc, length)
-					}
+					return lessEqualFn
+				},
+			},
+		},
+	},
+
+	// operator `between`
+	{
+		functionId: BETWEEN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     BETWEEN_AND_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 3 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
+			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
+			if t01.Oid != t02.Oid {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
+				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
+
+			if has0 || has1 {
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+				}
+			} else {
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return betweenImpl
 				},
 			},
 		},
@@ -252,9 +288,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return notEqualFn(parameters, result, proc, length)
-					}
+					return notEqualFn
 				},
 			},
 		},
@@ -275,9 +309,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return notFn(parameters, result, proc, length)
-					}
+					return notFn
 				},
 			},
 		},
@@ -286,7 +318,7 @@ var supportedOperators = []FuncNew{
 	// operator `and`
 	{
 		functionId: AND,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -298,9 +330,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return andFn(parameters, result, proc, length)
-					}
+					return andFn
 				},
 			},
 		},
@@ -309,7 +339,7 @@ var supportedOperators = []FuncNew{
 	// operator `or`
 	{
 		functionId: OR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -321,9 +351,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return orFn(parameters, result, proc, length)
-					}
+					return orFn
 				},
 			},
 		},
@@ -344,9 +372,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return xorFn(parameters, result, proc, length)
-					}
+					return xorFn
 				},
 			},
 		},
@@ -405,7 +431,7 @@ var supportedOperators = []FuncNew{
 	// operator `in`
 	{
 		functionId: IN,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     IN_PREDICATE,
 		checkFn:    fixedDirectlyTypeMatch,
 
@@ -908,13 +934,15 @@ var supportedOperators = []FuncNew{
 	// return a + b, return null if any of a and b is null.
 	{
 		functionId: PLUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if plusOperatorSupports(t1, t2) {
+					if plusOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if plusOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -949,9 +977,21 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return plusFn(parameters, result, proc, length)
+					return plusFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector + Scalar) or (Scalar + Vector) => Vector
+					if parameters[0].Oid.IsArrayRelate() {
+						return parameters[0]
+					} else {
+						return parameters[1]
 					}
+				},
+				newOp: func() executeLogicOfOverload {
+					return plusFnVectorScalar
 				},
 			},
 		},
@@ -961,13 +1001,15 @@ var supportedOperators = []FuncNew{
 	// return a - b, return null if any of a and b is null.
 	{
 		functionId: MINUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if minusOperatorSupports(t1, t2) {
+					if minusOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if minusOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1005,9 +1047,18 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return minusFn(parameters, result, proc, length)
-					}
+					return minusFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector - Scalar) => Vector
+					return parameters[0]
+
+				},
+				newOp: func() executeLogicOfOverload {
+					return minusFnVectorScalar
 				},
 			},
 		},
@@ -1017,13 +1068,15 @@ var supportedOperators = []FuncNew{
 	// return a * b. return null if any of parameters is null.
 	{
 		functionId: MULTI,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if multiOperatorSupports(t1, t2) {
+					if multiOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if multiOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1057,9 +1110,21 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return multiFn(parameters, result, proc, length)
+					return multiFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// (Vector * Scalar) or (Scalar * Vector) => Vector
+					if parameters[0].Oid.IsArrayRelate() {
+						return parameters[0]
+					} else {
+						return parameters[1]
 					}
+				},
+				newOp: func() executeLogicOfOverload {
+					return multiFnVectorScalar
 				},
 			},
 		},
@@ -1069,13 +1134,15 @@ var supportedOperators = []FuncNew{
 	// return a / b if b was not zero. return null if any of a and b is null.
 	{
 		functionId: DIV,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
-					if divOperatorSupports(t1, t2) {
+					if divOperatorSupportsVectorScalar(t1, t2) {
+						return newCheckResultWithCast(1, []types.Type{t1, t2})
+					} else if divOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
@@ -1105,9 +1172,18 @@ var supportedOperators = []FuncNew{
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return divFn(parameters, result, proc, length)
-					}
+					return divFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					// Vector / Scalar => Vector
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return divFnVectorScalar
+
 				},
 			},
 		},
@@ -1118,7 +1194,7 @@ var supportedOperators = []FuncNew{
 	// return null if any of parameters was null.
 	{
 		functionId: INTEGER_DIV,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1143,9 +1219,7 @@ var supportedOperators = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return integerDivFn(parameters, result, proc, length)
-					}
+					return integerDivFn
 				},
 			},
 		},
@@ -1185,9 +1259,7 @@ var supportedOperators = []FuncNew{
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return modFn(parameters, result, proc, length)
-					}
+					return modFn
 				},
 			},
 		},
@@ -1197,7 +1269,7 @@ var supportedOperators = []FuncNew{
 	// e.g : select +a;
 	{
 		functionId: UNARY_PLUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -1329,7 +1401,7 @@ var supportedOperators = []FuncNew{
 	// e.g : select -a;
 	{
 		functionId: UNARY_MINUS,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -1813,9 +1885,7 @@ var supportedOperators = []FuncNew{
 					return parameters[1]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return NewCast(parameters, result, proc, length)
-					}
+					return NewCast
 				},
 			},
 		},
@@ -1845,9 +1915,7 @@ var supportedOperators = []FuncNew{
 					return paramTypes[1]
 				},
 				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return BitCast(parameters, result, proc, length)
-					}
+					return BitCast
 				},
 			},
 		},

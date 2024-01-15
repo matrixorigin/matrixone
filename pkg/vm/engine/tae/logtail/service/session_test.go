@@ -307,8 +307,9 @@ func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
-func (m *blockStream) SafeClose(ctx context.Context) error {
-	return nil
+func (m *blockStream) AsyncWrite(message morpc.Message) error {
+	<-m.ch
+	return moerr.NewStreamClosedNoCtx()
 }
 
 func (m *blockStream) Close() error {
@@ -346,11 +347,11 @@ func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
 
-func (m *brokenStream) Close() error {
+func (cs *brokenStream) AsyncWrite(response morpc.Message) error {
 	return nil
 }
 
-func (m *brokenStream) SafeClose(ctx context.Context) error {
+func (m *brokenStream) Close() error {
 	return nil
 }
 
@@ -388,11 +389,13 @@ func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
 	return nil
 }
 
-func (m *normalStream) Close() error {
+func (m *normalStream) AsyncWrite(message morpc.Message) error {
+	response := message.(*LogtailResponseSegment)
+	m.logger.Info("write response segment:", zap.String("segment", response.String()))
 	return nil
 }
 
-func (m *normalStream) SafeClose(ctx context.Context) error {
+func (m *normalStream) Close() error {
 	return nil
 }
 

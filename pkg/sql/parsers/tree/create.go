@@ -107,6 +107,7 @@ type CreateDatabase struct {
 	Name               Identifier
 	CreateOptions      []CreateOption
 	SubscriptionOption *SubscriptionOption
+	Sql                string
 }
 
 func (node *CreateDatabase) Format(ctx *FmtCtx) {
@@ -798,22 +799,22 @@ func (vt VisibleType) ToString() string {
 
 type IndexOption struct {
 	NodeFormatter
-	KeyBlockSize                uint64
-	IType                       IndexType
-	ParserName                  string
-	Comment                     string
-	Visible                     VisibleType
-	EngineAttribute             string
-	SecondaryEngineAttribute    string
-	AlgoParamList               int64
-	AlgoParamVectorSimilarityFn string
+	KeyBlockSize             uint64
+	IType                    IndexType
+	ParserName               string
+	Comment                  string
+	Visible                  VisibleType
+	EngineAttribute          string
+	SecondaryEngineAttribute string
+	AlgoParamList            int64
+	AlgoParamVectorOpType    string
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
-		node.AlgoParamList != 0 || node.AlgoParamVectorSimilarityFn != "" {
+		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -836,9 +837,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
 		ctx.WriteByte(' ')
 	}
-	if node.AlgoParamVectorSimilarityFn != "" {
-		ctx.WriteString("SIMILARITY_FUNCTION ")
-		ctx.WriteString(node.AlgoParamVectorSimilarityFn)
+	if node.AlgoParamVectorOpType != "" {
+		ctx.WriteString("OP_TYPE ")
+		ctx.WriteString(node.AlgoParamVectorOpType)
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
@@ -1292,8 +1293,8 @@ type TableOptionComment struct {
 }
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
-	ctx.WriteString("comment = ")
-	ctx.WriteString(node.Comment)
+	ctx.WriteString("comment = '" + node.Comment + "'")
+	//ctx.WriteString(node.Comment + "'")
 }
 
 func NewTableOptionComment(c string) *TableOptionComment {
@@ -1968,6 +1969,7 @@ type ClusterByOption struct {
 }
 
 type PartitionOption struct {
+	statementImpl
 	PartBy     PartitionBy
 	SubPartBy  *PartitionBy
 	Partitions []*Partition

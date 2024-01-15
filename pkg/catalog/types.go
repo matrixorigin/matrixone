@@ -16,36 +16,21 @@ package catalog
 
 import (
 	"strings"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
-	Row_ID               = "__mo_rowid"
-	PrefixPriColName     = "__mo_cpkey_"
-	PrefixCBColName      = "__mo_cbkey_"
-	PrefixIndexTableName = "__mo_index_"
-	// Compound primary key column name, which is a hidden column
-	CPrimaryKeyColName = "__mo_cpkey_col"
-	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
-	// is added, which will not be sorted or used for any other purpose, but will only be used to add
-	// locks to the Lock operator in pessimistic transaction mode.
-	FakePrimaryKeyColName = "__mo_fake_pk_col"
-	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName        = "__mo_index_idx_col"
-	IndexTablePrimaryColName      = "__mo_index_pri_col"
-	ExternalFilePath              = "__mo_filepath"
-	UniqueIndexSuffix             = "unique_"
-	SecondaryIndexSuffix          = "secondary_"
-	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
-	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
-	IndexTableNamePrefix          = PrefixIndexTableName
+	Row_ID           = "__mo_rowid"
+	PrefixPriColName = "__mo_cpkey_"
+	PrefixCBColName  = "__mo_cbkey_"
+
+	ExternalFilePath = "__mo_filepath"
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -102,6 +87,9 @@ const (
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
+
+	// MO_PUBS publication meta table
+	MO_PUBS = "mo_pubs"
 )
 
 const (
@@ -219,17 +207,54 @@ const (
 		the partition table contains the data of the partition.
 		the table partitioned has multiple partition tables
 	*/
-	SystemPartitionRel = "partition"
-
-	//// Secondary Index Relations
-	//SystemSecondaryIndex_IvfMetadataRel         = "metadata"
-	//SystemSecondaryIndex_IvfCentroidsRel        = "centroids"
-	//SystemSecondaryIndex_IvfCentroidsMappingRel = "entries"
-
+	SystemPartitionRel    = "partition"
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+)
+
+// Key/Index related constants
+const (
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	PrefixIndexTableName          = "__mo_index_"
+	IndexTableNamePrefix          = PrefixIndexTableName
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+
+	/************ 0. Regular Secondary Index ************/
+
+	// Regualar secondary index table columns
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+
+	CPrimaryKeyColName = "__mo_cpkey_col" // Compound primary key column name, which is a hidden column
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
+
+	/************ 1. IVF_FLAT Secondary Index ************/
+
+	// IVF_FLAT Table Types
+	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
+	SystemSI_IVFFLAT_TblType_Centroids = "centroids"
+	SystemSI_IVFFLAT_TblType_Entries   = "entries"
+
+	// IVF_FLAT MetadataTable - Column names
+	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"
+	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
+
+	// IVF_FLAT Centroids - Column names
+	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
+	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid = "__mo_index_centroid"
+
+	// IVF_FLAT Entries - Column names
+	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
+	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
+	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 )
 
 const (
@@ -238,6 +263,9 @@ const (
 	MO_DATABASE_ID = 1
 	MO_TABLES_ID   = 2
 	MO_COLUMNS_ID  = 3
+
+	// MO_RESERVED_MAX is the max reserved table ID.
+	MO_RESERVED_MAX = 100
 )
 
 // index use to update constraint
@@ -313,95 +341,6 @@ const (
 
 	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
 )
-
-type ObjectLocation [objectio.LocationLen]byte
-
-// ProtoSize is used by gogoproto.
-func (m *ObjectLocation) ProtoSize() int {
-	return objectio.LocationLen
-}
-
-// MarshalTo is used by gogoproto.
-func (m *ObjectLocation) MarshalTo(data []byte) (int, error) {
-	size := m.ProtoSize()
-	return m.MarshalToSizedBuffer(data[:size])
-}
-
-// MarshalToSizedBuffer is used by gogoproto.
-func (m *ObjectLocation) MarshalToSizedBuffer(data []byte) (int, error) {
-	if len(data) < m.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	n := copy(data, m[:])
-	return n, nil
-}
-
-// Marshal is used by gogoproto.
-func (m *ObjectLocation) Marshal() ([]byte, error) {
-	data := make([]byte, m.ProtoSize())
-	n, err := m.MarshalToSizedBuffer(data)
-	if err != nil {
-		return nil, err
-	}
-	return data[:n], err
-}
-
-// Unmarshal is used by gogoproto.
-func (m *ObjectLocation) Unmarshal(data []byte) error {
-	if len(data) < m.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	copy(m[:], data)
-	return nil
-}
-
-const (
-	BlockInfoSize = unsafe.Sizeof(BlockInfo{})
-)
-
-type BlockInfo struct {
-	BlockID    types.Blockid
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
-
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
-}
-
-func (b *BlockInfo) MetaLocation() objectio.Location {
-	return b.MetaLoc[:]
-}
-
-func (b *BlockInfo) SetMetaLocation(metaLoc objectio.Location) {
-	b.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
-}
-
-func (b *BlockInfo) DeltaLocation() objectio.Location {
-	return b.DeltaLoc[:]
-}
-
-func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
-	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
-}
-
-// XXX info is passed in by value.   The use of unsafe here will cost
-// an allocation and copy.  BlockInfo is not small therefore this is
-// not exactly cheap.   However, caller of this function will keep a
-// reference to the buffer.  See txnTable.rangesOnePart.
-// ranges is *[][]byte.
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
-}
-
-func DecodeBlockInfo(buf []byte) *BlockInfo {
-	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
-}
 
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table

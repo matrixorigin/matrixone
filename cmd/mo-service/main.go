@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
@@ -158,6 +159,8 @@ func startService(
 	setupProcessLevelRuntime(cfg, stopper)
 
 	setupStatusServer(runtime.ProcessLevelRuntime())
+
+	goroutine.StartLeakCheck(stopper, cfg.Goroutine)
 
 	st, err := cfg.getServiceType()
 	if err != nil {
@@ -399,7 +402,7 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 		var uuidErr error
 		var nodeUUID uuid.UUID
 		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
-			nodeUUID = uuid.New()
+			nodeUUID, _ = uuid.NewV7()
 		}
 		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
 			return "", moerr.ConvertPanicError(ctx, err)

@@ -78,6 +78,8 @@ func TestLockBlockedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -88,14 +90,14 @@ func TestLockBlockedOnRemote(t *testing.T) {
 			row1 := []byte{1}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				// txn2 try lock row1 on l2
-				mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row1}, pb.Granularity_Row)
+				mustAddTestLock(t, ctx, l2, tableID, txn2, [][]byte{row1}, pb.Granularity_Row)
 				close(c)
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
 		},
@@ -136,6 +138,8 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -151,7 +155,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -159,7 +163,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 				// blocked by txn1
 				res, err := l2.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{row1},
 					txn2,
 					option)
@@ -168,7 +172,7 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 					t,
 					!res.Timestamp.IsEmpty())
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(
 				ctx,
 				txn1,
@@ -183,6 +187,8 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
 			l1 := s[0]
 			l2 := s[1]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -198,7 +204,7 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 			}
 
 			// txn1 hold lock row1 on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
@@ -206,14 +212,14 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 				// blocked by txn1
 				res, err := l2.Lock(
 					ctx,
-					1,
+					tableID,
 					[][]byte{row1},
 					txn2,
 					option)
 				require.NoError(t, err)
 				assert.False(t, res.Timestamp.IsEmpty())
 			}()
-			waitWaiters(t, l1, 1, row1, 1)
+			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
 		},
@@ -324,7 +330,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -345,7 +351,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -362,13 +368,13 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(table)
+			lt, err := l2.getLockTable(0, table)
 			require.NoError(t, err)
 			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 2, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -398,7 +404,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 				})
 				if err == nil {
 					// l2 get the bind
-					v, ok := l2.tables.Load(table)
+					v, ok := l2.getTables(0).Load(table)
 					assert.True(t, ok)
 					l := v.(lockTable)
 					assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
@@ -427,7 +433,7 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			assert.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			// l2 get the bind
-			v, ok := l2.tables.Load(table)
+			v, ok := l2.getTables(0).Load(table)
 			assert.True(t, ok)
 			l := v.(lockTable)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
@@ -450,11 +456,11 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			waitBindDisabled(t, alloc, l1.serviceID)
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(table)
+			lt, err := l2.getLockTable(0, table)
 			require.NoError(t, err)
 			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
-			v, ok := l2.tables.Load(table)
+			v, ok := l2.getTables(0).Load(table)
 			assert.True(t, ok)
 			l := v.(lockTable)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
@@ -485,7 +491,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -509,7 +515,7 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -529,13 +535,13 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(table)
+			lt, err := l2.getLockTable(0, table)
 			require.NoError(t, err)
 			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: 1, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -554,17 +560,17 @@ func TestIssue12554(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			table := uint64(1)
+			table := uint64(10)
 
 			// txn1 hold lock row1 on l1
 			mustAddTestLock(t, ctx, l1, table, txn1, [][]byte{row1}, pb.Granularity_Row)
 
-			oldBind := alloc.Get(l1.serviceID, table)
+			oldBind := alloc.Get(l1.serviceID, 0, table, 0, pb.Sharding_None)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.tables.Delete(table)
+			l1.getTables(0).Delete(table)
 			newLockTable := l1.createLockTableByBind(oldBind)
-			l1.tables.Store(table, newLockTable)
+			l1.getTables(0).Store(table, newLockTable)
 
 			_, err := l2.Lock(ctx, table, [][]byte{row1}, txn2, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
@@ -597,20 +603,20 @@ func runBindChangedTests(
 
 			txnID1 := []byte("txn1")
 			txnID2 := []byte("txn2")
-			table1 := uint64(1)
+			table1 := uint64(10)
 			// make table bind on l1
 			mustAddTestLock(t, ctx, l1, table1, txnID1, [][]byte{{1}}, pb.Granularity_Row)
 
 			// l2 get the table1's bind
 			mustAddTestLock(t, ctx, l2, table1, txnID2, [][]byte{{2}}, pb.Granularity_Row)
-			v, err := l2.getLockTable(table1)
+			v, err := l2.getLockTable(0, table1)
 			require.NoError(t, err)
 			require.Equal(t, l1.serviceID, v.getBind().ServiceID)
 
 			if makeBindChanged {
 				// stop l1 keep lock bind
 				skip.Store(true)
-				lt, err := l1.getLockTable(table1)
+				lt, err := l1.getLockTable(0, table1)
 				require.NoError(t, err)
 				old := lt.getBind()
 				waitBindDisabled(t, alloc, l1.serviceID)
@@ -659,7 +665,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTableWithCreate(old.Table, true)
+		lt, err := l.getLockTableWithCreate(0, old.Table, nil, pb.Sharding_None)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {
@@ -673,7 +679,7 @@ func checkBind(
 	t *testing.T,
 	bind pb.LockTable,
 	s *service) {
-	v, ok := s.tables.Load(bind.Table)
+	v, ok := s.getTables(0).Load(bind.Table)
 	assert.True(t, ok)
 	l := v.(lockTable)
 	assert.Equal(t, bind, l.getBind())

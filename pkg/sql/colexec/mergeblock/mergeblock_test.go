@@ -56,7 +56,7 @@ func TestMergeBlock(t *testing.T) {
 	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, 15, 0)
 
 	sid1 := loc1.Name().SegmentId()
-	blkInfo1 := catalog.BlockInfo{
+	blkInfo1 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid1,
 			loc1.Name().Num(),
@@ -68,7 +68,7 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo1.SetMetaLocation(loc1)
 
 	sid2 := loc2.Name().SegmentId()
-	blkInfo2 := catalog.BlockInfo{
+	blkInfo2 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid2,
 			loc2.Name().Num(),
@@ -80,7 +80,7 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo2.SetMetaLocation(loc2)
 
 	sid3 := loc3.Name().SegmentId()
-	blkInfo3 := catalog.BlockInfo{
+	blkInfo3 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid3,
 			loc3.Name().Num(),
@@ -96,9 +96,9 @@ func TestMergeBlock(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{
-				string(catalog.EncodeBlockInfo(blkInfo1)),
-				string(catalog.EncodeBlockInfo(blkInfo2)),
-				string(catalog.EncodeBlockInfo(blkInfo3))},
+				string(objectio.EncodeBlockInfo(blkInfo1)),
+				string(objectio.EncodeBlockInfo(blkInfo2)),
+				string(objectio.EncodeBlockInfo(blkInfo3))},
 				nil),
 			testutil.MakeTextVector([]string{
 				string(objectio.ZeroObjectStats[:]),

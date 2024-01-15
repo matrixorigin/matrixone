@@ -46,8 +46,11 @@ const (
 	FlushDeltaLoc
 )
 
+const argName = "deletion"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("delete rows")
+	buf.WriteString(argName)
+	buf.WriteString(": delete rows")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
@@ -57,7 +60,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 		ap.ctr.state = vm.Build
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
-		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
+		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
 		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
 	}
@@ -66,6 +69,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // the bool return value means whether it completed its work or not
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	if arg.RemoteDelete {
 		return arg.remote_delete(proc)
 	}
@@ -73,9 +80,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer func() {
+		anal.Stop()
+	}()
+
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := arg.children[0].Call(proc)
+			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+
 			if err != nil {
 				return result, err
 			}
@@ -167,6 +182,11 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal.Start()
+	defer anal.Stop()
+
 	bat := result.Batch
 
 	var affectedRows uint64

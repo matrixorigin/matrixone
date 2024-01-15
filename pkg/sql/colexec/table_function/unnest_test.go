@@ -47,7 +47,7 @@ var (
 	//	&plan.Expr_C{
 	//		C: &plan.Const{
 	//			Isnull: false,
-	//			Value: &plan.Const_Sval{}
+	//			Value: &plan.Literal_Sval{}
 	//		}
 	//	}
 	//}
@@ -134,9 +134,9 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 	ret := unnestTestCase{
 		proc: proc,
 		arg: &Argument{
-			Attrs: attrs,
-			Rets:  colDefs,
-			Name:  "unnest",
+			Attrs:    attrs,
+			Rets:     colDefs,
+			FuncName: "unnest",
 			info: &vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,
@@ -247,9 +247,9 @@ func makeConstInputExprs(jsons, paths []string, jsonType string, outers []bool) 
 			Id:    typeId,
 			Width: 256,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Sval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{
 					Sval: jsons[0],
 				},
 			},
@@ -285,9 +285,9 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 			Id:    int32(types.T_varchar),
 			Width: 256,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Sval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{
 					Sval: paths[0],
 				},
 			},
@@ -297,9 +297,9 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 		Typ: &plan.Type{
 			Id: int32(types.T_bool),
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Bval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{
 					Bval: outers[0],
 				},
 			},

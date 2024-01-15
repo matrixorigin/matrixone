@@ -88,24 +88,15 @@ message TraceSpan {
     int64 threshold = 3;
 }
 
-message StorageUsage {
+message StorageUsageReq {
     option (gogoproto.typedecl) = false;
-}
-
-message BlockMetaInfo {
-    option (gogoproto.typedecl)     = false;
-    repeated uint64 info            = 1;
-}
-
-message CkpMetaInfo {
-    option (gogoproto.typedecl)     = false;
-    uint32 version                  =1;
-    bytes location                 =2;
+    repeated int32 AccIds = 1;
 }
 
 message StorageUsageResp {
     option (gogoproto.typedecl)     = false;
     bool Succeed                    = 1;
-    repeated CkpMetaInfo CkpEntries = 2;
-    repeated BlockMetaInfo BlockEntries   = 3;
+    repeated int32 AccIds           = 2;
+    repeated uint64 Sizes            = 3;
+    uint64 Magic                    = 4;
 }

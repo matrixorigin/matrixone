@@ -118,8 +118,8 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
 }
 
-func (tcc *TxnCompilerContext) GetAccountId() uint32 {
-	return tcc.ses.accountId
+func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
+	return tcc.ses.accountId, nil
 }
 
 func (tcc *TxnCompilerContext) GetContext() context.Context {
@@ -184,15 +184,15 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
 		if account != nil && account.GetTenantID() != sysAccountID {
-			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+			txnCtx = defines.AttachAccountId(txnCtx, sysAccountID)
 		}
 	}
 	if sub != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
 	//open database
@@ -505,7 +505,10 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		return val, err
+		if val == nil {
+			return nil, err
+		}
+		return val.Value, err
 	}
 }
 

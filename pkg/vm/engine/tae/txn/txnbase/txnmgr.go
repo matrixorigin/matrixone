@@ -17,11 +17,12 @@ package txnbase
 import (
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -508,12 +509,6 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
-		dequeuePreparingDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparingDuration > threshold && op.Txn.GetContext() != nil {
-			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.DequeuePreparing, &common.DurationRecords{Duration: dequeuePreparingDuration}))
-		}
-
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
@@ -530,13 +525,19 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
+
 	for _, item := range items {
-		t0 := time.Now()
 		op := item.(*OpTxn)
+		var t1, t2, t3, t4, t5 time.Time
+		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
+
+			t2 = time.Now()
+			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(t2.Sub(t1).Seconds())
+
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
 					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
@@ -545,18 +546,30 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				}
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
-			prepareWALDuration := time.Since(t0)
-			_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
-				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
-			}
+
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+			t3 = time.Now()
+
+			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t3.Sub(t2).Seconds())
 		}
+
+		t4 = time.Now()
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
+		t5 = time.Now()
+		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t5.Sub(t4).Seconds())
 
-		v2.TxnOnPrepareWALDurationHistogram.Observe(time.Since(t0).Seconds())
+		if t5.Sub(t1) > time.Second {
+			logutil.Warn(
+				"SLOW-LOG",
+				zap.String("txn", op.Txn.String()),
+				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
+				zap.Duration("end-prepare-duration", t3.Sub(t2)),
+				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
+			)
+		}
+		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t5.Sub(t1).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
@@ -585,10 +598,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			mgr.on1PCPrepared(op)
 		}
 		dequeuePreparedDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
-			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
-		}
 		v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
 	}
 	common.DoIfDebugEnabled(func() {

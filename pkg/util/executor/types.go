@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -28,16 +29,20 @@ import (
 // data should be done using the internal sql executor, otherwise pessimistic transactions
 // may not work.
 type SQLExecutor interface {
+	// Exec new a txn operator, used for debug.
+	NewTxnOperator(ctx context.Context) client.TxnOperator
 	// Exec exec a sql in a exists txn.
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
 	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
 	// in a transaction.
-	ExecTxn(ctx context.Context, execFunc func(TxnExecutor) error, opts Options) error
+	// NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
+	// TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
+	ExecTxn(ctx context.Context, execFunc func(txn TxnExecutor) error, opts Options) error
 }
 
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
-	Exec(sql string) (Result, error)
+	Exec(sql string, options StatementOption) (Result, error)
 }
 
 // Options execute options.
@@ -50,6 +55,12 @@ type Options struct {
 	innerTxn                bool
 	waitCommittedLogApplied bool
 	timeZone                *time.Location
+	statementOptions        StatementOption
+}
+
+// StatementOption statement execute option.
+type StatementOption struct {
+	waitPolicy lock.WaitPolicy
 }
 
 // Result exec sql result

@@ -426,6 +426,34 @@ func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
 }
 
+// LockSkipped mocks base method.
+func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockSkipped", tableID, mode)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// LockSkipped indicates an expected call of LockSkipped.
+func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
+}
+
+// PKDedupCount mocks base method.
+func (m *MockTxnOperator) PKDedupCount() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PKDedupCount")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// PKDedupCount indicates an expected call of PKDedupCount.
+func (mr *MockTxnOperatorMockRecorder) PKDedupCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PKDedupCount", reflect.TypeOf((*MockTxnOperator)(nil).PKDedupCount))
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -781,17 +809,17 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 }
 
 // Adjust mocks base method.
-func (m *MockWorkspace) Adjust() error {
+func (m *MockWorkspace) Adjust(writeOffset uint64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Adjust")
+	ret := m.ctrl.Call(m, "Adjust", writeOffset)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Adjust indicates an expected call of Adjust.
-func (mr *MockWorkspaceMockRecorder) Adjust() *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
 }
 
 // Commit mocks base method.
@@ -899,4 +927,18 @@ func (m *MockWorkspace) StartStatement() {
 func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+}
+
+// WriteOffset mocks base method.
+func (m *MockWorkspace) WriteOffset() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteOffset")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// WriteOffset indicates an expected call of WriteOffset.
+func (mr *MockWorkspaceMockRecorder) WriteOffset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteOffset", reflect.TypeOf((*MockWorkspace)(nil).WriteOffset))
 }

@@ -290,8 +290,8 @@ func NewTxnReadConflictNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTxnReadConflict, xmsg)
 }
 
-func NewAppendableSegmentNotFoundNoCtx() *Error {
-	return newError(Context(), ErrAppendableSegmentNotFound)
+func NewAppendableObjectNotFoundNoCtx() *Error {
+	return newError(Context(), ErrAppendableObjectNotFound)
 }
 
 func NewAppendableBlockNotFoundNoCtx() *Error {
@@ -312,6 +312,10 @@ func NewLockTableBindChangedNoCtx() *Error {
 
 func NewLockTableNotFoundNoCtx() *Error {
 	return newError(Context(), ErrLockTableNotFound)
+}
+
+func NewLockConflictNoCtx() *Error {
+	return newError(Context(), ErrLockConflict)
 }
 
 func NewUDFAlreadyExistsNoCtx(f string) *Error {

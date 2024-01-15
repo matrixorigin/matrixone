@@ -273,6 +273,7 @@ func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	for i := range w.blockInfoBat.Attrs {
 		vec := proc.GetVector(*w.blockInfoBat.Vecs[i].GetType())
 		if err := vec.UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+			vec.Free(proc.Mp())
 			return err
 		}
 		bat.SetVector(int32(i), vec)
@@ -371,11 +372,13 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
 			rows = left
 		}
+
+		var err error
 		for i := 0; i < bat.VectorCount(); i++ {
 			vec := rbat.GetVector(int32(i))
 			srcVec := bat.GetVector(int32(i))
 			for j := 0; j < rows; j++ {
-				if err := w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
+				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
 					panic(err)
 				}
 			}
@@ -618,6 +621,9 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaTyp
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
 	}
+	if w.sortIndex > -1 {
+		w.writer.SetSortKey(uint16(w.sortIndex))
+	}
 	if w.attrs == nil {
 		w.attrs = bat.Attrs
 	}
@@ -659,7 +665,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
 			//[]byte(metaLoc),
-			catalog.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -685,13 +691,13 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, nil, err
 	}
-	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
+	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
 		location := blockio.EncodeLocation(
@@ -705,7 +711,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, [
 			return nil, nil, err
 		}
 		sid := location.Name().SegmentId()
-		blkInfo := catalog.BlockInfo{
+		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(
 				&sid,
 				location.Name().Num(),

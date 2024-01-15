@@ -34,22 +34,30 @@ import (
 const (
 	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
-	defaultKmeansDistanceType   = kmeans.CosineDistance
-	defaultInitType             = kmeans.Random
+	defaultKmeansDistanceType   = kmeans.L2Distance
+	defaultKmeansInitType       = kmeans.Random
 	defaultKmeansClusterCnt     = 1
+	defaultKmeansNormalize      = false
 
 	configSeparator = ","
 )
 
 var (
 	distTypeStrToEnum map[string]kmeans.DistanceType
+	initTypeStrToEnum map[string]kmeans.InitType
 )
 
 func init() {
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"vector_l2_ops":     kmeans.L2Distance,
-		"vector_ip_ops":     kmeans.InnerProduct,
-		"vector_cosine_ops": kmeans.CosineDistance,
+		"vector_l2_ops": kmeans.L2Distance,
+		//TODO: currently focusing on l2_distance index
+		//"vector_ip_ops":     kmeans.InnerProduct,
+		//"vector_cosine_ops": kmeans.CosineDistance,
+	}
+
+	initTypeStrToEnum = map[string]kmeans.InitType{
+		"random":         kmeans.Random,
+		"kmeansplusplus": kmeans.KmeansPlusPlus,
 	}
 }
 
@@ -65,11 +73,11 @@ var (
 
 // NewAggClusterCenters this agg func will take a vector/array column and run clustering algorithm like kmeans and
 // return the 'k' centroids.
-func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
+func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error) {
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
-	aggPriv.clusterCnt, aggPriv.distType, err = decodeConfig(config)
+	aggPriv.clusterCnt, aggPriv.distType, aggPriv.initType, aggPriv.normalize, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +86,9 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 	case types.T_array_float32, types.T_array_float64:
 		aggPriv.arrType = inputTypes[0]
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for cluster_centers", inputTypes[0])
 }
@@ -96,6 +104,8 @@ type sAggClusterCenters struct {
 	// Kmeans parameters
 	clusterCnt uint64
 	distType   kmeans.DistanceType
+	initType   kmeans.InitType
+	normalize  bool
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector from []byte to []float64 or []float32
@@ -107,6 +117,7 @@ func (s *sAggClusterCenters) Dup() agg.AggStruct {
 		groupedData: make([][][]byte, len(s.groupedData)),
 		clusterCnt:  s.clusterCnt,
 		distType:    s.distType,
+		initType:    s.initType,
 		arrType:     s.arrType,
 	}
 
@@ -188,7 +199,7 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		vecf64List := s.bytesListToVecF64List(arrGroup)
 
 		// 2. run kmeans
-		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, defaultInitType)
+		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, s.initType, s.normalize)
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +292,15 @@ func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 	var distType = uint16(s.distType)
 	buf.Write(types.EncodeUint16(&distType))
 
-	// 4. groupedData
+	// 4. initType
+	var initType = uint16(s.initType)
+	buf.Write(types.EncodeUint16(&initType))
+
+	//5. normalize
+	var normalize = s.normalize
+	buf.Write(types.EncodeBool(&normalize))
+
+	// 6. groupedData
 	encoded, err := json.Marshal(s.groupedData)
 	if err != nil {
 		return nil, err
@@ -308,7 +327,15 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 	s.distType = kmeans.DistanceType(types.DecodeUint16(data[:2]))
 	data = data[2:]
 
-	// 4. groupedData
+	// 4. initType
+	s.initType = kmeans.InitType(types.DecodeUint16(data[:2]))
+	data = data[2:]
+
+	// 5. normalize
+	s.normalize = types.DecodeBool(data[:1])
+	data = data[1:]
+
+	// 6. groupedData
 	err := json.Unmarshal(data, &s.groupedData)
 	if err != nil {
 		return err
@@ -317,11 +344,11 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 }
 
 // decodeConfig will decode the config string (separated by configSeparator) and return the k and distance_type
-func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error) {
+func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, initType kmeans.InitType, normalize bool, err error) {
 	bts, ok := config.([]byte)
 	if ok && bts != nil {
-		commaseparatedConfigStr := string(bts)
-		configs := strings.Split(commaseparatedConfigStr, configSeparator)
+		commaSeparatedConfigStr := string(bts)
+		configs := strings.Split(commaSeparatedConfigStr, configSeparator)
 
 		parseK := func(v string) (uint64, error) {
 			return strconv.ParseUint(strings.TrimSpace(v), 10, 64)
@@ -336,6 +363,14 @@ func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error
 			}
 		}
 
+		parseInitType := func(v string) (kmeans.InitType, error) {
+			if res, ok := initTypeStrToEnum[v]; !ok {
+				return 0, moerr.NewInternalErrorNoCtx("unsupported init_type '%s' for cluster_centers", v)
+			} else {
+				return res, nil
+			}
+		}
+
 		for i := range configs {
 			configs[i] = strings.TrimSpace(configs[i])
 			switch i {
@@ -343,15 +378,19 @@ func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error
 				k, err = parseK(configs[i])
 			case 1:
 				distType, err = parseDistType(configs[i])
+			case 2:
+				initType, err = parseInitType(configs[i])
+			case 3:
+				normalize, err = strconv.ParseBool(configs[i])
 			}
 			if err != nil {
-				return 0, defaultKmeansDistanceType, err
+				return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, defaultKmeansNormalize, err
 			}
 		}
-		return k, distType, nil
+		return k, distType, initType, normalize, nil
 
 	}
-	return defaultKmeansClusterCnt, defaultKmeansDistanceType, nil
+	return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, defaultKmeansNormalize, nil
 }
 
 func deepCopy3DSlice(src [][][]byte) [][][]byte {

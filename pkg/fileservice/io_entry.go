@@ -20,49 +20,49 @@ import (
 	"os"
 )
 
-func (e *IOEntry) setCachedData() error {
-	if e.ToCacheData == nil {
+func (i *IOEntry) setCachedData() error {
+	if i.ToCacheData == nil {
 		return nil
 	}
-	if len(e.Data) == 0 {
+	if len(i.Data) == 0 {
 		return nil
 	}
-	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data, DefaultCacheDataAllocator)
+	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, DefaultCacheDataAllocator)
 	if err != nil {
 		return err
 	}
-	e.CachedData = bs
+	i.CachedData = bs
 	return nil
 }
 
-func (e *IOEntry) ReadFromOSFile(file *os.File) error {
-	r := io.LimitReader(file, e.Size)
+func (i *IOEntry) ReadFromOSFile(file *os.File) error {
+	r := io.LimitReader(file, i.Size)
 
-	if len(e.Data) < int(e.Size) {
-		e.Data = make([]byte, e.Size)
+	if len(i.Data) < int(i.Size) {
+		i.Data = make([]byte, i.Size)
 	}
 
-	n, err := io.ReadFull(r, e.Data)
+	n, err := io.ReadFull(r, i.Data)
 	if err != nil {
 		return err
 	}
-	if n != int(e.Size) {
+	if n != int(i.Size) {
 		return io.ErrUnexpectedEOF
 	}
 
-	if e.WriterForRead != nil {
-		if _, err := e.WriterForRead.Write(e.Data); err != nil {
+	if i.WriterForRead != nil {
+		if _, err := i.WriterForRead.Write(i.Data); err != nil {
 			return err
 		}
 	}
-	if e.ReadCloserForRead != nil {
-		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(e.Data))
+	if i.ReadCloserForRead != nil {
+		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := e.setCachedData(); err != nil {
+	if err := i.setCachedData(); err != nil {
 		return err
 	}
 
-	e.done = true
+	i.done = true
 
 	return nil
 }

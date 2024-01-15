@@ -18,23 +18,21 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 1024
+const defaultmaxRowThenUnusePkFilterExpr = 1024
 
 type dmlSelectInfo struct {
 	typ string
@@ -252,7 +250,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemSourceRel {
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
+	} else if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
@@ -277,11 +277,15 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 	if obj.PubInfo != nil {
@@ -419,29 +423,55 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		checkInsertPkDup = len(slt.Rows) > 1
-		if CNPrimaryCheck && len(slt.Rows) <= maxRowThenUnusePkFilterExpr {
+		if CNPrimaryCheck {
+			CanUsePkFilter := false
+
 			if len(tableDef.Pkey.Names) == 1 {
-				for idx, name := range insertColumns {
+				for i, name := range insertColumns {
 					if name == tableDef.Pkey.PkeyColName {
-						pkPosInValues[idx] = 0
-						break
-					}
-				}
-			} else {
-				pkNameMap := make(map[string]int)
-				for pkIdx, pkName := range tableDef.Pkey.Names {
-					pkNameMap[pkName] = pkIdx
-				}
-				for idx, name := range insertColumns {
-					if pkIdx, ok := pkNameMap[name]; ok {
-						pkPosInValues[idx] = pkIdx
+						typ := tableDef.Cols[i].Typ
+						switch typ.Id {
+						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						}
 					}
 				}
 			}
-			// one of pk cols is incr col and this col was not in values.
-			// we can not use the values of other cols as filterExpr.
-			if len(tableDef.Pkey.Names) != len(pkPosInValues) {
-				pkPosInValues = make(map[int]int)
+
+			if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
+				CanUsePkFilter = true
+			}
+
+			if CanUsePkFilter {
+				if len(tableDef.Pkey.Names) == 1 {
+					for idx, name := range insertColumns {
+						if name == tableDef.Pkey.PkeyColName {
+							pkPosInValues[idx] = 0
+							break
+						}
+					}
+				} else {
+					pkNameMap := make(map[string]int)
+					for pkIdx, pkName := range tableDef.Pkey.Names {
+						pkNameMap[pkName] = pkIdx
+					}
+					for idx, name := range insertColumns {
+						if pkIdx, ok := pkNameMap[name]; ok {
+							pkPosInValues[idx] = pkIdx
+						}
+					}
+				}
+				// one of pk cols is incr col and this col was not in values.
+				// we can not use the values of other cols as filterExpr.
+				if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+					pkPosInValues = make(map[int]int)
+				}
 			}
 		}
 
@@ -797,8 +827,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
 	isConstantNull := false
-	if ef, ok := expr.Expr.(*plan.Expr_C); ok {
-		isConstantNull = ef.C.Isnull
+	if ef, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		isConstantNull = ef.Lit.Isnull
 	}
 	if !isConstantNull {
 		return nil
@@ -978,6 +1008,10 @@ func buildValueScan(
 						return err
 					}
 				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1010,6 +1044,10 @@ func buildValueScan(
 					return err
 				}
 				if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1083,7 +1121,7 @@ func buildValueScan(
 		}
 	}
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:      plan.Node_VALUE_SCAN,
 		RowsetData:    rowsetData,

@@ -18,8 +18,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -52,8 +52,6 @@ func NewLRUCache(
 	}
 
 	postSetFn := func(key CacheKey, value CacheData) {
-		value.Retain()
-
 		if overlapChecker != nil {
 			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -68,8 +66,6 @@ func NewLRUCache(
 	}
 
 	postGetFn := func(key CacheKey, value CacheData) {
-		value.Retain()
-
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -191,4 +187,12 @@ func (m *MemCache) Update(
 
 func (m *MemCache) Flush() {
 	m.cache.Flush()
+}
+
+func (m *MemCache) DeletePaths(
+	ctx context.Context,
+	paths []string,
+) error {
+	m.cache.DeletePaths(ctx, paths)
+	return nil
 }

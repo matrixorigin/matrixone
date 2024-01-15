@@ -212,12 +212,12 @@ func (cs *testClientSession) Close() error {
 	return nil
 }
 
-func (cs *testClientSession) SafeClose(ctx context.Context) error {
+func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
+	cs.c <- response
 	return nil
 }
 
-func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
-	cs.c <- response
+func (cs *testClientSession) AsyncWrite(response morpc.Message) error {
 	return nil
 }
 

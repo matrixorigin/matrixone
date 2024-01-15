@@ -33,8 +33,11 @@ const (
 	rowIdColPos
 )
 
+const argName = "pre_insert_secondary_index"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("pre processing insert secondary key")
+	buf.WriteString(argName)
+	buf.WriteString(": pre processing insert secondary key")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
@@ -42,12 +45,15 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx)
+	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analy.Start()
 	defer analy.Stop()
 

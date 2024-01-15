@@ -16,7 +16,9 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -132,11 +134,19 @@ type IOEntry struct {
 	fromCache IOVectorCache
 }
 
+func (i IOEntry) String() string {
+	buf := new(strings.Builder)
+	buf.WriteString("IOEntry(")
+	fmt.Fprintf(buf, "offset = %v", i.Offset)
+	fmt.Fprintf(buf, ", size = %v", i.Size)
+	buf.WriteString(")")
+	return buf.String()
+}
+
 type CacheData interface {
 	Bytes() []byte
 	Slice(length int) CacheData
 	Release()
-	Retain()
 }
 
 type CacheDataAllocator interface {

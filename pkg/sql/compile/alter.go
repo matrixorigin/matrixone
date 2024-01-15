@@ -115,10 +115,41 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 7. import data from the temporary replica table into the original table
+	// 7.a import data from the temporary replica table into the original table
 	err = c.runSql(qry.InsertDataSql)
 	if err != nil {
 		return err
+	}
+
+	{
+		// 7.b invoke reindex for the new table, if it contains ivf index.
+		multiTableIndexes := make(map[string]*MultiTableIndex)
+		newTableRel, err := dbSource.Relation(c.ctx, qry.TableDef.Name, nil)
+		if err != nil {
+			return err
+		}
+		newTableDef := newTableRel.GetTableDef(c.ctx)
+
+		for _, indexDef := range newTableDef.Indexes {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			}
+		}
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	// 8. Delete temporary replica table

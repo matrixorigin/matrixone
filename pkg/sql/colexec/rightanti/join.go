@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,8 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "right_anti"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" right anti join ")
+	buf.WriteString(argName)
+	buf.WriteString(": right anti join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -57,7 +61,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyze.Start()
 	defer analyze.Stop()
 	ap := arg
@@ -66,10 +74,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, analyze); err != nil {
+			if err := ctr.build(proc, analyze); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil {
+			// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+			// shuffle join can't stop early for this moment
+			if ctr.mp == nil && !arg.IsShuffle {
 				ctr.state = End
 			} else {
 				ctr.state = Probe
@@ -131,28 +141,49 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, analyze process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, analyze)
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	if bat != nil && bat.AuxData != nil {
+		ctr.mp = bat.DupJmAuxData()
+		anal.Alloc(ctr.mp.Size())
+	}
+	return nil
+}
 
+func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 	if bat != nil {
 		if ctr.bat != nil {
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
 		ctr.bat = bat
-		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.RowCount())
-		analyze.Alloc(ctr.mp.Size())
+		ctr.matched.InitWithSize(int64(bat.RowCount()))
 	}
 	return nil
 }
 
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(proc, anal)
+}
+
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
+
+	if ctr.matched == nil {
+		return true, nil
+	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {

@@ -15,9 +15,9 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"math/rand"
 	"strings"
@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -701,7 +702,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Uuid](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		val, err := uuid.NewUUID()
+		val, err := uuid.NewV7()
 		if err != nil {
 			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
 		}
@@ -1814,5 +1815,17 @@ func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResul
 	// ignore the second parameter and just set result the same to the first parameter.
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return v
+	})
+}
+
+func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		return bytes.ToUpper(v)
+	})
+}
+
+func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		return bytes.ToLower(v)
 	})
 }

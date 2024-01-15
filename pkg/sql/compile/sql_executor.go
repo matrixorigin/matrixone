@@ -84,6 +84,23 @@ func NewSQLExecutor(
 	}
 }
 
+func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	var opts executor.Options
+
+	ctx, opts, err := s.adjustOptions(ctx, opts)
+	if err != nil {
+		return nil
+	}
+	if !opts.ExistsTxn() {
+		if err := s.eng.New(ctx, opts.Txn()); err != nil {
+			return nil
+		}
+	}
+	opts.Txn().GetWorkspace().StartStatement()
+	opts.Txn().GetWorkspace().IncrStatementID(ctx, false)
+	return opts.Txn()
+}
+
 func (s *sqlExecutor) Exec(
 	ctx context.Context,
 	sql string,
@@ -92,7 +109,7 @@ func (s *sqlExecutor) Exec(
 	err := s.ExecTxn(
 		ctx,
 		func(exec executor.TxnExecutor) error {
-			v, err := exec.Exec(sql)
+			v, err := exec.Exec(sql, opts.StatementOption())
 			res = v
 			return err
 		},
@@ -187,7 +204,9 @@ func newTxnExecutor(
 	return &txnExecutor{s: s, ctx: ctx, opts: opts}, nil
 }
 
-func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
+func (exec *txnExecutor) Exec(
+	sql string,
+	statementOption executor.StatementOption) (executor.Result, error) {
 	receiveAt := time.Now()
 
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
@@ -222,6 +241,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.us,
 		exec.s.aicm,
 	)
+	proc.WaitPolicy = statementOption.WaitPolicy()
 	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
@@ -237,7 +257,8 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
 			exec.s.getCompileContext(exec.ctx, proc, exec.opts),
@@ -264,6 +285,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 			return nil
 		})
 	if err != nil {
+		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult

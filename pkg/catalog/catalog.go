@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -147,20 +148,6 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 }
 
-func GenBlockInfo(rows [][]any) []BlockInfo {
-	infos := make([]BlockInfo, len(rows))
-	for i, row := range rows {
-		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
-		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
-		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
-		infos[i].SetMetaLocation(row[BLOCKMETA_METALOC_IDX].([]byte))
-		infos[i].SetDeltaLocation(row[BLOCKMETA_DELTALOC_IDX].([]byte))
-		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
-		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
-	}
-	return infos
-}
-
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {
@@ -236,6 +223,9 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	for i, row := range rows {
 		name := string(row[SKIP_ROWID_OFFSET+MO_TABLES_REL_NAME_IDX].([]byte))
 		if id, tblName, ok := isTruncate(name); ok {
+			if id == 0 {
+				logutil.Infof("truncate table %s: %v-%v-%v", name, id, tblName, ok)
+			}
 			cmds[i].Id = id
 			cmds[i].Name = tblName
 			cmds[i].NewId = row[SKIP_ROWID_OFFSET+MO_TABLES_REL_ID_IDX].(uint64)

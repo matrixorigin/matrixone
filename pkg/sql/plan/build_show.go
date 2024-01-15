@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -47,7 +48,10 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	if sub, err := ctx.GetSubscriptionMeta(name); err != nil {
 		return nil, err
 	} else if sub != nil {
-		accountId := ctx.GetAccountId()
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, stmt.Name, accountId)
@@ -132,9 +136,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			ctx.GetAccountId() != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -207,7 +215,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	if tableDef.Indexes != nil {
+
+		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+		// other multi-table indexes.
+		indexNames := make(map[string]bool)
+
 		for _, indexdef := range tableDef.Indexes {
+			if _, ok := indexNames[indexdef.IndexName]; ok {
+				continue
+			} else {
+				indexNames[indexdef.IndexName] = true
+			}
+
 			var indexStr string
 			if indexdef.Unique {
 				indexStr = "UNIQUE KEY "
@@ -235,7 +254,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			indexStr += ")"
 			if indexdef.IndexAlgoParams != "" {
 				var paramList string
-				paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 				if err != nil {
 					return nil, err
 				}
@@ -414,7 +433,10 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 
 	var sql string
@@ -467,7 +489,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(stmt.DBName, ctx)
 	if err != nil {
 		return nil, err
@@ -533,7 +558,10 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 }
 
 func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(stmt.DbName, ctx)
 	if err != nil {
 		return nil, err
@@ -583,7 +611,10 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 }
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx)
 	if err != nil {
 		return nil, err
@@ -684,7 +715,10 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx)
 	if err != nil {
 		return nil, err
@@ -741,15 +775,26 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if tableDef.Indexes != nil {
+				uniqueColName := make(map[string]bool)
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
 						for _, name := range indexdef.Parts {
+							if uniqueColName[name] {
+								continue
+							}
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'UNI'"
+							uniqueColName[name] = true
 						}
-					} else {
+					}
+				}
+				for _, indexdef := range tableDef.Indexes {
+					if !indexdef.Unique {
 						for _, name := range indexdef.Parts {
+							if uniqueColName[name] {
+								continue
+							}
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
@@ -813,7 +858,10 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 	stmt.DbName = dbName
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
-	accountId := ctx.GetAccountId()
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 
 	sub, err := ctx.GetSubscriptionMeta(dbName)
 	if err != nil {
@@ -976,6 +1024,32 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"where `tcl`.`att_database` = '%s' AND " +
 		"`tcl`.`att_relname` = '%s' AND " +
 		"`idx`.`column_name` NOT LIKE '%s' " +
+		// Below `GROUP BY` is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes scenarios.
+		// NOTE: We need to add all the table column names to the GROUP BY clause
+		//
+		// Without `GROUP BY`, we will printing the same index multiple times for IVFFLAT index.
+		// (there are multiple entries in mo_indexes for the same index, with differing algo_table_type and index_table_name).
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//
+		// With `GROUP BY`, we print
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
+		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
+		"`idx`.`algo_params`, `idx`.`is_visible`" +
 		";"
 	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
@@ -1100,7 +1174,27 @@ func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 
 func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := "select pub_name as Name,database_name as `Database` from mo_catalog.mo_pubs;"
+	sql := "select" +
+		" pub_name as `publication`," +
+		" database_name as `database`," +
+		" created_time as `create_time`," +
+		" update_time as `update_time`," +
+		" case account_list " +
+		" 	when 'all' then cast('*' as text)" +
+		" 	else account_list" +
+		" end as `sub_account`," +
+		" comment as `comments`" +
+		" from mo_catalog.mo_pubs"
+	like := stmt.Like
+	if like != nil {
+		right, ok := like.Right.(*tree.NumVal)
+		if !ok || right.Value.Kind() != constant.String {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "like clause must be a string")
+		}
+		sql += fmt.Sprintf(" where pub_name like '%s' order by pub_name;", constant.StringVal(right.Value))
+	} else {
+		sql += " order by update_time desc, created_time desc;"
+	}
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

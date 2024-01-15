@@ -25,7 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"go.uber.org/zap"
 )
 
@@ -149,6 +150,7 @@ func (r *rebalancer) doRebalance() {
 func (r *rebalancer) rebalanceByHash(hash LabelHash) {
 	// Collect the tunnels that need to migrate.
 	tuns := r.collectTunnels(hash)
+	v2.ProxyConnectionsNeedToTransferGauge.Set(float64(len(tuns)))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -179,7 +181,7 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 
 	notEmptyCns := make(map[string]struct{})
 
-	selector := li.genSelector()
+	selector := li.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(s *metadata.CNService) {
 		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
@@ -187,9 +189,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 		}
 	}
 	if li.isSuperTenant() {
-		disttae.SelectForSuperTenant(selector, "", nil, appendFn)
+		route.RouteForSuperTenant(selector, "", nil, appendFn)
 	} else {
-		disttae.SelectForCommonTenant(selector, nil, appendFn)
+		route.RouteForCommonTenant(selector, nil, appendFn)
 	}
 
 	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
@@ -242,10 +244,16 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 	for {
 		select {
 		case tun := <-r.queue:
+			v2.ProxyTransferQueueSizeGauge.Set(float64(len(r.queue)))
 			if err := tun.transfer(ctx); err != nil {
 				if !moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
 					r.logger.Error("failed to do transfer", zap.Error(err))
+					v2.ProxyTransferFailCounter.Inc()
+				} else {
+					v2.ProxyTransferAbortCounter.Inc()
 				}
+			} else {
+				v2.ProxyTransferSuccessCounter.Inc()
 			}
 
 			// After transfer the tunnel, remove it from the inflight map.

@@ -28,24 +28,24 @@ import (
 )
 
 func TestMakeEvent(t *testing.T) {
-	e, r := makeEvent(nil)
+	e, r := makeEvent(nil, nil)
 	require.Nil(t, e)
 	require.False(t, r)
 
 	t.Run("kill query", func(t *testing.T) {
-		e, r = makeEvent(makeSimplePacket("kill quer8y 12"))
+		e, r = makeEvent(makeSimplePacket("kill quer8y 12"), nil)
 		require.Nil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(makeSimplePacket("kill query 123"))
+		e, r = makeEvent(makeSimplePacket("kill query 123"), nil)
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(makeSimplePacket("kiLL Query 12"))
+		e, r = makeEvent(makeSimplePacket("kiLL Query 12"), nil)
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(makeSimplePacket("set "))
+		e, r = makeEvent(makeSimplePacket("set "), nil)
 		require.Nil(t, e)
 		require.False(t, r)
 	})
@@ -92,12 +92,12 @@ func TestMakeEvent(t *testing.T) {
 			"set @a:='1",
 		}
 		for _, stmt := range stmtsValid {
-			e, r = makeEvent(makeSimplePacket(stmt))
+			e, r = makeEvent(makeSimplePacket(stmt), nil)
 			require.NotNil(t, e)
 			require.False(t, r)
 		}
 		for _, stmt := range stmtsInvalid {
-			e, r = makeEvent(makeSimplePacket(stmt))
+			e, r = makeEvent(makeSimplePacket(stmt), nil)
 			require.Nil(t, e)
 			require.False(t, r)
 		}
@@ -713,7 +713,7 @@ func TestUseEvent(t *testing.T) {
 	errChan := make(chan error, 1)
 	go func() {
 		<-sendEventCh
-		if _, err := client2.Write(makeSimplePacket("use d1")); err != nil {
+		if _, err := client2.Write(makeInitDBPacket("d1")); err != nil {
 			errChan <- err
 			return
 		}
@@ -747,6 +747,6 @@ func TestEventType_String(t *testing.T) {
 	e6 := prepareEvent{}
 	require.Equal(t, "Prepare", e6.eventType().String())
 
-	e7 := useEvent{}
+	e7 := initDBEvent{}
 	require.Equal(t, "Use", e7.eventType().String())
 }

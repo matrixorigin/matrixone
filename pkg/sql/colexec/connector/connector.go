@@ -22,8 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "connector"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("pipe connector")
+	buf.WriteString(argName)
+	buf.WriteString(": pipe connector")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
@@ -31,6 +34,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	reg := arg.Reg
 
 	result, err := arg.Children[0].Call(proc)
@@ -38,7 +45,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 

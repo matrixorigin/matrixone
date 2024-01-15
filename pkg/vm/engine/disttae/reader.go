@@ -18,28 +18,26 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -159,7 +157,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt 
 
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Const, len(pkNames))
+	pkVals := make([]*plan.Literal, len(pkNames))
 	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
@@ -272,7 +270,7 @@ func newBlockReader(
 	ctx context.Context,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
-	blks []*catalog.BlockInfo,
+	blks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -341,9 +339,9 @@ func (r *blockReader) Read(
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -358,7 +356,7 @@ func (r *blockReader) Read(
 
 	// read the block
 	var policy fileservice.Policy
-	if r.scanType == LARGE {
+	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
 	bat, err := blockio.BlockRead(
@@ -420,7 +418,7 @@ func newBlockMergeReader(
 	txnTable *txnTable,
 	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
-	dirtyBlks []*catalog.BlockInfo,
+	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -437,6 +435,7 @@ func newBlockMergeReader(
 			proc,
 		),
 		encodedPrimaryKey: encodedPrimaryKey,
+		deletaLocs:        make(map[string][]objectio.Location),
 	}
 	return r
 }

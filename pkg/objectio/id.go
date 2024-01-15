@@ -25,17 +25,19 @@ import (
 
 const (
 	SegmentIdSize = types.UuidSize
+	ObjectIDSize  = types.ObjectidSize
 )
 
 var emptySegmentId types.Segmentid
 var emptyBlockId types.Blockid
 
+type ObjectId = types.Objectid
 type Segmentid = types.Segmentid
 type Blockid = types.Blockid
 type Rowid = types.Rowid
 
 func NewSegmentid() *Segmentid {
-	id := types.Uuid(uuid.Must(uuid.NewUUID()))
+	id := types.Uuid(uuid.Must(uuid.NewV7()))
 	return &id
 }
 
@@ -46,6 +48,28 @@ func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 	copy(id[size:size+2], types.EncodeUint16(&fnum))
 	copy(id[size+2:size+4], types.EncodeUint16(&blknum))
 	return &id
+}
+
+func NewObjectid() *ObjectId {
+	sid := types.Uuid(uuid.Must(uuid.NewV7()))
+	var oid ObjectId
+	copy(oid[:types.UuidSize], sid[:])
+	return &oid
+}
+
+func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
+	var oid ObjectId
+	copy(oid[:types.UuidSize], sid[:])
+	copy(oid[types.UuidSize:], types.EncodeUint16(&num))
+	return &oid
+}
+
+func NewBlockidWithObjectID(segid *ObjectId, blknum uint16) *Blockid {
+	var bid Blockid
+	size := types.ObjectidSize
+	copy(bid[:size], segid[:])
+	copy(bid[size:size+2], types.EncodeUint16(&blknum))
+	return &bid
 }
 
 func NewRowid(blkid *Blockid, offset uint32) *types.Rowid {
@@ -113,6 +137,13 @@ func HackBlockid2Rowid(id *Blockid) Rowid {
 
 // used only in some special cases
 func HackSegid2Rowid(id *Segmentid) Rowid {
+	var rowid Rowid
+	copy(rowid[:], id[:])
+	return rowid
+}
+
+// used only in some special cases
+func HackObjid2Rowid(id *ObjectId) Rowid {
 	var rowid Rowid
 	copy(rowid[:], id[:])
 	return rowid

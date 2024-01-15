@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc64"
 	"sync"
 	"time"
 
@@ -36,7 +37,7 @@ import (
 type service struct {
 	cfg                  Config
 	serviceID            string
-	tables               sync.Map // table id -> locktable
+	tableGroups          sync.Map // group -> sync.Map -> table id -> locktable
 	activeTxnHolder      activeTxnHolder
 	fsp                  *fixedSlicePool
 	deadlockDetector     *detector
@@ -54,7 +55,7 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		allocating map[uint64]chan struct{}
+		allocating map[uint32]map[uint64]chan struct{}
 	}
 }
 
@@ -74,7 +75,7 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
-	s.mu.allocating = make(map[uint64]chan struct{})
+	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
@@ -96,6 +97,7 @@ func (s *service) Lock(
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
 	v2.TxnLockTotalCounter.Inc()
+	options.Validate(rows)
 
 	start := time.Now()
 	defer func() {
@@ -111,7 +113,7 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	l, err := s.getLockTableWithCreate(tableID, true)
+	l, err := s.getLockTableWithCreate(options.Group, tableID, rows, options.Sharding)
 	if err != nil {
 		return pb.Result{}, err
 	}
@@ -144,7 +146,8 @@ func (s *service) Lock(
 func (s *service) Unlock(
 	ctx context.Context,
 	txnID []byte,
-	commitTS timestamp.Timestamp) error {
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -165,7 +168,7 @@ func (s *service) Unlock(
 	}
 
 	defer logUnlockTxn(s.serviceID, txn)()
-	txn.close(s.serviceID, txnID, commitTS, s.getLockTable)
+	txn.close(s.serviceID, txnID, commitTS, s.getLockTable, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -186,10 +189,15 @@ func (s *service) Close() error {
 	var err error
 	s.stopOnce.Do(func() {
 		s.stopper.Stop()
-		s.tables.Range(func(key, value any) bool {
-			value.(lockTable).close()
+		s.tableGroups.Range(func(key, value any) bool {
+			tables := value.(*sync.Map)
+			tables.Range(func(key, value any) bool {
+				value.(lockTable).close()
+				return true
+			})
 			return true
 		})
+
 		if err = s.remote.client.Close(); err != nil {
 			return
 		}
@@ -253,46 +261,78 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 	activeTxn.abort(s.serviceID, wait, err)
 }
 
-func (s *service) getLockTable(tableID uint64) (lockTable, error) {
-	return s.getLockTableWithCreate(tableID, false)
+func (s *service) getLockTable(
+	group uint32,
+	tableID uint64) (lockTable, error) {
+	if v := s.loadLockTable(group, tableID); v != nil {
+		return v, nil
+	}
+	return s.waitLockTableBind(
+		group,
+		tableID,
+		false), nil
 }
 
-func (s *service) waitLockTableBind(tableID uint64, locked bool) lockTable {
-	getter := func() chan struct{} {
-		if !locked {
-			s.mu.RLock()
-			defer s.mu.RUnlock()
-		}
-		return s.mu.allocating[tableID]
+func (s *service) getAllocatingC(
+	group uint32,
+	tableID uint64,
+	locked bool) chan struct{} {
+	if !locked {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 	}
-
-	c := getter()
-	if c != nil {
-		<-c
-	}
-	if v, ok := s.tables.Load(tableID); ok {
-		return v.(lockTable)
+	if m, ok := s.mu.allocating[group]; ok {
+		return m[tableID]
 	}
 	return nil
 }
 
-func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable, error) {
-	if v, ok := s.tables.Load(tableID); ok {
-		return v.(lockTable), nil
+func (s *service) waitLockTableBind(
+	group uint32,
+	tableID uint64,
+	locked bool) lockTable {
+	c := s.getAllocatingC(group, tableID, locked)
+	if c != nil {
+		<-c
 	}
-	if !create {
-		return s.waitLockTableBind(tableID, false), nil
+	return s.loadLockTable(group, tableID)
+}
+
+func (s *service) getLockTableWithCreate(
+	group uint32,
+	tableID uint64,
+	rows [][]byte,
+	sharding pb.Sharding) (lockTable, error) {
+	originTableID := tableID
+	if sharding == pb.Sharding_ByRow {
+		tableID = shardingByRow(rows[0])
+	}
+
+	if v := s.loadLockTable(group, tableID); v != nil {
+		return v, nil
 	}
 
 	var c chan struct{}
 	fn := func() lockTable {
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		v := s.waitLockTableBind(tableID, true)
+		waitC := s.getAllocatingC(group, tableID, true)
+		if waitC != nil {
+			s.mu.Unlock()
+			<-waitC
+			s.mu.Lock()
+		}
+
+		v := s.loadLockTable(group, tableID)
 		if v == nil {
 			c = make(chan struct{})
-			s.mu.allocating[tableID] = c
+			m, ok := s.mu.allocating[group]
+			if !ok {
+				m = make(map[uint64]chan struct{})
+				s.mu.allocating[group] = m
+			}
+			m[tableID] = c
 		}
+		s.mu.Unlock()
 		return v
 	}
 	if v := fn(); v != nil {
@@ -300,33 +340,50 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 	}
 
 	defer func() {
-		close(c)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		delete(s.mu.allocating, tableID)
+		delete(s.mu.allocating[group], tableID)
+		close(c)
 	}()
 	bind, err := getLockTableBind(
 		s.remote.client,
+		group,
 		tableID,
-		s.serviceID)
+		originTableID,
+		s.serviceID,
+		sharding)
 	if err != nil {
 		return nil, err
 	}
-
 	l := s.createLockTableByBind(bind)
-	if _, loaded := s.tables.LoadOrStore(tableID, l); loaded {
+	if _, loaded := s.getTables(group).LoadOrStore(tableID, l); loaded {
 		getLogger().Fatal("BUG: cannot loaded lock table from tables")
 	}
 	return l, nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	var oldBind pb.LockTable
 	new := s.createLockTableByBind(newBind)
-	old, loaded := s.tables.Swap(newBind.Table, new)
+	var tables *sync.Map
+
+	v, ok := s.tableGroups.Load(newBind.Group)
+	if !ok {
+		tables = &sync.Map{}
+		v, loaded := tables.LoadOrStore(newBind.Table, new)
+		if loaded {
+			tables = v.(*sync.Map)
+		}
+	} else {
+		tables = v.(*sync.Map)
+	}
+
+	old, loaded := tables.Swap(newBind.Table, new)
 	if loaded {
 		old.(lockTable).close()
+		oldBind = old.(lockTable).getBind()
 	}
-	logRemoteBindChanged(s.serviceID, old.(lockTable).getBind(), newBind)
+	logRemoteBindChanged(s.serviceID, oldBind, newBind)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -340,15 +397,43 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			bind,
 			s.fsp,
 			s.events,
-			s.clock)
+			s.clock,
+			s.activeTxnHolder)
 	} else {
-		return newRemoteLockTable(
+		remote := newRemoteLockTable(
 			s.serviceID,
 			s.cfg.RemoteLockTimeout.Duration,
 			bind,
 			s.remote.client,
 			s.handleBindChanged)
+		if !s.cfg.EnableRemoteLocalProxy {
+			return remote
+		}
+		return newLockTableProxy(s.serviceID, remote)
 	}
+}
+
+func (s *service) loadLockTable(
+	group uint32,
+	tableID uint64) lockTable {
+	if v, ok := s.getTables(group).Load(tableID); ok {
+		return v.(lockTable)
+	}
+	return nil
+}
+
+func (s *service) getTables(group uint32) *sync.Map {
+	v, ok := s.tableGroups.Load(group)
+	if ok {
+		return v.(*sync.Map)
+	}
+
+	tables := &sync.Map{}
+	v, loaded := s.tableGroups.LoadOrStore(group, tables)
+	if loaded {
+		return v.(*sync.Map)
+	}
+	return tables
 }
 
 type activeTxnHolder interface {
@@ -524,4 +609,8 @@ func getUUIDFromServiceIdentifier(id string) string {
 		return id
 	}
 	return id[19:]
+}
+
+func shardingByRow(row []byte) uint64 {
+	return crc64.Checksum(row, crc64.MakeTable(crc64.ECMA))
 }

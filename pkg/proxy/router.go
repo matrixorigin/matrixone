@@ -24,12 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 )
 
 const (
-	tenantLabelKey        = "account"
-	defaultConnectTimeout = 3 * time.Second
+	tenantLabelKey = "account"
 )
 
 var (
@@ -55,6 +55,13 @@ type Router interface {
 	// It should take a handshakeResp as a parameter, which is the auth
 	// request from client including tenant, username, database and others.
 	Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
+}
+
+// RefreshableRouter is a router that can be refreshed to get latest route strategy
+type RefreshableRouter interface {
+	Router
+
+	Refresh(sync bool)
 }
 
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
@@ -83,22 +90,25 @@ type CNServer struct {
 }
 
 // Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect() (goetty.IOSession, error) {
+func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
-	err := c.Connect(s.addr, defaultConnectTimeout)
+	err := c.Connect(s.addr, timeout)
 	if err != nil {
 		return nil, newConnectErr(err)
 	}
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-	info := &pb.ExtraInfo{
-		Salt: s.salt,
-		Label: pb.RequestLabel{
-			Labels: s.reqLabel.allLabels(),
+	info := pb.NewVersionedExtraInfo(pb.Version0,
+		&pb.ExtraInfoV0{
+			Salt: s.salt,
+			Label: pb.RequestLabel{
+				Labels: s.reqLabel.allLabels(),
+			},
+			ConnectionID: s.proxyConnID,
+			InternalConn: s.internalConn,
 		},
-		InternalConn: s.internalConn,
-	}
+	)
 	data, err := info.Encode()
 	if err != nil {
 		return nil, err
@@ -118,21 +128,47 @@ type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
 	test       bool
+
+	// timeout configs.
+	connectTimeout time.Duration
+	authTimeout    time.Duration
 }
 
+type routeOption func(*router)
+
 var _ Router = (*router)(nil)
+
+func withConnectTimeout(t time.Duration) routeOption {
+	return func(r *router) {
+		r.connectTimeout = t
+	}
+}
+
+func withAuthTimeout(t time.Duration) routeOption {
+	return func(r *router) {
+		r.authTimeout = t
+	}
+}
 
 // newCNConnector creates a Router.
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
 	test bool,
+	opts ...routeOption,
 ) Router {
-	return &router{
+	rt := &router{
 		rebalancer: r,
 		moCluster:  mc,
 		test:       test,
 	}
+	for _, opt := range opts {
+		opt(rt)
+	}
+	if rt.authTimeout == 0 { // for test
+		rt.authTimeout = defaultAuthTimeout / 3
+	}
+	return rt
 }
 
 // SelectByConnID implements the Router interface.
@@ -151,10 +187,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.
-// For more detail, see disttae.SelectForSuperTenant.
+// For more detail, see route.RouteForSuperTenant.
 func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	disttae.SelectForSuperTenant(c.labelInfo.genSelector(), c.username, filter,
+	route.RouteForSuperTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), c.username, filter,
 		func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
 				reqLabel: c.labelInfo,
@@ -167,10 +203,10 @@ func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []
 }
 
 // selectForCommonTenant is used to select CN servers for common tenant.
-// For more detail, see disttae.SelectForCommonTenant.
+// For more detail, see route.RouteForCommonTenant.
 func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	disttae.SelectForCommonTenant(c.labelInfo.genSelector(), filter, func(s *metadata.CNService) {
+	route.RouteForCommonTenant(c.labelInfo.genSelector(clusterservice.EQ_Globbing), filter, func(s *metadata.CNService) {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
@@ -189,6 +225,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 	} else {
 		cns = r.selectForCommonTenant(c, filter)
 	}
+	cnCount := len(cns)
+	v2.ProxyAvailableBackendServerNumGauge.
+		WithLabelValues(string(c.Tenant)).Set(float64(cnCount))
 
 	// getHash returns same hash for same labels.
 	hash, err := c.labelInfo.getHash()
@@ -196,9 +235,9 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 		return nil, err
 	}
 
-	if len(cns) == 0 {
+	if cnCount == 0 {
 		return nil, noCNServerErr
-	} else if len(cns) == 1 {
+	} else if cnCount == 1 {
 		cns[0].hash = hash
 		return cns[0], nil
 	}
@@ -217,7 +256,7 @@ func (r *router) Connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (_ ServerConn, _ []byte, e error) {
 	// Creates a server connection.
-	sc, err := newServerConn(cn, t, r.rebalancer)
+	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -231,12 +270,12 @@ func (r *router) Connect(
 	if r.test {
 		r.rebalancer.connManager.connect(cn, t)
 		// The second value should be recognized OK packet.
-		return sc, makeOKPacket(), nil
+		return sc, makeOKPacket(8), nil
 	}
 
 	// Use the handshakeResp, which is auth request from client, to communicate
 	// with CN server.
-	resp, err := sc.HandleHandshake(handshakeResp)
+	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
 	if err != nil {
 		r.rebalancer.connManager.disconnect(cn, t)
 		return nil, nil, err
@@ -248,4 +287,9 @@ func (r *router) Connect(
 	r.rebalancer.connManager.connect(cn, t)
 
 	return sc, packetToBytes(resp), nil
+}
+
+// Refresh refreshes the router
+func (r *router) Refresh(sync bool) {
+	r.moCluster.ForceRefresh(sync)
 }

@@ -90,7 +90,7 @@ func Test_NewKMeans(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false) //<-- Not Spherical Kmeans UT
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewKMeans() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -143,10 +143,13 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				{0.15915269938161652, 0.31830539876323305, 0.5757527355814478, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666}
-				{0.8077006350571528, 0.26637173227965466, 0.3230802540228611, 0.4038503175285764},  // approx {10, 3.333333333333333, 4, 5}
+				//{0.15915269938161652, 0.31830539876323305, 0.5757527355814478, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666}
+				//{0.8077006350571528, 0.26637173227965466, 0.3230802540228611, 0.4038503175285764},  // approx {10, 3.333333333333333, 4, 5}
+				{10, 3.333333333333333, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666666},
 			},
-			wantSSE: 0.0657884123589134,
+			//wantSSE: 0.0657884123589134,
+			wantSSE: 12,
 			wantErr: false,
 		},
 	}
@@ -154,7 +157,7 @@ func Test_Cluster(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false)
 			got, err := clusterer.Cluster()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
@@ -252,7 +255,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false)
 
 			// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 			// Here we are only testing the working of initBounds() function.
@@ -341,7 +344,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
@@ -425,7 +428,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
@@ -564,7 +567,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
-				tt.fields.distType, tt.fields.initType)
+				tt.fields.distType, tt.fields.initType, false)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)

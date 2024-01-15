@@ -21,6 +21,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.2.0
 	github.com/docker/go-units v0.5.0
+	github.com/dolthub/maphash v0.1.0
 	github.com/elastic/gosigar v0.14.2
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
@@ -33,7 +34,7 @@ require (
 	github.com/google/gops v0.3.25
 	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/jhump/protoreflect v1.15.2
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
@@ -107,7 +108,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.12.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.14.10 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.2.0 // indirect
+	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect

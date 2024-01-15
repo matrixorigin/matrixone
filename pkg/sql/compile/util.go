@@ -58,6 +58,9 @@ const (
 
 var (
 	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
+	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
+	fuzzyNonCompoundCheck = "select %s from %s.%s where %s in (%s) group by %s having count(*) > 1 limit 1;"
+	fuzzyCompoundCheck    = "select serial(%s) from %s.%s where %s group by serial(%s) having count(*) > 1 limit 1;"
 )
 
 var (
@@ -75,6 +78,7 @@ var (
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
+	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 )
 
 var (
@@ -113,6 +117,55 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 			sql += " primary key"
 		}
 	}
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+// genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
+// NOTE: Here the columns are part of meta, centroids, entries table.
+// meta      -> key varchar(65535), value varchar(65535)
+// centroids -> version int64, centroid_id int64, centroid vecf32(xx)
+// entries   -> version int64, entry_id int64, pk xx
+// TODO: later on merge with genCreateIndexTableSql
+func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if planCol.Name == catalog.CPrimaryKeyColName {
+			continue
+		}
+		if i >= 1 {
+			sql += ","
+		}
+		sql += "`" + planCol.Name + "`" + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_array_float32:
+			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
+		case types.T_array_float64:
+			sql += fmt.Sprintf("VECF64(%d)", planCol.Typ.Width)
+		default:
+			sql += typeId.String()
+		}
+
+	}
+
+	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
+		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
+		sql += pkStr
+	}
+
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
@@ -167,8 +220,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		case *engine.IndexDef:
 			for _, indexdef := range def.Indexes {
 				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-				defer cancelFunc()
 				index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				cancelFunc()
 				if err != nil {
 					return "", err
 				}
@@ -245,8 +298,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 			}
 		case *engine.PrimaryKeyDef:
 			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-			defer cancelFunc()
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+			cancelFunc()
 			if err != nil {
 				return "", err
 			}
@@ -341,12 +394,13 @@ func makeInsertTablePartitionsSQL(eg engine.Engine, ctx context.Context, proc *p
 
 	for _, def := range tableDefs {
 		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			insertMoTablePartitionSql, err2 := genInsertMoTablePartitionsSql(eg, proc, databaseId, tableId, partitionDef)
-			if err2 != nil {
-				return "", err2
-			} else {
-				return insertMoTablePartitionSql, nil
+			partitionByDef := &plan2.PartitionByDef{}
+			if err = partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition)); err != nil {
+				return "", nil
 			}
+
+			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tableId, partitionByDef, partitionByDef.Partitions)
+			return insertMoTablePartitionSql, nil
 		}
 	}
 	return "", nil
@@ -446,19 +500,13 @@ func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
 	return false
 }
 
-// genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
-func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, partitionDef *engine.PartitionDef) (string, error) {
+// genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`
+func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionByDef *plan2.PartitionByDef, partitions []*plan.PartitionItem) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 2048))
 	buffer.WriteString("insert into mo_catalog.mo_table_partitions values")
 
-	partitionByDef := &plan2.PartitionByDef{}
-	err := partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-	if err != nil {
-		return "", nil
-	}
-
 	isFirst := true
-	for _, partition := range partitionByDef.Partitions {
+	for _, partition := range partitions {
 		// 1. tableId
 		if isFirst {
 			fmt.Fprintf(buffer, "(%d, ", tableId)
@@ -495,5 +543,5 @@ func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, data
 		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
 	}
 	buffer.WriteString(";")
-	return buffer.String(), nil
+	return buffer.String()
 }

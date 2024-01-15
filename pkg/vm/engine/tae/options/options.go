@@ -135,8 +135,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.StorageCfg == nil {
 		o.StorageCfg = &StorageCfg{
-			BlockMaxRows:     DefaultBlockMaxRows,
-			SegmentMaxBlocks: DefaultBlocksPerSegment,
+			BlockMaxRows:    DefaultBlockMaxRows,
+			ObjectMaxBlocks: DefaultBlocksPerObject,
 		}
 	}
 

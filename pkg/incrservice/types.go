@@ -121,13 +121,17 @@ type incrTableCache interface {
 
 type valueAllocator interface {
 	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
-	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error))
+	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	close()
 }
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
+	// Exec new a txn operator, used for debug.
+	NewTxnOperator(ctx context.Context) client.TxnOperator
+	// SelectAll return all auto increment metadata records from catalog.AutoIncrTableName.
+	SelectAll(ctx context.Context, tableID uint64, txnOp client.TxnOperator) (string, error)
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.

@@ -16,7 +16,6 @@ package loopjoin
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -24,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "loop_join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" loop join ")
+	buf.WriteString(argName)
+	buf.WriteString(": loop join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -41,7 +43,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ctr := arg.ctr

@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime"
+	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -48,6 +51,14 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
+	// HandleNotifyTimeout
+	// todo: this is a bad design here.
+	//  we should do the waiting work in the prepare stage of the dispatch operator but not in the exec stage.
+	//      do the waiting work in the exec stage can save some execution time, but it will cause an unstable waiting time.
+	//		(because we cannot control the execution time of the running sql,
+	//		and the coming time of the first batch of the result is not a constant time.)
+	// 		see the codes in pkg/sql/colexec/dispatch/dispatch.go:waitRemoteRegsReady()
+	//
 	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
 	HandleNotifyTimeout = 300 * time.Second
 )
@@ -85,10 +96,12 @@ type messageSenderOnClient struct {
 
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
+
+	c *Compile
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string) (*messageSenderOnClient, error) {
+	ctx context.Context, c *Compile, toAddr string) (*messageSenderOnClient, error) {
 	var sender = new(messageSenderOnClient)
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
@@ -102,6 +115,7 @@ func newMessageSenderOnClient(
 	} else {
 		sender.ctx = ctx
 	}
+	sender.c = c
 	return sender, nil
 }
 
@@ -158,6 +172,83 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
+	}
+}
+
+func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool, err error) {
+	var val morpc.Message
+	var m *pipeline.Message
+	var dataBuffer []byte
+
+	for {
+		val, err = sender.receiveMessage()
+		if err != nil {
+			return nil, false, err
+		}
+		if val == nil {
+			return nil, true, nil
+		}
+
+		m = val.(*pipeline.Message)
+		if info, get := m.TryToGetMoErr(); get {
+			return nil, false, info
+		}
+		if m.IsEndMessage() {
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				ana := new(pipeline.AnalysisList)
+				if err = ana.Unmarshal(anaData); err != nil {
+					return nil, false, err
+				}
+				mergeAnalyseInfo(sender.c.anal, ana)
+			}
+			return nil, true, nil
+		}
+
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
+
+		if m.WaitingNextToMerge() {
+			continue
+		}
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+		}
+
+		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
+		if err != nil {
+			return nil, false, err
+		}
+
+		return bat, false, nil
+	}
+}
+
+func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
+	source := ana.List
+	if len(target.analInfos) != len(source) {
+		return
+	}
+	for i := range target.analInfos {
+		n := source[i]
+		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		target.analInfos[i].MergeArray(n)
+		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
 	}
 }
 
@@ -289,20 +380,19 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
-		proc.AnalInfos[i] = &process.AnalyzeInfo{
-			NodeId: pHelper.analysisNodeList[i],
-		}
+		proc.AnalInfos[i] = reuse.Alloc[process.AnalyzeInfo](nil)
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
-	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+	proc.DispatchNotifyCh = make(chan process.WrapCs)
 
-	c := &Compile{
-		proc: proc,
-		e:    cnInfo.storeEngine,
-		anal: &anaylze{analInfos: proc.AnalInfos},
-		addr: receiver.cnInformation.cnAddr,
-	}
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
-	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
+	c := reuse.Alloc[Compile](nil)
+	c.proc = proc
+	c.e = cnInfo.storeEngine
+	c.anal = newAnaylze()
+	c.anal.analInfos = proc.AnalInfos
+	c.addr = receiver.cnInformation.cnAddr
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
+	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
@@ -442,27 +532,30 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
 	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-	defer getCancel()
 	var opProc *process.Process
 	var ok bool
-outter:
+
 	for {
 		select {
 		case <-getCtx.Done():
 			colexec.Srv.GetProcByUuid(uid, true)
+			getCancel()
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
 
 		case <-receiver.ctx.Done():
 			colexec.Srv.GetProcByUuid(uid, true)
+			getCancel()
 			return nil, nil
 
 		default:
 			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
+				// it's bad to call the Gosched() here.
+				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
 				runtime.Gosched()
 			} else {
-				break outter
+				getCancel()
+				return opProc, nil
 			}
 		}
 	}
-	return opProc, nil
 }

@@ -16,7 +16,6 @@ package single
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,8 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "single"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" single join ")
+	buf.WriteString(argName)
+	buf.WriteString(": single join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -56,7 +58,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -65,7 +71,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -112,22 +118,39 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	if bat != nil && bat.AuxData != nil {
+		ctr.mp = bat.DupJmAuxData()
+		anal.Alloc(ctr.mp.Size())
+	}
+	return nil
+}
 
+func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 	if bat != nil {
 		if ctr.bat != nil {
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
 		ctr.bat = bat
-		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
+}
+
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(proc, anal)
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {

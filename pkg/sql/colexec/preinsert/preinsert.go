@@ -21,14 +21,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"go.uber.org/zap"
 )
 
+const argName = "preinsert"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("pre processing insert")
+	buf.WriteString(argName)
+	buf.WriteString(": pre processing insert")
 }
 
 func (arg *Argument) Prepare(_ *proc) error {
@@ -36,12 +41,15 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx)
+	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analy.Start()
 	defer analy.Stop()
 
@@ -64,6 +72,7 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		srcVec := bat.Vecs[idx]
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			vec.Free(proc.Mp())
 			return result, err
 		}
 		arg.buf.SetVector(int32(idx), vec)
@@ -95,8 +104,9 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		idx := len(bat.Vecs) - 1
 		arg.buf.Attrs = append(arg.buf.Attrs, catalog.Row_ID)
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
-		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		err = rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
+			rowIdVec.Free(proc.Mp())
 			return result, err
 		}
 		arg.buf.Vecs = append(arg.buf.Vecs, rowIdVec)
@@ -113,6 +123,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 		bat)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			logutil.Error("insert auto increment column failed", zap.Error(err))
 			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)
 		}
 		return err

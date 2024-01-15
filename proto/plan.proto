@@ -34,9 +34,9 @@ message Type {
 	string enumvalues = 7;
 };
 
-// Const: if a const value can be reprensented by int64 or
+// Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
-message Const {
+message Literal {
 	bool isnull			= 1;
 	oneof value {
 		int32 i8val		= 2;  // pb have no int8
@@ -182,8 +182,8 @@ message Function {
 		WIN_VALUE				= 256;
 		WIN_ORDER				= 512;
 
-		// Monotonic function can filter by zonemap
-		MONOTONIC = 1024;
+		// Filter which can be applied on zonemaps
+		ZONEMAPPABLE = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -193,19 +193,19 @@ message Function {
 message Expr {
 	Type typ = 1;
 	oneof expr {
-		Const		c		= 2;
+		Literal		lit		= 2;
 		ParamRef	p		= 3;
 		VarRef		v		= 4;
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		WindowSpec w = 8;
+		WindowSpec	w		= 8;
 		SubqueryRef	sub		= 9;
 		CorrColRef	corr	= 10;
-		TargetType  t		= 11;
+		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		BinaryData	bin		= 14;
+		LiteralVec	vec	= 14;
 	}
 
 	int32 aux_id = 15;
@@ -213,8 +213,9 @@ message Expr {
 	double selectivity = 17;
 }
 
-message BinaryData {
-	bytes data = 1;
+message LiteralVec {
+	int32 len	= 1;
+	bytes data	= 2;
 }
 
 enum CompressType {
@@ -613,11 +614,18 @@ message AnalyzeInfo {
 	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
+	repeated int64 time_consumed_array_major = 15;
+	repeated int64 time_consumed_array_minor = 16;
 }
 
 message PartitionPrune {
 	bool isPruned = 1;
 	repeated PartitionItem selected_partitions = 2;
+}
+
+message OriginTableMessageForFuzzy {
+	string ParentTableName = 1;
+	repeated ColDef ParentUniqueCols = 2;
 }
 
 message Node {
@@ -689,6 +697,7 @@ message Node {
 		TIME_WINDOW = 64;
 		Fill = 65;
 		PARTITION = 66;
+		FUZZY_FILTER = 67;
 	}
 
 	enum JoinType {
@@ -802,6 +811,7 @@ message Node {
 
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
+	OriginTableMessageForFuzzy fuzzymessage = 54;
 }
 
 message ExternScan {
@@ -872,6 +882,8 @@ message DeleteCtx {
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
+	TruncateTable truncate_table = 10;
+	TableDef table_def 	= 11;
 }
 
 message Query {
@@ -1060,6 +1072,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {
@@ -1134,6 +1147,19 @@ message AlterTableAlterIndex {
 	bool visible = 4;
 }
 
+message AlterTableAlterReIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string index_name = 3;
+	int64 index_algo_param_list = 4;
+}
+
+message AlterTableAddPartition {
+	repeated PartitionItem definitions = 1;
+	repeated TableDef partition_tables = 2;
+	PartitionByDef PartitionDef = 3;
+}
+
 message AlterTableComment {
 	string new_comment = 1;
 }
@@ -1143,14 +1169,14 @@ message AlterTableName {
 	string new_name = 2;
 }
 
-message AlterAddCol {
+message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
 	Type type = 3;
 	int32 pos = 4;
 }
 
-message AlterDropCol {
+message AlterDropColumn {
 	uint32 idx = 1;
 	uint32 seq = 2;
 }
@@ -1170,8 +1196,10 @@ message AlterTable {
 			AlterTableAlterIndex alter_index = 4;
 			AlterTableComment alter_comment = 5;
 			AlterTableName alter_name = 6;
-			AlterAddCol add_col = 7;
-			AlterDropCol drop_col = 8;
+			AlterAddColumn add_column = 7;
+			AlterDropColumn drop_column = 8;
+			AlterTableAlterReIndex alter_reindex = 9;
+			AlterTableAddPartition addPartition = 10;
 		};
 	}
 	string database			      = 1;
@@ -1253,6 +1281,7 @@ message TruncateTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	bool	is_delete = 8;
 }
 
 message ClusterTable{

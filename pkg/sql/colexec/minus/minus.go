@@ -23,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "minus"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" minus ")
+	buf.WriteString(argName)
+	buf.WriteString(": minus ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -46,10 +49,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	var err error
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
 
+	var err error
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyze.Start()
 	defer analyze.Stop()
 	result := vm.NewCallResult()

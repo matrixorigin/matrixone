@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -43,7 +45,7 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	err = server.Start()
 	require.Nil(t, err)
 
-	sender, err := newMessageSenderOnClient(context.TODO(), "127.0.0.1:9999")
+	sender, err := newMessageSenderOnClient(context.TODO(), nil, "127.0.0.1:9999")
 	require.Nil(t, err)
 	defer sender.close()
 
@@ -69,7 +71,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
 
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	pipe := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -113,7 +115,8 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 		cli,
 		nil,
 	)
-	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{{}}
+	a := reuse.Alloc[process.AnalyzeInfo](nil)
+	receiver.finalAnalysisInfo = []*process.AnalyzeInfo{a}
 
 	_, err = receiver.acquireMessage()
 	require.Nil(t, err)

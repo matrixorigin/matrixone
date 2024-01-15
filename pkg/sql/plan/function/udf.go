@@ -62,18 +62,19 @@ type Arg struct {
 }
 
 func (u *Udf) GetPlanExpr() *plan.Expr {
+	uid, _ := uuid.NewV7()
 	bytes, _ := json.Marshal(&UdfWithContext{
 		Udf: u,
 		Context: map[string]string{
-			"queryId": uuid.NewString(),
+			"queryId": uid.String(),
 		},
 	})
 	return &plan.Expr{
 		Typ: type2PlanType(types.T_text.ToType()),
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
 				Isnull: false,
-				Value: &plan.Const_Sval{
+				Value: &plan.Literal_Sval{
 					Sval: string(bytes),
 				},
 			},

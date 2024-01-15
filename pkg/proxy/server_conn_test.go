@@ -75,11 +75,11 @@ func newMockServerConn(conn net.Conn) *mockServerConn {
 
 func (s *mockServerConn) ConnID() uint32    { return 0 }
 func (s *mockServerConn) RawConn() net.Conn { return s.conn }
-func (s *mockServerConn) HandleHandshake(_ *frontend.Packet) (*frontend.Packet, error) {
+func (s *mockServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
 	return nil, nil
 }
-func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
-	sendResp(makeOKPacket(), resp)
+func (s *mockServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	sendResp(makeOKPacket(8), resp)
 	return true, nil
 }
 func (s *mockServerConn) Close() error {
@@ -254,7 +254,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := &proxy.ExtraInfo{}
+	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
@@ -479,7 +479,7 @@ func TestServerConn_Create(t *testing.T) {
 		"k2": "v2",
 	})
 	// server not started.
-	sc, err := newServerConn(cn1, nil, nil)
+	sc, err := newServerConn(cn1, nil, nil, 0)
 	require.Error(t, err)
 	require.Nil(t, sc)
 
@@ -491,7 +491,7 @@ func TestServerConn_Create(t *testing.T) {
 		require.NoError(t, stopFn())
 	}()
 
-	sc, err = newServerConn(cn1, nil, nil)
+	sc, err = newServerConn(cn1, nil, nil, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
 }
@@ -513,10 +513,10 @@ func TestServerConn_Connect(t *testing.T) {
 		require.NoError(t, stopFn())
 	}()
 
-	sc, err := newServerConn(cn1, nil, tp.re)
+	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
-	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}})
+	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second*3)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	err = sc.Close()
@@ -566,14 +566,14 @@ func TestServerConn_ExecStmt(t *testing.T) {
 		require.NoError(t, stopFn())
 	}()
 
-	sc, err := newServerConn(cn1, nil, tp.re)
+	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
-	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}})
+	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second*3)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	resp := make(chan []byte, 10)
-	_, err = sc.ExecStmt("kill query", resp)
+	_, err = sc.ExecStmt(internalStmt{cmdType: cmdQuery, s: "kill query"}, resp)
 	require.NoError(t, err)
 	res := <-resp
 	ok := isOKPacket(res)

@@ -39,9 +39,12 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
+    alterPartitionOption  tree.AlterPartitionOption
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
+
+    PartitionNames tree.IdentifierList
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -257,6 +260,7 @@ import (
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
+%nonassoc LOWER_THAN_COMMA
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -344,7 +348,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
 // Alter
@@ -416,7 +420,7 @@ import (
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
-%token <str> CLUSTER_CENTERS SPHERICAL_KMEANS
+%token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
@@ -570,10 +574,12 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterPartitionOption> alter_partition_option partition_option
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
+%type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
 %type <tableOption> table_option source_option
 %type <connectorOption> connector_option
@@ -614,8 +620,9 @@ import (
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
-%type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
+%type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
+%type <exprs> value_expression_list
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
@@ -690,7 +697,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword separator_opt spherical_kmeans_opt
+%type <str> name_confict distinct_keyword separator_opt kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -2669,7 +2676,6 @@ alter_sequence_stmt:
         }
     }
 
-
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
@@ -2689,6 +2695,13 @@ alter_table_stmt:
             Options: $4,
         }
     }
+|   ALTER TABLE table_name alter_partition_option
+    {
+         $$ = &tree.AlterTable{
+             Table: $3,
+	     PartitionOptions: $4,
+         }
+    }
 
 alter_option_list:
     alter_option
@@ -2699,6 +2712,81 @@ alter_option_list:
     {
         $$ = append($1, $3)
     }
+
+alter_partition_option:
+     partition_option
+     {
+	  $$ = $1
+     }
+|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
+     {
+     	  $3.Num = uint64($4)
+     	  partitionDef := &tree.PartitionOption{
+	       PartBy:    *$3,
+	       SubPartBy:  $5,
+	       Partitions: $6,
+          }
+	  opt := &tree.AlterPartitionRedefinePartitionClause{
+	       PartitionOption: partitionDef,
+	  }
+	  $$ = tree.AlterPartitionOption(opt)
+     }
+
+partition_option:
+      ADD PARTITION partition_list_opt
+      {
+	   opt := &tree.AlterPartitionAddPartitionClause{
+                Typ:        tree.AlterPartitionAddPartition,
+                Partitions: $3,
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+|     DROP PARTITION AllOrPartitionNameList
+      {
+	   opt := &tree.AlterPartitionDropPartitionClause{
+                Typ:            tree.AlterPartitionDropPartition,
+                PartitionNames: $3,
+           }
+           if $3 == nil {
+                opt.OnAllPartitions = true
+           } else {
+                opt.PartitionNames = $3
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+|     TRUNCATE PARTITION AllOrPartitionNameList
+      {
+	   opt := &tree.AlterPartitionTruncatePartitionClause{
+                Typ:            tree.AlterPartitionTruncatePartition,
+                PartitionNames: $3,
+           }
+           if $3 == nil {
+           	opt.OnAllPartitions = true
+           } else {
+           	opt.PartitionNames = $3
+           }
+           $$ = tree.AlterPartitionOption(opt)
+      }
+
+AllOrPartitionNameList:
+	ALL
+	{
+		$$ = nil
+	}
+|	PartitionNameList %prec LOWER_THAN_COMMA
+        {
+                $$ = $1
+        }
+
+PartitionNameList:
+	ident
+	{
+	        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+	}
+|	PartitionNameList ',' ident
+	{
+		$$ = append($1 , tree.Identifier($3.Compare()))
+	}
 
 alter_option:
     ADD table_elem_2
@@ -2973,6 +3061,14 @@ alter_table_alter:
             Name: tree.Identifier($2.Compare()),
         }
     }
+| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+      {
+          $$ = &tree.AlterOptionAlterReIndex{
+	      KeyType : tree.INDEX_TYPE_IVFFLAT,
+              AlgoParamList: int64($6.(int64)),
+              Name: tree.Identifier($2.Compare()),
+          }
+      }
 |   CHECK ident enforce
     {
         $$ = &tree.AlterOptionAlterCheck{
@@ -3535,6 +3631,10 @@ show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
 	$$ = &tree.ShowSubscriptions{Like: $3}
+    }
+|   SHOW SUBSCRIPTIONS ALL like_opt
+    {
+	$$ = &tree.ShowSubscriptions{All: true, Like: $4}
     }
 
 like_opt:
@@ -6151,8 +6251,8 @@ index_option_list:
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
 	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
-	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
 	    }
             $$ = opt1
         }
@@ -6167,9 +6267,9 @@ index_option:
     {
 	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
     }
-|   SIMILARITY_FUNCTION STRING
+|   OP_TYPE STRING
     {
-	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
+	$$ = &tree.IndexOption{AlgoParamVectorOpType: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -6872,11 +6972,11 @@ values_opt:
         expr := tree.NewMaxValue()
         $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
-|   VALUES LESS THAN '(' expression_list ')'
+|   VALUES LESS THAN '(' value_expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
     }
-|   VALUES IN '(' expression_list ')'
+|   VALUES IN '(' value_expression_list ')'
     {
     $$ = &tree.ValuesIn{ValueList: $4}
     }
@@ -7359,6 +7459,8 @@ index_def:
             switch t {
  	    case "btree":
             	keyTyp = tree.INDEX_TYPE_BTREE
+	    case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7368,7 +7470,7 @@ index_def:
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid the type of index")
                 return 1
             }
         }
@@ -7388,6 +7490,8 @@ index_def:
             switch t {
              case "btree":
 		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7397,7 +7501,7 @@ index_def:
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid type of index")
                 return 1
             }
         }
@@ -8430,11 +8534,11 @@ separator_opt:
        $$ = $2
     }
 
-spherical_kmeans_opt:
+kmeans_opt:
     {
-        $$ = "1,vector_cosine_ops"
+        $$ = "1,vector_l2_ops,random,false"
     }
-|   SPHERICAL_KMEANS STRING
+|   KMEANS STRING
     {
        $$ = $2
     }
@@ -8483,7 +8587,7 @@ function_call_aggregate:
             OrderBy:$5,
 	    }
     }
-|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt spherical_kmeans_opt ')' window_spec_opt
+|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
   	     name := tree.SetUnresolvedName(strings.ToLower($1))
 		$$ = &tree.FuncExpr{
@@ -9159,6 +9263,16 @@ expression_list_opt:
         $$ = $1
     }
 
+value_expression_list:
+    value_expression
+    {
+        $$ = tree.Exprs{$1}
+    }
+|   value_expression_list ',' value_expression
+    {
+        $$ = append($1, $3)
+    }
+
 expression_list:
     expression
     {
@@ -9195,13 +9309,18 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   MAXVALUE
-    {
-        $$ = tree.NewMaxValue()
-    }
 |   boolean_primary
     {
         $$ = $1
+    }
+
+value_expression:
+    expression {
+        $$ = $1
+    }
+|   MAXVALUE
+    {
+        $$ = tree.NewMaxValue()
     }
 
 boolean_primary:
@@ -10544,7 +10663,9 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CONNECTOR
 |   CONNECTORS
+|	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
+|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -10568,6 +10689,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
@@ -10587,7 +10709,7 @@ non_reserved_keyword:
 |   VECF64
 |   KEY_BLOCK_SIZE
 |   LISTS
-|   SIMILARITY_FUNCTION
+|   OP_TYPE
 |   KEYS
 |   LANGUAGE
 |   LESS
@@ -10729,8 +10851,128 @@ non_reserved_keyword:
 |   STAGE
 |   STAGES
 |   BACKUP
-|  FILESYSTEM
+|   FILESYSTEM
 |	VALUE
+|	REFERENCE
+|	MODIFY
+|	ASCII
+|	AUTO_INCREMENT
+|	AUTOEXTEND_SIZE
+|	BSI
+|	BINDINGS
+|	UNDERSCORE_BINARY
+|	BOOLEAN
+|   BTREE
+|	IVFFLAT
+|	COALESCE
+|	CONNECT
+|	CIPHER
+|	CLIENT
+|	SAN
+|	SUBJECT
+|	INSTANT
+|	INPLACE
+|	COPY
+|	UNDEFINED
+|	MERGE
+|	TEMPTABLE
+|	INVOKER
+|	SECURITY
+|	CASCADED
+|	DISABLE
+|	DRAINER
+|	EXECUTE
+|	EVENT
+|	EVENTS
+|	FIRST
+|	AFTER
+|	FILE
+|	GRANTS
+|	HOUR
+|	IDENTIFIED
+|	INLINE
+|	INVISIBLE
+|	ISSUER
+|	JSONTYPE
+|	LAST
+|	IMPORT
+|	DISCARD
+|	LOCKS
+|	MANAGE
+|	MINUTE
+|	MICROSECOND
+|	NEXT
+|	NULLS
+|	NONE
+|	SHARED
+|	EXCLUSIVE
+|	EXTERNAL
+|	PARSER
+|	PRIVILEGES
+|	PREV
+|	PLUGINS
+|	REVERSE
+|	RELOAD
+|	ROUTINE
+|	ROW_COUNT
+|	RTREE
+|	SECOND
+|	SHUTDOWN
+|	SQL_CACHE
+|	SQL_NO_CACHE
+|	SLAVE
+|	SLIDING
+|	SUPER
+|	TABLESPACE
+|	TRUNCATE
+|	VISIBLE
+|	WITHOUT
+|	VALIDATION
+|	ZONEMAP
+|	MEDIAN
+|	PUMP
+|	VERBOSE
+|	SQL_TSI_MINUTE
+|	SQL_TSI_SECOND
+|	SQL_TSI_YEAR
+|	SQL_TSI_QUARTER
+|	SQL_TSI_MONTH
+|	SQL_TSI_WEEK
+|	SQL_TSI_DAY
+|	SQL_TSI_HOUR
+|	PREPARE
+|	DEALLOCATE
+|	RESET
+|	ADMIN_NAME
+|	RANDOM
+|	SUSPEND
+|	RESTRICTED
+|	REUSE
+|	CURRENT
+|	OPTIONAL
+|	FAILED_LOGIN_ATTEMPTS
+|	PASSWORD_LOCK_TIME
+|	UNBOUNDED
+|	SECONDARY
+|	MODUMP
+|	PRECEDING
+|	FOLLOWING
+|	FILL
+|	TABLE_NUMBER
+|	TABLE_VALUES
+|	TABLE_SIZE
+|	COLUMN_NUMBER
+|	RETURNS
+|	QUERY_RESULT
+|	MYSQL_COMPATIBILITY_MODE
+|	SEQUENCE
+|	BACKEND
+|	SERVERS
+|	CREDENTIALS
+|	HANDLER
+|	SAMPLE
+|	PERCENT
+|	OWNERSHIP
 
 func_not_keyword:
     DATE_ADD
@@ -10761,7 +11003,7 @@ not_keyword:
 |   EXTRACT
 |   GROUP_CONCAT
 |   CLUSTER_CENTERS
-|   SPHERICAL_KMEANS
+|   KMEANS
 |   MAX
 |   MID
 |   MIN

@@ -51,8 +51,9 @@ func (s *StorageTxnClient) New(
 	ts timestamp.Timestamp,
 	options ...client.TxnOption) (client.TxnOperator, error) {
 	now, _ := s.clock.Now()
+	uid, _ := uuid.NewV7()
 	meta := txn.TxnMeta{
-		ID:         []byte(uuid.NewString()),
+		ID:         []byte(uid.String()),
 		SnapshotTS: now,
 	}
 	return &StorageTxnOperator{
@@ -217,6 +218,10 @@ func (s *StorageTxnOperator) Status() txn.TxnStatus {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) PKDedupCount() int {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
 	return &s.meta
 }
@@ -301,5 +306,9 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 }
 
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	panic("should not call")
 }

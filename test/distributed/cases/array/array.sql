@@ -82,8 +82,8 @@ insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
 
 insert into t5 values(4, "[0,2,3]");
 
-insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- be1... is float32[5]
-insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- be1... is float32[2]
+insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- this is float32[5]
+insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- this is float32[2]
 
 select * from t5;
 select * from t5 where t5.b > "[0,0,0]";
@@ -160,6 +160,64 @@ INSERT INTO `t9` VALUES (2,'[0.8166459, 0.66616553, 0.4886152]',NULL);
 INSERT INTO `t9` VALUES (3,'[8.5606893, 6.7903588, 821.977768]','[0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]');
 INSERT INTO `t9` VALUES (4,'[0.9260021, 0.26637346, 0.06567037]','[0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]');
 select cosine_similarity(b,b), cosine_similarity(c,c) from t9;
+
+-- Sub Vector
+create table t10(a int, b vecf32(3), c vecf64(3));
+insert into t10 values(1, "[1,2.4,3]", "[4.1,5,6]");
+insert into t10 values(2, "[3,4,5]", "[6,7.3,8]");
+insert into t10 values(3, "[5,6,7]", "[8,9,10]");
+select subvector(b,1) from t10;
+select subvector(b,2) from t10;
+select subvector(b,3) from t10;
+select subvector(b,4) from t10;
+select subvector(b,-1) from t10;
+select subvector(b,-2) from t10;
+select subvector(b,-3) from t10;
+select subvector(b, 1, 1) from t10;
+select subvector(b, 1, 2) from t10;
+select subvector(b, 1, 3) from t10;
+select subvector(b, 1, 4) from t10;
+select subvector(b, -1, 1) from t10;
+select subvector(b, -2, 1) from t10;
+select subvector(b, -3, 1) from t10;
+SELECT SUBVECTOR("[1,2,3]", 2);
+SELECT SUBVECTOR("[1,2,3]",2,1);
+
+-- Arithmetic Operators between Vector and Scalar
+select b + 2 from t10;
+select b - 2 from t10;
+select b * 2 from t10;
+select b / 2 from t10;
+select 2 + b from t10;
+select 2 - b from t10;
+select 2 * b from t10;
+select 2 / b from t10;
+select b + 2.0 from t10;
+select b - 2.0 from t10;
+select b * 2.0 from t10;
+select b / 2.0 from t10;
+select 2.0 + b from t10;
+select 2.0 - b from t10;
+select 2.0 * b from t10;
+select 2.0 / b from t10;
+select cast("[1,2,3]" as vecf32(3)) + 2;
+select cast("[1,2,3]" as vecf32(3)) - 2;
+select cast("[1,2,3]" as vecf32(3)) * 2;
+select cast("[1,2,3]" as vecf32(3)) / 2;
+select 2 + cast("[1,2,3]" as vecf32(3));
+select 2 - cast("[1,2,3]" as vecf32(3));
+select 2 * cast("[1,2,3]" as vecf32(3));
+select 2 / cast("[1,2,3]" as vecf32(3));
+select cast("[1,2,3]" as vecf32(3)) + 2.0;
+select cast("[1,2,3]" as vecf32(3)) - 2.0;
+select cast("[1,2,3]" as vecf32(3)) * 2.0;
+select cast("[1,2,3]" as vecf32(3)) / 2.0;
+select 2.0 + cast("[1,2,3]" as vecf32(3));
+select 2.0 - cast("[1,2,3]" as vecf32(3));
+select 2.0 * cast("[1,2,3]" as vecf32(3));
+select 2.0 / cast("[1,2,3]" as vecf32(3));
+select cast("[1,2,3]" as vecf32(3)) / 0 ;
+select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 
 -- Except
 select * from t8 except select * from t9;

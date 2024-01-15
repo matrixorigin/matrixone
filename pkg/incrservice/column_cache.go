@@ -418,16 +418,21 @@ func (col *columnCache) allocateLocked(
 	return err
 }
 
-func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+		col.preAllocate(defines.AttachAccountId(context.Background(), accountId),
 			tableID,
 			col.cfg.CountPerAllocate,
 			txnOp)
 	}
+	return nil
 }
 
 func (col *columnCache) applyAllocate(

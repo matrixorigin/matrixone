@@ -28,9 +28,16 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
-	TaskGCkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
-	TaskICkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("ickp_collect_uage")
+	TaskFlushTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	GetObjectStatsDurationHistogram     = taskShortDurationHistogram.WithLabelValues("get_object_stats")
+
+	// storage usage / show accounts metrics
+	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
+	TaskICkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("ickp_collect_usage")
+	TaskStorageUsageReqDurationHistogram           = taskShortDurationHistogram.WithLabelValues("handle_usage_request")
+	TaskShowAccountsGetTableStatsDurationHistogram = taskShortDurationHistogram.WithLabelValues("show_accounts_get_table_stats")
+	TaskShowAccountsGetUsageDurationHistogram      = taskShortDurationHistogram.WithLabelValues("show_accounts_get_storage_usage")
+	TaskShowAccountsTotalDurationHistogram         = taskShortDurationHistogram.WithLabelValues("show_accounts_total_duration")
 
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -84,10 +91,8 @@ var (
 			Help:      "Total number of stuff a task have generated",
 		}, []string{"type"})
 
-	TaskMergedBlocksCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_block")
-	TasKMergedSizeCounter     = taskGeneratedStuffCounter.WithLabelValues("merged_size")
-	TaskGCkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("gckp_load_object")
-	TaskICkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("ickp_load_object")
+	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
+	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
 
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -112,5 +117,13 @@ var (
 			Subsystem: "task",
 			Name:      "merge_transfer_page_size",
 			Help:      "Size of merge generated transfer page",
+		})
+
+	TaskStorageUsageCacheMemUsedGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "storage_usage_cache_size",
+			Help:      "Size of the storage usage cache used",
 		})
 )

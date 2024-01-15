@@ -43,7 +43,7 @@ var (
 	}
 )
 
-func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
+func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
 		return newGenericVarPop[uint8](overloadID, inputTypes[0], outputType, dist)
@@ -68,15 +68,15 @@ func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 	case types.T_decimal64:
 		aggPriv := newVarianceDecimal(inputTypes[0])
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64, nil), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64), nil
 	case types.T_decimal128:
 		aggPriv := newVarianceDecimal(inputTypes[0])
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128, nil), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for var_pop", inputTypes[0])
 }
@@ -84,9 +84,9 @@ func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 func newGenericVarPop[T numeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggVarPop[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggVarPop[T numeric] struct {
@@ -257,7 +257,7 @@ func (s *VarianceDecimal) FillD64(groupNumber int64, v types.Decimal64, lastResu
 		return lastResult, false, nil
 	}
 	if s.ErrOne[groupNumber] {
-		err = moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+		err = moerr.NewInternalErrorNoCtx("Decimal64 overflowed")
 	}
 	return lastResult, false, err
 }
@@ -285,7 +285,7 @@ func (s *VarianceDecimal) FillD128(groupNumber int64, v types.Decimal128, lastRe
 		return lastResult, false, nil
 	}
 	if s.ErrOne[groupNumber] {
-		err = moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+		err = moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	}
 	return lastResult, false, err
 }
@@ -307,7 +307,7 @@ func (s *VarianceDecimal) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 
 	if s.Counts[groupNumber1] > 1 {
 		if s.ErrOne[groupNumber1] || s2.ErrOne[groupNumber2] {
-			return result1, false, moerr.NewInternalErrorNoCtx("result out of range during `var_pop`")
+			return result1, false, moerr.NewInternalErrorNoCtx("Decimal overflowed during merge")
 		}
 	}
 

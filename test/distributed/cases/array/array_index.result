@@ -21,16 +21,18 @@ a    b    normalize_l2(b)
 6    [100, 44, 50]    [0.8322936, 0.36620918, 0.4161468]
 7    [120, 50, 70]    [0.81274253, 0.33864272, 0.4740998]
 8    [130, 40, 90]    [0.7970811, 0.24525574, 0.5518254]
-select cluster_centers(b spherical_kmeans '2,vector_l2_ops') from t1;
+select cluster_centers(b kmeans '2,vector_l2_ops') from t1;
 cluster_centers(b, 2,vector_l2_ops)
-[ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-select cluster_centers(b spherical_kmeans '2,vector_ip_ops') from t1;
-cluster_centers(b, 2,vector_ip_ops)
-[ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-select cluster_centers(b spherical_kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(b, 2,vector_cosine_ops)
-[ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-SELECT value FROM  (SELECT cluster_centers(b spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+[ [116.666664, 44.666668, 70],[1, 2.35, 4.5] ]
+select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
+internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
+internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[116.666664, 44.666668, 70]
+[1, 2.35, 4.5]
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [0.8140391, 0.31670254, 0.4806907]
 [0.19485846, 0.45293573, 0.8673351]
@@ -43,17 +45,451 @@ a    c    normalize_l2(c)
 6    [100, 44, 50, 60, 70]    [0.6602997913373754, 0.29053190818844515, 0.3301498956686877, 0.3961798748024252, 0.46220985393616276]
 7    [120, 50, 70, 80, 90]    [0.6298366572977735, 0.26243194054073893, 0.3674047167570345, 0.41989110486518233, 0.4723774929733301]
 8    [130, 40, 90, 100, 110]    [0.5890862307582769, 0.1812573017717775, 0.4078289289864994, 0.4531432544294438, 0.49845757987238815]
-select cluster_centers(c spherical_kmeans '2,vector_l2_ops') from t1;
+select cluster_centers(c kmeans '2,vector_l2_ops') from t1;
 cluster_centers(c, 2,vector_l2_ops)
-[ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-select cluster_centers(c spherical_kmeans '2,vector_ip_ops') from t1;
-cluster_centers(c, 2,vector_ip_ops)
-[ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-select cluster_centers(c spherical_kmeans '2,vector_cosine_ops') from t1;
-cluster_centers(c, 2,vector_cosine_ops)
-[ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+[ [116.66666666666666, 44.666666666666664, 70, 80, 90],[1, 2.35, 4.5, 4, 5] ]
+select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
+internal error: unsupported distance_type 'vector_ip_ops' for cluster_centers
+select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
+internal error: unsupported distance_type 'vector_cosine_ops' for cluster_centers
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+value
+[116.66666666666666, 44.666666666666664, 70, 80, 90]
+[1, 2.35, 4.5, 4, 5]
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627]
 [0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785]
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+name    type    column_name    algo    algo_table_type    algo_params
+idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
+alter table tbl alter reindex idx1 ivfflat lists=3;
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+name    type    column_name    algo    algo_table_type    algo_params
+idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"3","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"vector_l2_ops"}
+alter table tbl add c vecf32(3);
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+name    type    column_name    algo    algo_table_type    algo_params
+idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf64(5));
+create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF64(5) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx2";
+name    type    column_name    algo    algo_table_type    algo_params
+idx2    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
+idx2    MULTIPLE    b    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
+idx2    MULTIPLE    b    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf32(3));
+insert into tbl values(1, "[1,2,3]","[1,2,3]");
+insert into tbl values(2, "[1,2,4]","[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]","[1,2,5]");
+create index idx3 using IVFFLAT on tbl(a) lists = 2 op_type 'vector_l2_ops';
+not supported: IVFFLAT only supports VECFXX column types
+create index idx4 using IVFFLAT on tbl(b,c) lists = 2 op_type 'vector_l2_ops';
+not supported: don't support multi column  IVF vector index
+create index idx5 using IVFFLAT on tbl(b) lists = -1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " -1;";
+create index idx6 using IVFFLAT on tbl(b) lists = 1 op_type 'vector_l1_ops';
+internal error: invalid op_type. not of type 'vector_l2_ops'
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf32(3));
+insert into tbl values(1, "[1,2,3]","[1,2,3]");
+insert into tbl values(2, "[1,2,4]","[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]","[1,2,5]");
+create index idx7 using IVFFLAT on tbl(b);
+internal error: invalid list. list must be > 0
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]"); -- dup
+insert into tbl values(7, "[100,44,50]");
+insert into tbl values(8, "[130,40,90]");
+create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx8    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx8` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx8";
+name    type    column_name    algo    algo_table_type    algo_params
+idx8    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
+idx8    MULTIPLE    b    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
+idx8    MULTIPLE    b    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx10 using ivfflat (b));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    1    idx10    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx10` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
+name    type    column_name    algo    algo_table_type    algo_params
+idx10    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
+idx10    MULTIPLE    b    ivfflat    centroids    {"lists":"1","op_type":"vector_l2_ops"}
+idx10    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l2_ops"}
+alter table tbl drop column b;
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\nPRIMARY KEY (`a`)\n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx10";
+name    type    column_name    algo    algo_table_type    algo_params
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx11 using ivfflat (b));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    1    idx11    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx11` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
+name    type    column_name    algo    algo_table_type    algo_params
+idx11    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
+idx11    MULTIPLE    b    ivfflat    centroids    {"lists":"1","op_type":"vector_l2_ops"}
+idx11    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l2_ops"}
+alter table tbl drop index idx11;
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx11";
+name    type    column_name    algo    algo_table_type    algo_params
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx12 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx12    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx12` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx12 ivfflat lists=2;
+insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int, age int, embedding vecf32(3), primary key(id, age));
+insert into tbl values(1, 10, "[1,2,3]");
+insert into tbl values(2, 20, "[1,2,4]");
+insert into tbl values(3, 30, "[1,2.4,4]");
+insert into tbl values(4, 40, "[1,2,5]");
+insert into tbl values(5, 50, "[1,3,5]");
+insert into tbl values(6, 60, "[100,44,50]");
+insert into tbl values(7, 70, "[120,50,70]");
+insert into tbl values(8, 80, "[130,40,90]");
+create index idx13 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+tbl    0    PRIMARY    2    age    A    0    NULL    NULL                        YES    NULL
+tbl    1    idx13    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`age` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`,`age`),\nKEY `idx13` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+insert into tbl values(15, 90, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, 100, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx13 ivfflat lists=2;
+insert into tbl values(25, 110, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, 120, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx14 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    1    idx14    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT DEFAULT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nKEY `idx14` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+insert into tbl values(15, "[1,3,5]"); -- inserted to centroid 1 of version 0
+insert into tbl values(18, "[130,40,90]"); -- inserted to centroid 2 of version 0
+alter table tbl alter reindex idx14 ivfflat lists=2;
+insert into tbl values(25, "[2,4,5]"); -- inserted to cluster 1 of version 1
+insert into tbl values(28, "[131,41,91]"); -- inserted to cluster 2 of version 1
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx15 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+insert into tbl values(9, "[130,40,90]");
+delete from tbl where id=9; -- delete 9
+delete from tbl where embedding="[130,40,90]"; -- delete 8
+alter table tbl alter reindex idx15 ivfflat lists=2;
+insert into tbl values(10, "[130,40,90]");
+delete from tbl where id=6; -- removes both (0,6) and (1,6) entries
+delete from tbl where embedding="[1,3,5]"; -- removes both (0,5) and (1,5) entries
+delete from tbl where id=10; -- removes (1,10)
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+delete from tbl;
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+truncate table tbl;
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id=8; -- update 8 to cluster 1 from cluster 2
+update tbl set id=9 where id=8; -- update 8 to 9
+alter table tbl alter reindex idx16 ivfflat lists=2;
+update tbl set embedding="[1,2,3]" where id=7; -- update 7 to cluster 1 from cluster 2 for the latest versions
+update tbl set id=10 where id=7; -- update 7 to 10
+drop table if exists tbl;
+create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id, age));
+insert into tbl values("1", "10", "[1,2,3]");
+insert into tbl values("2", "20", "[1,2,4]");
+insert into tbl values("3", "30", "[1,2.4,4]");
+insert into tbl values("4", "40", "[1,2,5]");
+insert into tbl values("5", "50", "[1,3,5]");
+insert into tbl values("6", "60", "[100,44,50]");
+insert into tbl values("7", "70", "[120,50,70]");
+insert into tbl values("8", "80", "[130,40,90]");
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id="8";
+update tbl set embedding="[1,2,3]" where id="7" and age = "70";
+update tbl set id="70" where id="7";
+alter table tbl alter reindex idx17 ivfflat lists=2;
+update tbl set embedding="[1,2,3]" where id="6";
+update tbl set id="60" where id="6";
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+update tbl set embedding="[1,2,3]" where id="8";
+delete from tbl where id="8";
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3), key idx18 using ivfflat (embedding) lists=2 op_type "vector_l2_ops");
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+alter table tbl add column id2 VARCHAR(20);
+update tbl set id2 = id;
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(9, "[130,40,90]");
+drop table if exists tbl2;
+create table tbl2(id int primary key, data vecf32(3), key idx20 using ivfflat (data) lists=2 op_type "vector_l2_ops");
+insert into tbl2 select * from tbl1;
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, NULL);
+insert into tbl values(2, NULL);
+insert into tbl values(3, NULL);
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+create index idx20 using ivfflat on tbl(data) lists=2 op_type "vector_l2_ops";
+insert into tbl values(6, NULL);
+insert into tbl values(7, "[130,40,90]");
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+create index idx21 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+create index idx22 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+alter table tbl alter reindex idx23 ivfflat lists=2;
+truncate table tbl;
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+alter table tbl alter reindex idx23 ivfflat lists=2;
+delete from tbl;
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+insert into tbl values(9, "[130,40,90]");
 drop database vecdb2;

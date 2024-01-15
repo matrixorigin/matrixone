@@ -358,3 +358,15 @@ col1    col2    col3    col4
 33    11    33    1
 230    22    55    2
 deallocate prepare stmt1;
+drop table if exists indup_08;
+create table indup_08(a varchar, primary key (a));
+insert into indup_08 values ('matrixone\''), ('matrixone\'');
+Duplicate entry 'matrixone'' for key 'a'
+drop table if exists indup_09;
+create table indup_09(a varchar, b varchar, primary key (a, b));
+insert into indup_09 values ('matrixone\'', 'mo-tester\''), ('matrixone\'', 'mo-tester\'');
+Duplicate entry '(matrixone',mo-tester')' for key '__mo_cpkey_col'
+drop table if exists indup_10;
+create table indup_10(a varchar(256), b int);
+insert into indup_10 (a, b) select  "matrixone " || " some space " || result, 1 from generate_series (1, 500000)g;
+drop table indup_10;

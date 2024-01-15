@@ -60,16 +60,8 @@ func (ncw *NullComputationWrapper) GetAst() tree.Statement {
 	return ncw.stmt
 }
 
-func (ncw *NullComputationWrapper) SetDatabaseName(db string) error {
-	return nil
-}
-
 func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
-}
-
-func (ncw *NullComputationWrapper) GetAffectedRows() uint64 {
-	return 0
 }
 
 func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
@@ -104,7 +96,7 @@ type TxnComputationWrapper struct {
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
-	uuid, _ := uuid.NewUUID()
+	uuid, _ := uuid.NewV7()
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
@@ -117,12 +109,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
 }
 
-func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
-	return cwft.proc
+func (cwft *TxnComputationWrapper) Free() {
+	cwft.plan = nil
+	cwft.proc = nil
+	cwft.ses = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+	cwft.stmt = nil
 }
 
-func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
-	return nil
+func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
+	return cwft.proc
 }
 
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
@@ -188,10 +185,6 @@ func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 	return rt.Clock()
 }
 
-func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.runResult.AffectRows
-}
-
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return cwft.ses.GetServerStatus()
 }
@@ -249,7 +242,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-		cwft.ses.accountId = defines.GetAccountId(requestCtx)
+		cwft.ses.accountId, err = defines.GetAccountId(requestCtx)
+		if err != nil {
+			return nil, err
+		}
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -354,7 +350,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if tInfo != nil {
 		tenant = tInfo.GetTenant()
 	}
-	cwft.compile = compile.New(
+	cwft.compile = compile.NewCompile(
 		addr,
 		cwft.ses.GetDatabaseName(),
 		cwft.ses.GetSql(),
@@ -368,8 +364,20 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 		getStatementStartAt(requestCtx),
 	)
+	defer func() {
+		if err != nil {
+			cwft.compile.Release()
+		}
+	}()
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
-		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		plan, err := buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		if err != nil {
+			return nil, err
+		}
+		if plan.IsPrepare {
+			_, _, err = plan2.ResetPreparePlan(cwft.ses.GetTxnCompileCtx(), plan)
+		}
+		return plan, err
 	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
@@ -382,7 +390,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
 		// 0. init memory-non-dist storage
-		tnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		var tnStore *metadata.TNService
+		tnStore, err = cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
 			return nil, err
 		}

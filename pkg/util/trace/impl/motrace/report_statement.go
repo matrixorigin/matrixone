@@ -59,37 +59,74 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 }
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
-	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
-	// fixme: if recording status=Running entity, here has data-trace issue.
-	// Should clone the StatementInfo as new one.
+	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
-		// process the execplan
+
+		// execute the stat plan
 		s.ExecPlan2Stats(ctx)
-		// remove the plan
+
+		// remove the plan, s will be free
 		s.jsonByte = nil
 		s.FreeExecPlan()
+		s.exported = true
 
-		// remove the TransacionID
-		s.TransactionID = NilTxnID
-		s.StatementTag = ""
-		s.StatementFingerprint = ""
-		s.Error = nil
-		s.AggrCount = 1
-		s.Database = ""
-		s.StmtBuilder.WriteString(s.Statement)
-		duration := s.Duration
-		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
-		s.RequestAt = s.ResponseAt.Truncate(windowSize)
-		s.ResponseAt = s.RequestAt.Add(windowSize)
-		return s
+		// copy value
+		stmt.StatementID = s.StatementID
+		stmt.SessionID = s.SessionID
+		stmt.TransactionID = s.TransactionID
+		stmt.Account = s.Account
+		stmt.User = s.User
+		stmt.Host = s.Host
+		stmt.RoleId = s.RoleId
+		stmt.StatementType = s.StatementType
+		stmt.QueryType = s.QueryType
+		stmt.SqlSourceType = s.SqlSourceType
+		stmt.Statement = s.Statement
+		stmt.StmtBuilder.WriteString(s.Statement)
+		stmt.Status = s.Status
+		stmt.Duration = s.Duration
+		stmt.ResultCount = s.ResultCount
+		stmt.RowsRead = s.RowsRead
+		stmt.BytesScan = s.BytesScan
+		stmt.ConnType = s.ConnType
+		stmt.statsArray = s.statsArray
+		stmt.RequestAt = s.RequestAt
+		stmt.ResponseAt = s.ResponseAt
+		stmt.end = s.end
+		stmt.StatementTag = s.StatementTag
+		stmt.StatementFingerprint = s.StatementFingerprint
+		stmt.Error = s.Error
+		stmt.Database = s.Database
+		stmt.AggrMemoryTime = s.AggrMemoryTime
+
+		// initialize the AggrCount as 0 here since aggr is not started
+		stmt.AggrCount = 0
+		return stmt
 	}
 	return nil
 }
 
-func StatementInfoUpdate(existing, new Item) {
+func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
+	// nil aggregated stmt record's txn-id, if including diff transactions.
+	if e.TransactionID != n.TransactionID {
+		e.TransactionID = NilTxnID
+	}
+	if e.AggrCount == 0 {
+		// initialize the AggrCount as 1 here since aggr is started
+		windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+		e.StatementTag = ""
+		e.StatementFingerprint = ""
+		e.Error = nil
+		e.Database = ""
+		duration := e.Duration
+		e.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
+		e.RequestAt = e.ResponseAt.Truncate(windowSize)
+		e.ResponseAt = e.RequestAt.Add(windowSize)
+		e.AggrCount = 1
+	}
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
@@ -120,6 +157,7 @@ func StatementInfoFilter(i Item) bool {
 		return false
 	}
 
+	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
 		return false
 	}
@@ -201,6 +239,11 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+
+	// skipTxnOnce, readonly, for flow control
+	// see more on NeedSkipTxn() and SkipTxnId()
+	skipTxnOnce bool
+	skipTxnID   []byte
 }
 
 type Key struct {
@@ -282,24 +325,42 @@ func (s *StatementInfo) freeNoLocked() {
 }
 
 func (s *StatementInfo) free() {
+	s.StatementID = NilStmtID
+	s.TransactionID = NilTxnID
+	s.SessionID = NilSesID
+	s.Account = ""
+	s.User = ""
+	s.Host = ""
 	s.RoleId = 0
+	s.Database = ""
 	s.Statement = ""
+	s.StmtBuilder.Reset()
 	s.StatementFingerprint = ""
 	s.StatementTag = ""
-	s.FreeExecPlan()
+	s.SqlSourceType = ""
 	s.RequestAt = time.Time{}
-	s.ResponseAt = time.Time{}
+	s.StatementType = ""
+	s.QueryType = ""
 	s.Status = StatementStatusRunning
 	s.Error = nil
+	s.ResponseAt = time.Time{}
+	s.Duration = 0
+	s.FreeExecPlan() // handle s.ExecPlan
 	s.RowsRead = 0
 	s.BytesScan = 0
+	s.AggrCount = 0
+	// s.AggrMemoryTime // skip
 	s.ResultCount = 0
+	s.ConnType = 0
 	s.end = false
 	s.reported = false
 	s.exported = false
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	// clean skipTxn ctrl
+	s.skipTxnOnce = false
+	s.skipTxnID = nil
 	stmtPool.Put(s)
 }
 
@@ -395,7 +456,7 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 		goto endL
 	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr))
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"uuid":%q}`, uuidStr))
 	} else {
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
@@ -420,12 +481,36 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		return s.statsArray.ToJsonString()
 	} else {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
+		if s.statsArray.GetTimeConsumed() > 0 {
+			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
+				zap.String("statement_id", uuid.UUID(s.StatementID).String()),
+			)
+		}
 		s.statsArray.InitIfEmpty().Add(&statsArray)
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
 	}
+}
+
+// SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
+// usage:
+// Step1: SetSkipTxn(true)
+// Step2:
+//
+//	if NeedSkipTxn() {
+//		SetSkipTxn(false)
+//		SetSkipTxnId(target_txn_id)
+//	} else SkipTxnId(current_txn_id) {
+//		// record current txn id
+//	}
+func (s *StatementInfo) SetSkipTxn(skip bool)   { s.skipTxnOnce = skip }
+func (s *StatementInfo) SetSkipTxnId(id []byte) { s.skipTxnID = id }
+func (s *StatementInfo) NeedSkipTxn() bool      { return s.skipTxnOnce }
+func (s *StatementInfo) SkipTxnId(id []byte) bool {
+	// s.skipTxnID == nil, means NO skipTxnId
+	return s.skipTxnID != nil && bytes.Equal(s.skipTxnID, id)
 }
 
 func GetLongQueryTime() time.Duration {
@@ -540,12 +625,28 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if s.User == db_holder.MOLoggerUser {
 		goto DiscardAndFreeL
 	}
+
+	// Filter out the statement is empty
+	if s.Statement == "" {
+		goto DiscardAndFreeL
+	}
+
+	// Filter out exported or reported statement
+	if s.exported || s.reported {
+		goto DiscardAndFreeL
+	}
+
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}
+	}
+
+	// logging the statement that should not be here anymore
+	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
+		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 
 	s.reported = true

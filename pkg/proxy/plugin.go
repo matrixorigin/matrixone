@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,6 +48,12 @@ func (r *pluginRouter) Route(
 	if err != nil {
 		return nil, err
 	}
+	if re.Updated {
+		// plugin signals that a state updated has happened, request a refresh if the delegated router is refreshable
+		if rr, ok := r.Router.(RefreshableRouter); ok {
+			rr.Refresh(false)
+		}
+	}
 	switch re.Action {
 	case plugin.Select:
 		if re.CN == nil {
@@ -56,6 +63,7 @@ func (r *pluginRouter) Route(
 		if err != nil {
 			return nil, err
 		}
+		v2.ProxyConnectSelectCounter.Inc()
 		return &CNServer{
 			reqLabel: ci.labelInfo,
 			cnLabel:  re.CN.Labels,
@@ -64,6 +72,7 @@ func (r *pluginRouter) Route(
 			hash:     hash,
 		}, nil
 	case plugin.Reject:
+		v2.ProxyConnectRejectCounter.Inc()
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message),
 			codeAuthFailed)
 	case plugin.Bypass:

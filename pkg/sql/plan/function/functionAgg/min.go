@@ -41,78 +41,78 @@ var (
 	}
 )
 
-func NewAggMin(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, partialresult any) (agg.Agg[any], error) {
+func NewAggMin(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_bool:
 		aggPriv := &sAggBoolMin{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	case types.T_uint8:
-		return newGenericMin[uint8](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:
-		return newGenericMin[uint16](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[uint16](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint32:
-		return newGenericMin[uint32](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[uint32](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint64:
-		return newGenericMin[uint64](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int8:
-		return newGenericMin[int8](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[int8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int16:
-		return newGenericMin[int16](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[int16](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int32:
-		return newGenericMin[int32](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[int32](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int64:
-		return newGenericMin[int64](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[int64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_float32:
-		return newGenericMin[float32](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[float32](overloadID, inputTypes[0], outputType, dist)
 	case types.T_float64:
-		return newGenericMin[float64](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[float64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_date:
-		return newGenericMin[types.Date](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[types.Date](overloadID, inputTypes[0], outputType, dist)
 	case types.T_datetime:
-		return newGenericMin[types.Datetime](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[types.Datetime](overloadID, inputTypes[0], outputType, dist)
 	case types.T_timestamp:
-		return newGenericMin[types.Timestamp](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[types.Timestamp](overloadID, inputTypes[0], outputType, dist)
 	case types.T_time:
-		return newGenericMin[types.Time](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[types.Time](overloadID, inputTypes[0], outputType, dist)
 	case types.T_enum:
-		return newGenericMin[types.Enum](overloadID, inputTypes[0], outputType, dist, partialresult)
+		return newGenericMin[types.Enum](overloadID, inputTypes[0], outputType, dist)
 	case types.T_decimal64:
 		aggPriv := &sAggDecimal64Min{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimal128Min{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	case types.T_uuid:
 		aggPriv := &sAggUuidMin{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	case types.T_binary, types.T_varbinary, types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		aggPriv := &sAggStrMin{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for min", inputTypes[0])
 }
 
-func newGenericMin[T compare](overloadID int64, typ types.Type, otyp types.Type, dist bool, partialresult any) (agg.Agg[any], error) {
+func newGenericMin[T compare](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggMin[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggMin[T compare] struct{}

@@ -33,7 +33,7 @@ import (
 
 var (
 	defaultRPCTimeout    = time.Second * 10
-	defaultHandleWorkers = 4
+	defaultHandleWorkers = 16
 )
 
 func acquireRequest() *pb.Request {
@@ -116,11 +116,12 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	ctx, span := trace.Debug(ctx, "lockservice.client.send")
 	defer span.End()
 
+	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
 		switch request.Method {
 		case pb.Method_ForwardLock:
-			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
+			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -131,7 +132,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
-			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
+			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -139,7 +140,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		case pb.Method_GetWaitingList:
-			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
+			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -162,7 +163,16 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		}
 	}
 	if address == "" {
+		var cns []string
+		c.cluster.GetCNService(
+			clusterservice.NewSelectAll(),
+			func(s metadata.CNService) bool {
+				cns = append(cns, s.ServiceID)
+				return true
+			})
 		getLogger().Error("cannot find lockservice address",
+			zap.String("target", sid),
+			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
 	}
 	return c.client.Send(ctx, address, request)
@@ -322,6 +332,11 @@ func (s *server) onMessage(
 
 func (s *server) handle(ctx context.Context) {
 	fn := func(ctx requestCtx) {
+		start := time.Now()
+		defer func() {
+			v2.TxnLockWorkerHandleDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
+
 		req := ctx.req
 		defer releaseRequest(req)
 		resp := getResponse(req)
@@ -366,7 +381,7 @@ func writeResponse(
 			zap.String("response", detail))
 	}
 	// after write, response will be released by rpc
-	if err := cs.Write(ctx, resp); err != nil {
+	if err := cs.AsyncWrite(resp); err != nil {
 		getLogger().Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))

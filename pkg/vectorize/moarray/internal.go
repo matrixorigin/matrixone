@@ -14,9 +14,7 @@
 
 package moarray
 
-import (
-	"gonum.org/v1/gonum/mat"
-)
+import "gonum.org/v1/gonum/mat"
 
 // These functions are use internally by the kmeans algorithm and vector index etc. They are not exposed externally.
 
@@ -36,9 +34,9 @@ func NormalizeGonumVectors(vectors []*mat.VecDense) {
 	}
 }
 
-// NormalizeMoVecf64 is used only in test functions.
-func NormalizeMoVecf64(vector []float64) []float64 {
-	res := ToGonumVector[float64](vector)
-	NormalizeGonumVector(res)
-	return ToMoArray[float64](res)
-}
+//// NormalizeMoVecf64 is used only in test functions.
+//func NormalizeMoVecf64(vector []float64) []float64 {
+//	res := ToGonumVector[float64](vector)
+//	//NormalizeGonumVector(res)
+//	return ToMoArray[float64](res)
+//}

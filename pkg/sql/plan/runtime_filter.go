@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -25,6 +26,14 @@ const (
 	MinProbeTableRows    = 8192 * 20 // Don't generate runtime filter for small tables
 	SelectivityThreshold = 0.5
 )
+
+func GetInFilterCardLimit() int64 {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
+	if ok {
+		return v.(int64)
+	}
+	return InFilterCardLimit
+}
 
 func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
@@ -38,7 +47,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	if node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_MARK {
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
 		return
 	}
 
@@ -96,7 +105,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	for _, expr := range node.OnList {
 		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
-			if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
+			if !ExprIsZonemappable(builder.GetContext(), args[0]) {
 				return
 			}
 			probeExprs = append(probeExprs, args[0])

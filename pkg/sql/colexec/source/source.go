@@ -25,8 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "source"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("Source scan")
+	buf.WriteString(argName)
+	buf.WriteString(": source scan")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -58,6 +61,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	_, span := trace.Start(proc.Ctx, "SourceCall")
 	defer span.End()
 

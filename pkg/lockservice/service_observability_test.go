@@ -133,10 +133,10 @@ func TestGetLockTableBind(t *testing.T) {
 			alloc *lockTableAllocator,
 			l1, l2 *service,
 			table uint64) {
-			bind1, err := l1.GetLockTableBind(table)
+			bind1, err := l1.GetLockTableBind(0, table)
 			require.NoError(t, err)
 
-			bind2, err := l2.GetLockTableBind(table)
+			bind2, err := l2.GetLockTableBind(0, table)
 			require.NoError(t, err)
 
 			assert.Equal(t, bind1, bind2)
@@ -145,7 +145,7 @@ func TestGetLockTableBind(t *testing.T) {
 }
 
 func TestIterLocks(t *testing.T) {
-	table := uint64(1)
+	table := uint64(10)
 	getRunner(false)(
 		t,
 		table,

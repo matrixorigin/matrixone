@@ -184,6 +184,123 @@ func (mr *MockConstraintMockRecorder) constraint() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "constraint", reflect.TypeOf((*MockConstraint)(nil).constraint))
 }
 
+// MockRanges is a mock of Ranges interface.
+type MockRanges struct {
+	ctrl     *gomock.Controller
+	recorder *MockRangesMockRecorder
+}
+
+// MockRangesMockRecorder is the mock recorder for MockRanges.
+type MockRangesMockRecorder struct {
+	mock *MockRanges
+}
+
+// NewMockRanges creates a new mock instance.
+func NewMockRanges(ctrl *gomock.Controller) *MockRanges {
+	mock := &MockRanges{ctrl: ctrl}
+	mock.recorder = &MockRangesMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockRanges) EXPECT() *MockRangesMockRecorder {
+	return m.recorder
+}
+
+// Append mocks base method.
+func (m *MockRanges) Append(arg0 []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Append", arg0)
+}
+
+// Append indicates an expected call of Append.
+func (mr *MockRangesMockRecorder) Append(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Append", reflect.TypeOf((*MockRanges)(nil).Append), arg0)
+}
+
+// GetAllBytes mocks base method.
+func (m *MockRanges) GetAllBytes() []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllBytes")
+	ret0, _ := ret[0].([]byte)
+	return ret0
+}
+
+// GetAllBytes indicates an expected call of GetAllBytes.
+func (mr *MockRangesMockRecorder) GetAllBytes() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllBytes", reflect.TypeOf((*MockRanges)(nil).GetAllBytes))
+}
+
+// GetBytes mocks base method.
+func (m *MockRanges) GetBytes(i int) []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBytes", i)
+	ret0, _ := ret[0].([]byte)
+	return ret0
+}
+
+// GetBytes indicates an expected call of GetBytes.
+func (mr *MockRangesMockRecorder) GetBytes(i interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBytes", reflect.TypeOf((*MockRanges)(nil).GetBytes), i)
+}
+
+// Len mocks base method.
+func (m *MockRanges) Len() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Len")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// Len indicates an expected call of Len.
+func (mr *MockRangesMockRecorder) Len() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Len", reflect.TypeOf((*MockRanges)(nil).Len))
+}
+
+// SetBytes mocks base method.
+func (m *MockRanges) SetBytes(arg0 []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetBytes", arg0)
+}
+
+// SetBytes indicates an expected call of SetBytes.
+func (mr *MockRangesMockRecorder) SetBytes(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBytes", reflect.TypeOf((*MockRanges)(nil).SetBytes), arg0)
+}
+
+// Size mocks base method.
+func (m *MockRanges) Size() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Size")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// Size indicates an expected call of Size.
+func (mr *MockRangesMockRecorder) Size() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Size", reflect.TypeOf((*MockRanges)(nil).Size))
+}
+
+// Slice mocks base method.
+func (m *MockRanges) Slice(i, j int) []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Slice", i, j)
+	ret0, _ := ret[0].([]byte)
+	return ret0
+}
+
+// Slice indicates an expected call of Slice.
+func (mr *MockRangesMockRecorder) Slice(i, j interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Slice", reflect.TypeOf((*MockRanges)(nil).Slice), i, j)
+}
+
 // MockRelation is a mock of Relation interface.
 type MockRelation struct {
 	ctrl     *gomock.Controller
@@ -395,7 +512,7 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 [][]byte) ([]engine.Reader, error) {
+func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]engine.Reader)
@@ -425,10 +542,10 @@ func (mr *MockRelationMockRecorder) PrimaryKeysMayBeModified(ctx, from, to, keyV
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) ([][]byte, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) (engine.Ranges, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
-	ret0, _ := ret[0].([][]byte)
+	ret0, _ := ret[0].(engine.Ranges)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -917,7 +1034,7 @@ func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
 }
 
 // NewBlockReader mocks base method.
-func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+func (m *MockEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp, expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewBlockReader", ctx, num, ts, expr, ranges, tblDef, proc)
 	ret0, _ := ret[0].([]engine.Reader)

@@ -17,14 +17,14 @@ package functionAgg
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -32,12 +32,12 @@ import (
 )
 
 func testUnaryAggSupported(
-	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error),
+	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error),
 	paramSupported []types.T, getReturnType func(typ []types.Type) types.Type) error {
 	for _, t := range paramSupported {
 		inputs := []types.Type{t.ToType()}
 
-		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil, nil)
+		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil)
 		if err != nil {
 			return err
 		}
@@ -725,8 +725,9 @@ func TestClusterCenters(t *testing.T) {
 
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
-		distType:   kmeans.CosineDistance,
+		distType:   kmeans.L2Distance,
 		arrType:    types.T_array_float64.ToType(),
+		normalize:  true, // <-- Spherical Kmeans UT
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
 	var vecf64Input = [][]byte{
@@ -776,6 +777,8 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.arrType, s2.arrType)
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, s1.initType, s2.initType)
+		require.Equal(t, s1.normalize, s2.normalize)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		require.Equal(t, s1.groupedData, s2.groupedData)
 	}

@@ -21,6 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -99,7 +104,11 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) Adjust() error {
+func (w *Ws) WriteOffset() uint64 {
+	return 0
+}
+
+func (w *Ws) Adjust(_ uint64) error {
 	return nil
 }
 
@@ -111,7 +120,7 @@ func (w *Ws) GetSQLCount() uint64 { return 0 }
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
@@ -124,7 +133,8 @@ func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		tc.proc.TxnOperator = txnOperator
-		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, time.Now())
+		tc.proc.Ctx = ctx
+		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -140,11 +150,12 @@ func TestCompile(t *testing.T) {
 func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
-	var ctx = context.Background()
+	var ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, time.Now())
+	tc.proc.Ctx = ctx
+	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
@@ -155,7 +166,7 @@ func TestCompileWithFaults(t *testing.T) {
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	proc.SessionInfo.Buf = buffer.New()
-	e, _, compilerCtx := testengine.New(context.Background())
+	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
 	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
@@ -174,7 +185,8 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 
 func TestCompileShouldReturnCtxError(t *testing.T) {
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
 		c.proc.Ctx = ctx
 		time.Sleep(time.Second)
@@ -184,7 +196,8 @@ func TestCompileShouldReturnCtxError(t *testing.T) {
 	}
 
 	{
-		c := Compile{proc: &process.Process{}}
+		c := reuse.Alloc[Compile](nil)
+		c.proc = &process.Process{}
 		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
 		c.proc.Ctx = ctx
 		cancel()

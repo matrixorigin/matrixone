@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -94,6 +95,7 @@ func NewService(
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
 		cfg:         cfg,
+		logger:      logutil.GetGlobalLogger().Named("cn-service"),
 		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
@@ -107,7 +109,6 @@ func NewService(
 	}
 	srv.initQueryService()
 
-	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initCacheServer(); err != nil {
@@ -590,7 +591,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				func(txnID []byte, createAt time.Time, createBy string) {
 					// dump all goroutines to stderr
 					profile.ProfileGoroutine(os.Stderr, 2)
-					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
+					v2.TxnLeakCounter.Inc()
+					runtime.DefaultRuntime().Logger().Error("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
 						zap.String("create-by", createBy))
@@ -604,6 +606,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
+		opts = append(opts,
+			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),

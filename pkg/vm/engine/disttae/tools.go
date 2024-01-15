@@ -19,10 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,9 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -791,7 +791,7 @@ func newStringConstVal(v string) *plan.Expr {
 		Typ: types.NewProtoType(types.T_varchar),
 		Expr: &plan.Expr_C{
 			C: &plan.Const{
-				Value: &plan.Const_Sval{Sval: v},
+				Value: &plan.Literal_Sval{Sval: v},
 			},
 		},
 	}
@@ -1128,19 +1128,17 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	var accountId, userId, roleId uint32
+	var err error
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
+	accountId, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		userId = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		roleId = v.(uint32)
-	}
-	return accountId, userId, roleId
+	userId = defines.GetUserId(ctx)
+	roleId = defines.GetRoleId(ctx)
+	return accountId, userId, roleId, nil
 }
 
 /*
@@ -1213,18 +1211,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
+		accountId:  id,
 	}
 }
 
@@ -1447,8 +1445,8 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
-	var infos [][]*catalog.BlockInfo
+func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objectio.BlockInfo, []int) {
+	var infos [][]*objectio.BlockInfo
 	objMap := make(map[string]int)
 	lenObjs := 0
 	for _, blkInfo := range blkInfos {
@@ -1459,7 +1457,7 @@ func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{blkInfo})
+			infos = append(infos, []*objectio.BlockInfo{blkInfo})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1486,7 +1484,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	return rds
 }
 
-func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*objectio.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		//distribute objects and steps for prefetch

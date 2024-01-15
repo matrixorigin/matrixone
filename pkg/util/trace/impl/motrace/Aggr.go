@@ -30,7 +30,7 @@ type Aggregator struct {
 	Grouped     map[interface{}]Item
 	WindowSize  time.Duration
 	NewItemFunc func(i Item, ctx context.Context) Item
-	UpdateFunc  func(existing, new Item)
+	UpdateFunc  func(ctx context.Context, existing, new Item)
 	FilterFunc  func(i Item) bool
 }
 
@@ -40,7 +40,7 @@ const (
 	DurationKey key = iota
 )
 
-func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i Item, ctx context.Context) Item, updateFunc func(existing, new Item), filterFunc func(i Item) bool) *Aggregator {
+func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i Item, ctx context.Context) Item, updateFunc func(ctx context.Context, existing, new Item), filterFunc func(i Item) bool) *Aggregator {
 	ctx = context.WithValue(ctx, DurationKey, windowSize)
 	return &Aggregator{
 		ctx:         ctx,
@@ -55,6 +55,12 @@ func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc fu
 var ErrFilteredOut = moerr.NewInternalError(context.Background(), "filtered out")
 
 func (a *Aggregator) Close() {
+	// Free the StatementInfo in the Grouped
+	for _, item := range a.Grouped {
+		if stmt, ok := item.(*StatementInfo); ok {
+			stmt.freeNoLocked()
+		}
+	}
 	// clean up the Grouped map
 	a.Grouped = make(map[interface{}]Item)
 	// release resources related to the context if necessary
@@ -72,7 +78,7 @@ func (a *Aggregator) AddItem(i Item) (Item, error) {
 		group = a.NewItemFunc(i, a.ctx)
 		a.Grouped[orignal_key] = group
 	} else {
-		a.UpdateFunc(group, i)
+		a.UpdateFunc(a.ctx, group, i)
 	}
 	return nil, nil
 }

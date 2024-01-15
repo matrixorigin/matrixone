@@ -78,9 +78,7 @@ create table time_window08 (ts timestamp primary key, col2 smallint unsigned);
 insert into time_window08 values ('2020-01-01 10:00:00.000', 127);
 insert into time_window08 values ('2020-01-02 12:00:00.000', 0);
 insert into time_window08 values ('2020-01-03 12:00:00.000', 22);
--- @bvt:issue#12548
 select _wstart, _wend, max(col2) from time_window08 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) sliding(2,day);
--- @bvt:issue
 drop table time_window08;
 
 -- the aggr column is int，with agg function max,min,avg,sum,count, interval day hour
@@ -95,9 +93,7 @@ insert into int01 values ('2020-01-06 09:00:00.000', 200, 0, 294095);
 select * from int01;
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day);
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(prev);
--- @bvt:issue#12440
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(next);
--- @bvt:issue
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(linear);
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(none);
 select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) fill(VALUE,200);
@@ -124,10 +120,8 @@ insert into int02 values ('2023-10-27 23:33:15.110', 321421.42314, 38021.3241432
 insert into int02 values ('2023-10-27 22:33:15.110', 321421.42314, null, null);
 select * from int02;
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts >= '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 1, hour) fill(none);
--- @bvt:issue#12440
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 10, minute) fill(next);
 select _wstart, _wend, sum(col2), sum(col3), sum(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 60, minute) fill(next);
--- @bvt:issue
 select _wstart, _wend, avg(col2), avg(col3), avg(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 20, minute);
 select _wstart, _wend, count(col2), count(col3), count(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 30, minute) fill(prev);
 drop table int02;
@@ -280,5 +274,9 @@ select _wstart, _wend, count(col2), sum(col6), avg(col7) from external01 where t
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute);
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute) fill(value,1000);
 drop table external01;
+
+drop table if exists tt1;
+create table tt1(ts timestamp primary key, a int);
+select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 
 drop database time_window;
