@@ -576,12 +576,12 @@ show create publication pubname6;
 Publication    Create Publication
 pubname6    CREATE PUBLICATION pubname6 DATABASE db6 ACCOUNT test_tenant_1
 show publications;
-Name    Database
-pubname6    db6
+publication    database    create_time    update_time    sub_account    comments
+pubname6    db6    2024-01-05 18:40:33    null    test_tenant_1    publication to test_tenant_1
 create database sub_db6 from sys publication pubname6;
 show subscriptions;
-Name    From_Account
-sub_db6    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+pubname6    sys    db6    2024-01-05 18:40:33    sub_db6    2024-01-05 18:40:33
 show create database sub_db6;
 Database    Create Database
 sub_db6    create database sub_db6 from sys publication pubname6
@@ -644,30 +644,29 @@ internal error: can not subscribe to self
 drop publication pubname5;
 drop database db5;
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 show publications;
-Name    Database
+publication    database    create_time    update_time    sub_account    comments
 show subscriptions;
-Name    From_Account
-sub_db4    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop account test_tenant_3;
