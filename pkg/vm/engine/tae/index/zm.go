@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
@@ -119,6 +120,12 @@ func (zm ZM) StringForCompose() string {
 func (zm ZM) String() string {
 	return zm.innerString(func(b []byte) string {
 		return string(b)
+	})
+}
+
+func (zm ZM) StringForHex() string {
+	return zm.innerString(func(b []byte) string {
+		return hex.EncodeToString(b)
 	})
 }
 

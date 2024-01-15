@@ -17,11 +17,12 @@ package frontend
 import (
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"math"
 	"strings"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -343,7 +344,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 			return moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
 		}
 		// switch to the sys account to get account info
-		newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
 		sql = getSqlForAccountInfo(uint64(account.GetTenantID()))
 		if allAccountInfo, accountIds, err = getAccountInfo(newCtx, bh, sql, true); err != nil {
 			return err
@@ -373,7 +374,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	for i, ids := range accountIds {
 		for _, id := range ids {
 			//step 3.1: get the admin_name, db_count, table_count for each account
-			newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
+			newCtx := defines.AttachAccountId(ctx, uint32(id))
 
 			tt = time.Now()
 			if tempBatch, err = getTableStats(newCtx, bh, id); err != nil {
