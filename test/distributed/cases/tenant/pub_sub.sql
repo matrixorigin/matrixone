@@ -9,6 +9,7 @@ create publication pub2 database t account all;
 create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
 create publication pub5 database t account accx comment 'test';
+-- @ignore:2,3
 show publications;
 show create publication pub1;
 show create publication pub2;
@@ -24,6 +25,7 @@ show create publication pub4;
 alter publication pub5 account all comment '1212';
 show create publication pub5;
 drop publication pub1;
+-- @ignore:2,3
 show publications;
 create publication pub1 database t;
 create publication pub1 database t;
@@ -51,6 +53,7 @@ create table sys_tbl_1(a int primary key );
 insert into sys_tbl_1 values(1),(2),(3);
 create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
+-- @ignore:2,3
 show publications;
 
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
@@ -58,6 +61,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=2&user=acc0:root&password=111
 create database sub1 from sys publication sys_pub_1;
 show databases;
+-- @ignore:3,5
 show subscriptions;
 use sub1;
 show tables;
@@ -75,6 +79,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- @session:id=3&user=acc1:root&password=111
 create database sub1 from sys publication sys_pub_1;
 show databases;
+-- @ignore:3,5
 show subscriptions;
 use sub1;
 show tables;
@@ -88,6 +93,7 @@ alter publication sys_pub_1 account acc1;
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
+-- @ignore:3,5
 show subscriptions;
 select * from sub1.sys_tbl_1;
 use sub1;
@@ -95,6 +101,7 @@ use sub1;
 
 -- acc1 订阅
 -- @session:id=3&user=acc1:root&password=111
+-- @ignore:3,5
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -107,6 +114,7 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
+-- @ignore:3,5
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -125,6 +133,7 @@ create table sys_tbl_2(b text);
 
 -- 查看acc0是否能感知新数据
 -- @session:id=2&user=acc0:root&password=111
+-- @ignore:3,5
 show subscriptions;
 use sub1;
 desc sys_tbl_1;
@@ -145,6 +154,7 @@ create publication acc2_pub_1 database acc2_db_1;
 -- sys 创建订阅获取acc2的发布
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
+-- @ignore:3,5
 show subscriptions;
 show tables;
 desc acc2_tbl_1;
@@ -154,6 +164,7 @@ select * from acc2_tbl_1;
 -- @session:id=2&user=acc0:root&password=111
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
+-- @ignore:3,5
 show subscriptions;
 desc acc2_tbl_1;
 select * from acc2_tbl_1;
@@ -214,7 +225,7 @@ set global syspublications = "pubname1,pubname1";
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 set global syspublications = "pubname1,pubname2";
 create account test_tenant_2 admin_name 'test_account' identified by '111';
-show publications;
+-- @ignore:2,3
 show publications;
 drop publication pubname1;
 drop publication pubname2;

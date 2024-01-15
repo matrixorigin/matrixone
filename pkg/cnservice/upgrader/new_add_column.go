@@ -16,7 +16,9 @@ package upgrader
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
 var (
@@ -43,6 +45,16 @@ var (
 			then: []string{
 				fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType),
 			},
+		},
+	}
+
+	MoPubsTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_PUBS,
+		Columns: []table.Column{
+			// only add new column
+			table.TimestampDefaultColumn("update_time", "NULL", ""),
 		},
 	}
 )
