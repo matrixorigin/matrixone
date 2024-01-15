@@ -83,10 +83,10 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, pkgReader udf.Pk
 	}
 
 	stream, err := c.sc.Run(ctx)
-	defer stream.CloseSend()
 	if err != nil {
 		return nil, err
 	}
+	defer stream.CloseSend()
 	err = stream.Send(request)
 	if err != nil {
 		return nil, err
