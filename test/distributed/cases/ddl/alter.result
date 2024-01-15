@@ -380,4 +380,48 @@ CREATE TABLE `t3` (
 PRIMARY KEY (`a`)
 );
 alter table t3 drop primary key;
+drop table if exists index03;
+create table index03(col1 int, col2 int, col3 int);
+insert into index03 values (1,2,1);
+insert into index03 values (2,3,4);
+insert into index03 values (1,2,10);
+select count(*) from index03;
+count(*)
+3
+alter table index03 add unique key `tempKey`(col1,col2) comment 'abcTest';
+Duplicate entry '(1,2)' for key 'col1,col2'
+show index from index03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+select count(*) from index03;
+count(*)
+3
+drop table index03;
+drop table if exists t4;
+create table t4(col1 varchar(256) primary key, col2 int);
+insert into t4 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+select count(*) from t4;
+count(*)
+500000
+alter table t4 add unique key `title01`(`col1`);
+show create table t4;
+Table    Create Table
+t4    CREATE TABLE `t4` (\n`col1` VARCHAR(256) NOT NULL,\n`col2` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `title01` (`col1`)\n)
+select count(*) from t4;
+count(*)
+500000
+drop table t4;
+drop table if exists t5;
+create table t5(col1 varchar(256) primary key, col2 int);
+insert into t5 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+select count(*) from t5;
+count(*)
+500000
+alter table t5 add unique key `title01`(`col1`) using btree;
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`col1` VARCHAR(256) NOT NULL,\n`col2` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `title01` (`col1`)\n)
+select count(*) from t5;
+count(*)
+500000
+drop table t5;
 drop database test;

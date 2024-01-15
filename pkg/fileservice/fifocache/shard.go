@@ -15,17 +15,14 @@
 package fifocache
 
 import (
-	"hash/maphash"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"golang.org/x/exp/constraints"
 )
 
-var seed = maphash.MakeSeed()
-
 func ShardInt[T constraints.Integer](v T) uint8 {
-	return uint8(maphash.Bytes(
-		seed,
+	return uint8(xxhash.Sum64(
 		unsafe.Slice(
 			(*byte)(unsafe.Pointer(&v)),
 			unsafe.Sizeof(v),
