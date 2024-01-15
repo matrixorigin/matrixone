@@ -1128,19 +1128,17 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	var accountId, userId, roleId uint32
+	var err error
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
+	accountId, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		userId = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		roleId = v.(uint32)
-	}
-	return accountId, userId, roleId
+	userId = defines.GetUserId(ctx)
+	roleId = defines.GetRoleId(ctx)
+	return accountId, userId, roleId, nil
 }
 
 /*

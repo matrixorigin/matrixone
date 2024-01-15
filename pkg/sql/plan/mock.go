@@ -860,8 +860,8 @@ func (m *MockCompilerContext) GetStatsCache() *StatsCache {
 	return nil
 }
 
-func (m *MockCompilerContext) GetAccountId() uint32 {
-	return 0
+func (m *MockCompilerContext) GetAccountId() (uint32, error) {
+	return 0, nil
 }
 
 func (m *MockCompilerContext) GetContext() context.Context {

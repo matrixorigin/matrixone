@@ -37,7 +37,7 @@ create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.
 select 1
 select account, statement from system.statement_info where statement_id = @uuid_insert_table limit 1;
 account    statement
-query_tae_table    /* 1 queries */ \ninsert into query_tae_table values (1)
+query_tae_table    insert into query_tae_table values (1)
 select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
 exist
 1
