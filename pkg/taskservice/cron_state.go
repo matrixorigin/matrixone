@@ -83,6 +83,7 @@ func (s *cronJobState) endRun() {
 	s.Lock()
 	defer s.Unlock()
 	s.running = false
+	s.updating = false
 }
 
 func (s *cronJobState) canUpdate() bool {
@@ -98,5 +99,6 @@ func (s *cronJobState) canUpdate() bool {
 func (s *cronJobState) endUpdate() {
 	s.Lock()
 	defer s.Unlock()
+	s.running = false
 	s.updating = false
 }
