@@ -169,7 +169,11 @@ type Transaction struct {
 	//TODO::remove it
 	blockId_raw_batch map[types.Blockid]*batch.Batch
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+	blockId_tn_delete_metaLoc_batch struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}
+	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[[2]string][]*batch.Batch
