@@ -27,26 +27,27 @@ import (
 func handleCoreDump(proc *process.Process, service serviceType,
 	param string, sender requestSender) (Result, error) {
 	var addrs []string
-	var nodeIds []string
 
 	qs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
-	mc.GetCNService(
-		clusterservice.NewSelector(),
-		func(c metadata.CNService) bool {
-			addrs = append(addrs, c.QueryAddress)
-			nodeIds = append(nodeIds, c.ServiceID)
-			return true
-		})
-	mc.GetTNService(
-		clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			if d.QueryAddress != "" {
-				addrs = append(addrs, d.QueryAddress)
-				nodeIds = append(nodeIds, d.ServiceID)
-			}
-			return true
-		})
+	if service == cn {
+		mc.GetCNService(
+			clusterservice.NewSelector(),
+			func(c metadata.CNService) bool {
+				addrs = append(addrs, c.QueryAddress)
+				return true
+			})
+	}
+	if service == tn {
+		mc.GetTNService(
+			clusterservice.NewSelector(),
+			func(d metadata.TNService) bool {
+				if d.QueryAddress != "" {
+					addrs = append(addrs, d.QueryAddress)
+				}
+				return true
+			})
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	for _, addr := range addrs {
