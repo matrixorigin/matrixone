@@ -1445,7 +1445,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 
 		builder.pushdownLimit(rootID)
-		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
+
+		colRefCnt := make(map[[2]int32]int)
+		builder.countColRefs(rootID, colRefCnt)
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
@@ -1481,7 +1484,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.applyIndices(rootID)
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
