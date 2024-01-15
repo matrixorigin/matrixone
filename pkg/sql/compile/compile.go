@@ -385,6 +385,8 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	var writeOffset uint64
+
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -400,6 +402,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		s.SetOperatorInfoRecursively(c.allocOperatorID)
 	}
 
+	if c.proc.TxnOperator != nil {
+		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+	}
 	result = &util2.RunResult{}
 	var span trace.Span
 	var runC *Compile // compile structure for rerun.
@@ -462,7 +467,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
 }
@@ -2042,10 +2047,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	{
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -3464,13 +3469,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {

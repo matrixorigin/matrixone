@@ -11,12 +11,12 @@ create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
 create publication pub5 database t account accx comment 'test';
 show publications;
-Name    Database
-pub1    t
-pub2    t
-pub3    t
-pub4    t
-pub5    t
+publication    database    create_time    update_time    sub_account    comments
+pub5    t    2024-01-05 18:21:29    null    accx    test
+pub4    t    2024-01-05 18:21:29    null    acc0,acc1,accx    
+pub3    t    2024-01-05 18:21:29    null    acc0,acc1    
+pub2    t    2024-01-05 18:21:29    null    *    
+pub1    t    2024-01-05 18:21:29    null    *    
 show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
@@ -49,11 +49,11 @@ Publication    Create Publication
 pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT all
 drop publication pub1;
 show publications;
-Name    Database
-pub2    t
-pub3    t
-pub4    t
-pub5    t
+publication    database    create_time    update_time    sub_account    comments
+pub5    t    2024-01-05 18:21:29    2024-01-05 18:21:29    *    1212
+pub4    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,accx    
+pub3    t    2024-01-05 18:21:29    2024-01-05 18:21:29    acc0,acc1,accx    
+pub2    t    2024-01-05 18:21:29    null    *    
 create publication pub1 database t;
 create publication pub1 database t;
 Duplicate entry 'pub1' for key 'pub_name'
@@ -62,7 +62,7 @@ show create publication pub1;
 Publication    Create Publication
 pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
 show create publication pubx;
-internal error: publication 'pubx' does not exist
+Publication    Create Publication
 drop publication pub1;
 drop publication pub2;
 drop publication pub3;
@@ -82,8 +82,8 @@ insert into sys_tbl_1 values(1),(2),(3);
 create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
-Name    Database
-sys_pub_1    sys_db_1
+publication    database    create_time    update_time    sub_account    comments
+sys_pub_1    sys_db_1    2024-01-05 18:21:30    null    *    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    all
@@ -97,8 +97,8 @@ information_schema
 mysql
 mo_catalog
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 use sub1;
 show tables;
 Tables_in_sub1
@@ -143,8 +143,8 @@ mysql
 sub1
 mo_catalog
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 use sub1;
 show tables;
 Tables_in_sub1
@@ -167,15 +167,14 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc1
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 select * from sub1.sys_tbl_1;
 SQL parser error: table "sys_tbl_1" does not exist
 use sub1;
 internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -190,8 +189,8 @@ select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    sys_db_1    acc0,acc1
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -207,8 +206,8 @@ use sys_db_1;
 insert into sys_tbl_1 values(4);
 create table sys_tbl_2(b text);
 show subscriptions;
-Name    From_Account
-sub1    sys
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 use sub1;
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -230,8 +229,8 @@ create publication acc2_pub_1 database acc2_db_1;
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
-Name    From_Account
-sub2    acc2
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
 show tables;
 Tables_in_sub2
 acc2_tbl_1
@@ -248,9 +247,9 @@ sys    4
 create database sub2 from acc2 publication acc2_pub_1;
 use sub2;
 show subscriptions;
-Name    From_Account
-sub1    sys
-sub2    acc2
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
+acc2_pub_1    acc2    acc2_db_1    2024-01-05 18:21:31    sub2    2024-01-05 18:21:31
+sys_pub_1    sys    sys_db_1    2024-01-05 18:21:30    sub1    2024-01-05 18:21:30
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 q    TEXT(0)    YES        null        
@@ -306,13 +305,9 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 set global syspublications = "pubname1,pubname2";
 create account test_tenant_2 admin_name 'test_account' identified by '111';
 show publications;
-Name    Database
-pubname1    db1
-pubname2    db1
-show publications;
-Name    Database
-pubname1    db1
-pubname2    db1
+publication    database    create_time    update_time    sub_account    comments
+pubname2    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
+pubname1    db1    2024-01-05 18:21:31    null    test_tenant_1    publish db1 database
 drop publication pubname1;
 drop publication pubname2;
 drop account test_tenant_1;

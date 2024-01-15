@@ -475,19 +475,40 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// do first sort
-	allocSz := totalRowCnt * 4
-	node, err := common.MergeAllocator.Alloc(allocSz)
-	if err != nil {
-		panic(err)
+	var orderedVecs []containers.Vector
+	var sortedIdx []uint32
+	if schema.HasSortKey() {
+		// mergesort is needed, allocate sortedidx and mapping
+		allocSz := totalRowCnt * 4
+		// sortedIdx is used to shuffle other columns according to the order of the sort key
+		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		// sortedidx will be used to shuffle other column, defer free
+		defer common.MergeAllocator.Free(sortIdxNode)
+		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), totalRowCnt)
+
+		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), totalRowCnt)
+
+		// modify sortidx and mapping
+		orderedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
+		// free mapping, which is never used again
+		common.MergeAllocator.Free(mappingNode)
+	} else {
+		// just do reshape
+		orderedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		// UpdateMappingAfterMerge will handle the nil mapping
+		task.transMappings.UpdateMappingAfterMerge(nil, fromLayout, toLayout)
 	}
-	defer common.MergeAllocator.Free(node)
-	// sortedIdx is used to shuffle other columns according to the order of the sort key
-	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), totalRowCnt)
-	orderedVecs, mapping := mergeColumns(sortVecs, &sortedIdx, true, fromLayout, toLayout, schema.HasSortKey(), task.rt.VectorPool.Transient)
 	for _, vec := range orderedVecs {
 		defer vec.Close()
 	}
-	task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
 
 	// create blks to hold sorted data
 	writtenBatches := make([]*containers.Batch, 0, len(orderedVecs))
@@ -519,13 +540,16 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		for _, bat := range readedBats {
 			vecs = append(vecs, bat.Vecs[i])
 		}
-		vecs, _ := mergeColumns(vecs, &sortedIdx, false, fromLayout, toLayout, schema.HasSortKey(), task.rt.VectorPool.Transient)
-
-		for i := range vecs {
-			defer vecs[i].Close()
+		var outvecs []containers.Vector
+		if schema.HasSortKey() {
+			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		} else {
+			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
-		for i, vec := range vecs {
+
+		for i, vec := range outvecs {
 			writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
+			defer vec.Close()
 		}
 	}
 
