@@ -165,6 +165,7 @@ func buildTNConfig(
 	}
 	cfg.ServiceAddress = cfg.ListenAddress
 	cfg.LogtailServer.ListenAddress = address.getTnLogtailAddress(index)
+	cfg.LogtailServer.ServiceAddress = cfg.LogtailServer.ListenAddress
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.tn

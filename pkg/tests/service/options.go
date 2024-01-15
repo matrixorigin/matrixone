@@ -115,7 +115,6 @@ type Options struct {
 // DefaultOptions sets a list of recommended options.
 func DefaultOptions() Options {
 	opt := Options{}
-	opt.validate()
 	return opt
 }
 

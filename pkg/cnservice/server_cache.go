@@ -24,6 +24,10 @@ import (
 )
 
 func (s *service) initCacheServer() error {
+	if s.gossipNode == nil {
+		return nil
+	}
+
 	s.gossipNode.SetListenAddrFn(s.gossipListenAddr)
 	s.gossipNode.SetServiceAddrFn(s.gossipServiceAddr)
 	s.gossipNode.SetCacheServerAddrFn(s.cacheServiceServiceAddr)
