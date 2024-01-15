@@ -273,6 +273,28 @@ func TestZMNull(t *testing.T) {
 	require.False(t, zm.Contains(int64(1)))
 }
 
+func TestZmStringCompose(t *testing.T) {
+	packer := types.NewPacker(mpool.MustNewNoFixed("TestZmCompose"))
+	packer.EncodeStringType([]byte("0123456789.0123456789.0123456789."))
+	packer.EncodeInt32(42)
+
+	zm1 := BuildZM(types.T_varchar, packer.Bytes())
+	require.NotPanics(t, func() {
+		t.Log(zm1.StringForCompose())
+	})
+
+	packer.Reset()
+
+	packer.EncodeStringType([]byte("0123456789."))
+	packer.EncodeInt32(42)
+
+	zm2 := BuildZM(types.T_varchar, packer.Bytes())
+	require.NotPanics(t, func() {
+		t.Log(zm2.StringForCompose())
+	})
+
+}
+
 func TestZM(t *testing.T) {
 	int64v := int64(100)
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
