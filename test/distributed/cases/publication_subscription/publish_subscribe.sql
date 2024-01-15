@@ -362,9 +362,11 @@ show databases;
 create database db6;
 create publication pubname6 database db6 account test_tenant_1 comment 'publication to test_tenant_1';
 show create publication pubname6;
+-- @ignore:2,3
 show publications;
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 create database sub_db6 from sys publication pubname6;
+-- @ignore:3,5
 show subscriptions;
 show create database sub_db6;
 -- @session
@@ -442,26 +444,38 @@ drop publication pubname5;
 drop database db5;
 
 -- @teardown
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session:id=2&user=test_tenant_1:test_account&password=111
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session
 -- @session:id=3&user=test_tenant_2:test_account&password=111
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session
 -- @session:id=4&user=test_tenant_3:test_account&password=111
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session
 -- @session:id=5&user=test_tenant_4:test_account&password=111
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session
 -- @session:id=6&user=test_tenant_5:test_account&password=111
+-- @ignore:2,3
 show publications;
+-- @ignore:3,5
 show subscriptions;
 -- @session
 
