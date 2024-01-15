@@ -38,7 +38,6 @@ func TestGetActiveRow(t *testing.T) {
 	// }
 	b := &baseBlock{
 		RWMutex: mvcc.RWMutex,
-		mvcc:    updates.NewObjectMVCCHandle(nil),
 	}
 	mnode := &memoryNode{
 		block: b,
@@ -72,7 +71,7 @@ func TestGetActiveRow(t *testing.T) {
 
 	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)
-	row, err := node.GetRowByFilter(
+	_, row, err := node.GetRowByFilter(
 		context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)), common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
@@ -81,7 +80,7 @@ func TestGetActiveRow(t *testing.T) {
 	//abort appendnode2
 	an2.Aborted = true
 
-	row, err = node.GetRowByFilter(
+	_, row, err = node.GetRowByFilter(
 		context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)), common.DefaultAllocator,
 	)
 	// row, err = blk.GetActiveRow(int8(1), ts2)
