@@ -20,9 +20,9 @@ jobs:
         run: |
           npm install @octokit/action
           npm install node-fetch
-          # 给node-fetch降级，不然2219.js导入不了包
+          # downgrade node-fetch version
           npm i node-fetch@2.6.1
-      - run: node .github/scripts/2219.js
+      - run: node .github/scripts/add-assignee-to-corr-project.js
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
           Issue_ID: ${{ github.event.issue.number }}
