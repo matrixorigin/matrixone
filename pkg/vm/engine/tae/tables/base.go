@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -69,9 +70,10 @@ func newBaseBlock(
 	rt *dbutils.Runtime,
 ) *baseBlock {
 	blk := &baseBlock{
-		impl: impl,
-		rt:   rt,
-		meta: meta,
+		impl:       impl,
+		rt:         rt,
+		meta:       meta,
+		appendMVCC: updates.NewAppendMVCCHandle(meta),
 	}
 	blk.appendMVCC.SetAppendListener(blk.OnApplyAppend)
 	blk.RWMutex = meta.RWMutex
@@ -111,15 +113,17 @@ func (blk *baseBlock) UpgradeAllDeleteChain() {
 	blk.getMVCC().UpgradeAllDeleteChain()
 }
 
-func (blk *baseBlock) Rows() int {
+func (blk *baseBlock) Rows() (int, error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return int(node.Rows())
+		rows, err := node.Rows()
+		return int(rows), err
 	} else {
-		return int(node.Rows())
+		rows, err := node.Rows()
+		return int(rows), err
 	}
 }
 func (blk *baseBlock) Foreach(
@@ -641,7 +645,11 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 }
 
 func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) string {
-	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
+	rows, err := blk.Rows()
+	if err != nil {
+		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.ID.String(), err)
+	}
+	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
 		blk.RLock()
 		s2 := blk.getMVCC().StringLocked()
@@ -827,7 +835,10 @@ func (blk *baseBlock) GetTotalChanges() int {
 func (blk *baseBlock) IsAppendable() bool { return false }
 
 func (blk *baseBlock) MutationInfo() string {
-	rows := blk.Rows()
+	rows, err := blk.Rows()
+	if err != nil {
+		logutil.Warnf("get object rows failed, obj: %v, err %v", blk.meta.ID.String(), err)
+	}
 	deleteCnt := blk.getMVCC().GetDeleteCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),

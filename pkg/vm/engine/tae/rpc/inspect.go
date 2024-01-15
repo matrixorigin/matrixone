@@ -385,7 +385,10 @@ func (c *infoArg) Run() error {
 		b.WriteRune('\n')
 		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetBlockData().GetDeltaPersistedTS().ToString()))
 		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
-		rows := c.blk.GetBlockData().Rows()
+		rows, err := c.blk.GetBlockData().Rows()
+		if err != nil {
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.blk.ID.String(), err)
+		}
 		dels := c.blk.GetBlockData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))

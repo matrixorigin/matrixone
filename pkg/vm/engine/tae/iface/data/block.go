@@ -34,7 +34,7 @@ import (
 
 type CheckpointUnit interface {
 	MutationInfo() string
-	RunCalibration() int
+	RunCalibration() (int,error)
 	// EstimateScore(time.Duration, bool) int
 }
 
@@ -73,7 +73,7 @@ type Block interface {
 	PrepareCompactInfo() (bool, string)
 	GetDeltaPersistedTS() types.TS
 
-	Rows() int
+	Rows() (int,error)
 	GetColumnDataById(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, blkID uint16, colIdx int, mp *mpool.MPool,
 	) (*containers.ColumnView, error)

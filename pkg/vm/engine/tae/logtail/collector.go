@@ -433,7 +433,13 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				return
 			}
-			if obj.GetBlockData().RunCalibration() == 0 {
+			var calibration int
+			calibration, err = obj.GetBlockData().RunCalibration()
+			if err != nil {
+				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID.String(), err)
+				continue
+			}
+			if calibration == 0 {
 				// TODO: may be put it to post replay process
 				// FIXME
 				if obj.HasPersistedData() {

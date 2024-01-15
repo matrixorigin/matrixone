@@ -48,10 +48,12 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 
 func (node *persistedNode) close() {}
 
-func (node *persistedNode) Rows() uint32 {
-	panic("not support")
-	// location := node.block.meta.GetMetaLoc()
-	// return uint32(ReadPersistedBlockRow(location))
+func (node *persistedNode) Rows() (uint32, error) {
+	stats, err := node.block.meta.MustGetObjectStats()
+	if err != nil {
+		return 0, err
+	}
+	return stats.BlkCnt(), nil
 }
 
 func (node *persistedNode) BatchDedup(

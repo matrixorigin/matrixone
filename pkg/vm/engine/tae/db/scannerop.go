@@ -251,7 +251,9 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	}
 
 	s.ObjectHelper.resetForNewObj()
-	s.ObjectHelper.objNonAppend = !objectEntry.IsAppendable()
+	if objectEntry.IsAppendable() {
+		return
+	}
 
 	// for sorted Objects, we just collect the rows and dels on this Object
 	// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
@@ -270,7 +272,10 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	// nblks in appenable objs or non-sorted non-appendable objs
 	// these blks are formed by continuous append
 	objectEntry.RUnlock()
-	rows := objectEntry.GetBlockData().Rows()
+	rows, err := objectEntry.GetBlockData().Rows()
+	if err != nil {
+		return
+	}
 	dels := objectEntry.GetBlockData().GetTotalChanges()
 	objectEntry.RLock()
 	s.ObjectHelper.objRowCnt += rows

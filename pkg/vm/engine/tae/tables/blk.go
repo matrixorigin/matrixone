@@ -172,7 +172,7 @@ func (blk *block) GetValue(
 	)
 }
 
-func (blk *block) RunCalibration() (score int) {
+func (blk *block) RunCalibration() (score int, err error) {
 	score, _ = blk.estimateRawScore()
 	return
 }

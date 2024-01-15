@@ -406,7 +406,25 @@ func (entry *ObjectEntry) StringWithLevelLocked(level common.PPLevel) string {
 }
 
 func (entry *ObjectEntry) BlockCnt() int {
+	if entry.IsAppendable() {
+		return 1
+	}
+	cnt := entry.getBlockCntFromStats()
+	if cnt != 0 {
+		return int(cnt)
+	}
 	return entry.blkCnt
+}
+
+func (entry *ObjectEntry) getBlockCntFromStats() (blkCnt uint32) {
+	node := entry.GetLatestCommittedNode()
+	if node == nil {
+		return
+	}
+	if node.BaseNode.IsEmpty() {
+		return
+	}
+	return node.BaseNode.ObjectStats.BlkCnt()
 }
 
 func (entry *ObjectEntry) tryUpdateBlockCnt(cnt int) {

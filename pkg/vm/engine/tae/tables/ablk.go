@@ -117,7 +117,8 @@ func (blk *ablock) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
-	return node.Rows() < blk.meta.GetSchema().BlockMaxRows
+	rows, _ := node.Rows()
+	return rows < blk.meta.GetSchema().BlockMaxRows
 }
 
 func (blk *ablock) PrepareCompactInfo() (result bool, reason string) {
@@ -375,7 +376,7 @@ func (blk *ablock) CollectAppendInRange(
 	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
-func (blk *ablock) estimateRawScore() (score int, dropped bool) {
+func (blk *ablock) estimateRawScore() (score int, dropped bool, err error) {
 	if blk.meta.HasDropCommitted() {
 		dropped = true
 		return
@@ -388,7 +389,7 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 		return
 	}
 
-	rows := blk.Rows()
+	rows, err := blk.Rows()
 	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		score = 100
 		return
@@ -408,8 +409,8 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 	return
 }
 
-func (blk *ablock) RunCalibration() (score int) {
-	score, _ = blk.estimateRawScore()
+func (blk *ablock) RunCalibration() (score int, err error) {
+	score, _, err = blk.estimateRawScore()
 	return
 }
 

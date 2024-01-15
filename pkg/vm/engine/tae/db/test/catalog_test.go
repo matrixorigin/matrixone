@@ -67,7 +67,7 @@ func TestCatalog1(t *testing.T) {
 			t.Log(object.GetMeta().(*catalog.ObjectEntry).String())
 			it.Next()
 		}
-		assert.Equal(t, 2, cnt)
+		assert.Equal(t, 1, cnt)
 	}
 }
 
@@ -158,30 +158,29 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn.Commit(context.Background())
 	assert.Nil(t, err)
+	schema.BlockMaxRows = 10
+	batchCnt := 10
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows)*batchCnt)
+	bats := bat.Split(batchCnt)
 
 	pool, _ := ants.NewPool(20)
 	defer pool.Release()
 	var wg sync.WaitGroup
-	mockRes := func() {
-		defer wg.Done()
-		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
-		rel, _ := db.GetRelationByName(schema.Name)
-		_, err := rel.CreateNonAppendableObject(false)
-		assert.Nil(t, err)
-		var id *common.ID
-		err = txn.Commit(context.Background())
-		assert.Nil(t, err)
-
-		txn, _ = tae.StartTxn(nil)
-		db, _ = txn.GetDatabase("db")
-		rel, _ = db.GetRelationByName(schema.Name)
-		rel.GetObject(id.ObjectID())
-		assert.Nil(t, txn.Commit(context.Background()))
+	mockRes := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			txn, _ := tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, _ := db.GetRelationByName(schema.Name)
+			err := rel.Append(context.Background(), bats[i])
+			assert.Nil(t, err)
+			err = txn.Commit(context.Background())
+			assert.Nil(t, err)
+		}
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < batchCnt; i++ {
 		wg.Add(1)
-		err := pool.Submit(mockRes)
+		err := pool.Submit(mockRes(i))
 		assert.Nil(t, err)
 	}
 	wg.Wait()

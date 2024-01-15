@@ -172,11 +172,11 @@ func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
 	return node.pkIndex.GetActiveRow(key)
 }
 
-func (node *memoryNode) Rows() uint32 {
+func (node *memoryNode) Rows() (uint32,error) {
 	if node.data == nil {
-		return 0
+		return 0,nil
 	}
-	return uint32(node.data.Length())
+	return uint32(node.data.Length()),nil
 }
 
 func (node *memoryNode) EstimateMemSize() int {

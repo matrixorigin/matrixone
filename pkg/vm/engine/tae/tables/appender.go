@@ -30,7 +30,8 @@ type blockAppender struct {
 func newAppender(ablk *ablock) *blockAppender {
 	appender := new(blockAppender)
 	appender.blk = ablk
-	appender.rows = uint32(ablk.Rows())
+	rows, _ := ablk.Rows()
+	appender.rows = uint32(rows)
 	return appender
 }
 
