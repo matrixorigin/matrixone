@@ -45,7 +45,7 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		&s.tables)
+		s.tables)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
