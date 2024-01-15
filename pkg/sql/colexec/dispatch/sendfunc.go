@@ -114,16 +114,15 @@ func (arg *Argument) sendToAnyLocalReceiver(proc *process.Process, bat *batch.Ba
 			arg.LocalRegs = append(arg.LocalRegs[:idx], arg.LocalRegs[idx+1:]...)
 			arg.ctr.localRegsCnt--
 			arg.ctr.aliveRegCnt--
-			if arg.ctr.aliveRegCnt == 0 {
-				bat.AddCnt(-1)
-				arg.ctr.stopSending()
-				return nil
-			}
 
 		case reg.Ch <- bat:
 			arg.ctr.sendCnt++
 			return nil
 		}
+	}
+	if arg.ctr.aliveRegCnt == 0 {
+		bat.AddCnt(-1)
+		arg.ctr.stopSending()
 	}
 	return nil
 }
@@ -166,7 +165,7 @@ func (arg *Argument) sendToAnyReceiver(proc *process.Process, bat *batch.Batch) 
 			return err
 		}
 		if arg.ctr.isStopSending() {
-			arg.ctr.startSending()
+			arg.ctr.resumeSending()
 			return arg.sendToAnyRemoteReceiver(proc, bat)
 		}
 	} else {
@@ -174,7 +173,7 @@ func (arg *Argument) sendToAnyReceiver(proc *process.Process, bat *batch.Batch) 
 			return err
 		}
 		if arg.ctr.isStopSending() {
-			arg.ctr.startSending()
+			arg.ctr.resumeSending()
 			return arg.sendToAnyLocalReceiver(proc, bat)
 		}
 	}

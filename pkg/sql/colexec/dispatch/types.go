@@ -76,7 +76,7 @@ type container struct {
 	rowCnt   []int
 }
 
-func (ctr *container) startSending() {
+func (ctr *container) resumeSending() {
 	ctr.sendStatus = normalSending
 }
 

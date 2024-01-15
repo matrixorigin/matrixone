@@ -34,7 +34,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.ctr = new(container)
-	arg.ctr.startSending()
+	arg.ctr.resumeSending()
 	arg.ctr.localRegsCnt = len(arg.LocalRegs)
 	arg.ctr.remoteRegsCnt = len(arg.RemoteRegs)
 	arg.ctr.aliveRegCnt = arg.ctr.localRegsCnt + arg.ctr.remoteRegsCnt
