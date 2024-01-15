@@ -778,7 +778,6 @@ type BaseCollector struct {
 
 	// true for prefech object meta
 	isPrefetch bool
-	isGC       bool
 
 	Objects []*catalog.ObjectEntry
 	// for storage usage
