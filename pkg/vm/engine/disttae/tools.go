@@ -1221,7 +1221,7 @@ func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId: id,
+		accountId:  id,
 	}
 }
 
