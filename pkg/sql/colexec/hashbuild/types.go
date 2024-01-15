@@ -37,11 +37,6 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	colexec.ReceiverOperator
 
@@ -50,11 +45,13 @@ type container struct {
 	hasNull            bool
 	isMerge            bool
 	multiSels          [][]int32
-	bat                *batch.Batch
+	batches            []*batch.Batch
+	batchIdx           int
+	tmpBatch           *batch.Batch
 	inputBatchRowCount int
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     [][]*vector.Vector
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
@@ -126,7 +123,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+		ctr.cleanBatches(mp)
 		ctr.cleanEvalVectors(mp)
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
@@ -140,17 +137,17 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) cleanBatches(mp *mpool.MPool) {
+	for i := range ctr.batches {
+		ctr.batches[i].Clean(mp)
 	}
+	ctr.batches = nil
 }
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
 		}
 	}
 }
