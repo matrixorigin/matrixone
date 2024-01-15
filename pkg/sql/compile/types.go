@@ -66,7 +66,7 @@ const (
 	Replace
 )
 
-// Source contains information of a relation which will be used in execution,
+// Source contains information of a relation which will be used in execution.
 type Source struct {
 	PushdownId             uint64
 	PushdownAddr           string
@@ -127,9 +127,11 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx       int
-	ShuffleCnt     int
-	PartialResults []any
+	BuildIdx   int
+	ShuffleCnt int
+
+	PartialResults     []any
+	PartialResultTypes []types.T
 }
 
 // canRemote checks whether the current scope can be executed remotely.
@@ -266,6 +268,8 @@ type Compile struct {
 	buildPlanFunc func() (*plan2.Plan, error)
 	startAt       time.Time
 	fuzzy         *fuzzyCheck
+	// use for release
+	createdFuzzy []*fuzzyCheck
 
 	needLockMeta bool
 	metaTables   map[string]struct{}
@@ -300,4 +304,9 @@ type fuzzyCheck struct {
 	compoundCols []*plan.ColDef
 
 	cnt int
+}
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
 }

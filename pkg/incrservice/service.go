@@ -86,9 +86,10 @@ func (s *service) Create(
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
-	if txnOp == nil {
-		panic("txn operator is nil")
-	}
+	s.logger.Info("create auto increment table",
+		zap.Uint64("table-id", tableID),
+		zap.String("txn", txnOp.Txn().DebugString()))
+
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		s.txnClosed)
@@ -127,12 +128,24 @@ func (s *service) Reset(
 	newTableID uint64,
 	keep bool,
 	txnOp client.TxnOperator) error {
+	s.logger.Info("reset auto increment table",
+		zap.Uint64("table-id", oldTableID),
+		zap.String("txn", txnOp.Txn().DebugString()),
+		zap.Uint64("new-table-id", newTableID))
+
 	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
 	if err != nil {
 		return err
 	}
 	if len(cols) == 0 {
-		return nil
+		rows, err := s.store.SelectAll(ctx, oldTableID, txnOp)
+		if err != nil {
+			return err
+		}
+		s.logger.Info("no columns found",
+			zap.Uint64("table-id", oldTableID),
+			zap.String("txn", txnOp.Txn().DebugString()),
+			zap.String("rows", rows))
 	}
 
 	if !keep {
@@ -159,19 +172,24 @@ func (s *service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) error {
-	if txnOp == nil {
-		panic("txn operator is nil")
-	}
+	s.logger.Info("delete auto increment table",
+		zap.Uint64("table-id", tableID),
+		zap.String("txn", txnOp.Txn().DebugString()))
+
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		s.txnClosed)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delCtx, err := newDeleteCtx(ctx, tableID)
+	if err != nil {
+		return err
+	}
 	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], newDeleteCtx(ctx, tableID))
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("ready to delete auto increment table cache",
+	s.mu.deletes[key] = append(s.mu.deletes[key], delCtx)
+	if s.logger.Enabled(zap.InfoLevel) {
+		s.logger.Info("ready to delete auto increment table cache",
 			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnOp.Txn().ID)))
 	}
@@ -229,8 +247,8 @@ func (s *service) doCreateLocked(
 	c incrTableCache,
 	txnID []byte) error {
 	s.mu.tables[tableID] = c
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("auto increment cache created",
+	if s.logger.Enabled(zap.InfoLevel) {
+		s.logger.Info("auto increment cache created",
 			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnID)))
 	}
@@ -251,12 +269,22 @@ func (s *service) getCommittedTableCache(
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
-	cols, err := s.store.GetColumns(ctx, tableID, nil)
+	txnOp := s.store.NewTxnOperator(ctx)
+	if txnOp != nil {
+		defer txnOp.Rollback(ctx)
+	}
+	s.logger.Info("try to get columns", zap.Uint64("tableId", tableID), zap.String("txn", txnOp.Txn().DebugString()))
+
+	cols, err := s.store.GetColumns(ctx, tableID, txnOp)
 	if err != nil {
 		return nil, err
 	}
 	if len(cols) == 0 {
-		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+		table, err := s.store.SelectAll(ctx, tableID, txnOp)
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewNoSuchTableNoCtx("", table)
 	}
 
 	c, err = newTableCache(
@@ -296,6 +324,10 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 			} else {
 				_ = tc.close()
 				delete(s.mu.tables, id)
+				s.logger.Info("auto increment cache destroyed with txn aborted",
+					zap.Uint64("table-id", id),
+					zap.String("txn", hex.EncodeToString(txnMeta.ID)))
+
 			}
 		}
 	}
@@ -316,6 +348,10 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 				_ = tc.close()
 				delete(s.mu.tables, ctx.tableID)
 				s.mu.destroyed[ctx.tableID] = ctx
+				s.logger.Info("auto increment cache delete",
+					zap.Uint64("table-id", ctx.tableID),
+					zap.String("txn", hex.EncodeToString(txnMeta.ID)))
+
 			}
 		}
 	}
@@ -343,7 +379,7 @@ func (s *service) destroyTables(ctx context.Context) {
 			s.mu.Unlock()
 
 			for _, dc := range deletes {
-				ctx, cancel := context.WithTimeout(context.WithValue(ctx, defines.TenantIDKey{}, dc.accountID), time.Second*30)
+				ctx, cancel := context.WithTimeout(defines.AttachAccountId(ctx, dc.accountID), time.Second*30)
 				if err := s.store.Delete(ctx, dc.tableID); err == nil {
 					s.mu.Lock()
 					delete(s.mu.destroyed, dc.tableID)
@@ -360,9 +396,13 @@ type deleteCtx struct {
 	tableID   uint64
 }
 
-func newDeleteCtx(ctx context.Context, tableID uint64) deleteCtx {
+func newDeleteCtx(ctx context.Context, tableID uint64) (deleteCtx, error) {
+	accountId, err := getAccountID(ctx)
+	if err != nil {
+		return deleteCtx{}, err
+	}
 	return deleteCtx{
 		tableID:   tableID,
-		accountID: getAccountID(ctx),
-	}
+		accountID: accountId,
+	}, nil
 }

@@ -83,7 +83,7 @@ func sendResp(r []byte, c chan<- []byte) {
 // supported event, just return nil. If the second return value
 // is true, means that the message has been consumed completely,
 // and do not need to send to dst anymore.
-func makeEvent(msg []byte) (IEvent, bool) {
+func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 	if msg == nil || len(msg) < preRecvLen {
 		return nil, false
 	}
@@ -104,11 +104,17 @@ func makeEvent(msg []byte) (IEvent, bool) {
 			return makeSetVarEvent(sql), false
 		case *tree.PrepareString:
 			return makePrepareEvent(sql), false
+		case *tree.Use:
+			return makeInitDBEvent(s.Name.Origin()), false
 		default:
 			return nil, false
 		}
 	} else if isCmdInitDB(msg) {
 		return makeInitDBEvent(getStatement(msg)), false
+	} else if isCmdStmtPrepare(msg) && b != nil {
+		b.setPrepared(true)
+	} else if isCmdStmtClose(msg) && b != nil {
+		b.setPrepared(false)
 	}
 	return nil, false
 }

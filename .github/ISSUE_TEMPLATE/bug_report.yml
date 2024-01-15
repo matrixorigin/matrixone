@@ -1,7 +1,8 @@
-name: Bug report
+name: Bug Report
 description: Create a bug report to improve MatrixOne
 title: "[Bug]: "
 labels: [kind/bug, needs-triage]
+
 assignees:
   - matrix-meow
 body:
@@ -12,13 +13,29 @@ body:
       options:
         - label: I have checked the existing issues.
           required: true
+  - type: markdown
+    attributes:
+      value: "Please provide the following information to help us understand the issue."
+  - type: input
+    attributes:
+      label: Branch Name
+      description: Enter the name of the branch where you encountered the issue.
+      placeholder: e.g., main, 1.1-dev, v1.0.1
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Commit ID
+      description: Enter the commit ID associated with the issue.
+      placeholder: e.g., a1b2c3d
+    validations:
+      required: true
   - type: textarea
     attributes:
-      label: Environment
+      label: Other Environment Information
       description: |
         Enter the Environment Details:
       value: |
-        - Version or commit-id (e.g. v0.1.0 or 8b23a93):
         - Hardware parameters:
         - OS type:
         - Others:
@@ -43,11 +60,11 @@ body:
       description: Steps to reproduce what you encountered.
       render: Markdown
     validations:
-      required: false
+      required: true
   - type: textarea
     attributes:
       label: Additional information
       description: |
-        Log, error message or any other information can help find the root cause.
+        Log, error message, or any other information can help find the root cause.
     validations:
       required: false

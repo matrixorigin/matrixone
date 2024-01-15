@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+	"unsafe"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -31,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -95,7 +99,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"time"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -144,40 +147,58 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
-		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || opProc == nil {
+		dispatchProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || dispatchProc == nil {
 			return err
 		}
 
-		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
-		defer putCancel()
-		doneCh := make(chan struct{})
-		info := process.WrapCs{
-			MsgId:  receiver.messageId,
-			Uid:    receiver.messageUuid,
-			Cs:     receiver.clientSession,
-			DoneCh: doneCh,
+		infoToDispatchOperator := process.WrapCs{
+			MsgId: receiver.messageId,
+			Uid:   receiver.messageUuid,
+			Cs:    receiver.clientSession,
+			Err:   make(chan error, 1),
+		}
+
+		// todo : the timeout should be removed.
+		//		but I keep it here because I don't know whether it will cause hung sometimes.
+		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+
+		succeed := false
+		select {
+		case <-timeLimit.Done():
+			err = moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+		case dispatchProc.DispatchNotifyCh <- infoToDispatchOperator:
+			succeed = true
+		case <-receiver.ctx.Done():
+		case <-dispatchProc.Ctx.Done():
+		}
+		cancel()
+
+		if err != nil || !succeed {
+			dispatchProc.Cancel()
+			return err
 		}
 
 		select {
-		case <-putCtx.Done():
-			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
-		case <-opProc.Ctx.Done():
-			//logutil.Errorf("dispatch operator context done")
-		case opProc.DispatchNotifyCh <- info:
-			// TODO: need fix. It may hung here if dispatch operator receive the info but
-			// end without close doneCh
-			<-doneCh
+			dispatchProc.Cancel()
+
+		// there is no need to check the dispatchProc.Ctx.Done() here.
+		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		case err = <-infoToDispatchOperator.Err:
 		}
-		return nil
+		return err
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
-
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
+		defer func() {
+			c.proc.AnalInfos = nil
+			c.anal.analInfos = nil
+			c.Release()
+			s.release()
+		}()
 		if err != nil {
 			return err
 		}
@@ -248,6 +269,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
+	// can not reuse
 	valueScanOperator := &value_scan.Argument{}
 	info := &vm.OperatorInfo{
 		Idx:     -1,
@@ -295,6 +317,10 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
+	for _, ins := range s.Instructions[lastIdx+1:] {
+		ins.Arg.Release()
+		ins.Arg = nil
+	}
 	s.Instructions = s.Instructions[:lastIdx]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
@@ -349,7 +375,8 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
+	if err = fillInstructionsForScope(s, ctx, p, eng); err != nil {
+		s.release()
 		return nil, err
 	}
 
@@ -367,7 +394,11 @@ func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
-		procInfo.AccountId = defines.GetAccountId(proc.Ctx)
+		accountId, err := defines.GetAccountId(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+		procInfo.AccountId = accountId
 		snapshot, err := proc.TxnOperator.Snapshot()
 		if err != nil {
 			return nil, err
@@ -403,7 +434,8 @@ func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
-		Arg: &output.Argument{Data: nil, Func: c.fill},
+		Arg: output.NewArgument().
+			WithFunc(c.fill),
 	})
 	return rs
 }
@@ -452,15 +484,14 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
 		Mcpu:    int32(s.NodeInfo.Mcpu),
-		Payload: make([]string, len(s.NodeInfo.Data)),
+		Payload: string(s.NodeInfo.Data),
+		Type: objectio.EncodeInfoHeader(objectio.InfoHeader{
+			Type:    objectio.BlockInfoType,
+			Version: objectio.V1},
+		),
 	}
 	ctx.pipe = p
 	ctx.scope = s
-	{
-		for i := range s.NodeInfo.Data {
-			p.Node.Payload[i] = string(s.NodeInfo.Data[i])
-		}
-	}
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
 		for i := range s.Proc.Reg.MergeReceivers {
@@ -518,7 +549,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	// Instructions
 	p.InstructionList = make([]*pipeline.Instruction, len(s.Instructions))
 	for i := range p.InstructionList {
-		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId, s.NodeInfo); err != nil {
+		if ctxId, p.InstructionList[i], err = convertToPipelineInstruction(&s.Instructions[i], ctx, ctxId); err != nil {
 			return ctxId, err
 		}
 	}
@@ -561,19 +592,26 @@ func convertScopeRemoteReceivInfo(s *Scope) (ret []*pipeline.UuidToRegIdx) {
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext,
 	analNodes []*process.AnalyzeInfo, isRemote bool) (*Scope, error) {
 	var err error
+	var s *Scope
+	defer func() {
+		if err != nil {
+			s.release()
+		}
+	}()
+
 	if p.Qry != nil {
 		ctx.plan = p.Qry
 	}
 
-	s := newScope(magicType(p.GetPipelineType()))
+	s = newScope(magicType(p.GetPipelineType()))
 	s.IsEnd = p.IsEnd
 	s.IsJoin = p.IsJoin
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
 	s.BuildIdx = int(p.BuildIdx)
 	s.ShuffleCnt = int(p.ShuffleCnt)
-	if err := convertPipelineUuid(p, s); err != nil {
-		return s, err
+	if err = convertPipelineUuid(p, s); err != nil {
+		return nil, err
 	}
 	dsc := p.GetDataSource()
 	if dsc != nil {
@@ -590,7 +628,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
-			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
+			if err = types.Decode([]byte(dsc.Block), bat); err != nil {
 				return nil, err
 			}
 			bat.Cnt = 1
@@ -601,10 +639,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
-		s.NodeInfo.Data = make([][]byte, len(p.Node.Payload))
-		for i := range p.Node.Payload {
-			s.NodeInfo.Data[i] = []byte(p.Node.Payload[i])
-		}
+		s.NodeInfo.Data = []byte(p.Node.Payload)
+		s.NodeInfo.Header = objectio.DecodeInfoHeader(p.Node.Type)
 	}
 	s.Proc = process.NewWithAnalyze(proc, proc.Ctx, int(p.ChildrenCount), analNodes)
 	{
@@ -653,7 +689,7 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
-func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32, nodeInfo engine.Node) (int32, *pipeline.Instruction, error) {
+func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
 	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
@@ -971,6 +1007,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
 		}
+		EncodeMergeGroup(t, in.Agg)
 	case *mergelimit.Argument:
 		in.Limit = t.Limit
 	case *mergeoffset.Argument:
@@ -1004,18 +1041,19 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Rets:   t.Rets,
 			Args:   t.Args,
 			Params: t.Params,
-			Name:   t.Name,
+			Name:   t.FuncName,
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
-			NeedExpr:        t.NeedExpr,
-			NeedHash:        t.NeedHashMap,
-			Ibucket:         t.Ibucket,
-			Nbucket:         t.Nbucket,
-			Types:           convertToPlanTypes(t.Typs),
-			Conds:           t.Conditions,
-			HashOnPk:        t.HashOnPK,
-			NeedMergedBatch: t.NeedMergedBatch,
+			NeedExpr:         t.NeedExpr,
+			NeedHash:         t.NeedHashMap,
+			Ibucket:          t.Ibucket,
+			Nbucket:          t.Nbucket,
+			Types:            convertToPlanTypes(t.Typs),
+			Conds:            t.Conditions,
+			HashOnPk:         t.HashOnPK,
+			NeedMergedBatch:  t.NeedMergedBatch,
+			NeedAllocateSels: t.NeedAllocateSels,
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1052,49 +1090,49 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
-		v.Arg = &deletion.Argument{
-			Ts:           t.Ts,
-			RemoteDelete: t.RemoteDelete,
-			SegmentMap:   t.SegmentMap,
-			IBucket:      t.IBucket,
-			Nbucket:      t.NBucket,
-			DeleteCtx: &deletion.DeleteCtx{
-				CanTruncate:           t.CanTruncate,
-				RowIdIdx:              int(t.RowIdIdx),
-				PartitionTableIDs:     t.PartitionTableIds,
-				PartitionTableNames:   t.PartitionTableNames,
-				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
-				Ref:                   t.Ref,
-				AddAffectedRows:       t.AddAffectedRows,
-				PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
-			},
+		arg := deletion.NewArgument()
+		arg.Ts = t.Ts
+		arg.RemoteDelete = t.RemoteDelete
+		arg.SegmentMap = t.SegmentMap
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.NBucket
+		arg.DeleteCtx = &deletion.DeleteCtx{
+			CanTruncate:           t.CanTruncate,
+			RowIdIdx:              int(t.RowIdIdx),
+			PartitionTableIDs:     t.PartitionTableIds,
+			PartitionTableNames:   t.PartitionTableNames,
+			PartitionIndexInBatch: int(t.PartitionIndexInBatch),
+			Ref:                   t.Ref,
+			AddAffectedRows:       t.AddAffectedRows,
+			PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
 		}
+		v.Arg = arg
 	case vm.Insert:
 		t := opr.GetInsert()
-		v.Arg = &insert.Argument{
-			ToWriteS3: t.ToWriteS3,
-			InsertCtx: &insert.InsertCtx{
-				Ref:                   t.Ref,
-				AddAffectedRows:       t.AddAffectedRows,
-				Attrs:                 t.Attrs,
-				PartitionTableIDs:     t.PartitionTableIds,
-				PartitionTableNames:   t.PartitionTableNames,
-				PartitionIndexInBatch: int(t.PartitionIdx),
-				TableDef:              t.TableDef,
-			},
+		arg := insert.NewArgument()
+		arg.ToWriteS3 = t.ToWriteS3
+		arg.InsertCtx = &insert.InsertCtx{
+			Ref:                   t.Ref,
+			AddAffectedRows:       t.AddAffectedRows,
+			Attrs:                 t.Attrs,
+			PartitionTableIDs:     t.PartitionTableIds,
+			PartitionTableNames:   t.PartitionTableNames,
+			PartitionIndexInBatch: int(t.PartitionIdx),
+			TableDef:              t.TableDef,
 		}
+		v.Arg = arg
 	case vm.PreInsert:
 		t := opr.GetPreInsert()
-		v.Arg = &preinsert.Argument{
-			SchemaName: t.GetSchemaName(),
-			TableDef:   t.GetTableDef(),
-			Attrs:      t.GetAttrs(),
-			HasAutoCol: t.GetHasAutoCol(),
-			IsUpdate:   t.GetIsUpdate(),
-		}
+		arg := preinsert.NewArgument()
+		arg.SchemaName = t.GetSchemaName()
+		arg.TableDef = t.GetTableDef()
+		arg.Attrs = t.GetAttrs()
+		arg.HasAutoCol = t.GetHasAutoCol()
+		arg.IsUpdate = t.GetIsUpdate()
+		v.Arg = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
-		lockArg := lockop.NewArgument(eng)
+		lockArg := lockop.NewArgumentByEngine(eng)
 		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
@@ -1108,55 +1146,55 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
-		v.Arg = &preinsertunique.Argument{
-			PreInsertCtx: t.GetPreInsertUkCtx(),
-		}
+		arg := preinsertunique.NewArgument()
+		arg.PreInsertCtx = t.GetPreInsertUkCtx()
+		v.Arg = arg
 	case vm.PreInsertSecondaryIndex:
 		t := opr.GetPreInsertSecondaryIndex()
-		v.Arg = &preinsertsecondaryindex.Argument{
-			PreInsertCtx: t.GetPreInsertSkCtx(),
-		}
+		arg := preinsertsecondaryindex.NewArgument()
+		arg.PreInsertCtx = t.GetPreInsertSkCtx()
+		v.Arg = arg
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
-		v.Arg = &onduplicatekey.Argument{
-			TableDef:        t.TableDef,
-			OnDuplicateIdx:  t.OnDuplicateIdx,
-			OnDuplicateExpr: t.OnDuplicateExpr,
-			IsIgnore:        t.IsIgnore,
-		}
+		arg := onduplicatekey.NewArgument()
+		arg.TableDef = t.TableDef
+		arg.OnDuplicateIdx = t.OnDuplicateIdx
+		arg.OnDuplicateExpr = t.OnDuplicateExpr
+		arg.IsIgnore = t.IsIgnore
+		v.Arg = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()
-		v.Arg = &fuzzyfilter.Argument{
-			N:                  float64(t.N),
-			PkName:             t.PkName,
-			PkTyp:              t.PkTyp,
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-		}
+		arg := fuzzyfilter.NewArgument()
+		arg.N = float64(t.N)
+		arg.PkName = t.PkName
+		arg.PkTyp = t.PkTyp
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		v.Arg = arg
 	case vm.Anti:
 		t := opr.GetAnti()
-		v.Arg = &anti.Argument{
-			Ibucket: t.Ibucket,
-			Nbucket: t.Nbucket,
-			Cond:    t.Expr,
-			Typs:    convertToTypes(t.Types),
-			Conditions: [][]*plan.Expr{
-				t.LeftCond, t.RightCond,
-			},
-			Result:    t.Result,
-			HashOnPK:  t.HashOnPk,
-			IsShuffle: t.IsShuffle,
+		arg := anti.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Conditions = [][]*plan.Expr{
+			t.LeftCond, t.RightCond,
 		}
+		arg.Result = t.Result
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
-		v.Arg = &shuffle.Argument{
-			ShuffleColIdx:      t.ShuffleColIdx,
-			ShuffleType:        t.ShuffleType,
-			ShuffleColMin:      t.ShuffleColMin,
-			ShuffleColMax:      t.ShuffleColMax,
-			AliveRegCnt:        t.AliveRegCnt,
-			ShuffleRangeInt64:  t.ShuffleRangesInt64,
-			ShuffleRangeUint64: t.ShuffleRangesUint64,
-		}
+		arg := shuffle.NewArgument()
+		arg.ShuffleColIdx = t.ShuffleColIdx
+		arg.ShuffleType = t.ShuffleType
+		arg.ShuffleColMin = t.ShuffleColMin
+		arg.ShuffleColMax = t.ShuffleColMax
+		arg.AliveRegCnt = t.AliveRegCnt
+		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
+		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
+		v.Arg = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
@@ -1186,276 +1224,277 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			shuffleRegIdxRemote[i] = int(t.ShuffleRegIdxRemote[i])
 		}
 
-		v.Arg = &dispatch.Argument{
-			IsSink:              t.IsSink,
-			RecSink:             t.RecSink,
-			FuncId:              int(t.FuncId),
-			LocalRegs:           regs,
-			RemoteRegs:          rrs,
-			ShuffleType:         t.ShuffleType,
-			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
-			ShuffleRegIdxRemote: shuffleRegIdxRemote,
-		}
+		arg := dispatch.NewArgument()
+		arg.IsSink = t.IsSink
+		arg.RecSink = t.RecSink
+		arg.FuncId = int(t.FuncId)
+		arg.LocalRegs = regs
+		arg.RemoteRegs = rrs
+		arg.ShuffleType = t.ShuffleType
+		arg.ShuffleRegIdxLocal = shuffleRegIdxLocal
+		arg.ShuffleRegIdxRemote = shuffleRegIdxRemote
+		v.Arg = arg
 	case vm.Group:
 		t := opr.GetAgg()
-		v.Arg = &group.Argument{
-			IsShuffle:    t.IsShuffle,
-			PreAllocSize: t.PreAllocSize,
-			NeedEval:     t.NeedEval,
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
-			Exprs:        t.Exprs,
-			Types:        convertToTypes(t.Types),
-			Aggs:         convertToAggregates(t.Aggs),
-			MultiAggs:    convertToMultiAggs(t.MultiAggs),
-		}
+		arg := group.NewArgument()
+		arg.IsShuffle = t.IsShuffle
+		arg.PreAllocSize = t.PreAllocSize
+		arg.NeedEval = t.NeedEval
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Exprs = t.Exprs
+		arg.Types = convertToTypes(t.Types)
+		arg.Aggs = convertToAggregates(t.Aggs)
+		arg.MultiAggs = convertToMultiAggs(t.MultiAggs)
+		v.Arg = arg
 	case vm.Sample:
 		v.Arg = sample.GenerateFromPipelineOperator(opr)
 
 	case vm.Join:
 		t := opr.GetJoin()
-		v.Arg = &join.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Expr,
-			Typs:               convertToTypes(t.Types),
-			Result:             convertToResultPos(t.RelList, t.ColList),
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := join.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Left:
 		t := opr.GetLeftJoin()
-		v.Arg = &left.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Expr,
-			Typs:               convertToTypes(t.Types),
-			Result:             convertToResultPos(t.RelList, t.ColList),
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := left.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Right:
 		t := opr.GetRightJoin()
-		v.Arg = &right.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             convertToResultPos(t.RelList, t.ColList),
-			LeftTypes:          convertToTypes(t.LeftTypes),
-			RightTypes:         convertToTypes(t.RightTypes),
-			Cond:               t.Expr,
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := right.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.Cond = t.Expr
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
-		v.Arg = &rightsemi.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			RightTypes:         convertToTypes(t.RightTypes),
-			Cond:               t.Expr,
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := rightsemi.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.Cond = t.Expr
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
-		v.Arg = &rightanti.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			RightTypes:         convertToTypes(t.RightTypes),
-			Cond:               t.Expr,
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := rightanti.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.Cond = t.Expr
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Limit:
-		v.Arg = &limit.Argument{Limit: opr.Limit}
+		v.Arg = limit.NewArgument().WithLimit(opr.Limit)
 	case vm.LoopAnti:
 		t := opr.GetAnti()
-		v.Arg = &loopanti.Argument{
-			Result: t.Result,
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopanti.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.LoopJoin:
 		t := opr.GetJoin()
-		v.Arg = &loopjoin.Argument{
-			Result: convertToResultPos(t.RelList, t.ColList),
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopjoin.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.LoopLeft:
 		t := opr.GetLeftJoin()
-		v.Arg = &loopleft.Argument{
-			Result: convertToResultPos(t.RelList, t.ColList),
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopleft.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.LoopSemi:
 		t := opr.GetSemiJoin()
-		v.Arg = &loopsemi.Argument{
-			Result: t.Result,
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopsemi.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
-		v.Arg = &loopsingle.Argument{
-			Result: convertToResultPos(t.RelList, t.ColList),
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopsingle.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.LoopMark:
 		t := opr.GetMarkJoin()
-		v.Arg = &loopmark.Argument{
-			Result: t.Result,
-			Cond:   t.Expr,
-			Typs:   convertToTypes(t.Types),
-		}
+		arg := loopmark.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
 	case vm.Offset:
-		v.Arg = &offset.Argument{Offset: opr.Offset}
+		v.Arg = offset.NewArgument().WithOffset(opr.Offset)
 	case vm.Order:
-		v.Arg = &order.Argument{OrderBySpec: opr.OrderBy}
+		arg := order.NewArgument()
+		arg.OrderBySpec = opr.OrderBy
+		v.Arg = arg
 	case vm.Product:
 		t := opr.GetProduct()
-		v.Arg = &product.Argument{
-			Result:    convertToResultPos(t.RelList, t.ColList),
-			Typs:      convertToTypes(t.Types),
-			IsShuffle: t.IsShuffle,
-		}
+		arg := product.NewArgument()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Typs = convertToTypes(t.Types)
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Projection:
-		v.Arg = &projection.Argument{Es: opr.ProjectList}
+		arg := projection.NewArgument()
+		arg.Es = opr.ProjectList
+		v.Arg = arg
 	case vm.Restrict:
-		v.Arg = &restrict.Argument{E: opr.Filter}
+		arg := restrict.NewArgument()
+		arg.E = opr.Filter
+		v.Arg = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()
-		v.Arg = &semi.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			Cond:               t.Expr,
-			Typs:               convertToTypes(t.Types),
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := semi.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		arg.IsShuffle = t.IsShuffle
+		v.Arg = arg
 	case vm.Single:
 		t := opr.GetSingleJoin()
-		v.Arg = &single.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             convertToResultPos(t.RelList, t.ColList),
-			Cond:               t.Expr,
-			Typs:               convertToTypes(t.Types),
-			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
-			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
-			HashOnPK:           t.HashOnPk,
-		}
+		arg := single.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.Cond = t.Expr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.HashOnPK = t.HashOnPk
+		v.Arg = arg
 	case vm.Mark:
 		t := opr.GetMarkJoin()
-		v.Arg = &mark.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
-			Typs:       convertToTypes(t.Types),
-			Cond:       t.Expr,
-			OnList:     t.OnList,
-			HashOnPK:   t.HashOnPk,
-		}
+		arg := mark.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.Typs = convertToTypes(t.Types)
+		arg.Cond = t.Expr
+		arg.OnList = t.OnList
+		arg.HashOnPK = t.HashOnPk
+		v.Arg = arg
 	case vm.Top:
-		v.Arg = &top.Argument{
-			Limit: int64(opr.Limit),
-			Fs:    opr.OrderBy,
-		}
+		v.Arg = top.NewArgument().
+			WithLimit(int64(opr.Limit)).
+			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
 		t := opr.GetAnti()
-		v.Arg = &intersect.Argument{
-			IBucket: t.Ibucket,
-			NBucket: t.Nbucket,
-		}
+		arg := intersect.NewArgument()
+		arg.IBucket = t.Ibucket
+		arg.NBucket = t.Nbucket
+		v.Arg = arg
 	case vm.IntersectAll:
 		t := opr.GetAnti()
-		v.Arg = &intersectall.Argument{
-			IBucket: t.Ibucket,
-			NBucket: t.Nbucket,
-		}
+		arg := intersect.NewArgument()
+		arg.IBucket = t.Ibucket
+		arg.NBucket = t.Nbucket
+		v.Arg = arg
 	case vm.Minus:
 		t := opr.GetAnti()
-		v.Arg = &minus.Argument{
-			IBucket: t.Ibucket,
-			NBucket: t.Nbucket,
-		}
+		arg := minus.NewArgument()
+		arg.IBucket = t.Ibucket
+		arg.NBucket = t.Nbucket
+		v.Arg = arg
 	case vm.Connector:
 		t := opr.GetConnect()
-		v.Arg = &connector.Argument{
-			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
-		}
+		v.Arg = connector.NewArgument().
+			WithReg(ctx.root.getRegister(t.PipelineId, t.ConnectorIndex))
 	case vm.Merge:
-		v.Arg = &merge.Argument{}
+		v.Arg = merge.NewArgument()
 	case vm.MergeRecursive:
-		v.Arg = &mergerecursive.Argument{}
+		v.Arg = mergerecursive.NewArgument()
 	case vm.MergeGroup:
-		v.Arg = &mergegroup.Argument{
-			NeedEval: opr.Agg.NeedEval,
-		}
+		arg := mergegroup.NewArgument()
+		arg.NeedEval = opr.Agg.NeedEval
+		v.Arg = arg
+		DecodeMergeGroup(v.Arg.(*mergegroup.Argument), opr.Agg)
 	case vm.MergeLimit:
-		v.Arg = &mergelimit.Argument{
-			Limit: opr.Limit,
-		}
+		v.Arg = mergelimit.NewArgument().WithLimit(opr.Limit)
 	case vm.MergeOffset:
-		v.Arg = &mergeoffset.Argument{
-			Offset: opr.Offset,
-		}
+		v.Arg = mergeoffset.NewArgument().WithOffset(opr.Offset)
 	case vm.MergeTop:
-		v.Arg = &mergetop.Argument{
-			Limit: int64(opr.Limit),
-			Fs:    opr.OrderBy,
-		}
+		v.Arg = mergetop.NewArgument().
+			WithLimit(int64(opr.Limit)).
+			WithFs(opr.OrderBy)
 	case vm.MergeOrder:
-		v.Arg = &mergeorder.Argument{
-			OrderBySpecs: opr.OrderBy,
-		}
+		arg := mergeorder.NewArgument()
+		arg.OrderBySpecs = opr.OrderBy
+		v.Arg = arg
 	case vm.TableFunction:
-		v.Arg = &table_function.Argument{
-			Attrs:  opr.TableFunction.Attrs,
-			Rets:   opr.TableFunction.Rets,
-			Args:   opr.TableFunction.Args,
-			Name:   opr.TableFunction.Name,
-			Params: opr.TableFunction.Params,
-		}
+		arg := table_function.NewArgument()
+		arg.Attrs = opr.TableFunction.Attrs
+		arg.Rets = opr.TableFunction.Rets
+		arg.Args = opr.TableFunction.Args
+		arg.FuncName = opr.TableFunction.Name
+		arg.Params = opr.TableFunction.Params
+		v.Arg = arg
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
-		v.Arg = &hashbuild.Argument{
-			Ibucket:         t.Ibucket,
-			Nbucket:         t.Nbucket,
-			NeedHashMap:     t.NeedHash,
-			NeedExpr:        t.NeedExpr,
-			Typs:            convertToTypes(t.Types),
-			Conditions:      t.Conds,
-			HashOnPK:        t.HashOnPk,
-			NeedMergedBatch: t.NeedMergedBatch,
-		}
+		arg := hashbuild.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.NeedHashMap = t.NeedHash
+		arg.NeedExpr = t.NeedExpr
+		arg.Typs = convertToTypes(t.Types)
+		arg.Conditions = t.Conds
+		arg.HashOnPK = t.HashOnPk
+		arg.NeedMergedBatch = t.NeedMergedBatch
+		arg.NeedAllocateSels = t.NeedAllocateSels
+		v.Arg = arg
 	case vm.External:
 		t := opr.GetExternalScan()
 		name2ColIndex := make(map[string]int32)
 		for _, n2i := range t.Name2ColIndex {
 			name2ColIndex[n2i.Name] = n2i.Index
 		}
-		v.Arg = &external.Argument{
-			Es: &external.ExternalParam{
+		v.Arg = external.NewArgument().WithEs(
+			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Attrs,
 					FileSize:        t.FileSize,
@@ -1472,14 +1511,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 					},
 				},
 			},
-		}
+		)
 	case vm.Source:
 		t := opr.GetStreamScan()
-		v.Arg = &source.Argument{
-			TblDef: t.TblDef,
-			Limit:  t.Limit,
-			Offset: t.Offset,
-		}
+		arg := source.NewArgument()
+		arg.TblDef = t.TblDef
+		arg.Limit = t.Limit
+		arg.Offset = t.Offset
+		v.Arg = arg
 	default:
 		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -1554,6 +1593,7 @@ func convertPipelineMultiAggs(multiAggs []group_concat.Argument) []*pipeline.Mul
 func convertToMultiAggs(multiAggs []*pipeline.MultiArguemnt) []group_concat.Argument {
 	result := make([]group_concat.Argument, len(multiAggs))
 	for i, a := range multiAggs {
+		// can not reuse
 		result[i] = group_concat.Argument{
 			Dist:        a.Dist,
 			GroupExpr:   a.GroupExpr,
@@ -1721,4 +1761,206 @@ func (ctx *scopeContext) findRegister(reg *process.WaitRegister) (int32, *scopeC
 		}
 	}
 	return -1, nil
+}
+
+func EncodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
+	if !merge.NeedEval || merge.PartialResults == nil {
+		return
+	}
+	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
+	pipe.PartialResults = make([]byte, 0)
+	for i := range pipe.PartialResultTypes {
+		pipe.PartialResultTypes[i] = uint32(merge.PartialResultTypes[i])
+		switch merge.PartialResultTypes[i] {
+		case types.T_bool:
+			result := merge.PartialResults[i].(bool)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int8:
+			result := merge.PartialResults[i].(int8)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int16:
+			result := merge.PartialResults[i].(int16)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int32:
+			result := merge.PartialResults[i].(int32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_int64:
+			result := merge.PartialResults[i].(int64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint8:
+			result := merge.PartialResults[i].(uint8)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint16:
+			result := merge.PartialResults[i].(uint16)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint32:
+			result := merge.PartialResults[i].(uint32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uint64:
+			result := merge.PartialResults[i].(uint64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_float32:
+			result := merge.PartialResults[i].(float32)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_float64:
+			result := merge.PartialResults[i].(float64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_date:
+			result := merge.PartialResults[i].(types.Date)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_time:
+			result := merge.PartialResults[i].(types.Time)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_datetime:
+			result := merge.PartialResults[i].(types.Datetime)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_timestamp:
+			result := merge.PartialResults[i].(types.Timestamp)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_enum:
+			result := merge.PartialResults[i].(types.Enum)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_decimal64:
+			result := merge.PartialResults[i].(types.Decimal64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_decimal128:
+			result := merge.PartialResults[i].(types.Decimal128)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_uuid:
+			result := merge.PartialResults[i].(types.Uuid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_TS:
+			result := merge.PartialResults[i].(types.TS)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_Rowid:
+			result := merge.PartialResults[i].(types.Rowid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_Blockid:
+			result := merge.PartialResults[i].(types.Blockid)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		}
+	}
+}
+
+func DecodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
+	if !pipe.NeedEval || pipe.PartialResults == nil {
+		return
+	}
+	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))
+	merge.PartialResults = make([]any, 0)
+	for i := range merge.PartialResultTypes {
+		merge.PartialResultTypes[i] = types.T(pipe.PartialResultTypes[i])
+		switch merge.PartialResultTypes[i] {
+		case types.T_bool:
+			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int8:
+			result := *(*int8)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int16:
+			result := *(*int16)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int32:
+			result := *(*int32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_int64:
+			result := *(*int64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint8:
+			result := *(*uint8)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint16:
+			result := *(*uint16)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint32:
+			result := *(*uint32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uint64:
+			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_float32:
+			result := *(*float32)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_float64:
+			result := *(*float64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_date:
+			result := *(*types.Date)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_time:
+			result := *(*types.Time)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_datetime:
+			result := *(*types.Datetime)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_timestamp:
+			result := *(*types.Timestamp)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_enum:
+			result := *(*types.Enum)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_decimal64:
+			result := *(*types.Decimal64)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_decimal128:
+			result := *(*types.Decimal128)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_uuid:
+			result := *(*types.Uuid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_TS:
+			result := *(*types.TS)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_Rowid:
+			result := *(*types.Rowid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_Blockid:
+			result := *(*types.Blockid)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		}
+	}
 }

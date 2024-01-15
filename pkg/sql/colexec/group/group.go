@@ -29,9 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "group"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("group([")
+	buf.WriteString(": group([")
 	for i, expr := range ap.Exprs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -167,23 +170,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 func (ctr *container) generateAggStructures(arg *Argument) error {
 	var err error
 	i := 0
-	if arg.PartialResults == nil {
-		for i < len(arg.Aggs) {
-			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, nil); err != nil {
-				ctr.bat = nil
-				return err
-			}
-			i++
+	for i < len(arg.Aggs) {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
+			ctr.bat = nil
+			return err
 		}
-	} else {
-		for i < len(arg.Aggs) {
-			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, arg.PartialResults[i]); err != nil {
-				ctr.bat = nil
-				return err
-			}
-			i++
-		}
-		arg.PartialResults = nil
+		i++
 	}
 
 	return nil

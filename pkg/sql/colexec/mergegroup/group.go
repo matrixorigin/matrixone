@@ -23,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_group"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("mergeroup()")
+	buf.WriteString(argName)
+	buf.WriteString(": mergeroup()")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -72,6 +75,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
+						if ap.PartialResults != nil {
+							agg.SetPartialResult(ap.PartialResults[i])
+						}
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End

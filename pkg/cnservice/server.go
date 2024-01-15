@@ -607,6 +607,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
 		opts = append(opts,
+			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
+		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
 		)

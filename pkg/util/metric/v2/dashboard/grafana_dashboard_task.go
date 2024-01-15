@@ -17,7 +17,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
-
+	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
@@ -38,6 +38,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
 			c.initTaskMergeTransferPageRow(),
+			c.initTaskStorageUsageRow(),
 		)...)
 
 	if err != nil {
@@ -139,42 +140,46 @@ func (c *DashboardCreator) initTaskCheckpointRow() dashboard.Option {
 			c.getMetricWithFilter(`mo_task_long_duration_seconds_bucket`, `type="ckp_entry_pending"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
-			timeseries.Span(3),
-		),
-		c.getPercentHist(
-			"ICheckpoint Collecting Duration",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_uage"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(3),
-		),
-		c.getTimeSeries(
-			"Checkpoint Load Object Count",
-			[]string{
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="gckp_load_object"`)),
-
-				fmt.Sprintf(
-					"sum by (%s) (increase(%s[$interval]))",
-					c.by,
-					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="ickp_load_object"`)),
-			},
-			[]string{
-				"GCheckpoint",
-				"ICheckpoint",
-			},
-			timeseries.Span(3),
-		),
-		c.getPercentHist(
-			"GCheckpoint Collecting Duration",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_uage"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(3),
+			timeseries.Span(12),
 		),
 	)
+}
+
+func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
+	rows := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_usage"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_usage"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="handle_usage_request"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="show_accounts_get_table_stats"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="show_accounts_get_storage_usage"`),
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="show_accounts_total_duration"`),
+		},
+		[]string{
+			"gckp_collect_usage",
+			"ickp_collect_usage",
+			"handle_usage_request",
+			"show_accounts_get_table_stats",
+			"show_accounts_get_storage_usage",
+			"show_accounts_total_duration",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
+
+	rows = append(rows, c.withGraph(
+		"tn storage usage cache mem used",
+		12,
+		`sum(`+c.getMetricWithFilter("mo_task_storage_usage_cache_size", ``)+`)`,
+		"cache mem used",
+		axis.Unit("mb")))
+
+	return dashboard.Row(
+		"Storage Usage Overview",
+		rows...,
+	)
+
 }
 
 func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {

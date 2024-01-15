@@ -73,9 +73,9 @@ func (memo *TxnMemo) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (memo *TxnMemo) ReadFrom(r io.Reader) (n int64, err error) {
+func (memo *TxnMemo) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var tmpn int64
-	if tmpn, err = memo.Tree.ReadFrom(r); err != nil {
+	if tmpn, err = memo.Tree.ReadFromWithVersion(r, ver); err != nil {
 		return
 	}
 	n += tmpn

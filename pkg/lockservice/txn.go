@@ -31,6 +31,11 @@ var (
 	parallelUnlockTables = 2
 )
 
+type tableLockHolder struct {
+	tableKeys  map[uint64]*cowSlice
+	tableBinds map[uint64]pb.LockTable
+}
+
 // activeTxn one goroutine write, multi goroutine read
 type activeTxn struct {
 	*sync.RWMutex
@@ -38,7 +43,7 @@ type activeTxn struct {
 	txnKey         string
 	fsp            *fixedSlicePool
 	blockedWaiters []*waiter
-	holdLocks      map[uint64]*cowSlice
+	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
 }
@@ -64,9 +69,11 @@ func (txn activeTxn) Name() string {
 
 func (txn *activeTxn) lockRemoved(
 	serviceID string,
+	group uint32,
 	table uint64,
 	removedLocks map[string]struct{}) {
-	v, ok := txn.holdLocks[table]
+	h := txn.getHoldLocksLocked(group)
+	v, ok := h.tableKeys[table]
 	if !ok {
 		return
 	}
@@ -80,11 +87,12 @@ func (txn *activeTxn) lockRemoved(
 		return true
 	})
 	v.close()
-	txn.holdLocks[table] = newV
+	h.tableKeys[table] = newV
 }
 
 func (txn *activeTxn) lockAdded(
-	table uint64,
+	group uint32,
+	bind pb.LockTable,
 	locks [][]byte) {
 
 	// only in the lockservice node where the transaction was
@@ -104,64 +112,69 @@ func (txn *activeTxn) lockAdded(
 	//    the lock information. We use mutex to solve it.
 
 	defer logTxnLockAdded(txn, locks)
-	v, ok := txn.holdLocks[table]
+	h := txn.getHoldLocksLocked(group)
+	v, ok := h.tableKeys[bind.Table]
 	if ok {
 		v.append(locks)
 		return
 	}
-	txn.holdLocks[table] = newCowSlice(txn.fsp, locks)
+	h.tableKeys[bind.Table] = newCowSlice(txn.fsp, locks)
+	h.tableBinds[bind.Table] = bind
 }
 
 func (txn *activeTxn) close(
 	serviceID string,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	lockTableFunc func(uint64) (lockTable, error)) error {
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	mutations ...pb.ExtraMutation) error {
 	logTxnReadyToClose(serviceID, txn)
 
 	// cancel all blocked waiters
 	txn.cancelBlocks()
 
-	n := len(txn.holdLocks)
+	n := len(txn.lockHolders)
 	var wg sync.WaitGroup
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
-	for table, cs := range txn.holdLocks {
-		l, err := lockTableFunc(table)
-		if err != nil {
-			// if a remote transaction, then the corresponding locktable should be local
-			// and cannot return an error.
-			//
-			// or a local transaction holds a lock on remote lock table, but can not get the remote
-			// LockTable, it is a bug.
-			panic(err)
-		}
-		if l == nil {
-			continue
-		}
+	for group, h := range txn.lockHolders {
+		for table, cs := range h.tableKeys {
+			l, err := lockTableFunc(group, table)
+			if err != nil {
+				// if a remote transaction, then the corresponding locktable should be local
+				// and cannot return an error.
+				//
+				// or a local transaction holds a lock on remote lock table, but can not get the remote
+				// LockTable, it is a bug.
+				panic(err)
+			}
+			if l == nil {
+				continue
+			}
 
-		fn := func(table uint64, cs *cowSlice) func() {
-			return func() {
-				logTxnUnlockTable(
-					serviceID,
-					txn,
-					table)
-				l.unlock(txn, cs, commitTS)
-				logTxnUnlockTableCompleted(
-					serviceID,
-					txn,
-					table,
-					cs)
-				if n > parallelUnlockTables {
-					wg.Done()
+			fn := func(table uint64, cs *cowSlice, l lockTable) func() {
+				return func() {
+					logTxnUnlockTable(
+						serviceID,
+						txn,
+						table)
+					l.unlock(txn, cs, commitTS, mutations...)
+					logTxnUnlockTableCompleted(
+						serviceID,
+						txn,
+						table,
+						cs)
+					if n > parallelUnlockTables {
+						wg.Done()
+					}
 				}
 			}
-		}
 
-		if n > parallelUnlockTables {
-			wg.Add(1)
-			ants.Submit(fn(table, cs))
-		} else {
-			fn(table, cs)()
+			if n > parallelUnlockTables {
+				wg.Add(1)
+				ants.Submit(fn(table, cs, l))
+			} else {
+				fn(table, cs, l)()
+			}
 		}
 	}
 
@@ -174,10 +187,15 @@ func (txn *activeTxn) close(
 }
 
 func (txn *activeTxn) reset() {
-	for table, cs := range txn.holdLocks {
-		cs.close()
-		delete(txn.holdLocks, table)
+	for g, h := range txn.lockHolders {
+		for table, cs := range h.tableKeys {
+			cs.close()
+			delete(h.tableKeys, table)
+			delete(h.tableBinds, table)
+		}
+		delete(txn.lockHolders, g)
 	}
+
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]
@@ -253,7 +271,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	txnID []byte,
 	holder activeTxnHolder,
 	waiters func(pb.WaitTxn) bool,
-	lockTableFunc func(uint64) (lockTable, error)) bool {
+	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
@@ -266,12 +284,18 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		txn.RUnlock()
 		panic("can not fetch waiting txn on remote txn")
 	}
-	tables := make([]uint64, 0, len(txn.holdLocks))
-	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
-	for table, cs := range txn.holdLocks {
-		tables = append(tables, table)
-		lockKeys = append(lockKeys, cs.slice())
+
+	groups := make([]uint32, 0, len(txn.lockHolders))
+	tables := make([]uint64, 0, len(txn.lockHolders))
+	lockKeys := make([]*fixedSlice, 0, len(txn.lockHolders))
+	for g, m := range txn.lockHolders {
+		for table, cs := range m.tableKeys {
+			tables = append(tables, table)
+			lockKeys = append(lockKeys, cs.slice())
+			groups = append(groups, g)
+		}
 	}
+
 	wt := txn.toWaitTxn(serviceID, true)
 	txn.RUnlock()
 
@@ -282,7 +306,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	}()
 
 	for idx, table := range tables {
-		l, err := lockTableFunc(table)
+		l, err := lockTableFunc(groups[idx], table)
 		if err != nil {
 			// if a remote transaction, then the corresponding locktable should be local
 			// and cannot return an error.
@@ -334,4 +358,17 @@ func (txn *activeTxn) getID() []byte {
 	txn.RLock()
 	defer txn.RUnlock()
 	return txn.txnID
+}
+
+func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
+	h, ok := txn.lockHolders[group]
+	if ok {
+		return h
+	}
+	h = &tableLockHolder{
+		tableKeys:  make(map[uint64]*cowSlice),
+		tableBinds: make(map[uint64]pb.LockTable),
+	}
+	txn.lockHolders[group] = h
+	return h
 }

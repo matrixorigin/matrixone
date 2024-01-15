@@ -46,8 +46,11 @@ const (
 	FlushDeltaLoc
 )
 
+const argName = "deletion"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("delete rows")
+	buf.WriteString(argName)
+	buf.WriteString(": delete rows")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
@@ -57,7 +60,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 		ap.ctr.state = vm.Build
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
-		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
+		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
 		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
 		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
 	}

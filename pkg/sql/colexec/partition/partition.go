@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,9 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "partition"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
-	buf.WriteString("partition([")
+	buf.WriteString(": partition([")
 	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -90,6 +94,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 		case eval:
+
+			if len(ctr.batchList) == 0 {
+				result.Status = vm.ExecStop
+				return result, nil
+			}
+
 			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop

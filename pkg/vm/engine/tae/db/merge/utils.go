@@ -83,22 +83,27 @@ func (h *heapBuilder[T]) finish() []T {
 	return ret
 }
 
-func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
-	if len(msegs) == 0 {
+func estimateMergeConsume(mobjs []*catalog.ObjectEntry) (origSize, estSize, compSize int) {
+	if len(mobjs) == 0 {
 		return
 	}
 	rows, merged := 0, 0
-	for _, m := range msegs {
-		rows += m.Stat.GetRows()
-		merged += m.Stat.GetRemainingRows()
-		origSize += m.Stat.GetOriginSize()
+	for _, m := range mobjs {
+		rows += m.GetRows()
+		merged += m.GetRemainingRows()
+		origSize += m.GetOriginSize()
+		compSize += m.GetCompSize()
 	}
 	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
 	// the ExpansionRate will be moderated by the actual row number after applying deletes
-	rate := float64(constMergeExpansionRate*merged) / float64(rows)
+	factor := float64(merged) / float64(rows)
+	rate := float64(constMergeExpansionRate) * factor
 	if rate < 2 {
 		rate = 2
 	}
 	estSize = int(float64(origSize) * rate)
+
+	// compSize is estimated after applying deletes
+	compSize = int(float64(compSize) * factor)
 	return
 }

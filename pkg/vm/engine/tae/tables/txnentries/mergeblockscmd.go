@@ -28,32 +28,25 @@ import (
 type mergeBlocksCmd struct {
 	txnbase.BaseCmd
 	tid         uint64
-	droppedSegs []*common.ID
-	createdSegs []*common.ID
+	droppedObjs []*common.ID
+	createdObjs []*common.ID
 	droppedBlks []*common.ID
 	createdBlks []*common.ID
-	mapping     []uint32
-	fromAddr    []uint32
-	toAddr      []uint32
 	txn         txnif.AsyncTxn
 	id          uint32
 }
 
 func newMergeBlocksCmd(
 	tid uint64,
-	droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID,
-	mapping, fromAddr, toAddr []uint32,
+	droppedObjs, createdObjs, droppedBlks, createdBlks []*common.ID,
 	txn txnif.AsyncTxn,
 	id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
-		droppedSegs: droppedSegs,
-		createdSegs: createdSegs,
+		droppedObjs: droppedObjs,
+		createdObjs: createdObjs,
 		droppedBlks: droppedBlks,
 		createdBlks: createdBlks,
-		mapping:     mapping,
-		fromAddr:    fromAddr,
-		toAddr:      toAddr,
 		txn:         txn,
 		id:          id,
 	}
@@ -125,7 +118,7 @@ func (cmd *mergeBlocksCmd) VerboseString() string {
 	for _, blk := range cmd.createdBlks {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
-	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v", s, cmd.fromAddr, cmd.toAddr)
+	s = fmt.Sprintf("%s ]", s)
 	return s
 }
 func (cmd *mergeBlocksCmd) ApplyCommit()                  {}

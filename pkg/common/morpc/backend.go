@@ -274,8 +274,9 @@ func (rb *remoteBackend) adjust() {
 		}
 	}
 
+	uid, _ := uuid.NewV7()
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
-		zap.String("backend-id", uuid.NewString()))
+		zap.String("backend-id", uid.String()))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec),
 		goetty.WithSessionLogger(rb.logger))
@@ -480,6 +481,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			}
 
 			if len(written) > 0 {
+				rb.metrics.outputBytesCounter.Add(float64(rb.conn.OutBuf().Readable()))
 				if err := rb.conn.Flush(writeTimeout); err != nil {
 					for _, f := range written {
 						id := f.getSendMessageID()
@@ -581,6 +583,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				wg.Add(1)
 			}
 			resp := msg.(RPCMessage).Message
+			rb.metrics.inputBytesCounter.Add(float64(resp.Size()))
 			rb.requestDone(ctx, resp.GetID(), msg.(RPCMessage), nil, cb)
 			if rb.options.hasPayloadResponse {
 				wg.Wait()

@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package fifocache
 
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestObjectLocationMarshalAndUnmarshal(t *testing.T) {
-	var loc ObjectLocation
-	for i := 0; i < len(loc); i++ {
-		loc[i] = byte(i)
+func TestQueue(t *testing.T) {
+	queue := NewQueue[int]()
+	for i := 0; i < maxQueuePartCapacity*1024; i++ {
+		queue.enqueue(i)
 	}
-
-	data, err := loc.Marshal()
-	require.NoError(t, err)
-
-	var ret ObjectLocation
-	err = ret.Unmarshal(data)
-	require.NoError(t, err)
-	require.Equal(t, loc, ret)
+	for i := 0; i < maxQueuePartCapacity*1024; i++ {
+		n, ok := queue.dequeue()
+		assert.True(t, ok)
+		assert.Equal(t, i, n)
+	}
 }

@@ -277,11 +277,15 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 	if obj.PubInfo != nil {
@@ -1004,6 +1008,10 @@ func buildValueScan(
 						return err
 					}
 				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1036,6 +1044,10 @@ func buildValueScan(
 					return err
 				}
 				if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1109,7 +1121,7 @@ func buildValueScan(
 		}
 	}
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:      plan.Node_VALUE_SCAN,
 		RowsetData:    rowsetData,

@@ -15,6 +15,7 @@
 package onduplicatekey
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -35,8 +36,7 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch   //batch to check conflict
-	insertBats       []*batch.Batch //the final batch
+	checkConflictBat *batch.Batch //batch to check conflict
 	rbat             *batch.Batch
 }
 
@@ -62,6 +62,33 @@ type Argument struct {
 	children []vm.Operator
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) Name() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
 }
@@ -73,12 +100,6 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if len(arg.ctr.insertBats) > 0 {
-			for _, bat := range arg.ctr.insertBats {
-				bat.Clean(proc.Mp())
-			}
-			arg.ctr.insertBats = nil
-		}
 		if arg.ctr.rbat != nil {
 			arg.ctr.rbat.Clean(proc.GetMPool())
 		}

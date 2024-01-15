@@ -1,4 +1,4 @@
-FROM golang:1.20.7-bookworm as builder
+FROM golang:1.21.5-bookworm as builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
@@ -19,7 +19,7 @@ COPY . .
 
 RUN make build
 
-FROM ubuntu:latest
+FROM ubuntu:22.04
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc

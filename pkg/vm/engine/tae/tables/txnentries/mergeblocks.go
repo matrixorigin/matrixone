@@ -35,15 +35,12 @@ type mergeBlocksEntry struct {
 	sync.RWMutex
 	txn           txnif.AsyncTxn
 	relation      handle.Relation
-	droppedSegs   []*catalog.SegmentEntry
+	droppedObjs   []*catalog.ObjectEntry
 	deletes       []*nulls.Bitmap
-	createdSegs   []*catalog.SegmentEntry
+	createdObjs   []*catalog.ObjectEntry
 	droppedBlks   []*catalog.BlockEntry
 	createdBlks   []*catalog.BlockEntry
 	transMappings *BlkTransferBooking
-	mapping       []uint32
-	fromAddr      []uint32
-	toAddr        []uint32
 	skippedBlks   []int
 
 	rt *dbutils.Runtime
@@ -52,10 +49,9 @@ type mergeBlocksEntry struct {
 func NewMergeBlocksEntry(
 	txn txnif.AsyncTxn,
 	relation handle.Relation,
-	droppedSegs, createdSegs []*catalog.SegmentEntry,
+	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	transMappings *BlkTransferBooking,
-	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	rt *dbutils.Runtime,
@@ -63,14 +59,11 @@ func NewMergeBlocksEntry(
 	return &mergeBlocksEntry{
 		txn:           txn,
 		relation:      relation,
-		createdSegs:   createdSegs,
-		droppedSegs:   droppedSegs,
+		createdObjs:   createdObjs,
+		droppedObjs:   droppedObjs,
 		createdBlks:   createdBlks,
 		droppedBlks:   droppedBlks,
 		transMappings: transMappings,
-		mapping:       mapping,
-		fromAddr:      fromAddr,
-		toAddr:        toAddr,
 		deletes:       deletes,
 		skippedBlks:   skipBlks,
 		rt:            rt,
@@ -91,15 +84,15 @@ func (entry *mergeBlocksEntry) ApplyCommit() (err error) {
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	droppedSegs := make([]*common.ID, 0)
-	for _, blk := range entry.droppedSegs {
+	droppedObjs := make([]*common.ID, 0)
+	for _, blk := range entry.droppedObjs {
 		id := blk.AsCommonID()
-		droppedSegs = append(droppedSegs, id)
+		droppedObjs = append(droppedObjs, id)
 	}
-	createdSegs := make([]*common.ID, 0)
-	for _, blk := range entry.createdSegs {
+	createdObjs := make([]*common.ID, 0)
+	for _, blk := range entry.createdObjs {
 		id := blk.AsCommonID()
-		createdSegs = append(createdSegs, id)
+		createdObjs = append(createdObjs, id)
 	}
 	droppedBlks := make([]*common.ID, 0)
 	for _, blk := range entry.droppedBlks {
@@ -112,13 +105,10 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 	}
 	cmd = newMergeBlocksCmd(
 		entry.relation.ID(),
-		droppedSegs,
-		createdSegs,
+		droppedObjs,
+		createdObjs,
 		droppedBlks,
 		createdBlks,
-		entry.mapping,
-		entry.fromAddr,
-		entry.toAddr,
 		entry.txn,
 		csn)
 	return
@@ -146,7 +136,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	tblEntry := dropped.GetSegment().GetTable()
+	tblEntry := dropped.GetObject().GetTable()
 	isTransient := !tblEntry.GetLastestSchema().HasPK()
 	id := dropped.AsCommonID()
 	page := model.NewTransferHashPage(id, time.Now(), isTransient)
@@ -203,12 +193,12 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	delTbls := make([]*model.TransDels, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
-		seg, err := entry.relation.GetSegment(id.SegmentID())
+		obj, err := entry.relation.GetObject(id.ObjectID())
 		if err != nil {
 			return err
 		}
-		defer seg.Close()
-		blk, err := seg.GetBlock(id.BlockID)
+		defer obj.Close()
+		blk, err := obj.GetBlock(id.BlockID)
 		if err != nil {
 			return err
 		}

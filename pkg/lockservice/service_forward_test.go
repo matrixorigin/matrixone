@@ -37,7 +37,7 @@ func TestForwardLock(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			_, err := l2.getLockTableWithCreate(tableID, true)
+			_, err := l2.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
 			txn1 := []byte("txn1")

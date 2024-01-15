@@ -69,6 +69,16 @@ func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	}
 }
 
+// WithClientEnableAutoCreateBackend enable client to automatically create a backend
+// in the background, when the links in the connection pool are used, if the pool has
+// not reached the maximum number of links, it will automatically create them in the
+// background to improve the latency of link creation.
+func WithClientEnableAutoCreateBackend() ClientOption {
+	return func(c *client) {
+		c.options.enableAutoCreate = true
+	}
+}
+
 type client struct {
 	name        string
 	metrics     *metrics
@@ -90,6 +100,7 @@ type client struct {
 		maxIdleDuration    time.Duration
 		initBackends       []string
 		initBackendCounts  []int
+		enableAutoCreate   bool
 	}
 }
 
@@ -338,6 +349,10 @@ func (c *client) maybeCreateLocked(backend string) bool {
 }
 
 func (c *client) tryCreate(backend string) bool {
+	if !c.options.enableAutoCreate {
+		return false
+	}
+
 	select {
 	case c.createC <- backend:
 		return true

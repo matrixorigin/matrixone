@@ -47,6 +47,7 @@ func init() {
 	initMemMetrics()
 	initTraceMetrics()
 	initProxyMetrics()
+	initFrontendMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -71,6 +72,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+
+	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
 
 func initFileServiceMetrics() {
@@ -100,8 +103,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
-
-	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {
@@ -121,6 +122,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnCheckPKDupDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(txnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
@@ -139,6 +141,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcNetworkBytesCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)
@@ -165,6 +168,10 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
 	registry.MustRegister(ProxyTransferQueueSizeGauge)
 	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
+}
+
+func initFrontendMetrics() {
+	registry.MustRegister(acceptConnDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

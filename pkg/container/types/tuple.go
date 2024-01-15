@@ -32,6 +32,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -105,15 +106,15 @@ func (tp Tuple) ErrString(scales []int32) string {
 	return res.String()
 }
 
-func (tp Tuple) SQLStrings() []string {
+func (tp Tuple) SQLStrings(scales []int32) []string {
 	res := make([]string, 0, len(tp))
-	for _, t := range tp {
+	for i, t := range tp {
 		switch t := t.(type) {
 		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
 			res = append(res, fmt.Sprintf("%v", t))
 		case []byte:
 			s := *(*string)(unsafe.Pointer(&t))
-			res = append(res, "'"+s+"'")
+			res = append(res, strconv.Quote(s))
 		case Date:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Time:
@@ -123,9 +124,9 @@ func (tp Tuple) SQLStrings() []string {
 		case Timestamp:
 			res = append(res, fmt.Sprintf("'%v'", t.String()))
 		case Decimal64:
-			res = append(res, fmt.Sprintf("%v", t.Format(0)))
+			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
 		case Decimal128:
-			res = append(res, fmt.Sprintf("%v", t.Format(0)))
+			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
 		default:
 			res = append(res, fmt.Sprintf("%v", t))
 		}

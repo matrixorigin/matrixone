@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-func BuildSegmentCompactionTaskFactory(meta *catalog.SegmentEntry, rt *dbutils.Runtime) (
+func BuildObjectCompactionTaskFactory(meta *catalog.ObjectEntry, rt *dbutils.Runtime) (
 	factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error,
 ) {
 	if !meta.IsAppendable() {
@@ -39,13 +39,13 @@ func BuildSegmentCompactionTaskFactory(meta *catalog.SegmentEntry, rt *dbutils.R
 	filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
 	filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
 	blks := meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
-	if len(blks) < int(meta.GetTable().GetLastestSchema().SegmentMaxBlocks) {
+	if len(blks) < int(meta.GetTable().GetLastestSchema().ObjectMaxBlocks) {
 		return
 	}
 	for _, blk := range blks {
 		scopes = append(scopes, *blk.AsCommonID())
 	}
-	factory = jobs.CompactSegmentTaskFactory(blks, rt)
+	factory = jobs.CompactObjectTaskFactory(blks, rt)
 	taskType = tasks.DataCompactionTask
 	return
 }

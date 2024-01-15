@@ -27,14 +27,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "window"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("window")
+	buf.WriteString(argName)
+	buf.WriteString(": window")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -57,7 +59,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 || w.Name == plan2.NameGroupConcat {
+	if len(w.PartitionBy) == 0 {
 		ctr.status = receiveAll
 	}
 
@@ -123,7 +125,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
+				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 					return result, err
 				}
 				if err = ctr.bat.Aggs[i].Grows(ctr.bat.RowCount(), proc.Mp()); err != nil {
@@ -409,17 +411,6 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
 		return nil
 	}
-	if w.Name == plan2.NameGroupConcat {
-		orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
-		for _, p := range w.PartitionBy {
-			orderBy = append(orderBy, &plan.OrderBySpec{
-				Expr: p,
-				Flag: plan.OrderBySpec_INTERNAL,
-			})
-		}
-		orderBy = append(orderBy, w.OrderBy...)
-		return orderBy
-	}
 	return w.OrderBy
 }
 
@@ -541,9 +532,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		}
 	}
 
-	if w.Name != plan2.NameGroupConcat {
-		ctr.ps = nil
-	}
+	ctr.ps = nil
 
 	return false, nil
 }

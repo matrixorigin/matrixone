@@ -16,14 +16,18 @@ package fileservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"go.uber.org/zap"
 )
 
 type CacheConfig struct {
@@ -124,6 +128,31 @@ type IOVectorCache interface {
 		async bool,
 	) error
 	Flush()
+	//TODO file contents may change, so we still need this s.
+	DeletePaths(
+		ctx context.Context,
+		paths []string,
+	) error
+}
+
+func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
+	ctx, cancel := context.WithTimeout(ctx, slowCacheReadThreshold)
+	defer cancel()
+	err := cache.Read(ctx, vector)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			logutil.Warn("cache read exceed deadline",
+				zap.Any("err", err),
+				zap.Any("cache type", fmt.Sprintf("%T", cache)),
+				zap.Any("path", vector.FilePath),
+				zap.Any("entries", vector.Entries),
+			)
+			// safe to ignore
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 type CacheKey = pb.CacheKey
@@ -132,8 +161,12 @@ type CacheKey = pb.CacheKey
 type DataCache interface {
 	Set(ctx context.Context, key CacheKey, value CacheData)
 	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
+	//TODO file contents may change, so we still need this s.
+	DeletePaths(ctx context.Context, paths []string)
 	Flush()
 	Capacity() int64
 	Used() int64
 	Available() int64
 }
+
+var slowCacheReadThreshold = time.Second * 10

@@ -160,6 +160,22 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+// WithTxnSkipLock skip txn lock on specified tables
+func WithTxnSkipLock(
+	tables []uint64,
+	modes []lock.LockMode) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.skipLocks = append(tc.option.skipLocks, tables...)
+		tc.option.skipLockModes = append(tc.option.skipLockModes, modes...)
+	}
+}
+
+func WithTxnPKDedupCount(count int) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.PKDedupCount = count
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
@@ -171,8 +187,11 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		PKDedupCount     int
 		createBy         string
 		lockService      lockservice.LockService
+		skipLocks        []uint64
+		skipLockModes    []lock.LockMode
 	}
 
 	mu struct {
@@ -570,11 +589,16 @@ func (tc *txnOperator) IsOpenLog() bool {
 	return tc.mu.openlog
 }
 
+func (tc *txnOperator) PKDedupCount() int {
+	return tc.option.PKDedupCount
+}
+
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	for _, l := range tc.mu.lockTables {
-		if l.Table == value.Table {
+		if l.Group == value.Group &&
+			l.Table == value.Table {
 			if l.Changed(value) {
-				return moerr.NewDeadLockDetectedNoCtx()
+				return moerr.NewLockTableBindChangedNoCtx()
 			}
 			return nil
 		}
@@ -1053,7 +1077,6 @@ func (tc *txnOperator) GetOverview() TxnOverview {
 }
 
 func (tc *txnOperator) getWaitLocksLocked() []Lock {
-
 	if tc.mu.waitLocks == nil {
 		return nil
 	}
@@ -1063,4 +1086,19 @@ func (tc *txnOperator) getWaitLocksLocked() []Lock {
 		values = append(values, l)
 	}
 	return values
+}
+
+func (tc *txnOperator) LockSkipped(
+	tableID uint64,
+	mode lock.LockMode) bool {
+	if len(tc.option.skipLocks) == 0 {
+		return false
+	}
+	for i, id := range tc.option.skipLocks {
+		if id == tableID &&
+			mode == tc.option.skipLockModes[i] {
+			return true
+		}
+	}
+	return false
 }

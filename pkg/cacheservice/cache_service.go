@@ -28,7 +28,7 @@ type CacheService interface {
 	// Start starts the service.
 	Start() error
 	// AddHandleFunc add message handler.
-	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.CacheResponse) error, async bool)
 	// Close closes the service.
 	Close() error
 }
@@ -36,7 +36,7 @@ type CacheService interface {
 // cacheService is a cache server started in file-service.
 type cacheService struct {
 	log     *log.MOLogger
-	handler morpc.MessageHandler[*pb.Request, *pb.Response]
+	handler morpc.MessageHandler[*pb.Request, *pb.CacheResponse]
 }
 
 // NewCacheServer creates a new cache server instance.
@@ -53,7 +53,7 @@ func NewCacheServer(address string, cfg morpc.Config) (CacheService, error) {
 
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
-		func() *pb.Response { return &pb.Response{} })
+		func() *pb.CacheResponse { return &pb.CacheResponse{} })
 
 	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool)
 	if err != nil {
@@ -73,7 +73,7 @@ func (s *cacheService) Start() error {
 
 // AddHandleFunc implements the CacheService interface.
 func (s *cacheService) AddHandleFunc(
-	method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool,
+	method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.CacheResponse) error, async bool,
 ) {
 	s.handler.RegisterHandleFunc(uint32(method), h, async)
 }

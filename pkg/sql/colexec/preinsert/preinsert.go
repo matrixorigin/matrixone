@@ -21,14 +21,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"go.uber.org/zap"
 )
 
+const argName = "preinsert"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("pre processing insert")
+	buf.WriteString(argName)
+	buf.WriteString(": pre processing insert")
 }
 
 func (arg *Argument) Prepare(_ *proc) error {
@@ -118,6 +123,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 		bat)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			logutil.Error("insert auto increment column failed", zap.Error(err))
 			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)
 		}
 		return err

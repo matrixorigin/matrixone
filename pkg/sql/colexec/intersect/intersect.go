@@ -23,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "intersect"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" intersect ")
+	buf.WriteString(argName)
+	buf.WriteString(": intersect ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

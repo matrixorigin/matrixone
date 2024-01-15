@@ -60,6 +60,8 @@ type EncodeGroupConcat struct {
 	Groups         int
 }
 
+const argName = "group_concat"
+
 func (m *EncodeGroupConcat) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
@@ -465,4 +467,8 @@ func hasNull(vecs []*vector.Vector, rowIdx int64) bool {
 		}
 	}
 	return false
+}
+
+func (gc *GroupConcat) SetPartialResult(_ any) {
+
 }

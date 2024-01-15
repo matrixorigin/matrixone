@@ -17,6 +17,7 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -77,20 +78,66 @@ type container struct {
 }
 
 type Argument struct {
-	ctr            *container
-	IsShuffle      bool // is shuffle group
-	PreAllocSize   uint64
-	NeedEval       bool // need to projection the aggregate column
-	Ibucket        uint64
-	Nbucket        uint64
-	Exprs          []*plan.Expr // group Expressions
-	Types          []types.Type
-	Aggs           []agg.Aggregate         // aggregations
-	MultiAggs      []group_concat.Argument // multiAggs, for now it's group_concat
-	PartialResults []any
+	ctr          *container
+	IsShuffle    bool // is shuffle group
+	PreAllocSize uint64
+	NeedEval     bool // need to projection the aggregate column
+	Ibucket      uint64
+	Nbucket      uint64
+	Exprs        []*plan.Expr // group Expressions
+	Types        []types.Type
+	Aggs         []agg.Aggregate         // aggregations
+	MultiAggs    []group_concat.Argument // multiAggs, for now it's group_concat
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) Name() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithAggs(aggs []agg.Aggregate) *Argument {
+	arg.Aggs = aggs
+	return arg
+}
+
+func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
+	arg.Exprs = exprs
+	return arg
+}
+
+func (arg *Argument) WithTypes(types []types.Type) *Argument {
+	arg.Types = types
+	return arg
+}
+
+func (arg *Argument) WithMultiAggs(multiAggs []group_concat.Argument) *Argument {
+	arg.MultiAggs = multiAggs
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {

@@ -42,7 +42,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-type TestFlushBailout struct{}
+type TestFlushBailoutPos1 struct{}
+type TestFlushBailoutPos2 struct{}
 
 var FlushTableTailTaskFactory = func(
 	metas []*catalog.BlockEntry, rt *dbutils.Runtime, endTs types.TS, /* end of dirty range*/
@@ -93,13 +94,13 @@ func NewFlushTableTailTask(
 		dirtyEndTs: dirtyEndTs,
 	}
 	meta := blks[0]
-	dbId := meta.GetSegment().GetTable().GetDB().ID
+	dbId := meta.GetObject().GetTable().GetDB().ID
 	task.dbid = dbId
 	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	tableId := meta.GetSegment().GetTable().ID
+	tableId := meta.GetObject().GetTable().ID
 	rel, err := database.UnsafeGetRelation(tableId)
 	task.rel = rel
 	if err != nil {
@@ -109,13 +110,13 @@ func NewFlushTableTailTask(
 
 	for _, blk := range blks {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Segment
-		seg, err = rel.GetSegment(&meta.GetSegment().ID)
+		var obj handle.Object
+		obj, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
 		var hdl handle.Block
-		if hdl, err = seg.GetBlock(blk.ID); err != nil {
+		if hdl, err = obj.GetBlock(blk.ID); err != nil {
 			return
 		}
 		if blk.IsAppendable() {
@@ -136,13 +137,13 @@ func NewFlushTableTailTask(
 	task.dirtyLen = len(tblEntry.DeletedDirties)
 	for _, blk := range tblEntry.DeletedDirties {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
-		var seg handle.Segment
-		seg, err = rel.GetSegment(&meta.GetSegment().ID)
+		var obj handle.Object
+		obj, err = rel.GetObject(&meta.GetObject().ID)
 		if err != nil {
 			return
 		}
 		var hdl handle.Block
-		if hdl, err = seg.GetBlock(blk.ID); err != nil {
+		if hdl, err = obj.GetBlock(blk.ID); err != nil {
 			return
 		}
 		task.delSrcMetas = append(task.delSrcMetas, blk)
@@ -236,7 +237,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 
-	if v := ctx.Value(TestFlushBailout{}); v != nil {
+	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		err = moerr.NewInternalErrorNoCtx("test merge bail out")
 		return
 	}
@@ -415,9 +416,18 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 	if len(readedBats) == 0 {
 		//just  soft delete all ablks and return
+		ObjectsToDelete := make(map[types.Objectid]handle.Object)
 		for _, blk := range task.ablksHandles {
-			seg := blk.GetSegment()
-			if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+			obj := blk.GetObject()
+			if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
+				return err
+			}
+			ObjectsToDelete[*obj.GetID()] = obj
+		}
+		// delete all Objects
+		for _, obj := range ObjectsToDelete {
+			tbl := obj.GetRelation()
+			if err = tbl.SoftDeleteObject(obj.GetID()); err != nil {
 				return err
 			}
 		}
@@ -426,13 +436,13 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// create new object to hold merged blocks
-	var toSegmentEntry *catalog.SegmentEntry
-	var toSegmentHandle handle.Segment
-	if toSegmentHandle, err = task.rel.CreateNonAppendableSegment(false); err != nil {
+	var toObjectEntry *catalog.ObjectEntry
+	var toObjectHandle handle.Object
+	if toObjectHandle, err = task.rel.CreateNonAppendableObject(false); err != nil {
 		return
 	}
-	toSegmentEntry = toSegmentHandle.GetMeta().(*catalog.SegmentEntry)
-	toSegmentEntry.SetSorted()
+	toObjectEntry = toObjectHandle.GetMeta().(*catalog.ObjectEntry)
+	toObjectEntry.SetSorted()
 
 	// prepare merge
 	// pick the sort key or first column to run first merge, determing the ordering
@@ -465,25 +475,46 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// do first sort
-	allocSz := totalRowCnt * 4
-	node, err := common.MergeAllocator.Alloc(allocSz)
-	if err != nil {
-		panic(err)
+	var orderedVecs []containers.Vector
+	var sortedIdx []uint32
+	if schema.HasSortKey() {
+		// mergesort is needed, allocate sortedidx and mapping
+		allocSz := totalRowCnt * 4
+		// sortedIdx is used to shuffle other columns according to the order of the sort key
+		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		// sortedidx will be used to shuffle other column, defer free
+		defer common.MergeAllocator.Free(sortIdxNode)
+		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), totalRowCnt)
+
+		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), totalRowCnt)
+
+		// modify sortidx and mapping
+		orderedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
+		// free mapping, which is never used again
+		common.MergeAllocator.Free(mappingNode)
+	} else {
+		// just do reshape
+		orderedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		// UpdateMappingAfterMerge will handle the nil mapping
+		task.transMappings.UpdateMappingAfterMerge(nil, fromLayout, toLayout)
 	}
-	defer common.MergeAllocator.Free(node)
-	// sortedIdx is used to shuffle other columns according to the order of the sort key
-	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), totalRowCnt)
-	orderedVecs, mapping := mergeColumns(sortVecs, &sortedIdx, true, fromLayout, toLayout, schema.HasSortKey(), task.rt.VectorPool.Transient)
 	for _, vec := range orderedVecs {
 		defer vec.Close()
 	}
-	task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
 
 	// create blks to hold sorted data
 	writtenBatches := make([]*containers.Batch, 0, len(orderedVecs))
 	task.createdBlkHandles = make([]handle.Block, 0, len(orderedVecs))
 	for i := range orderedVecs {
-		blk, err := toSegmentHandle.CreateNonAppendableBlock(
+		blk, err := toObjectHandle.CreateNonAppendableBlock(
 			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
@@ -509,18 +540,21 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		for _, bat := range readedBats {
 			vecs = append(vecs, bat.Vecs[i])
 		}
-		vecs, _ := mergeColumns(vecs, &sortedIdx, false, fromLayout, toLayout, schema.HasSortKey(), task.rt.VectorPool.Transient)
-
-		for i := range vecs {
-			defer vecs[i].Close()
+		var outvecs []containers.Vector
+		if schema.HasSortKey() {
+			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		} else {
+			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
-		for i, vec := range vecs {
+
+		for i, vec := range outvecs {
 			writtenBatches[i].AddVector(schema.ColDefs[idx].Name, vec)
+			defer vec.Close()
 		}
 	}
 
 	// write!
-	name := objectio.BuildObjectName(&toSegmentEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&toObjectEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
@@ -528,6 +562,8 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	if schema.HasPK() {
 		pkIdx := schema.GetSingleSortKeyIdx()
 		writer.SetPrimaryKey(uint16(pkIdx))
+	} else if schema.HasSortKey() {
+		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
 	}
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -552,11 +588,24 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 			return err
 		}
 	}
+	if err != nil {
+		return
+	}
+	toObjectHandle.UpdateStats(writer.Stats())
 
+	ObjectsToDelete := make(map[types.Objectid]handle.Object)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
-		seg := blk.GetSegment()
-		if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+		obj := blk.GetObject()
+		if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
+			return err
+		}
+		ObjectsToDelete[*obj.GetID()] = obj
+	}
+	// delete all Objects
+	for _, obj := range ObjectsToDelete {
+		tbl := obj.GetRelation()
+		if err = tbl.SoftDeleteObject(obj.GetID()); err != nil {
 			return err
 		}
 	}
@@ -619,11 +668,13 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 
 // waitFlushAblkForSnapshot waits all io tasks about flushing ablock for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, subtasks []*flushBlkTask) (err error) {
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
 	for i, subtask := range subtasks {
 		if subtask == nil {
 			continue
 		}
-		if err = subtask.WaitDone(); err != nil {
+		if err = subtask.WaitDone(ictx); err != nil {
 			return
 		}
 		metaLocABlk := blockio.EncodeLocation(
@@ -633,6 +684,9 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 			subtask.blocks[0].GetID(),
 		)
 		if err = task.ablksHandles[i].UpdateMetaLoc(metaLocABlk); err != nil {
+			return
+		}
+		if err = task.ablksHandles[i].GetObject().UpdateStats(subtask.stat); err != nil {
 			return
 		}
 		if subtask.delta == nil {
@@ -698,7 +752,9 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 	if subtask == nil {
 		return
 	}
-	if err = subtask.WaitDone(); err != nil {
+	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
+	if err = subtask.WaitDone(ictx); err != nil {
 		return err
 	}
 	task.createdDeletesObjectName = subtask.name.String()
@@ -732,7 +788,13 @@ func makeDeletesTempBatch(template *containers.Batch, pool *containers.VectorPoo
 
 func relaseFlushDelTask(task *flushDeletesTask, err error) {
 	if err != nil && task != nil {
-		task.WaitDone()
+		logutil.Infof("[FlushTabletail] release flush del task bat because of err %v", err)
+		ictx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second, /*6*time.Minute,*/
+		)
+		defer cancel()
+		task.WaitDone(ictx)
 	}
 	if task != nil && task.delta != nil {
 		task.delta.Close()
@@ -741,11 +803,16 @@ func relaseFlushDelTask(task *flushDeletesTask, err error) {
 
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 	if err != nil {
-		logutil.Infof("[FlushTabletail] release flush task bat because of err %v", err)
+		logutil.Infof("[FlushTabletail] release flush ablk bat because of err %v", err)
+		ictx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second, /*6*time.Minute,*/
+		)
+		defer cancel()
 		for _, subtask := range subtasks {
 			if subtask != nil {
 				// wait done, otherwise the data might be released before flush, and cause data race
-				subtask.WaitDone()
+				subtask.WaitDone(ictx)
 			}
 		}
 	}
@@ -757,4 +824,9 @@ func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 			subtask.delta.Close()
 		}
 	}
+}
+
+// For unit test
+func (task *flushTableTailTask) GetCreatedBlocks() []handle.Block {
+	return task.createdBlkHandles
 }

@@ -94,8 +94,9 @@ func TestMerge1(t *testing.T) {
 			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
-		ret, mapping := MergeSortedColumn(
-			[]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
+		mapping := make([]uint32, 10)
+		ret := MergeColumn(
+			[]containers.Vector{vec3, vec4}, sortedIdx, mapping, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
 		)
 		ret2 := ShuffleColumn(
 			[]containers.Vector{vec, vec2}, sortedIdx, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
@@ -131,8 +132,9 @@ func TestMerge1(t *testing.T) {
 			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
 		sortedIdx := make([]uint32, 10)
-		ret, mapping := MergeSortedColumn(
-			[]containers.Vector{vec3, vec4}, &sortedIdx, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
+		mapping := make([]uint32, 10)
+		ret := MergeColumn(
+			[]containers.Vector{vec3, vec4}, sortedIdx, mapping, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
 		)
 		ret2 := ShuffleColumn(
 			[]containers.Vector{vec, vec2}, sortedIdx, []uint32{5, 5}, []uint32{5, 5}, mocks.GetTestVectorPool(),
@@ -154,9 +156,10 @@ func TestMerge2(t *testing.T) {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)
 		sortedIdx := make([]uint32, 100000)
+		mapping := make([]uint32, 100000)
 		t0 := time.Now()
-		ret, _ := MergeSortedColumn(
-			[]containers.Vector{vec, vec2}, &sortedIdx, []uint32{50000, 50000}, []uint32{50000, 50000}, mocks.GetTestVectorPool(),
+		ret := MergeColumn(
+			[]containers.Vector{vec, vec2}, sortedIdx, mapping, []uint32{50000, 50000}, []uint32{50000, 50000}, mocks.GetTestVectorPool(),
 		)
 		t.Logf("%-20v takes %v", vecType, time.Since(t0))
 		for _, v := range ret {
@@ -174,7 +177,7 @@ func TestReshape1(t *testing.T) {
 		vec2.Update(rand.Intn(6), nil, true)
 		t.Log(vec)
 		t.Log(vec2)
-		ret := Reshape([]containers.Vector{vec, vec2}, []uint32{4, 6}, []uint32{5, 5}, mocks.GetTestVectorPool())
+		ret := ReshapeColumn([]containers.Vector{vec, vec2}, []uint32{4, 6}, []uint32{5, 5}, mocks.GetTestVectorPool())
 		t.Log(ret)
 		for _, v := range ret {
 			v.Close()
@@ -188,7 +191,7 @@ func TestReshape2(t *testing.T) {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)
 		t0 := time.Now()
-		ret := Reshape([]containers.Vector{vec, vec2}, []uint32{50000, 50000}, []uint32{50000, 50000}, mocks.GetTestVectorPool())
+		ret := ReshapeColumn([]containers.Vector{vec, vec2}, []uint32{50000, 50000}, []uint32{50000, 50000}, mocks.GetTestVectorPool())
 		t.Logf("%v takes %v", vecType, time.Since(t0))
 		for _, v := range ret {
 			v.Close()
