@@ -35,7 +35,7 @@ type Argument struct {
 	Offset int64
 	Limit  int64
 
-	//end     bool
+	// end     bool
 	attrs   []string
 	types   []types.Type
 	Configs map[string]interface{}
@@ -60,7 +60,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 

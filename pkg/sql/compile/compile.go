@@ -104,7 +104,8 @@ func NewCompile(
 	stmt tree.Statement,
 	isInternal bool,
 	cnLabel map[string]string,
-	startAt time.Time) *Compile {
+	startAt time.Time,
+) *Compile {
 	c := reuse.Alloc[Compile](nil)
 	c.e = e
 	c.db = db
@@ -129,7 +130,7 @@ func (c *Compile) Release() {
 	reuse.Free[Compile](c, nil)
 }
 
-func (c Compile) Name() string {
+func (c Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -836,9 +837,11 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= plan2.BlockNumForceOneCN {
 			c.cnListStrategy()
 		} else {
-			c.cnList = engine.Nodes{engine.Node{
-				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(ncpu, blkNum)},
+			c.cnList = engine.Nodes{
+				engine.Node{
+					Addr: c.addr,
+					Mcpu: c.generateCPUNumber(ncpu, blkNum),
+				},
 			}
 		}
 		// insertNode := qry.Nodes[qry.Steps[0]]
@@ -869,24 +872,28 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		// }
 	default:
 		if blkNum < plan2.BlockNumForceOneCN {
-			c.cnList = engine.Nodes{engine.Node{
-				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(ncpu, blkNum)},
+			c.cnList = engine.Nodes{
+				engine.Node{
+					Addr: c.addr,
+					Mcpu: c.generateCPUNumber(ncpu, blkNum),
+				},
 			}
 		} else {
 			c.cnListStrategy()
 		}
 	}
 	if c.info.Typ == plan2.ExecTypeTP && len(c.cnList) > 1 {
-		c.cnList = engine.Nodes{engine.Node{
-			Addr: c.addr,
-			Mcpu: c.generateCPUNumber(ncpu, blkNum)},
+		c.cnList = engine.Nodes{
+			engine.Node{
+				Addr: c.addr,
+				Mcpu: c.generateCPUNumber(ncpu, blkNum),
+			},
 		}
 	}
 
 	c.initAnalyze(qry)
 
-	//deal with sink scan first.
+	// deal with sink scan first.
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		err := c.compileSinkScan(qry, qry.Steps[i])
 		if err != nil {
@@ -939,7 +946,6 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 					Ctx: c.ctx,
 					Ch:  make(chan *batch.Batch, 1),
 				}
-
 			}
 			c.appendStepRegs(s, nodeId, wr)
 		}
@@ -1354,7 +1360,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg:     preInsertSkArg,
 				})
 			}
-
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
@@ -1879,7 +1884,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}
 	if time.Since(t) > time.Second {
 		logutil.Infof("read file offset cost %v", time.Since(t))
-
 	}
 	ss := make([]*Scope, 1)
 	if param.Parallel {
@@ -2953,7 +2957,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 
 		return parent
-		//return []*Scope{c.newMergeScope(parent)}
+		// return []*Scope{c.newMergeScope(parent)}
 	}
 }
 
@@ -2963,7 +2967,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 // the same block to one and the same CN to perform
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
-	//Todo: implemet delete merge
+	// Todo: implemet delete merge
 	ss2 := make([]*Scope, 0, len(ss))
 	// ends := make([]*Scope, 0, len(ss))
 	for _, s := range ss {
@@ -3065,8 +3069,8 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 }
 
 func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
-	var parent = make([]*Scope, 0, len(c.cnList))
-	var children = make([]*Scope, 0, len(c.cnList))
+	parent := make([]*Scope, 0, len(c.cnList))
+	children := make([]*Scope, 0, len(c.cnList))
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
@@ -3509,7 +3513,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into objectio.BlockInfo.
+				// add partition number into objectio.BlockInfo.
 				blkSlice := subranges.(*objectio.BlockInfoSlice)
 				for j := 1; j < subranges.Len(); j++ {
 					blkInfo := blkSlice.Get(j)
@@ -3531,7 +3535,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into objectio.BlockInfo.
+				// add partition number into objectio.BlockInfo.
 				blkSlice := subranges.(*objectio.BlockInfoSlice)
 				for j := 1; j < subranges.Len(); j++ {
 					blkInfo := blkSlice.Get(j)
@@ -3883,14 +3887,14 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			partialResultTypes = nil
 		}
 	}
-	//n.AggList = nil
+	// n.AggList = nil
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := ranges.Len()
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	//if len(ranges) == 0 indicates that it's a temporary table.
+	// if len(ranges) == 0 indicates that it's a temporary table.
 	if ranges.Len() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
@@ -3980,20 +3984,20 @@ func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n
 
 func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
-	//add current CN
+	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
 		Rel:  rel,
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
-	//add memory table block
+	// add memory table block
 	nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
 	*ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
 	if ranges.Len() == 0 {
 		return nodes, nil
 	}
-	//only one cn
+	// only one cn
 	if len(c.cnList) == 1 {
 		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		return nodes, nil
@@ -4008,7 +4012,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 		}
 	}
 
-	//add the rest of CNs in list
+	// add the rest of CNs in list
 	for i := range c.cnList {
 		if c.cnList[i].Addr != c.addr {
 			nodes = append(nodes, engine.Node{
@@ -4033,7 +4037,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel eng
 
 	minWorkLoad := math.MaxInt32
 	maxWorkLoad := 0
-	//remove empty node from nodes
+	// remove empty node from nodes
 	var newNodes engine.Nodes
 	for i := range nodes {
 		if len(nodes[i].Data) > maxWorkLoad {
@@ -4118,7 +4122,7 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.No
 
 func putBlocksInCurrentCN(c *Compile, ranges []byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
-	//add current CN
+	// add current CN
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
 		Rel:  rel,
@@ -4243,7 +4247,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 }
 
 func evalRowsetData(proc *process.Process,
-	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
+	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor,
+) error {
 	var bats []*batch.Batch
 
 	vec.ResetArea()

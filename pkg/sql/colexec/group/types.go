@@ -54,7 +54,7 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	//idx        *index.LowCardinalityIndex
+	// idx        *index.LowCardinalityIndex
 
 	aggVecs           []evalVector
 	groupVecs         []evalVector
@@ -106,7 +106,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 

@@ -43,7 +43,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -61,6 +61,7 @@ func (arg *Argument) Release() {
 		reuse.Free[Argument](arg, nil)
 	}
 }
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
 }

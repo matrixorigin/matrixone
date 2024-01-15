@@ -94,7 +94,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 

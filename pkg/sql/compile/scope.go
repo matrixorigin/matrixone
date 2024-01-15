@@ -418,7 +418,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		s.NodeInfo.Data = nil
 
-	//FIXME:: s.NodeInfo.Rel == nil, partition table?
+	// FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
 		var db engine.Database
 		var rel engine.Relation
@@ -465,7 +465,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 			rds = append(rds, mainRds...)
 		} else {
-			//handle partition table.
+			// handle partition table.
 			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
 			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
 			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
@@ -478,8 +478,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 						newRanges = append(newRanges, objectio.EmptyBlockInfoBytes...)
 						dirtyRanges[blkInfo.PartitionNum] = newRanges
 					}
-					dirtyRanges[blkInfo.PartitionNum] =
-						append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
+					dirtyRanges[blkInfo.PartitionNum] = append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
 					continue
 				}
 				cleanRanges = append(cleanRanges, ranges.GetBytes(i)...)
@@ -698,7 +697,7 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				})
 			}
 			arg.Release()
-		//case vm.Order:
+		// case vm.Order:
 		//	flg = true
 		//	arg := in.Arg.(*order.Argument)
 		//	s.Instructions = s.Instructions[i:]
@@ -840,8 +839,8 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: merge.NewArgument(),
 		}
-		//Add log for cn panic which reported on issue 10656
-		//If you find this log is printed, please report the repro details
+		// Add log for cn panic which reported on issue 10656
+		// If you find this log is printed, please report the repro details
 		if len(s.Instructions) < 2 {
 			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
 				zap.String("stack", string(debug.Stack())),
@@ -1040,6 +1039,6 @@ func (s *Scope) replace(c *Compile) error {
 	return nil
 }
 
-func (s Scope) Name() string {
+func (s Scope) TypeName() string {
 	return "compile.Scope"
 }

@@ -16,6 +16,7 @@ package preinsertsecondaryindex
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,7 +47,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
