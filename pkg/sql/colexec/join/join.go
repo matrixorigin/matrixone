@@ -16,7 +16,6 @@ package join
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" inner join ")
+	buf.WriteString(argName)
+	buf.WriteString(": inner join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -108,23 +110,39 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	if bat != nil && bat.AuxData != nil {
+		ctr.mp = bat.DupJmAuxData()
+		anal.Alloc(ctr.mp.Size())
+	}
+	return nil
+}
 
+func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 	if bat != nil {
 		if ctr.bat != nil {
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
-
 		ctr.bat = bat
-		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
+}
+
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(proc, anal)
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
@@ -152,7 +170,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat1 == nil {
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
 	}
-	if ctr.joinBat2 == nil && ctr.bat.RowCount() != 0 {
+	if ctr.joinBat2 == nil && ctr.bat != nil && ctr.bat.RowCount() != 0 {
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
 

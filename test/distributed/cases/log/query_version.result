@@ -14,4 +14,4 @@ select count(1) as cnt, statement_id, statement, status from system.statement_in
 cnt    statement_id    statement    status
 select `database`, `aggr_count` from system.statement_info where statement LIKE '%select * from user limit 0%' order by request_at desc limit 1;
 database    aggr_count
-    1
+mysql    0

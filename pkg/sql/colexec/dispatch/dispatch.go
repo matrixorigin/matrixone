@@ -30,8 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "dispatch"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("dispatch")
+	buf.WriteString(argName)
+	buf.WriteString(": dispatch")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

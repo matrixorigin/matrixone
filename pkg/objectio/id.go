@@ -37,7 +37,7 @@ type Blockid = types.Blockid
 type Rowid = types.Rowid
 
 func NewSegmentid() *Segmentid {
-	id := types.Uuid(uuid.Must(uuid.NewUUID()))
+	id := types.Uuid(uuid.Must(uuid.NewV7()))
 	return &id
 }
 
@@ -51,7 +51,7 @@ func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 }
 
 func NewObjectid() *ObjectId {
-	sid := types.Uuid(uuid.Must(uuid.NewUUID()))
+	sid := types.Uuid(uuid.Must(uuid.NewV7()))
 	var oid ObjectId
 	copy(oid[:types.UuidSize], sid[:])
 	return &oid

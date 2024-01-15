@@ -1232,7 +1232,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	tbl.constraint = ct
+	// add tbl.partition = partition
+
 	tbl.tableDef = nil
+
+	// update TableDef
 	tbl.GetTableDef(ctx)
 	return nil
 }
@@ -1783,7 +1787,11 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	tbl.tnList = []int{0}
 
-	_, created := tbl.db.txn.createMap.Load(genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId))
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	_, created := tbl.db.txn.createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
 	// check if the table is not created in this txn, and the block infos are not updated, then update:
 	// 1. update logtail
 	// 2. generate block infos
@@ -1804,8 +1812,12 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	}
 
 	// if the table is created in this txn, skip
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	if _, created := tbl.db.txn.createMap.Load(
-		genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId)); created {
+		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 

@@ -38,28 +38,25 @@ Project
   Limit: 10
   ->  Join
         Join Type: INNER
-        Join Cond: (v3.c3 = v4.c3)
+        Join Cond: (v3.c3 = t3.c3)
         ->  Project
               Limit: 10
               ->  Join
                     Join Type: INNER
-                    Join Cond: (v1.c1 = v2.c1)
-                    ->  Project
+                    Join Cond: (t1.c1 = t2.c1)
+                    ->  Table Scan on d1.t1
+                          Filter Cond: (t1.c1 <> 0)
                           Limit: 10
-                          ->  Table Scan on d1.t1
-                                Filter Cond: (t1.c1 <> 0)
                     ->  Filter
-                          Filter Cond: (v2.c2 > 0)
-                          ->  Project
+                          Filter Cond: (t2.c2 > 0)
+                          ->  Table Scan on d1.t2
+                                Filter Cond: (t2.c1 <> 1)
                                 Limit: 10
-                                ->  Table Scan on d1.t2
-                                      Filter Cond: (t2.c1 <> 1)
         ->  Filter
-              Filter Cond: (v4.c2 > 0)
-              ->  Project
+              Filter Cond: (t3.c2 > 0)
+              ->  Table Scan on d1.t3
+                    Filter Cond: (t3.c1 <> 2)
                     Limit: 10
-                    ->  Table Scan on d1.t3
-                          Filter Cond: (t3.c1 <> 2)
 explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
 QUERY PLAN
 Project

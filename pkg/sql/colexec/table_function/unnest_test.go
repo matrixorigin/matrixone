@@ -134,9 +134,9 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 	ret := unnestTestCase{
 		proc: proc,
 		arg: &Argument{
-			Attrs: attrs,
-			Rets:  colDefs,
-			Name:  "unnest",
+			Attrs:    attrs,
+			Rets:     colDefs,
+			FuncName: "unnest",
 			info: &vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,

@@ -54,13 +54,13 @@ type partitionBuilder interface {
 	build(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, tableDef *TableDef) error
 
 	// buildPartitionDefinitionsInfo build partition definitions info without assign partition id.
-	buildPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, syntaxDefs []*tree.Partition) (err error)
+	buildPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, defs []*tree.Partition) (err error)
 
 	// checkTableDefPartition Perform integrity constraint check on partitions of create table statement
 	checkPartitionIntegrity(ctx context.Context, partitionBinder *PartitionBinder, tableDef *TableDef, partitionDef *plan.PartitionByDef) error
 
 	// This method is used to convert different types of partition structures into plan.Expr
-	buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionDef *plan.PartitionByDef) error
+	buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.PartitionOption, partitionDef *plan.PartitionByDef) error
 }
 
 var _ partitionBuilder = &hashPartitionBuilder{}

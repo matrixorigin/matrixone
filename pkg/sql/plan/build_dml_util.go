@@ -272,9 +272,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	canTruncate := delCtx.isDeleteWithoutFilters
 
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
 	if len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account) ||
+		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
 		canTruncate = false
 	}
@@ -572,7 +576,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable, delCtx.partitionInfos)
-	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
@@ -1921,7 +1925,14 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.TableExist {
-				delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				if catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+					delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				} else if catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					// apply deletes only for entries table.
+					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+						delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+					}
+				}
 			}
 		}
 	}
