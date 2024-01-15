@@ -15,17 +15,48 @@
 package ctl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"context"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handleCoreDump(proc *process.Process, service serviceType,
 	param string, sender requestSender) (Result, error) {
-	switch param {
-	case "enable":
-		util.EnableCoreDump()
-	case "disable":
-		util.DisableCoreDump()
+	var addrs []string
+	var nodeIds []string
+
+	qs := proc.QueryService
+	mc := clusterservice.GetMOCluster()
+	mc.GetCNService(
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			addrs = append(addrs, c.QueryAddress)
+			nodeIds = append(nodeIds, c.ServiceID)
+			return true
+		})
+	mc.GetTNService(
+		clusterservice.NewSelector(),
+		func(d metadata.TNService) bool {
+			if d.QueryAddress != "" {
+				addrs = append(addrs, d.QueryAddress)
+				nodeIds = append(nodeIds, d.ServiceID)
+			}
+			return true
+		})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	for _, addr := range addrs {
+		req := qs.NewRequest(querypb.CmdMethod_CoreDumpConfig)
+		req.CoreDumpConfig = &querypb.CoreDumpConfigRequest{Action: param}
+		resp, err := qs.SendMessage(ctx, addr, req)
+		if err != nil {
+			return Result{}, err
+		}
+		qs.Release(resp)
 	}
 	return Result{
 		Method: CoreDumpMethod,
