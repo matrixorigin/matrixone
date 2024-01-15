@@ -16,6 +16,8 @@ package testengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -37,6 +39,7 @@ func New(
 	client client.TxnClient,
 	compilerContext plan.CompilerContext,
 ) {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	ck := runtime.ProcessLevelRuntime().Clock()
 	addr := "1"

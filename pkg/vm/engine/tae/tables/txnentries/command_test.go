@@ -55,18 +55,12 @@ func TestMergeBlocksCmd(t *testing.T) {
 		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 3, 0)},
 		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 4, 0)}}
 	createdBlks := []*common.ID{{TableID: 1, BlockID: *objectio.NewBlockid(createdSid, 1, 0)}}
-	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
-	fromAddr := []uint32{40000, 40000, 40000, 42}
-	toAddr := []uint32{40000, 40000, 242}
 	cmd := newMergeBlocksCmd(
 		0,
 		droppedObjs,
 		createdObjs,
 		droppedBlks,
 		createdBlks,
-		mapping,
-		fromAddr,
-		toAddr,
 		nil,
 		0)
 

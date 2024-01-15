@@ -41,9 +41,6 @@ type mergeBlocksEntry struct {
 	droppedBlks   []*catalog.BlockEntry
 	createdBlks   []*catalog.BlockEntry
 	transMappings *BlkTransferBooking
-	mapping       []uint32
-	fromAddr      []uint32
-	toAddr        []uint32
 	skippedBlks   []int
 
 	rt *dbutils.Runtime
@@ -55,7 +52,6 @@ func NewMergeBlocksEntry(
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	transMappings *BlkTransferBooking,
-	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	rt *dbutils.Runtime,
@@ -68,9 +64,6 @@ func NewMergeBlocksEntry(
 		createdBlks:   createdBlks,
 		droppedBlks:   droppedBlks,
 		transMappings: transMappings,
-		mapping:       mapping,
-		fromAddr:      fromAddr,
-		toAddr:        toAddr,
 		deletes:       deletes,
 		skippedBlks:   skipBlks,
 		rt:            rt,
@@ -116,9 +109,6 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 		createdObjs,
 		droppedBlks,
 		createdBlks,
-		entry.mapping,
-		entry.fromAddr,
-		entry.toAddr,
 		entry.txn,
 		csn)
 	return

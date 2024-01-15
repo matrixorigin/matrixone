@@ -120,44 +120,6 @@ func NewMergeBlocksTask(
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func mergeColumns(
-	srcVecs []containers.Vector,
-	sortedIdx *[]uint32,
-	isPrimary bool,
-	fromLayout,
-	toLayout []uint32,
-	sort bool,
-	pool *containers.VectorPool) (retVecs []containers.Vector, mapping []uint32) {
-	if len(srcVecs) == 0 {
-		return
-	}
-	if sort {
-		if isPrimary {
-			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout, pool)
-		} else {
-			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout, pool)
-		}
-	} else {
-		retVecs, mapping = mergeColumnWithOutSort(srcVecs, fromLayout, toLayout, pool)
-	}
-	return
-}
-
-func mergeColumnWithOutSort(
-	column []containers.Vector, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector, mapping []uint32) {
-	totalLength := uint32(0)
-	for _, i := range toLayout {
-		totalLength += i
-	}
-	mapping = make([]uint32, totalLength)
-	for i := range mapping {
-		mapping[i] = uint32(i)
-	}
-	ret = mergesort.Reshape(column, fromLayout, toLayout, pool)
-	return
-}
-
 func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	objs := ""
 	for _, obj := range task.mergedObjs {
@@ -193,21 +155,20 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		common.OperandField(schema.Name),
 		common.OperandField(task))
 	sortVecs := make([]containers.Vector, 0)
-	rows := make([]uint32, 0)
+	fromLayout := make([]uint32, 0)
 	skipBlks := make([]int, 0)
 	length := 0
-	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	task.deletes = make([]*nulls.Bitmap, len(task.compacted))
 
 	// Prepare sort key resources
-	// If there's no sort key, use physical address key
+	// If there's no sort key, use first column to do reshaping
 	var sortColDef *catalog.ColDef
 	if schema.HasSortKey() {
 		sortColDef = schema.GetSingleSortKey()
 		logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	} else {
-		sortColDef = schema.PhyAddrKey
+		sortColDef = schema.ColDefs[0]
 	}
 	phaseNumber = 1
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
@@ -245,8 +206,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 		task.transMappings.AddSortPhaseMapping(i, rowCntBeforeApplyDelete, task.deletes[i], nil /*it is sorted, no mapping*/)
 		sortVecs = append(sortVecs, vec.TryConvertConst())
-		rows = append(rows, uint32(vec.Length()))
-		fromAddr = append(fromAddr, uint32(length))
+		fromLayout = append(fromLayout, uint32(vec.Length()))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
@@ -280,68 +240,90 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		panic("warning: merge to a existing Object")
 	}
 
-	to := make([]uint32, 0)
+	toLayout := make([]uint32, 0)
 	maxrow := schema.BlockMaxRows
 	totalRows := length
 	for totalRows > 0 {
 		if totalRows > int(maxrow) {
-			to = append(to, maxrow)
+			toLayout = append(toLayout, maxrow)
 			totalRows -= int(maxrow)
 		} else {
-			to = append(to, uint32(totalRows))
+			toLayout = append(toLayout, uint32(totalRows))
 			break
 		}
 	}
 
 	// merge sort the sort key
-	allocSz := length * 4
-	node, err := common.MergeAllocator.Alloc(allocSz)
-	if err != nil {
-		panic(err)
-	}
-	defer common.MergeAllocator.Free(node)
-	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), length)
+	var sortedVecs []containers.Vector
+	var sortedIdx []uint32
+	if schema.HasSortKey() {
+		// mergesort is needed, allocate sortedidx and mapping
+		allocSz := length * 4
+		// sortedIdx is used to shuffle other columns according to the order of the sort key
+		sortIdxNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		// sortedidx will be used to shuffle other column, defer free
+		defer common.MergeAllocator.Free(sortIdxNode)
+		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), length)
 
-	vecs, mapping := mergeColumns(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey(), task.rt.VectorPool.Transient)
-	task.transMappings.UpdateMappingAfterMerge(mapping, rows, to)
-	// logutil.Infof("mapping is %v", mapping)
-	// logutil.Infof("sortedIdx is %v", sortedIdx)
+		mappingNode, err := common.MergeAllocator.Alloc(allocSz)
+		if err != nil {
+			panic(err)
+		}
+		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), length)
+
+		// modify sortidx and mapping
+		sortedVecs = mergesort.MergeColumn(sortVecs, sortedIdx, mapping, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		task.transMappings.UpdateMappingAfterMerge(mapping, fromLayout, toLayout)
+		// free mapping, which is never used again
+		common.MergeAllocator.Free(mappingNode)
+	} else {
+		// just do reshape
+		sortedVecs = mergesort.ReshapeColumn(sortVecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		// UpdateMappingAfterMerge will handle the nil mapping
+		task.transMappings.UpdateMappingAfterMerge(nil, fromLayout, toLayout)
+	}
+
 	length = 0
-	var blk handle.Block
-	toAddr := make([]uint32, 0, len(vecs))
-	// index meta for every created block
-	// Prepare new block placeholder
-	// Build and flush block index if sort key is defined
-	// Flush sort key it correlates to only one column
+
 	batchs := make([]*containers.Batch, 0)
 	blockHandles := make([]handle.Block, 0)
 	phaseNumber = 2
-	for i, vec := range vecs {
-		toAddr = append(toAddr, uint32(length))
+	for _, vec := range sortedVecs {
+		defer vec.Close()
+	}
+	for i, vec := range sortedVecs {
 		length += vec.Length()
-		blk, err = toObjEntry.CreateNonAppendableBlock(
+		blk, err := toObjEntry.CreateNonAppendableBlock(
 			new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(i)))
 		if err != nil {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		blockHandles = append(blockHandles, blk)
-		batch := containers.NewBatch()
-		batchs = append(batchs, batch)
-		vec.Close()
+		batchs = append(batchs, containers.NewBatch())
 	}
 
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 
 	phaseNumber = 3
+	vecs := make([]containers.Vector, 0, len(views))
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
-		// Skip
-		// PhyAddr column was processed before
-		// If only one single sort key, it was processed before
+
+		// just put the sorted column to the write batch
+		if def.Idx == sortColDef.Idx {
+			for i, vec := range sortedVecs {
+				batchs[i].AddVector(def.Name, vec)
+			}
+			continue
+		}
+
 		vecs = vecs[:0]
 		for i := range task.compacted {
 			vec := views[i].Columns[def.Idx].Orphan().TryConvertConst()
@@ -351,12 +333,15 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			}
 			vecs = append(vecs, vec)
 		}
-		vecs, _ := mergeColumns(vecs, &sortedIdx, false, rows, to, schema.HasSortKey(), task.rt.VectorPool.Transient)
-		for i := range vecs {
-			defer vecs[i].Close()
+		var outvecs []containers.Vector
+		if schema.HasSortKey() {
+			outvecs = mergesort.ShuffleColumn(vecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
+		} else {
+			outvecs = mergesort.ReshapeColumn(vecs, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
-		for i, vec := range vecs {
+		for i, vec := range outvecs {
 			batchs[i].AddVector(def.Name, vec)
+			defer vec.Close()
 		}
 	}
 
@@ -422,9 +407,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		task.mergedBlks,
 		task.createdBlks,
 		task.transMappings,
-		mapping,
-		fromAddr,
-		toAddr,
 		task.deletes,
 		skipBlks,
 		task.rt,

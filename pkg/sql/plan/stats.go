@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -325,16 +326,16 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	switch funcName {
 	case ">", ">=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (max - val) / (max - min)
+			return (max - val + 1) / (max - min)
 		}
 	case "<", "<=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (val - min) / (max - min)
+			return (val - min + 1) / (max - min)
 		}
 	case "between":
 		if lb, ok := getFloat64Value(typ, vals[0]); ok {
 			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				return (ub - lb) / (max - min)
+				return (ub - lb + 1) / (max - min)
 			}
 		}
 	}
@@ -408,7 +409,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		return 0.1
 	}
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
 	if col != nil && len(literals) > 0 {
 		typ := s.DataTypeMap[col.Name]
 		if !(typ.IsInteger() || typ.IsDateRelate()) {
@@ -423,7 +424,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			case types.T_date:
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), typ, literals)
+				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
 			}
@@ -760,23 +761,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_VALUE_SCAN:
-		//do nothing and just return default stats, fix this in the future
-		/*
-			if node.RowsetData == nil {
-				node.Stats = DefaultStats()
-			} else {
-				colsData := node.RowsetData.Cols
-				rowCount := float64(len(colsData[0].Data))
-				blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
-				node.Stats = &plan.Stats{
-					TableCnt:    (rowCount),
-					BlockNum:    int32(blockNumber),
-					Outcnt:      rowCount,
-					Cost:        rowCount,
-					Selectivity: 1,
-				}
-			}
-		*/
+		if node.RowsetData != nil {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			node.Stats.TableCnt = rowCount
+			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
+			node.Stats.Cost = rowCount
+			node.Stats.Outcnt = rowCount
+			node.Stats.Selectivity = 1
+		}
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats

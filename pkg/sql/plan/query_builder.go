@@ -629,7 +629,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 {
+		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 && child.Limit == nil && child.Offset == nil {
 			child.AggList = make([]*Expr, 0, len(node.AggList))
 			for _, agg := range node.AggList {
 				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
@@ -2901,10 +2901,14 @@ func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
 	selectList tree.SelectExprs, exprs ...tree.SelectExpr) (tree.SelectExprs, error) {
+	accountId, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	for _, selectExpr := range exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", builder.compCtx.GetAccountId() == catalog.System_Account)
+			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
 			if err != nil {
 				return nil, err
 			}
@@ -2950,7 +2954,7 @@ func appendSelectList(
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], builder.compCtx.GetAccountId() == catalog.System_Account)
+				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], accountId == catalog.System_Account)
 				if err != nil {
 					return nil, err
 				}
@@ -3592,7 +3596,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if midNode.NodeType == plan.Node_TABLE_SCAN {
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
-			currentAccountID := builder.compCtx.GetAccountId()
+			currentAccountID, err := builder.compCtx.GetAccountId()
+			if err != nil {
+				return 0, err
+			}
 			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
@@ -3646,7 +3653,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						NumParts: 1,
 						Parts:    tree.NameParts{util.GetClusterTableAttributeName()},
 					}
-					currentAccountID := builder.compCtx.GetAccountId()
 					right := tree.NewNumVal(constant.MakeUint64(uint64(currentAccountID)), strconv.Itoa(int(currentAccountID)), false)
 					right.ValType = tree.P_uint64
 					//account_id = the accountId of the non-sys account

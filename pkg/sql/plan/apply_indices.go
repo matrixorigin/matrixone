@@ -17,7 +17,6 @@ package plan
 import (
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -358,16 +357,6 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	}
 
 	// Apply single-column unique/secondary indices for BETWEEN-expression
-
-	limitExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, node.Limit, builder.compCtx.GetProcess(), false)
-	if err != nil {
-		return nodeID
-	}
-
-	limitCnt := limitExpr.GetLit().GetI64Val()
-	if limitCnt == 0 || limitCnt > int64(node.Stats.TableCnt)/100 {
-		return nodeID
-	}
 
 	for i, expr := range node.FilterList {
 		fn, ok := expr.Expr.(*plan.Expr_F)

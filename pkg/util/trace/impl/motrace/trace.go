@@ -26,6 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -150,6 +153,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	c := &GetTracerProvider().tracerProviderConfig
 	WithSQLExecutor(sqlExecutor).apply(c)
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {

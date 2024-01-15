@@ -32,7 +32,8 @@ var _ vm.Operator = new(Argument)
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
-	Eval
+	SendHashMap
+	SendBatch
 	End
 )
 
@@ -75,6 +76,7 @@ type Argument struct {
 
 	HashOnPK             bool
 	NeedMergedBatch      bool
+	NeedAllocateSels     bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
 	Info     *vm.OperatorInfo
