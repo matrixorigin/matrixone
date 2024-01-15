@@ -28,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const batchSize = 8192
-
 const argName = "hash_build"
 
 func (arg *Argument) String(buf *bytes.Buffer) {
