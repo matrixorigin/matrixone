@@ -238,6 +238,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		ctr.rbat.AddRowCount(len(sels))
 
 		analyze.Output(ctr.rbat, isLast)
+		ap.rbat = []*batch.Batch{ctr.rbat}
 		return false, nil
 	} else {
 		n := (len(sels)-1)/8192 + 1
