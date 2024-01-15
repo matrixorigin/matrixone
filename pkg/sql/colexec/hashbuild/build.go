@@ -130,10 +130,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = SendBatch
 			return result, nil
 		case SendBatch:
-			result.Batch = ctr.batches[ctr.batchIdx]
-			ctr.batchIdx++
 			if ctr.batchIdx >= len(ctr.batches) {
 				ctr.state = End
+			} else {
+				result.Batch = ctr.batches[ctr.batchIdx]
+				ctr.batchIdx++
 			}
 			return result, nil
 		default:
