@@ -284,7 +284,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		Sample SQL:
 		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
 		SELECT     `centroids_tbl`.`__mo_index_centroid_version`,
-		           serial_extract( serial_min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`, normalize_l2(`tbl`.embedding) ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
+		           serial_extract( min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`, normalize_l2(`tbl`.embedding) ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
 		           `tbl`.`id`
 		FROM tbl CROSS JOIN(SELECT * FROM   `a`.`centroids_tbl` WHERE  `__mo_index_centroid_version` = 0) AS `centroids_tbl`
 		GROUP BY   `tbl`.`id`;
@@ -293,7 +293,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	// 5. final SQL
 	mappingSQL := fmt.Sprintf("%s "+
 		"select `%s`.`__mo_index_centroid_version`, "+
-		"serial_extract( serial_min( serial( %s(`%s`.`%s`, normalize_l2(`%s`.%s)), `%s`.`%s`)), 1 as bigint), "+
+		"serial_extract( min( serial( %s(`%s`.`%s`, normalize_l2(`%s`.%s)), `%s`.`%s`)), 1 as bigint), "+
 		"%s "+
 		"from %s CROSS JOIN %s group by %s;",
 		insertSQL,

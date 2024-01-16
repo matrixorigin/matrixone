@@ -40,16 +40,17 @@ SELECT serial_extract(serial_full(NULL, "adam"), 1 as varchar(4));
 SELECT serial_extract(serial_full(NULL, "adam"), 1 as vecf32(4));
 
 
--- test serial_min
+-- test min
 CREATE TABLE t2 (name varchar(255), age int);
 INSERT INTO t2 (name, age) VALUES ('Abby', 24);
-INSERT INTO t2 (age) VALUES (25);
-INSERT INTO t2 (name, age) VALUES ('Carol', 23);
 INSERT INTO t2 (name,age) VALUES ('Alex',23);
-SELECT * FROM t2;
-SELECT serial_min( serial(t2.name, t2.age)) from t2;
-SELECT serial_min( serial(t2.age,t2.name)) from t2;
-SELECT serial_min( serial_full(t2.age,t2.name)) from t2;
-SELECT serial_min( serial_full(t2.name,t2.age)) from t2;
-select  serial_extract(min, 0 as int),  serial_extract(min, 1 as varchar(255)) from (SELECT serial_min( serial_full(t2.age,t2.name)) as min from t2);
-select  serial_extract(min, 0 as varchar(255)),  serial_extract(min, 1 as int) from (SELECT serial_min( serial_full(t2.name,t2.age)) as min from t2);
+INSERT INTO t2 (name, age) VALUES ('Carol', 23);
+INSERT INTO t2 (age) VALUES (25);
+select name, age from t2 order by name,age;
+SELECT min( serial(t2.name, t2.age)) from t2;
+SELECT min( serial_full(t2.name,t2.age)) from t2;
+select  serial_extract(min, 0 as varchar(255)),  serial_extract(min, 1 as int) from (SELECT min( serial_full(t2.name,t2.age)) as min from t2);
+select age,name from t2 order by age,name;
+SELECT min( serial(t2.age,t2.name)) from t2;
+SELECT min( serial_full(t2.age,t2.name)) from t2;
+select  serial_extract(min, 0 as int),  serial_extract(min, 1 as varchar(255)) from (SELECT min( serial_full(t2.age,t2.name)) as min from t2);

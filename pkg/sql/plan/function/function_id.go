@@ -156,7 +156,6 @@ const (
 	MAX
 	MEDIAN
 	MIN
-	SERIAL_MIN
 	MODE
 	MONTH
 	NORMAL
@@ -418,7 +417,6 @@ var functionIdRegister = map[string]int32{
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
-	"serial_min":            SERIAL_MIN,
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
