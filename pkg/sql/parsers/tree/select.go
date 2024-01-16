@@ -88,11 +88,11 @@ func (node *Select) Free() {
 	reuse.Free[Select](node, nil)
 }
 
-func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
+func NewSelect(selectStatement SelectStatement, orderby OrderBy, limit *Limit) *Select {
 	sel := reuse.Alloc[Select](nil)
-	sel.Select = s
-	sel.OrderBy = o
-	sel.Limit = l
+	sel.Select = selectStatement
+	sel.OrderBy = orderby
+	sel.Limit = limit
 	return sel
 }
 

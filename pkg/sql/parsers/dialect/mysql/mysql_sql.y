@@ -4391,33 +4391,62 @@ select_stmt:
     select_no_parens
 |   select_with_parens
     {
-        $$ = &tree.Select{Select: $1}
+        // selectsatement orderby limit
+        $$ = tree.NewSelect($1, nil, nil)
     }
 
 select_no_parens:
     simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo: $6}
+        // selectsatement orderby limit
+        sel := tree.NewSelect($1, $3, $4)
+        sel.TimeWindow = $2
+        sel.Ep = $5
+        sel.SelectLockInfo = $6
+        $$ = sel
     }
 |   select_with_parens time_window_opt order_by_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
+
+        // selectsatement orderby limit
+        sel := tree.NewSelect($1, $3, nil)
+        sel.TimeWindow = $2
+        sel.Ep = $4
+        $$ = sel
     }
 |   select_with_parens time_window_opt order_by_opt limit_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5}
+        // selectsatement orderby limit
+        sel := tree.NewSelect($1, $3, $4)
+        sel.TimeWindow = $2
+        sel.Ep = $5
+        $$ = sel
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, Ep: $6, SelectLockInfo:$7, With: $1}
+        // selectsatement orderby limit
+        sel := tree.NewSelect($2, $4, $5)
+        sel.TimeWindow = $3
+        sel.Ep = $6
+        sel.SelectLockInfo = $7
+        sel.With = $1
+        $$ = sel
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
+        // selectsatement orderby limit
+        sel := tree.NewSelect($2, $3, nil)
+        sel.Ep = $4
+        sel.With = $1
+        $$ = sel
     }
 |   with_clause select_with_parens order_by_opt limit_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+        // selectsatement orderby limit
+        sel := tree.NewSelect($2, $3, $4)
+        sel.Ep = $5
+        sel.With = $1
+        $$ = sel
     }
 
 time_window_opt:
@@ -4653,19 +4682,22 @@ select_with_parens:
     }
 |   '(' select_with_parens ')'
     {
-        $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
+                                            // select orderby limit
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, nil, nil)}
     }
 |   '(' values_stmt ')'
     {
         valuesStmt := $2.(*tree.ValuesStatement);
-        $$ = &tree.ParenSelect{Select: &tree.Select {
-            Select: &tree.ValuesClause {
-                Rows: valuesStmt.Rows,
-                RowWord: true,
-            },
-            OrderBy: valuesStmt.OrderBy,
-            Limit:   valuesStmt.Limit,
-        }}
+        $$ = &tree.ParenSelect{
+            Select : tree.NewSelect(
+                &tree.ValuesClause {
+                    Rows: valuesStmt.Rows,
+                    RowWord: true,
+                },
+                valuesStmt.OrderBy,
+                valuesStmt.Limit,
+            ),
+        }
     }
 
 simple_select:
