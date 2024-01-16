@@ -1353,7 +1353,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					bind := lt.getBind()
 					bind.Version = bind.Version + 1
 					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder)
-					s.getTables(0).Store(table, new)
+					s.tableGroups.set(0, table, new)
 					lt.close()
 
 					// txn2 get lock, shared
@@ -1436,14 +1436,14 @@ func TestShardingByRowWithSameTableID(t *testing.T) {
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows1, txn1, option)
 					require.NoError(t, err)
-					l := s.loadLockTable(1, shardingByRow(rows1[0]))
+					l := s.tableGroups.get(1, shardingByRow(rows1[0]))
 					assert.Equal(t, table, l.getBind().OriginTable)
 					checkLock(t, l.(*localLockTable), rows1[0], [][]byte{txn1}, nil, nil)
 
 					// txn2 get lock, shared
 					_, err = s.Lock(ctx, table, rows2, txn2, option)
 					require.NoError(t, err)
-					l = s.loadLockTable(1, shardingByRow(rows2[0]))
+					l = s.tableGroups.get(1, shardingByRow(rows2[0]))
 					assert.Equal(t, table, l.getBind().OriginTable)
 					checkLock(t, l.(*localLockTable), rows2[0], [][]byte{txn2}, nil, nil)
 
@@ -1542,6 +1542,40 @@ func TestIssue14008(t *testing.T) {
 			}
 			wg.Wait()
 		})
+}
+
+func TestHandleBindChangedConcurrently(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(
+			ctx context.Context,
+			s *service,
+			lt *localLockTable) {
+			bind := lt.getBind()
+
+			var wg sync.WaitGroup
+			for i := 0; i < 20; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					option := newTestRowSharedOptions()
+					rows := newTestRows(1)
+					txn := newTestTxnID(byte(i))
+					for i := 0; i < 1000; i++ {
+						_, err := s.Lock(ctx, table, rows, txn, option)
+						require.NoError(t, err)
+						require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+					}
+				}(i)
+			}
+			for i := 0; i < 1000; i++ {
+				s.handleBindChanged(bind)
+			}
+			wg.Wait()
+		},
+	)
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {

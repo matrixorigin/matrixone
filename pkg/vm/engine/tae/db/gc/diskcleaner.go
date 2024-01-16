@@ -237,7 +237,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	var input *GCTable
 	var err error
 	if input, err = cleaner.createNewInput(candidates); err != nil {
-		logutil.Errorf("processing clean %s: %v", candidates[0].String(), err)
+		logutil.Errorf("[DiskGC]processing clean %s: %v", candidates[0].String(), err)
 		// TODO
 		return
 	}
@@ -245,10 +245,12 @@ func (cleaner *DiskCleaner) process(items ...any) {
 	cleaner.updateMaxConsumed(candidates[len(candidates)-1])
 	err = cleaner.tryGC()
 	if err != nil {
+		logutil.Errorf("[DiskGC]processing clean tryGC %s: %v", candidates[0].String(), err)
 		return
 	}
 	err = cleaner.mergeGCFile()
 	if err != nil {
+		logutil.Errorf("[DiskGC]processing clean mergeGCFile %s: %v", candidates[0].String(), err)
 		// TODO: Error handle
 		return
 	}
@@ -290,6 +292,7 @@ func (cleaner *DiskCleaner) collectCkpData(
 		ckp.GetStart(),
 		ckp.GetEnd(),
 		false,
+		true,
 	)
 	data, err = factory(cleaner.catalog)
 	return
