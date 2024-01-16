@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -161,9 +162,10 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 	uid, _ := uuid.NewV7()
 	cfg := &cnservice.Config{
-		UUID:          uid.String(),
-		ListenAddress: address.getCNListenAddress(index),
-		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
+		UUID:           uid.String(),
+		ListenAddress:  address.getCNListenAddress(index),
+		ServiceAddress: address.getCNListenAddress(index),
+		SQLAddress:     fmt.Sprintf("127.0.0.1:%d", p),
 		Frontend: config.FrontendParameters{
 			Port: int64(p),
 		},
@@ -172,6 +174,9 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.cn
 	cfg.Engine.Type = opt.storage.cnEngine
 	cfg.TaskRunner.Parallelism = 4
+	cfg.LockService.ListenAddress = address.getCNLockListenAddress(index)
+	cfg.LockService.ServiceAddress = cfg.LockService.ListenAddress
+	cfg.LockService.KeepBindTimeout.Duration = time.Second * 30
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.
