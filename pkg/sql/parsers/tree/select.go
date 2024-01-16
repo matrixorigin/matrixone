@@ -17,7 +17,19 @@ package tree
 import (
 	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[Select](
+		func() *Select { return &Select{} },
+		func(s *Select) {
+			s.release()
+		},
+		reuse.DefaultOptions[Select]().
+			WithEnableChecker())
+}
 
 type SelectStatement interface {
 	Statement
@@ -66,12 +78,22 @@ func (node *Select) Format(ctx *FmtCtx) {
 func (node *Select) GetStatementType() string { return "Select" }
 func (node *Select) GetQueryType() string     { return QueryTypeDQL }
 
-func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
-	return &Select{
-		Select:  s,
-		OrderBy: o,
-		Limit:   l,
+func (node *Select) release() {
+	if node.SelectLockInfo != nil {
+		reuse.Free(node.SelectLockInfo, nil)
 	}
+}
+
+func (node *Select) Free() {
+	reuse.Free[Select](node, nil)
+}
+
+func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
+	sel := reuse.Alloc[Select](nil)
+	sel.Select = s
+	sel.OrderBy = o
+	sel.Limit = l
+	return sel
 }
 
 type TimeWindow struct {
@@ -184,7 +206,7 @@ type Order struct {
 	Expr          Expr
 	Direction     Direction
 	NullsPosition NullsPosition
-	//without order
+	// without order
 	NullOrder bool
 }
 
@@ -677,4 +699,8 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 		}
 	}
 	ctx.WriteString(")")
+}
+
+func (node Select) Name() string {
+	return "tree.Select"
 }

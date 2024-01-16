@@ -4643,9 +4643,7 @@ select_lock_opt:
     }
 |   FOR UPDATE
     {
-        $$ = &tree.SelectLockInfo{
-            LockType:tree.SelectLockForUpdate,
-        }
+        $$ = tree.NewSelectLockInfo(tree.SelectLockForUpdate)
     }
 
 select_with_parens:

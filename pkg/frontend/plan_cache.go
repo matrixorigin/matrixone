@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"container/list"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -53,6 +54,11 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
 		toRemove := pc.lruList.Back()
+		toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
+		for _, stmt := range toRemoveStmts {
+			stmt.Free()
+		}
+
 		pc.lruList.Remove(toRemove)
 		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
 	}
@@ -80,6 +86,15 @@ func (pc *planCache) isCached(sql string) bool {
 }
 
 func (pc *planCache) clean() {
+	if pc.lruList != nil {
+		for i := 0; i < pc.lruList.Len(); i++ {
+			toRemove := pc.lruList.Front()
+			toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
+			for _, stmt := range toRemoveStmts {
+				stmt.Free()
+			}
+		}
+	}
 	pc.lruList = nil
 	pc.cachePool = nil
 }

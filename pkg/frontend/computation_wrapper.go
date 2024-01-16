@@ -115,6 +115,7 @@ func (cwft *TxnComputationWrapper) Free() {
 	cwft.ses = nil
 	cwft.compile = nil
 	cwft.runResult = nil
+	cwft.stmt.Free()
 	cwft.stmt = nil
 }
 
