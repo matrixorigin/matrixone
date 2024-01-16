@@ -1349,6 +1349,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1368,6 +1369,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	}
 	if err = tbl.db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1444,6 +1446,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return tbl.db.txn.dumpBatch(tbl.writesOffset)
@@ -1572,6 +1575,7 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return nil
