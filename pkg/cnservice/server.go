@@ -269,7 +269,10 @@ func (s *service) Close() error {
 			return err
 		}
 	}
-	return s.server.Close()
+	if err := s.server.Close(); err != nil {
+		return err
+	}
+	return s.lockService.Close()
 }
 
 // ID implements the frontend.BaseService interface.
