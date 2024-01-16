@@ -1210,6 +1210,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1229,6 +1230,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	}
 	if err = tbl.db.txn.WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1311,6 +1313,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return tbl.db.txn.dumpBatch(tbl.writesOffset)
@@ -1439,6 +1442,7 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return nil
@@ -1787,7 +1791,11 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	tbl.tnList = []int{0}
 
-	_, created := tbl.db.txn.createMap.Load(genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId))
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	_, created := tbl.db.txn.createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
 	// check if the table is not created in this txn, and the block infos are not updated, then update:
 	// 1. update logtail
 	// 2. generate block infos
@@ -1808,8 +1816,12 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	}
 
 	// if the table is created in this txn, skip
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	if _, created := tbl.db.txn.createMap.Load(
-		genTableKey(defines.GetAccountId(ctx), tbl.tableName, tbl.db.databaseId)); created {
+		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
 

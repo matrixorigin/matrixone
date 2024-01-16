@@ -75,13 +75,16 @@ func (entry *ObjectEntry) GetCompSize() int {
 	return int(stats.Size())
 }
 
-func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
+func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
-		if composeSortKey {
-			zonemapStr = z.StringForCompose()
-		} else {
+		switch zonemapKind {
+		case common.ZonemapPrintKindNormal:
 			zonemapStr = z.String()
+		case common.ZonemapPrintKindCompose:
+			zonemapStr = z.StringForCompose()
+		case common.ZonemapPrintKindHex:
+			zonemapStr = z.StringForHex()
 		}
 	}
 	return fmt.Sprintf(

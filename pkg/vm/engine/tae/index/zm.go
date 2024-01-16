@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
@@ -108,17 +109,25 @@ func (zm ZM) innerString(f func([]byte) string) string {
 
 func (zm ZM) StringForCompose() string {
 	return zm.innerString(func(b []byte) string {
-		s := string(b)
-		if r, _, e := types.DecodeTuple(b); e == nil {
-			s = r.ErrString(nil)
+		if len(b) >= 30 {
+			return hex.EncodeToString(b)
 		}
-		return s
+		if r, _, e := types.DecodeTuple(b); e == nil {
+			return r.ErrString(nil)
+		}
+		return string(b)
 	})
 }
 
 func (zm ZM) String() string {
 	return zm.innerString(func(b []byte) string {
 		return string(b)
+	})
+}
+
+func (zm ZM) StringForHex() string {
+	return zm.innerString(func(b []byte) string {
+		return hex.EncodeToString(b)
 	})
 }
 

@@ -51,16 +51,10 @@ func TestMergeBlocksCmd(t *testing.T) {
 	id2.SetSegmentID(createdSid)
 	droppedObjs := []*common.ID{&id1, &id1}
 	createdObjs := []*common.ID{&id2}
-	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
-	fromAddr := []uint32{40000, 40000, 40000, 42}
-	toAddr := []uint32{40000, 40000, 242}
 	cmd := newMergeBlocksCmd(
 		0,
 		droppedObjs,
 		createdObjs,
-		mapping,
-		fromAddr,
-		toAddr,
 		nil,
 		0)
 

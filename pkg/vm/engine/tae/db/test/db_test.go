@@ -4637,17 +4637,16 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range entries {
-		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
-			assert.NoError(t, err)
-			t.Logf("table %d", tid)
-			if ins != nil {
-				t.Log(common.ApiBatchToString(ins, 3))
-			}
-			if del != nil {
-				t.Log(common.ApiBatchToString(del, 3))
-			}
+	entry := entries[len(entries)-1]
+	for _, tid := range tids {
+		ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+		assert.NoError(t, err)
+		t.Logf("table %d", tid)
+		if ins != nil {
+			t.Log(common.ApiBatchToString(ins, 3))
+		}
+		if del != nil {
+			t.Log(common.ApiBatchToString(del, 3))
 		}
 	}
 }

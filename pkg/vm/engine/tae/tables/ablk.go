@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -36,35 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
-
-type AblkTempFilter struct {
-	sync.RWMutex
-	m map[types.Blockid]bool
-}
-
-func (f *AblkTempFilter) Add(id types.Blockid) {
-	f.Lock()
-	defer f.Unlock()
-	f.m[id] = true
-}
-
-func (f *AblkTempFilter) Check(id types.Blockid) (skip bool) {
-	f.Lock()
-	defer f.Unlock()
-	if _, ok := f.m[id]; ok {
-		delete(f.m, id)
-		return true
-	}
-	return false
-}
-
-var AblkTempF *AblkTempFilter
-
-func init() {
-	AblkTempF = &AblkTempFilter{
-		m: make(map[types.Blockid]bool),
-	}
-}
 
 type ablock struct {
 	*baseBlock
@@ -144,11 +114,6 @@ func (blk *ablock) PrepareCompactInfo() (result bool, reason string) {
 }
 
 func (blk *ablock) PrepareCompact() bool {
-	// in aobj, there's only one blk.
-	if AblkTempF.Check(*objectio.NewBlockidWithObjectID(&blk.meta.ID, 0)) {
-		logutil.Infof("temp ablk filter skip blk %v", blk.meta.ID.String())
-		return true
-	}
 	if blk.RefCount() > 0 {
 		return false
 	}

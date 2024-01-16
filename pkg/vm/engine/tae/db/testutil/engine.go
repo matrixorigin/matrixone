@@ -391,7 +391,7 @@ func writeIncrementalCheckpoint(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false)
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
@@ -456,7 +456,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 
 func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
 	start, end types.TS, c *catalog.Catalog) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, false)
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()

@@ -30,9 +30,6 @@ type mergeBlocksCmd struct {
 	tid         uint64
 	droppedObjs []*common.ID
 	createdObjs []*common.ID
-	mapping     []uint32
-	fromAddr    []uint32
-	toAddr      []uint32
 	txn         txnif.AsyncTxn
 	id          uint32
 }
@@ -40,16 +37,12 @@ type mergeBlocksCmd struct {
 func newMergeBlocksCmd(
 	tid uint64,
 	droppedObjs, createdObjs []*common.ID,
-	mapping, fromAddr, toAddr []uint32,
 	txn txnif.AsyncTxn,
 	id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
 		droppedObjs: droppedObjs,
 		createdObjs: createdObjs,
-		mapping:     mapping,
-		fromAddr:    fromAddr,
-		toAddr:      toAddr,
 		txn:         txn,
 		id:          id,
 	}
@@ -121,7 +114,7 @@ func (cmd *mergeBlocksCmd) VerboseString() string {
 	for _, blk := range cmd.createdObjs {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
-	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v", s, cmd.fromAddr, cmd.toAddr)
+	s = fmt.Sprintf("%s ]", s)
 	return s
 }
 func (cmd *mergeBlocksCmd) ApplyCommit()                  {}
