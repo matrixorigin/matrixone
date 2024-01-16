@@ -991,7 +991,6 @@ func TestGetPKExpr(t *testing.T) {
 	for i, expr := range tc.exprs {
 		rExpr := getPkExpr(expr, pkName, proc)
 		// t.Log(plan2.FormatExpr(rExpr))
-		// t.Log(plan2.FormatExpr(tc.valExprs[i]))
 		require.Equal(t, tc.valExprs[i], rExpr)
 	}
 	require.Zero(t, m.CurrNB())
