@@ -32,7 +32,8 @@ var _ vm.Operator = new(Argument)
 const (
 	BuildHashMap = iota
 	HandleRuntimeFilter
-	Eval
+	SendHashMap
+	SendBatch
 	End
 )
 
@@ -75,6 +76,7 @@ type Argument struct {
 
 	HashOnPK             bool
 	NeedMergedBatch      bool
+	NeedAllocateSels     bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
 	Info     *vm.OperatorInfo
@@ -114,6 +116,22 @@ func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.Info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.Info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.Info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.Info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.Info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {

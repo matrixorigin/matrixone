@@ -82,20 +82,23 @@ func WithTimeoutTaskHandler(handler func(tasks []string, timeAfterStop time.Dura
 	}
 }
 
-// Stopper a stopper used to to manage all tasks that are executed in a separate goroutine,
+// Stopper a stopper used to manage all tasks that are executed in a separate goroutine,
 // and Stopper can manage these goroutines centrally to avoid leaks.
 // When Stopper's Stop method is called, if some tasks do not exit within the specified time,
 // the names of these tasks will be returned for analysis.
 type Stopper struct {
-	name    string
-	opts    *options
-	stopC   chan struct{}
-	cancels sync.Map // id -> cancelFunc
-	tasks   sync.Map // id -> name
+	name  string
+	opts  *options
+	stopC chan struct{}
 
-	atomic struct {
-		lastID    uint64
-		taskCount int64
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	lastId atomic.Uint64
+
+	tasks struct {
+		sync.RWMutex
+		m map[uint64]string
 	}
 
 	mu struct {
@@ -111,6 +114,8 @@ func NewStopper(name string, opts ...Option) *Stopper {
 		opts:  &options{},
 		stopC: make(chan struct{}),
 	}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.tasks.m = make(map[uint64]string)
 	for _, opt := range opts {
 		opt(s.opts)
 	}
@@ -134,7 +139,7 @@ func NewStopper(name string, opts ...Option) *Stopper {
 //	})
 //
 //	if err != nil {
-//		// hanle error
+//		// handle error
 //		return
 //	}
 func (s *Stopper) RunTask(task func(context.Context)) error {
@@ -154,7 +159,7 @@ func (s *Stopper) RunTask(task func(context.Context)) error {
 //	})
 //
 //	if err != nil {
-//		// hanle error
+//		// handle error
 //		return
 //	}
 func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
@@ -171,7 +176,7 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
-// Stop stop all task, and wait to all tasks canceled. If some tasks do not exit within the specified time,
+// Stop stops all task, and wait to all tasks canceled. If some tasks do not exit within the specified time,
 // the names of these tasks will be print to the given logger.
 func (s *Stopper) Stop() {
 	s.mu.Lock()
@@ -185,25 +190,22 @@ func (s *Stopper) Stop() {
 	case stopping:
 		<-s.stopC // wait concurrent stop completed
 		return
+	default:
 	}
 
 	defer func() {
 		close(s.stopC)
 	}()
 
-	s.cancels.Range(func(key, value interface{}) bool {
-		cancel := value.(context.CancelFunc)
-		cancel()
-		return true
-	})
+	s.cancel()
 
 	stopAt := time.Now()
-	timer := time.NewTimer(s.opts.stopTimeout)
-	defer timer.Stop()
+	ticker := time.NewTicker(s.opts.stopTimeout)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-timer.C:
+		case <-ticker.C:
 			tasks := s.runningTasks()
 			continuous := time.Since(stopAt)
 			s.opts.logger.Warn("tasks still running in stopper",
@@ -213,9 +215,8 @@ func (s *Stopper) Stop() {
 			if s.opts.timeoutTaskHandler != nil {
 				s.opts.timeoutTaskHandler(tasks, continuous)
 			}
-			timer.Reset(s.opts.stopTimeout)
 		default:
-			if s.GetTaskCount() == 0 {
+			if s.getTaskCount() == 0 {
 				return
 			}
 		}
@@ -227,26 +228,29 @@ func (s *Stopper) Stop() {
 }
 
 func (s *Stopper) runningTasks() []string {
-	if s.GetTaskCount() == 0 {
+	s.tasks.RLock()
+	defer s.tasks.RUnlock()
+	if s.getTaskCount() == 0 {
 		return nil
 	}
 
-	var tasks []string
-	s.tasks.Range(func(key, value interface{}) bool {
-		tasks = append(tasks, value.(string))
-		return true
-	})
+	tasks := make([]string, 0, len(s.tasks.m))
+	for _, name := range s.tasks.m {
+		tasks = append(tasks, name)
+	}
 	return tasks
 }
 
 func (s *Stopper) setupTask(id uint64, name string) {
-	s.tasks.Store(id, name)
-	s.addTask(1)
+	s.tasks.Lock()
+	defer s.tasks.Unlock()
+	s.tasks.m[id] = name
 }
 
 func (s *Stopper) shutdownTask(id uint64) {
-	s.tasks.Delete(id)
-	s.addTask(-1)
+	s.tasks.Lock()
+	defer s.tasks.Unlock()
+	delete(s.tasks.m, id)
 }
 
 func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name string, task func(context.Context)) {
@@ -261,22 +265,13 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 }
 
 func (s *Stopper) allocate() (uint64, context.Context) {
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
-	id := s.nextTaskID()
-	s.cancels.Store(id, cancel)
-	return id, ctx
+	// fill span{trace_id} in ctx
+	return s.lastId.Add(1), trace.Generate(s.ctx)
 }
 
-func (s *Stopper) nextTaskID() uint64 {
-	return atomic.AddUint64(&s.atomic.lastID, 1)
-}
-
-func (s *Stopper) addTask(v int64) {
-	atomic.AddInt64(&s.atomic.taskCount, v)
-}
-
-// GetTaskCount returns number of the running task
-func (s *Stopper) GetTaskCount() int64 {
-	return atomic.LoadInt64(&s.atomic.taskCount)
+// getTaskCount returns number of the running task
+func (s *Stopper) getTaskCount() int {
+	s.tasks.RLock()
+	defer s.tasks.RUnlock()
+	return len(s.tasks.m)
 }

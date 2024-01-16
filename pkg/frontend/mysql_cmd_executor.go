@@ -31,22 +31,19 @@ import (
 	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,8 +61,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -224,7 +223,7 @@ func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
 	}
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) (context.Context, error) {
 	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
@@ -261,7 +260,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 
 	if !motrace.GetTracerProvider().IsEnable() {
-		return ctx
+		return ctx, nil
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -270,8 +269,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm := motrace.NewStatementInfo()
 	// set TransactionID
 	var txn TxnOperator
+	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		_, txn = handler.GetTxnOperator()
+		_, txn, err = handler.GetTxnOperator()
+		if err != nil {
+			return nil, err
+		}
 		copy(stm.TransactionID[:], txn.Txn().ID)
 	}
 	// set SessionID
@@ -307,11 +310,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 
-	return motrace.ContextWithStatement(ctx, stm)
+	return motrace.ContextWithStatement(ctx, stm), nil
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
-	envStmt []string, sqlTypes []string, err error) context.Context {
+	envStmt []string, sqlTypes []string, err error) (context.Context, error) {
 	retErr := moerr.NewParseError(ctx, err.Error())
 	/*
 		!!!NOTE: the sql may be empty string.
@@ -328,11 +331,17 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if i < len(sqlTypes) {
 				sqlType = sqlTypes[i]
 			}
-			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+			ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+			if err != nil {
+				return nil, err
+			}
 			motrace.EndStatement(ctx, retErr, 0, 0)
 		}
 	} else {
-		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
+		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
+		if err != nil {
+			return nil, err
+		}
 		motrace.EndStatement(ctx, retErr, 0, 0)
 	}
 
@@ -342,16 +351,20 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
-	return ctx
+	return ctx, nil
 }
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
-var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
+var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
 	var txn TxnOperator
+	var err error
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			// 简化获取TxnOperator 逻辑, 详见 https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
-			_, txn = handler.GetTxnOperator()
+			// simplify the logic of TxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
+			_, txn, err = handler.GetTxnOperator()
+			if err != nil {
+				return err
+			}
 			stm.SetTxnID(txn.Txn().ID)
 			ses.SetTxnId(txn.Txn().ID)
 		}
@@ -362,7 +375,10 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	if upSes := ses.upstream; upSes != nil && upSes.tStmt != nil && upSes.tStmt.IsZeroTxnID() /* not record txn-id */ {
 		// background session has valid txn
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			_, txn = handler.GetTxnOperator()
+			_, txn, err = handler.GetTxnOperator()
+			if err != nil {
+				return err
+			}
 			// set upstream (the frontend session) statement's txn-id
 			// PS: only skip ONE txn
 			if stmt := upSes.tStmt; stmt.NeedSkipTxn() /* normally set by determineUserHasPrivilegeSet */ {
@@ -374,26 +390,64 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 			}
 		}
 	}
+	return nil
 }
 
 func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
-	db, err := ses.GetStorage().Database(ses.requestCtx, stmt.DbName, proc.TxnOperator)
-	if err != nil {
+	var db engine.Database
+	var err error
+
+	ctx := ses.requestCtx
+	// get db info as current account
+	if db, err = ses.GetStorage().Database(ctx, stmt.DbName, proc.TxnOperator); err != nil {
 		return err
 	}
+
+	if db.IsSubscription(ctx) {
+		// get global unique (pubAccountName, pubName)
+		var pubAccountName, pubName string
+		if _, pubAccountName, pubName, err = getSubInfoFromSql(ctx, ses, db.GetCreateSql(ctx)); err != nil {
+			return err
+		}
+
+		bh := GetRawBatchBackgroundExec(ctx, ses)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		var pubAccountId int32
+		if pubAccountId = getAccountIdByName(ctx, ses, bh, pubAccountName); pubAccountId == -1 {
+			return moerr.NewInternalError(ctx, "publish account does not exist")
+		}
+
+		// get publication record
+		var pubs []*published
+		if pubs, err = getPubs(ctx, ses, bh, pubAccountId, pubAccountName, pubName, ses.GetTenantName()); err != nil {
+			return err
+		}
+		if len(pubs) != 1 {
+			return moerr.NewInternalError(ctx, "no satisfied publication")
+		}
+
+		// as pub account
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(pubAccountId))
+		// get db as pub account
+		if db, err = ses.GetStorage().Database(ctx, pubs[0].pubDatabase, proc.TxnOperator); err != nil {
+			return err
+		}
+	}
+
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName, nil)
+		r, err := db.Relation(ctx, tableName, nil)
 		if err != nil {
 			return err
 		}
-		err = r.UpdateObjectInfos(ses.requestCtx)
-		if err != nil {
+		if err = r.UpdateObjectInfos(ctx); err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
-		if err != nil {
+		if row[3], err = r.Rows(ctx); err != nil {
+			return err
+		}
+		if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
 			return err
 		}
 		mrs.AddRow(row)
@@ -1658,7 +1712,10 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var err error
 	isPrepareStmt := false
 	if ses != nil {
-		ses.accountId = defines.GetAccountId(requestCtx)
+		ses.accountId, err = defines.GetAccountId(requestCtx)
+		if err != nil {
+			return nil, err
+		}
 		if len(ses.sql) > 8 {
 			prefix := strings.ToLower(ses.sql[:8])
 			isPrepareStmt = prefix == "execute " || prefix == "prepare "
@@ -1713,6 +1770,9 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 }
 
 func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
+	if plan2 == nil {
+		return true
+	}
 	checkFn := func(db string, def *plan.TableDef) bool {
 		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, def.Name)
 		if tableDef == nil {
@@ -1777,6 +1837,10 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			if tcw.plan == nil {
+				modify = true
+				break
+			}
 			if checkModify(tcw.plan, proc, ses) {
 				modify = true
 				break
@@ -2866,7 +2930,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
-	_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
+	if err != nil {
+		return err
+	}
 	ses.GetTxnHandler().disableStartStmt()
 	if txnOp != nil && !ses.IsDerivedStmt() {
 		txnOp.GetWorkspace().StartStatement()
@@ -2877,7 +2944,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	defer func() {
 		// move finishTxnFunc() out to another defer so that if finishTxnFunc
 		// paniced, the following is still called.
-		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+		var err3 error
+		_, txnOp, err3 = ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
+			return
+		}
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
@@ -3806,10 +3878,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
-		proc.SessionInfo.Account = sysAccountName
-		proc.SessionInfo.AccountId = sysAccountID
-		proc.SessionInfo.RoleId = moAdminRoleID
-		proc.SessionInfo.UserId = rootID
+		var accountId uint32
+		accountId, retErr = defines.GetAccountId(requestCtx)
+		if retErr != nil {
+			return retErr
+		}
+		proc.SessionInfo.AccountId = accountId
+		proc.SessionInfo.UserId = defines.GetUserId(requestCtx)
+		proc.SessionInfo.RoleId = defines.GetRoleId(requestCtx)
 	}
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
@@ -3834,7 +3910,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	if err != nil {
 		statsInfo.ParseDuration = ParseDuration
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
+		var err2 error
+		requestCtx, err2 = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
+		if err2 != nil {
+			return err2
+		}
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3843,13 +3923,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		return retErr
 	}
 
+	singleStatement := len(cws) == 1
+	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
+		return moerr.NewNotSupported(requestCtx, "prepare multi statements")
+	}
+
 	defer func() {
 		ses.SetMysqlResultSet(nil)
 	}()
 
 	canCache := true
-
-	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
@@ -3870,7 +3953,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		var err2 error
+		requestCtx, err2 = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+		if err2 != nil {
+			return err2
+		}
 
 		statsInfo.Reset()
 		//average parse duration
@@ -4018,7 +4105,11 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
+		var err2 error
+		requestCtx, err2 = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
+		if err2 != nil {
+			return err2
+		}
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
@@ -4513,10 +4604,11 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 
 			statsByte.WithTimeConsumed(
 				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration) +
-					float64(statsInfo.CompileDuration) +
-					float64(statsInfo.PlanDuration))
-
+					float64(statsInfo.ParseDuration+
+						statsInfo.CompileDuration+
+						statsInfo.CompileDuration+
+						statsInfo.PlanDuration) -
+					float64(statsInfo.DiskAccessTimeConsumption+statsInfo.S3AccessTimeConsumption))
 		}
 
 	} else {
@@ -4532,8 +4624,9 @@ func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (
 	cap := mce.GetSession().GetMysqlProtocol().GetCapability()
 	switch binary.LittleEndian.Uint16(data[:2]) {
 	case 0:
-		cap |= CLIENT_MULTI_STATEMENTS
-		mce.GetSession().GetMysqlProtocol().SetCapability(cap)
+		// MO do not support CLIENT_MULTI_STATEMENTS in prepare, so do nothing here(Like MySQL)
+		// cap |= CLIENT_MULTI_STATEMENTS
+		// mce.GetSession().GetMysqlProtocol().SetCapability(cap)
 
 	case 1:
 		cap &^= CLIENT_MULTI_STATEMENTS

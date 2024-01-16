@@ -18,12 +18,14 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"math"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -507,7 +509,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 }
 
 func TestGetExprValue(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -628,7 +630,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().Adjust().AnyTimes()
+		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -727,7 +730,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().Adjust().AnyTimes()
+		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
 

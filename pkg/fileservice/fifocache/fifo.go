@@ -22,12 +22,15 @@ import (
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
 type Cache[K comparable, V any] struct {
-	capacity  int
-	capacity1 int
-	onEvict   func(K, V)
+	capacity     int
+	capacity1    int
+	onEvict      func(K, V)
+	keyShardFunc func(K) uint8
 
-	mapLock sync.RWMutex
-	values  map[K]*_CacheItem[K, V]
+	shards [256]struct {
+		sync.RWMutex
+		values map[K]*_CacheItem[K, V]
+	}
 
 	queueLock sync.Mutex
 	used1     int
@@ -70,23 +73,29 @@ func (c *_CacheItem[K, V]) dec() {
 func New[K comparable, V any](
 	capacity int,
 	onEvict func(K, V),
+	keyShardFunc func(K) uint8,
 ) *Cache[K, V] {
-	return &Cache[K, V]{
-		capacity:  capacity,
-		capacity1: capacity / 10,
-		values:    make(map[K]*_CacheItem[K, V]),
-		queue1:    *NewQueue[*_CacheItem[K, V]](),
-		queue2:    *NewQueue[*_CacheItem[K, V]](),
-		onEvict:   onEvict,
+	ret := &Cache[K, V]{
+		capacity:     capacity,
+		capacity1:    capacity / 10,
+		queue1:       *NewQueue[*_CacheItem[K, V]](),
+		queue2:       *NewQueue[*_CacheItem[K, V]](),
+		onEvict:      onEvict,
+		keyShardFunc: keyShardFunc,
 	}
+	for i := range ret.shards {
+		ret.shards[i].values = make(map[K]*_CacheItem[K, V], 1024)
+	}
+	return ret
 }
 
 func (c *Cache[K, V]) Set(key K, value V, size int) {
-	c.mapLock.Lock()
-	_, ok := c.values[key]
+	shard := &c.shards[c.keyShardFunc(key)]
+	shard.Lock()
+	_, ok := shard.values[key]
 	if ok {
 		// existed
-		c.mapLock.Unlock()
+		shard.Unlock()
 		return
 	}
 
@@ -95,8 +104,8 @@ func (c *Cache[K, V]) Set(key K, value V, size int) {
 		value: value,
 		size:  size,
 	}
-	c.values[key] = item
-	c.mapLock.Unlock()
+	shard.values[key] = item
+	shard.Unlock()
 
 	c.queueLock.Lock()
 	defer c.queueLock.Unlock()
@@ -108,16 +117,25 @@ func (c *Cache[K, V]) Set(key K, value V, size int) {
 }
 
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	c.mapLock.RLock()
+	shard := &c.shards[c.keyShardFunc(key)]
+	shard.RLock()
 	var item *_CacheItem[K, V]
-	item, ok = c.values[key]
+	item, ok = shard.values[key]
 	if !ok {
-		c.mapLock.RUnlock()
+		shard.RUnlock()
 		return
 	}
-	c.mapLock.RUnlock()
+	shard.RUnlock()
 	item.inc()
 	return item.value, true
+}
+
+func (c *Cache[K, V]) Delete(key K) {
+	shard := &c.shards[c.keyShardFunc(key)]
+	shard.Lock()
+	defer shard.Unlock()
+	delete(shard.values, key)
+	// we don't update queues
 }
 
 func (c *Cache[K, V]) evict() {
@@ -145,9 +163,10 @@ func (c *Cache[K, V]) evict1() {
 			c.used2 += item.size
 		} else {
 			// evict
-			c.mapLock.Lock()
-			delete(c.values, item.key)
-			c.mapLock.Unlock()
+			shard := &c.shards[c.keyShardFunc(item.key)]
+			shard.Lock()
+			delete(shard.values, item.key)
+			shard.Unlock()
 			if c.onEvict != nil {
 				c.onEvict(item.key, item.value)
 			}
@@ -171,9 +190,10 @@ func (c *Cache[K, V]) evict2() {
 			item.dec()
 		} else {
 			// evict
-			c.mapLock.Lock()
-			delete(c.values, item.key)
-			c.mapLock.Unlock()
+			shard := &c.shards[c.keyShardFunc(item.key)]
+			shard.Lock()
+			delete(shard.values, item.key)
+			shard.Unlock()
 			if c.onEvict != nil {
 				c.onEvict(item.key, item.value)
 			}

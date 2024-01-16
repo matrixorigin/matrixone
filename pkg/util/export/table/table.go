@@ -63,6 +63,7 @@ const (
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
 	TFloat32
+	TTimestamp
 )
 
 func (c *ColType) ToType() types.Type {
@@ -71,6 +72,8 @@ func (c *ColType) ToType() types.Type {
 		typ := types.T_datetime.ToType()
 		typ.Scale = 6
 		return typ
+	case TTimestamp:
+		return types.T_timestamp.ToType()
 	case TUint32:
 		return types.T_uint32.ToType()
 	case TInt32:
@@ -106,6 +109,8 @@ func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
+	case TTimestamp:
+		return "TIMESTAMP"
 	case TUint32:
 		return "INT UNSIGNED"
 	case TInt32:
@@ -265,6 +270,15 @@ func BoolColumn(name, comment string) Column {
 		Name:    name,
 		ColType: TBool,
 		Default: "false",
+		Comment: comment,
+	}
+}
+
+func TimestampDefaultColumn(name, defaultVal, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TTimestamp,
+		Default: defaultVal,
 		Comment: comment,
 	}
 }

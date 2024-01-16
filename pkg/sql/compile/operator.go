@@ -99,7 +99,16 @@ func init() {
 }
 
 func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
-	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx, IsFirst: sourceIns.IsFirst, IsLast: sourceIns.IsLast}
+	res := vm.Instruction{
+		Op:          sourceIns.Op,
+		Idx:         sourceIns.Idx,
+		IsFirst:     sourceIns.IsFirst,
+		IsLast:      sourceIns.IsLast,
+		CnAddr:      sourceIns.CnAddr,
+		OperatorID:  sourceIns.OperatorID,
+		MaxParallel: sourceIns.MaxParallel,
+		ParallelID:  sourceIns.ParallelID,
+	}
 	switch sourceIns.Op {
 	case vm.Anti:
 		t := sourceIns.Arg.(*anti.Argument)
@@ -387,6 +396,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Conditions = t.Conditions
 		arg.HashOnPK = t.HashOnPK
 		arg.NeedMergedBatch = t.NeedMergedBatch
+		arg.NeedAllocateSels = t.NeedAllocateSels
 		res.Arg = arg
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -1606,6 +1616,11 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedAllocateSels = true
+		}
 
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
@@ -1615,6 +1630,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
@@ -1636,6 +1652,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			}
 		}
 		ret.NeedMergedBatch = needMergedBatch
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1647,6 +1664,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1660,6 +1678,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1673,6 +1692,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1686,6 +1706,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1697,6 +1718,11 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedAllocateSels = true
+		}
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
@@ -1708,15 +1734,17 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
-		ret.NeedHashMap = true
+		ret.NeedHashMap = false
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
@@ -1724,6 +1752,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
@@ -1731,6 +1760,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
@@ -1738,6 +1768,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
@@ -1745,6 +1776,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
@@ -1752,6 +1784,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
@@ -1759,6 +1792,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.IsDup = isDup
 		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	default:
 		ret.Release()

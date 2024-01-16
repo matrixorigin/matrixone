@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/shirou/gopsutil/v3/mem"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,13 +92,17 @@ func metaCacheSize() int64 {
 	return 2 * mpool.GB
 }
 
+func shardMetaCacheKey(key mataCacheKey) uint8 {
+	return uint8(xxhash.Sum64(key[:]))
+}
+
 func init() {
-	metaCache = fifocache.New[mataCacheKey, []byte](int(metaCacheSize()), nil)
+	metaCache = fifocache.New[mataCacheKey, []byte](int(metaCacheSize()), nil, shardMetaCacheKey)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = fifocache.New[mataCacheKey, []byte](int(size), nil)
+		metaCache = fifocache.New[mataCacheKey, []byte](int(size), nil, shardMetaCacheKey)
 	})
 }
 
