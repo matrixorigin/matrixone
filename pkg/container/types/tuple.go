@@ -693,6 +693,7 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 
 		switch {
 		case b[i] == nilCode:
+			schema = append(schema, T_any)
 			el = nil
 			off = 1
 		case b[i] == int8Code:

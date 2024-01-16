@@ -1329,13 +1329,21 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 			continue
 		}
 
-		tuple, err := types.Unpack(v1)
+		tuple, schema, err := types.UnpackWithSchema(v1)
 		if err != nil {
 			return err
 		}
 
 		if int(v2) >= len(tuple) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
+		}
+
+		if schema[v2] == types.T_any {
+			var nilVal T
+			if err = result.Append(nilVal, true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		if value, ok := tuple[v2].(T); ok {
@@ -1363,13 +1371,20 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			continue
 		}
 
-		tuple, err := types.Unpack(v1)
+		tuple, schema, err := types.UnpackWithSchema(v1)
 		if err != nil {
 			return err
 		}
 
 		if int(v2) >= len(tuple) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
+		}
+
+		if schema[v2] == types.T_any {
+			if err = result.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		if value, ok := tuple[v2].([]byte); ok {
