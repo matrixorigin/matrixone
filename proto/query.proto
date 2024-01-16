@@ -53,7 +53,8 @@ enum CmdMethod {
   GetProtocolVersion = 10;
   SetProtocolVersion = 11;
 
-  RunTask = 12;
+  CoreDumpConfig = 12;
+  RunTask = 13;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -91,6 +92,14 @@ message GetCommitRequest {
 message GetCommitResponse {
   // CurrentCommitTS current commit timestamp after sync
   timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
+}
+
+message CoreDumpConfigRequest {
+	// enable or disable
+	string Action = 1;
+}
+
+message CoreDumpConfigResponse {
 }
 
 message GetProtocolVersionRequest {
@@ -148,7 +157,8 @@ message Request {
   GetProtocolVersionRequest GetProtocolVersion = 13;
   SetProtocolVersionRequest SetProtocolVersion = 14;
 
-  RunTaskRequest RunTask = 15;
+  CoreDumpConfigRequest CoreDumpConfig = 15;
+  RunTaskRequest RunTask = 16;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -185,7 +195,8 @@ message Response {
   GetProtocolVersionResponse GetProtocolVersion = 13;
   SetProtocolVersionResponse SetProtocolVersion = 14;
 
-  RunTaskResponse RunTask = 15;
+  CoreDumpConfigResponse CoreDumpConfig = 15;
+  RunTaskResponse RunTask = 16;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
