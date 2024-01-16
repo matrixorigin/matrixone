@@ -775,30 +775,28 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if tableDef.Indexes != nil {
-				uniqueColName := make(map[string]bool)
 				for _, indexdef := range tableDef.Indexes {
+					name := indexdef.Parts[0]
 					if indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
+						if isPrimaryKey(tableDef, indexdef.Parts) {
+							for _, name := range indexdef.Parts {
+								keyStr += " when attname = "
+								keyStr += "'" + name + "'"
+								keyStr += " then 'PRI'"
 							}
-							keyStr += " when attname = "
-							keyStr += "'" + name + "'"
-							keyStr += " then 'UNI'"
-							uniqueColName[name] = true
-						}
-					}
-				}
-				for _, indexdef := range tableDef.Indexes {
-					if !indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
-							}
+						} else if isMultiplePriKey(indexdef) {
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
+						} else {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
 						}
+					} else {
+						keyStr += " when attname = "
+						keyStr += "'" + name + "'"
+						keyStr += " then 'MUL'"
 					}
 				}
 			}
