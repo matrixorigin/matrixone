@@ -81,6 +81,7 @@ func (node *Select) GetQueryType() string     { return QueryTypeDQL }
 func (node *Select) release() {
 	if node.SelectLockInfo != nil {
 		reuse.Free(node.SelectLockInfo, nil)
+		node.SelectLockInfo = nil
 	}
 }
 
