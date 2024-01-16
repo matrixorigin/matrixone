@@ -80,6 +80,9 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	bat        *batch.Batch
+	rbat       []*batch.Batch
+	lastpos    int
 
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap

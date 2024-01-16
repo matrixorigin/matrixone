@@ -49,12 +49,11 @@ func getVal(val any) string {
 
 func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
 	if val == nil {
-		vec := vector.NewConstNull(typ, 1, proc.Mp()) // todo use pool
+		vec := vector.NewConstNull(typ, 1, proc.Mp())
 		return vec, nil
 	} else {
 		strVal := getVal(val)
-		vec := vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp()) // todo use pool
-		return vec, nil
+		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
 }
 

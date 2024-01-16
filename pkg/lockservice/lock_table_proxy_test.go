@@ -47,7 +47,7 @@ func TestProxySharedLock(t *testing.T) {
 			require.NoError(t, err, err)
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-			v, _ := s1.getTables(0).Load(tableID)
+			v := s1.tableGroups.get(0, tableID)
 			lt := v.(*localLockTable)
 
 			// s2 will enable shared remote proxy
@@ -55,7 +55,7 @@ func TestProxySharedLock(t *testing.T) {
 			_, err = s2.Lock(ctx, tableID, rows, txn2, option)
 			require.NoError(t, err)
 			checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
-			v, _ = s2.getTables(0).Load(tableID)
+			v = s2.tableGroups.get(0, tableID)
 			ltp := v.(*localLockTableProxy)
 			require.Equal(t, ltp.mu.currentHolder[string(rows[0])], txn2)
 			require.Equal(t, 1, len(ltp.mu.holders[string(rows[0])].txns))
@@ -123,7 +123,7 @@ func TestProxySharedUnlock(t *testing.T) {
 			require.NoError(t, err, err)
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
-			v, _ := s1.getTables(0).Load(tableID)
+			v := s1.tableGroups.get(0, tableID)
 			lt := v.(*localLockTable)
 
 			// s2 will enable shared remote proxy
