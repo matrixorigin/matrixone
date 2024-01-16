@@ -200,6 +200,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 				if err != nil {
 					return err
 				}
+				proc.PutBatch(src)
 			}
 		}
 	} else { // src.RowCount() > colexec.DefaultBatchSize
@@ -207,6 +208,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		if err != nil {
 			return err
 		}
+		proc.PutBatch(ctr.tmpBatch)
 		ctr.tmpBatch = nil
 
 		offset := colexec.DefaultBatchSize
@@ -226,7 +228,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 				return err
 			}
 		}
-		src.SetRowCount(colexec.DefaultBatchSize)
+		src.Truncate(colexec.DefaultBatchSize)
 		ctr.batches = append(ctr.batches, src)
 	}
 	return nil
