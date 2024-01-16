@@ -682,7 +682,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
 		vec := vector.NewVec(tt[i])
-		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		if err := vec.PreExtend(batchSize, testutil.TestUtilMp); err != nil {
+			panic(err)
+		}
 		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}

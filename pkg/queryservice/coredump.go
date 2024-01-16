@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testutil
+package queryservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"context"
+	"strings"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
-var (
-	int8Type    = types.T_int8.ToType()
-	int16Type   = types.T_int16.ToType()
-	int32Type   = types.T_int32.ToType()
-	int64Type   = types.T_int64.ToType()
-	uint16Type  = types.T_uint16.ToType()
-	varcharType = types.T_varchar.ToType()
-	textType    = types.T_text.ToType()
-	rowIdType   = types.T_Rowid.ToType()
-)
+func handleCoreDumpConfig(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.CoreDumpConfig == nil {
+		return nil
+	}
+	switch strings.ToLower(req.CoreDumpConfig.Action) {
+	case "enable":
+		util.EnableCoreDump()
+	case "disable":
+		util.DisableCoreDump()
+	}
+	resp.CoreDumpConfig = &pb.CoreDumpConfigResponse{}
+	return nil
+}

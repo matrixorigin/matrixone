@@ -71,6 +71,8 @@ type Argument struct {
 	Conditions [][]*plan.Expr
 	HashOnPK   bool
 	IsShuffle  bool
+	bat        *batch.Batch
+	lastrow    int
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
