@@ -24,7 +24,7 @@ jobs:
           npm install node-fetch
           # downgrade node-fetch version
           npm i node-fetch@2.6.1
-      - run: node .scripts/add-assignee-to-corr-project.js
+      - run: node .scripts/workflow-js-file/add-assignee-to-corr-project.js
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
           Issue_ID: ${{ github.event.issue.number }}
