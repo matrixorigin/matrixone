@@ -105,7 +105,7 @@ func TestBuildAlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().SetBuildingAlterView(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
@@ -190,7 +190,7 @@ func TestBuildLockTables(t *testing.T) {
 			return x.obj, x.table
 		}).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()

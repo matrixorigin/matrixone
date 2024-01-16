@@ -1127,19 +1127,17 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	var accountId, userId, roleId uint32
+	var err error
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
+	accountId, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		userId = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		roleId = v.(uint32)
-	}
-	return accountId, userId, roleId
+	userId = defines.GetUserId(ctx)
+	roleId = defines.GetRoleId(ctx)
+	return accountId, userId, roleId, nil
 }
 
 /*
@@ -1212,18 +1210,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
+		accountId:  id,
 	}
 }
 
