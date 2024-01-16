@@ -4015,7 +4015,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 					plans[i] = cwft.plan
 					stmts[i] = cwft.stmt
 				} else {
-					cwft.Free()
+					for j := 0 ; j < i; j ++ {
+						if cj, ok := cws[j].(*TxnComputationWrapper); ok {
+							cj.Free()
+						}
+					}
 					return nil
 				}
 			}
