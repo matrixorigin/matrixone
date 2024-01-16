@@ -180,7 +180,10 @@ var _ StmtExecutor = &resultSetStmtExecutor{}
 func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt, sqlType string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
-	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, sqlType, useEnv)
+	ctx, err = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, sqlType, useEnv)
+	if err != nil {
+		return err
+	}
 	err = stmtExec.Setup(ctx, ses)
 	if err != nil {
 		goto handleRet

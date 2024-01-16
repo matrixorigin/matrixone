@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -429,6 +431,7 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	initMysqlTables(ctx, ieFactory)
 	initInformationSchemaTables(ctx, ieFactory)
 	return nil

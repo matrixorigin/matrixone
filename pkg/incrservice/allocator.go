@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -57,9 +58,11 @@ func (a *allocator) allocate(
 	count int,
 	txnOp client.TxnOperator) (uint64, uint64, error) {
 	c := make(chan struct{})
-	var from, to uint64
+	//UT test find race here
+	var from, to atomic.Uint64
 	var err error
-	a.asyncAllocate(
+	var err2 atomic.Value
+	err = a.asyncAllocate(
 		ctx,
 		tableID,
 		key,
@@ -68,13 +71,21 @@ func (a *allocator) allocate(
 		func(
 			v1, v2 uint64,
 			e error) {
-			from = v1
-			to = v2
-			err = e
+			from.Store(v1)
+			to.Store(v2)
+			if e != nil {
+				err2.Store(e)
+			}
 			close(c)
 		})
+	if err2.Load() != nil && err2.Load().(error) != nil {
+		err = err2.Load().(error)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
 	<-c
-	return from, to, err
+	return from.Load(), to.Load(), err
 }
 
 func (a *allocator) asyncAllocate(
@@ -83,15 +94,20 @@ func (a *allocator) asyncAllocate(
 	col string,
 	count int,
 	txnOp client.TxnOperator,
-	apply func(uint64, uint64, error)) {
+	apply func(uint64, uint64, error)) error {
+	accountId, err := getAccountID(ctx)
+	if err != nil {
+		return err
+	}
 	a.c <- action{
 		txnOp:         txnOp,
-		accountID:     getAccountID(ctx),
+		accountID:     accountId,
 		actionType:    allocType,
 		tableID:       tableID,
 		col:           col,
 		count:         count,
 		applyAllocate: apply}
+	return nil
 }
 
 func (a *allocator) updateMinValue(
@@ -101,6 +117,11 @@ func (a *allocator) updateMinValue(
 	minValue uint64,
 	txnOp client.TxnOperator) error {
 	var err error
+	var accountId uint32
+	accountId, err = getAccountID(ctx)
+	if err != nil {
+		return err
+	}
 	c := make(chan struct{})
 	fn := func(e error) {
 		err = e
@@ -108,7 +129,7 @@ func (a *allocator) updateMinValue(
 	}
 	a.c <- action{
 		txnOp:       txnOp,
-		accountID:   getAccountID(ctx),
+		accountID:   accountId,
 		actionType:  updateType,
 		tableID:     tableID,
 		col:         col,
@@ -136,7 +157,7 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doAllocate(act action) {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx := defines.AttachAccountId(context.Background(), act.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
@@ -160,7 +181,7 @@ func (a *allocator) doAllocate(act action) {
 }
 
 func (a *allocator) doUpdate(act action) {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx := defines.AttachAccountId(context.Background(), act.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
@@ -203,10 +224,6 @@ type action struct {
 	applyUpdate   func(error)
 }
 
-func getAccountID(ctx context.Context) uint32 {
-	v := ctx.Value(defines.TenantIDKey{})
-	if v != nil {
-		return v.(uint32)
-	}
-	return 0
+func getAccountID(ctx context.Context) (uint32, error) {
+	return defines.GetAccountId(ctx)
 }
