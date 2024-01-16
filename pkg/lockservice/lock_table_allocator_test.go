@@ -17,7 +17,6 @@ package lockservice
 import (
 	"fmt"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -132,8 +131,8 @@ func TestKeepaliveBind(t *testing.T) {
 			}()
 
 			bind := a.Get("s1", 1)
-			m := &sync.Map{}
-			m.Store(1,
+			m := &lockTableHolder{id: "s1", tables: map[uint64]lockTable{}}
+			m.set(1,
 				newRemoteLockTable(
 					"s1",
 					time.Second,

@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -30,7 +29,7 @@ type lockTableKeeper struct {
 	stopper                   *stopper.Stopper
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
-	tables                    *sync.Map
+	tables                    *lockTableHolder
 	canDoKeep                 bool
 }
 
@@ -42,7 +41,7 @@ func NewLockTableKeeper(
 	client Client,
 	keepLockTableBindInterval time.Duration,
 	keepRemoteLockInterval time.Duration,
-	tables *sync.Map) LockTableKeeper {
+	tables *lockTableHolder) LockTableKeeper {
 	s := &lockTableKeeper{
 		serviceID:                 serviceID,
 		client:                    client,
@@ -118,9 +117,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	binds = binds[:0]
 	futures = futures[:0]
 
-	k.tables.Range(func(key, value any) bool {
-		lb := value.(lockTable)
-		bind := lb.getBind()
+	k.tables.iter(func(key uint64, value lockTable) bool {
+		bind := value.getBind()
 		if bind.ServiceID != k.serviceID {
 			services[bind.ServiceID] = bind
 		}
@@ -164,9 +162,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	if !k.canDoKeep {
-		k.tables.Range(func(key, value any) bool {
-			lb := value.(lockTable)
-			bind := lb.getBind()
+		k.tables.iter(func(key uint64, value lockTable) bool {
+			bind := value.getBind()
 			if bind.ServiceID == k.serviceID {
 				k.canDoKeep = true
 			}
@@ -197,15 +194,13 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	}
 
 	n := 0
-	k.tables.Range(func(key, value any) bool {
-		lb := value.(lockTable)
-		bind := lb.getBind()
+	k.tables.removeWithFilter(func(key uint64, value lockTable) bool {
+		bind := value.getBind()
 		if bind.ServiceID == k.serviceID {
-			k.tables.Delete(key)
-			lb.close()
+			return true
 		}
 		n++
-		return true
+		return false
 	})
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local
