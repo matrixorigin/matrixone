@@ -379,7 +379,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+c    DATE(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
@@ -400,7 +400,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-x    DATETIME(0)    YES        null        
+x    DATETIME(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    x    d
@@ -1431,7 +1431,7 @@ desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 bnewnew    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES        null        
+c    DATE(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable

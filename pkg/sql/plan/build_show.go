@@ -797,7 +797,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 						keyStr += " when attname = "
 						keyStr += "'" + name + "'"
 						keyStr += " then 'MUL'"
-						break
 					}
 				}
 			}

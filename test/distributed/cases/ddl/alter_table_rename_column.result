@@ -369,10 +369,10 @@ index02    1    c    1    c    A    0    NULL    NULL    YES                    
 index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-bnewnew    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+bnewnew    CHAR(10)    YES        null        
+c    DATE(0)    YES    MUL    null        
+d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 index02    a    INT    NO
