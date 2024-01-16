@@ -120,7 +120,6 @@ type sAggDecimal64Min struct{}
 type sAggDecimal128Min struct{}
 type sAggUuidMin struct{}
 type sAggStrMin struct{}
-type sAggSerialMin struct{}
 
 func (s *sAggMin[T]) Dup() agg.AggStruct {
 	return &sAggMin[T]{}
