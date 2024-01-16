@@ -22,10 +22,12 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
@@ -517,7 +519,7 @@ func runColumnCacheTestsWithInitOffset(
 	runAllocatorTests(
 		t,
 		func(a valueAllocator) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			defer cancel()
 			col := AutoColumn{
 				ColName: "k1",
