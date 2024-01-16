@@ -16,6 +16,7 @@ package preinsertunique
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -64,6 +65,22 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
