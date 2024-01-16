@@ -66,7 +66,7 @@ type typedSlice struct {
 }
 
 func (t *typedSlice) setFromVector(v *Vector) {
-	sz := int(v.typ.TypeSize())
+	sz := v.typ.TypeSize()
 	if cap(v.data) >= sz {
 		t.Ptr = unsafe.Pointer(&v.data[0])
 		t.Cap = cap(v.data) / sz
@@ -279,44 +279,44 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	return vec
 }
 
-func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) *Vector {
-	vec := &Vector{
+func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
+	vec = &Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
 
 	if length > 0 {
-		SetConstFixed(vec, val, length, mp)
+		err = SetConstFixed(vec, val, length, mp)
 	}
 
-	return vec
+	return vec, err
 }
 
-func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vector {
-	vec := &Vector{
+func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
+	vec = &Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
 
 	if length > 0 {
-		SetConstBytes(vec, val, length, mp)
+		err = SetConstBytes(vec, val, length, mp)
 	}
 
-	return vec
+	return vec, err
 }
 
 // NewConstArray Creates a Const_Array Vector
-func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) *Vector {
-	vec := &Vector{
+func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
+	vec = &Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
 
 	if length > 0 {
-		SetConstArray[T](vec, val, length, mp)
+		err = SetConstArray[T](vec, val, length, mp)
 	}
 
-	return vec
+	return vec, err
 }
 
 func (v *Vector) IsConst() bool {
@@ -338,7 +338,7 @@ func (v *Vector) IsNull(i uint64) bool {
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector) []T {
-	sz := int(v.typ.TypeSize())
+	sz := v.typ.TypeSize()
 
 	//if cap(v.data)%sz != 0 {
 	//	panic(moerr.NewInternalErrorNoCtx("decode slice that is not a multiple of element size"))
@@ -724,64 +724,64 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 }
 
 // Shuffle use to shrink vectors, sels can be disordered
-func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
+func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
 		return nil
 	}
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		shuffleFixed[bool](v, sels, mp)
+		err = shuffleFixed[bool](v, sels, mp)
 	case types.T_int8:
-		shuffleFixed[int8](v, sels, mp)
+		err = shuffleFixed[int8](v, sels, mp)
 	case types.T_int16:
-		shuffleFixed[int16](v, sels, mp)
+		err = shuffleFixed[int16](v, sels, mp)
 	case types.T_int32:
-		shuffleFixed[int32](v, sels, mp)
+		err = shuffleFixed[int32](v, sels, mp)
 	case types.T_int64:
-		shuffleFixed[int64](v, sels, mp)
+		err = shuffleFixed[int64](v, sels, mp)
 	case types.T_uint8:
-		shuffleFixed[uint8](v, sels, mp)
+		err = shuffleFixed[uint8](v, sels, mp)
 	case types.T_uint16:
-		shuffleFixed[uint16](v, sels, mp)
+		err = shuffleFixed[uint16](v, sels, mp)
 	case types.T_uint32:
-		shuffleFixed[uint32](v, sels, mp)
+		err = shuffleFixed[uint32](v, sels, mp)
 	case types.T_uint64:
-		shuffleFixed[uint64](v, sels, mp)
+		err = shuffleFixed[uint64](v, sels, mp)
 	case types.T_float32:
-		shuffleFixed[float32](v, sels, mp)
+		err = shuffleFixed[float32](v, sels, mp)
 	case types.T_float64:
-		shuffleFixed[float64](v, sels, mp)
+		err = shuffleFixed[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
-		shuffleFixed[types.Varlena](v, sels, mp)
+		err = shuffleFixed[types.Varlena](v, sels, mp)
 	case types.T_date:
-		shuffleFixed[types.Date](v, sels, mp)
+		err = shuffleFixed[types.Date](v, sels, mp)
 	case types.T_datetime:
-		shuffleFixed[types.Datetime](v, sels, mp)
+		err = shuffleFixed[types.Datetime](v, sels, mp)
 	case types.T_time:
-		shuffleFixed[types.Time](v, sels, mp)
+		err = shuffleFixed[types.Time](v, sels, mp)
 	case types.T_timestamp:
-		shuffleFixed[types.Timestamp](v, sels, mp)
+		err = shuffleFixed[types.Timestamp](v, sels, mp)
 	case types.T_enum:
-		shuffleFixed[types.Enum](v, sels, mp)
+		err = shuffleFixed[types.Enum](v, sels, mp)
 	case types.T_decimal64:
-		shuffleFixed[types.Decimal64](v, sels, mp)
+		err = shuffleFixed[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
-		shuffleFixed[types.Decimal128](v, sels, mp)
+		err = shuffleFixed[types.Decimal128](v, sels, mp)
 	case types.T_uuid:
-		shuffleFixed[types.Uuid](v, sels, mp)
+		err = shuffleFixed[types.Uuid](v, sels, mp)
 	case types.T_TS:
-		shuffleFixed[types.TS](v, sels, mp)
+		err = shuffleFixed[types.TS](v, sels, mp)
 	case types.T_Rowid:
-		shuffleFixed[types.Rowid](v, sels, mp)
+		err = shuffleFixed[types.Rowid](v, sels, mp)
 	case types.T_Blockid:
-		shuffleFixed[types.Blockid](v, sels, mp)
+		err = shuffleFixed[types.Blockid](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
-	return nil
+	return err
 }
 
 // XXX Old Copy is FUBAR.
@@ -2979,7 +2979,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	olddata := v.data[:v.length*sz]
 	ns := len(sels)
 	vs := MustFixedCol[T](v)
-	data, err := mp.Alloc(int(ns * v.GetType().TypeSize()))
+	data, err := mp.Alloc(ns * v.GetType().TypeSize())
 	if err != nil {
 		return err
 	}
@@ -3064,7 +3064,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		return NewConstNull(v.typ, end-start, mp), nil
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
-			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp), nil
+			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
 		} else {
 			vec := NewVec(v.typ)
 			vec.class = v.class

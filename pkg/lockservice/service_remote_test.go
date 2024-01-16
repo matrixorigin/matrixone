@@ -404,9 +404,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 				})
 				if err == nil {
 					// l2 get the bind
-					v, ok := l2.getTables(0).Load(table)
-					assert.True(t, ok)
-					l := v.(lockTable)
+					l := l2.tableGroups.get(0, table)
 					assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
 					return
 				}
@@ -433,9 +431,7 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			assert.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			// l2 get the bind
-			v, ok := l2.getTables(0).Load(table)
-			assert.True(t, ok)
-			l := v.(lockTable)
+			l := l2.tableGroups.get(0, table)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
 		},
 	)
@@ -460,9 +456,7 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			require.NoError(t, err)
 			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
-			v, ok := l2.getTables(0).Load(table)
-			assert.True(t, ok)
-			l := v.(lockTable)
+			l := l2.tableGroups.get(0, table)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
 		},
 	)
@@ -568,9 +562,9 @@ func TestIssue12554(t *testing.T) {
 			oldBind := alloc.Get(l1.serviceID, 0, table, 0, pb.Sharding_None)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.getTables(0).Delete(table)
+			l1.tableGroups.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table })
 			newLockTable := l1.createLockTableByBind(oldBind)
-			l1.getTables(0).Store(table, newLockTable)
+			l1.tableGroups.set(0, table, newLockTable)
 
 			_, err := l2.Lock(ctx, table, [][]byte{row1}, txn2, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
@@ -679,8 +673,6 @@ func checkBind(
 	t *testing.T,
 	bind pb.LockTable,
 	s *service) {
-	v, ok := s.getTables(0).Load(bind.Table)
-	assert.True(t, ok)
-	l := v.(lockTable)
+	l := s.tableGroups.get(0, bind.Table)
 	assert.Equal(t, bind, l.getBind())
 }
