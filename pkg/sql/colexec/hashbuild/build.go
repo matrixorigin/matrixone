@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -159,6 +160,9 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		}
 		if ctr.tmpBatch.RowCount()+src.RowCount() >= colexec.DefaultBatchSize {
 			offset := ctr.tmpBatch.RowCount() + src.RowCount() - colexec.DefaultBatchSize
+			if offset > src.RowCount() {
+				logutil.Infof("tmpbatch %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
+			}
 			length := colexec.DefaultBatchSize - ctr.tmpBatch.RowCount()
 			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length)
 			if err != nil {
