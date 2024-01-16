@@ -5931,7 +5931,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							isClusterTable:        clusterTable,
 							clusterTableOperation: clusterTableOperation,
 						})
-					} else {
+					} else if node.ParentObjRef != nil {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							databaseName:          node.ParentObjRef.GetSchemaName(),
