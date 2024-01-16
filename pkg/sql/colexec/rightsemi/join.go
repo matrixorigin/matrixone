@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -170,6 +171,7 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(int64(ctr.batchRowCount))
 	}
+	logutil.Infof("###########right semi join receive batch %v ", ctr.batchRowCount)
 	return nil
 }
 
@@ -212,6 +214,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	count := ctr.matched.Count()
+	logutil.Infof("###########right semi join matched count %v ", count)
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {

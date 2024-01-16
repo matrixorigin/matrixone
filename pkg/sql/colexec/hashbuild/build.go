@@ -192,7 +192,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 					return err
 				}
 				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				src.SetRowCount(offset)
+				src.Truncate(offset)
 				ctr.tmpBatch = src
 				return nil
 			} else {
