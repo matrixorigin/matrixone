@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"go.uber.org/zap"
 )
 
 type TestRunner interface {
@@ -144,22 +146,62 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
+	now := time.Now()
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
 	}
-	start := types.TS{}
+
+	var (
+		err      error
+		errPhase string
+		start    types.TS
+		fatal    bool
+		fields   []zap.Field
+	)
+
 	if prev != nil {
 		start = prev.end.Next()
 	}
+
 	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	logutil.Info(
+		"Checkpoint-Start-Force",
+		zap.String("entry", entry.String()),
+	)
+
+	defer func() {
+		if err != nil {
+			logger := logutil.Error
+			if fatal {
+				logger = logutil.Fatal
+			}
+			logger(
+				"Checkpoint-Error-Force",
+				zap.String("entry", entry.String()),
+				zap.String("phase", errPhase),
+				zap.Error(err),
+				zap.Duration("cost", time.Since(now)),
+			)
+		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.String("entry", entry.String()))
+			logutil.Info(
+				"Checkpoint-End-Force",
+				fields...,
+			)
+		}
+	}()
+
 	r.storage.Lock()
 	r.storage.entries.Set(entry)
-	now := time.Now()
 	r.storage.Unlock()
-	if err := r.doIncrementalCheckpoint(entry); err != nil {
+
+	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
+		errPhase = "do-ckp"
 		return err
 	}
+
 	var lsn, lsnToTruncate uint64
 	if truncate {
 		lsn = r.source.GetMaxLSN(entry.start, entry.end)
@@ -169,20 +211,28 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 		entry.ckpLSN = lsn
 		entry.truncateLSN = lsnToTruncate
 	}
-	if err := r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
+
+	if err = r.saveCheckpoint(
+		entry.start, entry.end, lsn, lsnToTruncate,
+	); err != nil {
+		errPhase = "save-ckp"
 		return err
 	}
 	entry.SetState(ST_Finished)
+
 	if truncate {
-		e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
-		if err != nil {
-			panic(err)
+		var e wal.LogEntry
+		if e, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
+			errPhase = "wal-ckp"
+			fatal = true
+			return err
 		}
 		if err = e.WaitDone(); err != nil {
-			panic(err)
+			errPhase = "wait-wal-ckp"
+			fatal = true
+			return err
 		}
 	}
-	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 	return nil
 }
 
@@ -200,7 +250,7 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	r.storage.entries.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
-	if err = r.doIncrementalCheckpoint(entry); err != nil {
+	if _, err = r.doIncrementalCheckpoint(entry); err != nil {
 		return
 	}
 	var lsn, lsnToTruncate uint64
