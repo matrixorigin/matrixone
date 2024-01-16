@@ -194,7 +194,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	rowCount := 0
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if rowCount >= 8192 {
+		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat

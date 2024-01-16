@@ -17,13 +17,14 @@ package shuffle
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
 
-const shuffleBatchSize = 8192 * 3 / 4
+const shuffleBatchSize = colexec.DefaultBatchSize * 3 / 4
 
 type Argument struct {
 	ctr                *container

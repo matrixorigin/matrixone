@@ -156,7 +156,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 	rowCountIncrease := 0
 	for i := ap.lastrow; i < count; i++ {
-		if rowCountIncrease >= 8192 {
+		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat

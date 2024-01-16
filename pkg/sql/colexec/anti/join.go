@@ -162,7 +162,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	}
 	count := ap.bat.RowCount()
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if ctr.rbat.RowCount() >= 8192 {
+		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.lastrow = i
@@ -224,7 +224,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if ctr.rbat.RowCount() >= 8192 {
+		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.lastrow = i

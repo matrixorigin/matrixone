@@ -152,6 +152,13 @@ func appendFromOffset(dst *batch.Batch, proc *process.Process, src *batch.Batch,
 		dst.Recursive = src.Recursive
 		for j := range src.Vecs {
 			dst.Vecs[j] = proc.GetVector(*src.Vecs[j].GetType())
+			if dst.Vecs[j].Capacity() < colexec.DefaultBatchSize {
+				err := dst.Vecs[j].PreExtend(colexec.DefaultBatchSize, proc.Mp())
+				if err != nil {
+					dst.Vecs[j].Free(proc.Mp())
+					return dst, err
+				}
+			}
 		}
 	}
 	if len(dst.Vecs) != len(src.Vecs) {
@@ -162,7 +169,7 @@ func appendFromOffset(dst *batch.Batch, proc *process.Process, src *batch.Batch,
 			return dst, err
 		}
 	}
-	dst.SetRowCount(length)
+	dst.SetRowCount(dst.RowCount() + length)
 	return dst, nil
 }
 
