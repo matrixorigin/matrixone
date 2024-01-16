@@ -18,13 +18,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: npn install dependency
+      - name: npm install dependency
         run: |
-          npm install -g @octokit/action
-          npm install -g node-fetch
-          # downgrade node-fetch version
-          npm i node-fetch@2.6.1
-      - run: node ./scripts/workflow-js-file/add-assignee-to-corr-project.js
+          cd ${GITHUB_WORKSPACE}/scripts/projects
+          npm install
+      - run: node ${GITHUB_WORKSPACE}/scripts/projects/add-assignee-to-corr-project.js
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
           Issue_ID: ${{ github.event.issue.number }}
