@@ -161,7 +161,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		if ctr.tmpBatch.RowCount()+src.RowCount() >= colexec.DefaultBatchSize {
 			offset := ctr.tmpBatch.RowCount() + src.RowCount() - colexec.DefaultBatchSize
 			if offset > src.RowCount() {
-				logutil.Infof("tmpbatch %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
+				logutil.Infof("################tmpbatch1 %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
 			}
 			length := colexec.DefaultBatchSize - ctr.tmpBatch.RowCount()
 			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length)
@@ -169,6 +169,9 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 				return err
 			}
 			ctr.batches = append(ctr.batches, ctr.tmpBatch)
+			if offset > src.RowCount() {
+				logutil.Infof("################tmpbatch2 %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
+			}
 			src.Truncate(offset)
 			ctr.tmpBatch = src
 			return nil

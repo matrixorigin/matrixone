@@ -333,6 +333,7 @@ func (bat *Batch) SetRowCount(rowCount int) {
 
 func (bat *Batch) Truncate(rowCount int) {
 	if rowCount > bat.RowCount() {
+		logutil.Infof("################rowcount %v, bat rowcount %v", rowCount, bat.rowCount)
 		panic("truncate batch size must be smaller than origin size!")
 	}
 	bat.rowCount = rowCount
