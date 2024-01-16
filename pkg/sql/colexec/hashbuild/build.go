@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -145,34 +144,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func appendFromOffset(dst *batch.Batch, proc *process.Process, src *batch.Batch, offset int, length int) (*batch.Batch, error) {
-	if dst == nil {
-		dst = batch.NewWithSize(len(src.Vecs))
-		dst.SetAttributes(src.Attrs)
-		dst.Recursive = src.Recursive
-		for j := range src.Vecs {
-			dst.Vecs[j] = proc.GetVector(*src.Vecs[j].GetType())
-			if dst.Vecs[j].Capacity() < colexec.DefaultBatchSize {
-				err := dst.Vecs[j].PreExtend(colexec.DefaultBatchSize, proc.Mp())
-				if err != nil {
-					dst.Vecs[j].Free(proc.Mp())
-					return dst, err
-				}
-			}
-		}
-	}
-	if len(dst.Vecs) != len(src.Vecs) {
-		return nil, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
-	}
-	for i := range dst.Vecs {
-		if err := dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
-			return dst, err
-		}
-	}
-	dst.SetRowCount(dst.RowCount() + length)
-	return dst, nil
-}
-
 // make sure src is not empty
 func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) error {
 	var err error
@@ -181,40 +152,43 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		return nil
 	} else if src.RowCount() < colexec.DefaultBatchSize {
 		if ctr.tmpBatch == nil {
+			ctr.tmpBatch, err = proc.NewBatchFromSrc(src, 0)
+			if err != nil {
+				return err
+			}
+		}
+		if ctr.tmpBatch.RowCount()+src.RowCount() >= colexec.DefaultBatchSize {
+			offset := ctr.tmpBatch.RowCount() + src.RowCount() - colexec.DefaultBatchSize
+			length := colexec.DefaultBatchSize - ctr.tmpBatch.RowCount()
+			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length)
+			if err != nil {
+				return err
+			}
+			ctr.batches = append(ctr.batches, ctr.tmpBatch)
+			src.Truncate(offset)
 			ctr.tmpBatch = src
 			return nil
 		} else {
-			if ctr.tmpBatch.RowCount()+src.RowCount() >= colexec.DefaultBatchSize {
-				offset := ctr.tmpBatch.RowCount() + src.RowCount() - colexec.DefaultBatchSize
-				length := colexec.DefaultBatchSize - ctr.tmpBatch.RowCount()
-				ctr.tmpBatch, err = appendFromOffset(ctr.tmpBatch, proc, src, offset, length)
-				if err != nil {
-					return err
-				}
-				ctr.batches = append(ctr.batches, ctr.tmpBatch)
-				src.Truncate(offset)
-				ctr.tmpBatch = src
-				return nil
-			} else {
-				ctr.tmpBatch, err = ctr.tmpBatch.Append(proc.Ctx, proc.Mp(), src)
-				if err != nil {
-					return err
-				}
-				proc.PutBatch(src)
+			ctr.tmpBatch, err = ctr.tmpBatch.Append(proc.Ctx, proc.Mp(), src)
+			if err != nil {
+				return err
 			}
+			proc.PutBatch(src)
 		}
 	} else { // src.RowCount() > colexec.DefaultBatchSize
-		src, err = src.Append(proc.Ctx, proc.Mp(), ctr.tmpBatch)
-		if err != nil {
-			return err
+		if ctr.tmpBatch != nil {
+			src, err = src.Append(proc.Ctx, proc.Mp(), ctr.tmpBatch)
+			if err != nil {
+				return err
+			}
+			proc.PutBatch(ctr.tmpBatch)
+			ctr.tmpBatch = nil
 		}
-		proc.PutBatch(ctr.tmpBatch)
-		ctr.tmpBatch = nil
 
 		offset := colexec.DefaultBatchSize
 		length := src.RowCount()
 		for offset+colexec.DefaultBatchSize <= length {
-			ctr.tmpBatch, err = appendFromOffset(ctr.tmpBatch, proc, src, offset, colexec.DefaultBatchSize)
+			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, colexec.DefaultBatchSize)
 			if err != nil {
 				return err
 			}
@@ -223,7 +197,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 			offset += colexec.DefaultBatchSize
 		}
 		if offset < length {
-			ctr.tmpBatch, err = appendFromOffset(ctr.tmpBatch, proc, src, offset, length-offset)
+			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length-offset)
 			if err != nil {
 				return err
 			}

@@ -47,8 +47,9 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat  *batch.Batch
-	rbat *batch.Batch
+	batches       []*batch.Batch
+	batchRowCount int
+	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -135,10 +136,10 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+	for i := range ctr.batches {
+		ctr.batches[i].Clean(mp)
 	}
+	ctr.batches = nil
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
