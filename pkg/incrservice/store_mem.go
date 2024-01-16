@@ -42,8 +42,8 @@ func (s *memStore) NewTxnOperator(_ context.Context) client.TxnOperator {
 	return nil
 }
 
-func (s *memStore) SelectAll(_ context.Context, _ uint64, _ client.TxnOperator) string {
-	return ""
+func (s *memStore) SelectAll(_ context.Context, _ uint64, _ client.TxnOperator) (string, error) {
+	return "", nil
 }
 
 func (s *memStore) Create(

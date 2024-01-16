@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-var registeredTable = []*table.Table{motrace.SingleRowLogTable}
+var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable}
 
 type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
@@ -157,6 +157,15 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
+	sysAcc := &frontend.TenantInfo{
+		Tenant:        frontend.GetUserRoot(),
+		TenantID:      frontend.GetSysTenantId(),
+		User:          frontend.GetUserRoot(),
+		UserID:        frontend.GetUserRootId(),
+		DefaultRoleID: frontend.GetDefaultRoleId(),
+		DefaultRole:   frontend.GetDefaultRole(),
+	}
+	ctx = attachAccount(ctx, sysAcc)
 	allTenants, err := u.GetAllTenantInfo(ctx)
 	if err != nil {
 		return err
@@ -297,6 +306,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 			continue
 			//return err
 		}
+		logutil.Info("upgradeSQL: " + upgradeSQL)
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
@@ -325,6 +335,9 @@ func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
 			errors = append(errors, moerr.NewUpgrateError(ctx, sql.schema, sql.table, sql.tenant, sql.account, err.Error()))
 			continue
 			//return err
+		}
+		if currentSchema == nil {
+			continue
 		}
 		if ok := sql.modified(currentSchema); ok {
 			continue
@@ -580,7 +593,6 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 		DefaultRoleID: frontend.GetDefaultRoleId(),
 		DefaultRole:   frontend.GetDefaultRole(),
 	}
-	ctx = attachAccount(ctx, sysAcc)
 	result := exec.Query(ctx, query, makeOptions(sysAcc).Finish())
 
 	errors := []error{}
