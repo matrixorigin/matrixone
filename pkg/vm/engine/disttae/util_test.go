@@ -78,6 +78,37 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
+func makeInExprForTest[T any](arg0 *plan.Expr, vals []T) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					arg0,
+					{
+						Typ: &plan.Type{
+							Id: int32(types.T_tuple),
+						},
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  int32(len(vals)),
+								Data: types.EncodeSlice[T](vals),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	var info objectio.BlockInfo
@@ -881,7 +912,7 @@ func TestGetPKExpr(t *testing.T) {
 			"a=10",
 			"a=20 and a=10",
 			"30=a and 20=a",
-			// "a in (1,2)",
+			"a in (1,2)",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("=", []*plan.Expr{
@@ -908,11 +939,16 @@ func TestGetPKExpr(t *testing.T) {
 					makeColExprForTest(0, types.T_int64),
 				}),
 			}),
+			makeInExprForTest[int64](
+				makeColExprForTest(0, types.T_int64),
+				[]int64{1, 2},
+			),
 		},
 		valExprs: []*plan.Expr{
 			plan2.MakePlan2Int64ConstExprWithType(10),
 			plan2.MakePlan2Int64ConstExprWithType(20),
 			plan2.MakePlan2Int64ConstExprWithType(30),
+			plan2.MakePlan2Int64VecExprWithType(int64(1), int64(2)),
 		},
 	}
 	pkName := "a"
@@ -920,6 +956,7 @@ func TestGetPKExpr(t *testing.T) {
 		rExpr := getPkExpr(expr, pkName, proc)
 		require.NotNil(t, rExpr)
 		// t.Log(plan2.FormatExpr(rExpr))
+		// t.Log(plan2.FormatExpr(tc.valExprs[i]))
 		require.Equal(t, tc.valExprs[i], rExpr)
 	}
 	require.Zero(t, m.CurrNB())
