@@ -17,125 +17,211 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
-const (
-	Rows = 10 // default rows
-)
+func TestWaitRemoteReceiversReady(t *testing.T) {
+	proc := testutil.NewProcess()
+	mp := proc.Mp()
+	colexec.Srv = colexec.NewServer(nil)
 
-// add unit tests for cases
-type dispatchTestCase struct {
-	arg    *Argument
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-}
-
-var (
-	tcs []dispatchTestCase
-)
-
-func init() {
-	tcs = []dispatchTestCase{
-		newTestCase(true),
-		newTestCase(false),
-	}
-}
-
-func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
-		tc.arg.String(buf)
-	}
-}
-
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-	}
-}
-
-func TestDispatch(t *testing.T) {
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(t, tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+	// case 1. the remote receiver has been ready.
+	ids := []int{ShuffleToAllFunc, SendToAllFunc, SendToAnyFunc}
+	for _, id := range ids {
+		arg1 := &Argument{
+			ctr:    new(container),
+			FuncId: id,
+			RemoteRegs: []colexec.ReceiveInfo{
+				{
+					Uuid: uuid.New(),
+				},
+			},
 		}
-		resetChildren(tc.arg, bats)
-		/*{
-			for _, vec := range bat.Vecs {
-				if vec.IsOriginal() {
-					vec.FreeOriginal(tc.proc.Mp())
-				}
-			}
-		}*/
-		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.Children[0].Free(tc.proc, false, nil)
-		for _, re := range tc.arg.LocalRegs {
-			for len(re.Ch) > 0 {
-				bat := <-re.Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(tc.proc.Mp())
-			}
+		if id == ShuffleToAllFunc {
+			arg1.ShuffleRegIdxRemote = make([]int, len(arg1.RemoteRegs))
 		}
-		tc.proc.FreeVectors()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+		proc.DispatchNotifyCh <- process.WrapCs{}
+		require.NoError(t, arg1.waitRemoteReceiversReady(proc, 2*time.Second), "functionID is %d", id)
 	}
-}
 
-func newTestCase(all bool) dispatchTestCase {
-	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
-	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
-	return dispatchTestCase{
-		proc:  proc,
-		types: []types.Type{types.T_int8.ToType()},
-		arg: &Argument{
-			FuncId:    SendToAllLocalFunc,
-			LocalRegs: []*process.WaitRegister{reg},
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+	// case 2. the remote receiver has been closed. so it does never be ready.
+	// waitRemoteReceiversReady should return an error after wait timeout.
+	arg2 := &Argument{
+		ctr:    new(container),
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{
+				Uuid: uuid.New(),
 			},
 		},
-		cancel: cancel,
 	}
+	proc.DispatchNotifyCh = make(chan process.WrapCs, 1)
+	require.Error(t, arg2.waitRemoteReceiversReady(proc, 500*time.Millisecond))
 
+	// case 3. the waiting process is canceled.
+	proc.Ctx, proc.Cancel = context.WithCancel(context.TODO())
+	proc.Cancel()
+	arg3 := &Argument{
+		ctr:    new(container),
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{
+				Uuid: uuid.New(),
+			},
+		},
+	}
+	require.Error(t, arg3.waitRemoteReceiversReady(proc, time.Second))
+
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-// create a new block based on the type information
-func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+func TestCTE_Dispatch(t *testing.T) {
+	proc := testutil.NewProcess()
+	mp := proc.Mp()
+
+	arg := &Argument{
+		ctr:     new(container),
+		RecSink: true,
+	}
+	// case 1. cte change the nil batch to CteEndBatch.
+	result, free, err := specialLogicForCTE(proc, arg, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	{
+		// do check for the CteEndBatch.
+		require.True(t, result.End())
+		require.Equal(t, int64(1), result.GetCnt())
+	}
+	require.True(t, free)
+	result.Clean(mp)
+
+	// case 2. cte deals with the last batch (special batch by cte).
+	// it will set the hasData flag to false, because the data will be sent.
+	bat := batch.NewWithSize(0)
+	bat.SetLast()
+	arg.ctr.hasData = true
+	result, free, err = specialLogicForCTE(proc, arg, bat)
+	require.NoError(t, err)
+	require.False(t, free)
+	require.False(t, arg.ctr.hasData)
+	require.True(t, result.End())
+	result.Clean(mp)
+
+	// case 3. the batch may change the hasData flag.
+	arg.ctr.hasData = false
+	result, free, err = specialLogicForCTE(proc, arg, batch.EmptyBatch)
+	require.NoError(t, err)
+	require.False(t, free)
+	require.False(t, arg.ctr.hasData)
+	result.Clean(mp)
+
+	arg.ctr.hasData = false
+	bat = batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	result, free, err = specialLogicForCTE(proc, arg, bat)
+	require.NoError(t, err)
+	require.False(t, free)
+	require.True(t, arg.ctr.hasData)
+	result.Clean(mp)
+
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+func TestDispatchString(t *testing.T) {
+	arg := &Argument{}
+	buf := new(bytes.Buffer)
+	arg.String(buf)
+	require.True(t, len(buf.String()) > 0)
+}
 
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+func TestDispatchCall(t *testing.T) {
+	proc := testutil.NewProcess()
+	mp := proc.Mp()
+
+	// because we have tested the send function in the test of `pkg/sql/colexec/dispatch/sendfunc_test.go`.
+	// we only test if the dispatch can deal with the special batch.
+	// special batch means the batch which is nil or is the empty batch.
+	data := mockSimpleInput(mp)
+	child := &value_scan.Argument{
+		Batchs: []*batch.Batch{data, batch.EmptyBatch, nil},
 	}
+	require.NoError(t, child.Prepare(proc))
+	arg := &Argument{
+		ctr:      new(container),
+		IsSink:   false,
+		RecSink:  false,
+		Children: []vm.Operator{child},
+		info:     &vm.OperatorInfo{},
+	}
+	arg.ctr.sendFunc = func(proc *process.Process, bat *batch.Batch) error {
+		return nil
+	}
+
+	cnt := 0
+	for {
+		cnt++
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, 3, cnt)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+
+	proc.FreeVectors()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestDispatchPrepare(t *testing.T) {
+	proc := testutil.NewProcess()
+	mp := proc.Mp()
+
+	// because we have tested the waitRemoteReceiversReady in the test of `pkg/sql/colexec/dispatch/dispatch_test.go`.
+	// we only test the fail case of the prepare function.
+	toLocalAndRemote := []int{SendToAllFunc, SendToAnyFunc}
+	toLocal := []int{SendToAnyLocalFunc, SendToAllLocalFunc}
+	// case 1. `send to all` requires the remote receiver.
+	{
+		for _, id := range toLocalAndRemote {
+			arg := &Argument{
+				FuncId:     id,
+				LocalRegs:  make([]*process.WaitRegister, 2),
+				RemoteRegs: nil,
+			}
+			require.Error(t, arg.Prepare(proc))
+		}
+	}
+
+	// case 2. `send to local` requires no remote receiver.
+	{
+		for _, id := range toLocal {
+			arg := &Argument{
+				FuncId:     id,
+				LocalRegs:  make([]*process.WaitRegister, 2),
+				RemoteRegs: make([]colexec.ReceiveInfo, 1),
+			}
+			require.Error(t, arg.Prepare(proc))
+		}
+	}
+
+	// case 3. unexpected function id.
+	arg := &Argument{
+		FuncId: -5,
+	}
+	require.Error(t, arg.Prepare(proc))
+
+	require.Equal(t, int64(0), mp.CurrNB())
 }

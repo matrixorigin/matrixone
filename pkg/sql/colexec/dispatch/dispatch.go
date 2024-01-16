@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
 
 func (arg *Argument) String(buf *bytes.Buffer) {
@@ -44,7 +45,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		if arg.ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "invalid dispatch argument: SendToAllFunc requires RemoteRegs")
 		}
-		if err = arg.waitRemoteReceiversReady(proc); err != nil {
+		if err = arg.waitRemoteReceiversReady(proc, waitNotifyTimeout); err != nil {
 			return err
 		}
 		if arg.ctr.localRegsCnt == 0 {
@@ -55,7 +56,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	case ShuffleToAllFunc:
 		if arg.ctr.remoteRegsCnt > 0 {
-			if err = arg.waitRemoteReceiversReady(proc); err != nil {
+			if err = arg.waitRemoteReceiversReady(proc, waitNotifyTimeout); err != nil {
 				return err
 			}
 		}
@@ -67,7 +68,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		if arg.ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "invalid dispatch argument: SendToAnyFunc requires RemoteRegs")
 		}
-		if err = arg.waitRemoteReceiversReady(proc); err != nil {
+		if err = arg.waitRemoteReceiversReady(proc, waitNotifyTimeout); err != nil {
 			return err
 		}
 		if arg.ctr.localRegsCnt == 0 {
@@ -96,6 +97,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	// duplicated codes with other operators.
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
@@ -116,16 +118,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		defer proc.PutBatch(sendBatch)
 	}
 
+	// batch check and send.
 	if sendBatch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-
 	if sendBatch.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
-
 	if err = arg.ctr.sendFunc(proc, sendBatch); err != nil {
 		return result, err
 	}
@@ -136,11 +137,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // waitRemoteReceiversReady do prepare work for remote receivers. and wait for all remote receivers ready.
-func (arg *Argument) waitRemoteReceiversReady(proc *process.Process) (err error) {
+func (arg *Argument) waitRemoteReceiversReady(proc *process.Process, waitTime time.Duration) (err error) {
 	// prepare work for remote receivers.
-	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
+	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, len(arg.RemoteRegs))
 	if arg.FuncId == ShuffleToAllFunc {
-		arg.ctr.remoteToIdx = make(map[uuid.UUID]int, arg.ctr.remoteRegsCnt)
+		arg.ctr.remoteToIdx = make(map[uuid.UUID]int, len(arg.RemoteRegs))
 		for i, rr := range arg.RemoteRegs {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 			if err = colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
@@ -156,9 +157,9 @@ func (arg *Argument) waitRemoteReceiversReady(proc *process.Process) (err error)
 	}
 
 	// wait for all remote receivers ready.
-	cnt := arg.ctr.remoteRegsCnt
+	cnt := len(arg.RemoteRegs)
+	ctx, cancel := context.WithTimeout(context.TODO(), waitTime)
 	for cnt > 0 {
-		ctx, cancel := context.WithTimeout(context.TODO(), waitNotifyTimeout)
 		select {
 		case <-ctx.Done():
 			cancel()
@@ -169,11 +170,11 @@ func (arg *Argument) waitRemoteReceiversReady(proc *process.Process) (err error)
 			return moerr.NewInternalErrorNoCtx("process has done")
 
 		case receiver := <-proc.DispatchNotifyCh:
-			cancel()
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, receiver)
 			cnt--
 		}
 	}
+	cancel()
 
 	return err
 }
@@ -189,15 +190,14 @@ func specialLogicForCTE(proc *process.Process, arg *Argument, bat *batch.Batch) 
 
 	result = bat
 	if result.Last() {
-		if !arg.ctr.hasData {
-			result.SetEnd()
-		} else {
-			arg.ctr.hasData = false
-		}
+		result.SetEnd()
+		arg.ctr.hasData = false
 		return
 	}
 
-	arg.ctr.hasData = !result.IsEmpty()
+	if !arg.ctr.hasData {
+		arg.ctr.hasData = !result.IsEmpty()
+	}
 	return
 }
 

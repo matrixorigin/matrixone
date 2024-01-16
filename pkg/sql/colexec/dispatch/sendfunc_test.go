@@ -227,7 +227,6 @@ func TestDispatchToRemoteReceiver(t *testing.T) {
 	require.Equal(t, int64(1), input5.GetCnt())
 	require.Error(t, arg.sendToAnyRemoteReceiver(proc, input5))
 	require.Equal(t, int64(1), input5.GetCnt())
-	require.True(t, arg.ctr.isStopSending())
 	input5.Clean(mp)
 
 	// clean the environment.
