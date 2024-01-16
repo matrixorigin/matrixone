@@ -124,7 +124,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			_, _, err := itr.Insert(i, n, i, bat.Vecs)
+			_, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
 				bat.Clean(proc.Mp())
 				return err
@@ -182,7 +182,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			vs, _, err := itr.Insert(i, n, i, bat.Vecs)
+			vs, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
 				bat.Clean(proc.Mp())
 				return false, err

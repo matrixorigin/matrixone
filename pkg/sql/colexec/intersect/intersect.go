@@ -119,7 +119,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				n = hashmap.UnitLimit
 			}
 
-			vs, zs, err := itr.Insert(i, n, i, btc.Vecs)
+			vs, zs, err := itr.Insert(i, n, btc.Vecs)
 			if err != nil {
 				btc.Clean(proc.Mp())
 				return err

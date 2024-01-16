@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -326,12 +327,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 				}
-				/*
-					rows1 := vector.MustFixedCol[int64](bat.Vecs[0])
-					if rows1[i+k] < 2000 {
-						rows2 := vector.MustFixedCol[int64](ctr.batches[idx1].Vecs[0])
-						logutil.Infof("#######hashtable hit , row in probe batch %v, value in hashtable %v,idx1 %v,idx2 %v, row in build batch %v", rows1[i+k], vals[k]-1, idx1, idx2, rows2[idx2])
-					}*/
 				ctr.matched.Add(vals[k] - 1)
 			} else {
 				sels := mSels[vals[k]-1]

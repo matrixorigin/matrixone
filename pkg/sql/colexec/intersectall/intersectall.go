@@ -124,7 +124,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 				if n > hashmap.UnitLimit {
 					n = hashmap.UnitLimit
 				}
-				vs, _, err := itr.Insert(i, n, i, bat.Vecs)
+				vs, _, err := itr.Insert(i, n, bat.Vecs)
 				if err != nil {
 					bat.Clean(proc.Mp())
 					return err

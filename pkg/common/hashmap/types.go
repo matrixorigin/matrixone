@@ -55,7 +55,7 @@ type Iterator interface {
 	// Insert vecs[start, start+count) into hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
-	Insert(start, count, dataOffset int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
+	Insert(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
