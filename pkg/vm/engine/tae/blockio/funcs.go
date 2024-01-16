@@ -45,6 +45,7 @@ func LoadColumnsData(
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
 		return
 	}
+	defer objectio.ReleaseIOVector(ioVectors)
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
@@ -52,8 +53,19 @@ func LoadColumnsData(
 		if err != nil {
 			return
 		}
-		bat.Vecs[i] = obj.(*vector.Vector)
+		typ := *obj.(*vector.Vector).GetType()
+		if err = vector.GetUnionAllFunction(typ, m)(bat.Vecs[i], obj.(*vector.Vector)); err != nil {
+			break
+		}
 		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+	if err != nil {
+		for _, col := range bat.Vecs {
+			if col != nil {
+				col.Free(m)
+			}
+		}
+		return nil, err
 	}
 	//TODO call CachedData.Release
 	return
