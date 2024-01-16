@@ -476,7 +476,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, err := blockio.LoadTombstoneColumnsWithoutVPool(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
@@ -513,7 +513,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, err := blockio.LoadColumnsWithoutVPool(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,

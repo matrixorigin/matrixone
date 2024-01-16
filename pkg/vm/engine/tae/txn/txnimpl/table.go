@@ -702,6 +702,7 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 					loc,
 					nil,
 					fileservice.Policy(0),
+					tbl.store.rt.VectorPool.Transient,
 				)
 				if err != nil {
 					return err
@@ -1239,6 +1240,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					loc,
 					nil,
 					fileservice.Policy(0),
+					tbl.store.rt.VectorPool.Transient,
 				)
 				if err != nil {
 					return err

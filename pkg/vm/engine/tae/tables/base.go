@@ -193,6 +193,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		location,
 		nil,
 		fileservice.Policy(0),
+		blk.rt.VectorPool.Transient,
 	)
 	if err != nil {
 		return

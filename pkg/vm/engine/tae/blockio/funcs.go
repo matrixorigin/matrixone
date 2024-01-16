@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -71,7 +72,82 @@ func LoadColumnsData(
 	return
 }
 
+func LoadColumnsDataWithVPool(
+	ctx context.Context,
+	metaType objectio.DataMetaType,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+	vPool *containers.VectorPool,
+) (bat *batch.Batch, err error) {
+	name := location.Name()
+	var meta objectio.ObjectMeta
+	var ioVectors *fileservice.IOVector
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+		return
+	}
+	dataMeta := meta.MustGetMeta(metaType)
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
+		return
+	}
+	defer objectio.ReleaseIOVector(ioVectors)
+	bat = batch.NewWithSize(len(cols))
+	var obj any
+	for i := range cols {
+		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		if err != nil {
+			return
+		}
+		typ := *obj.(*vector.Vector).GetType()
+		vec := vPool.GetVector(&typ)
+		err = vec.ExtendVec(obj.(*vector.Vector))
+		if err != nil {
+			break
+		}
+		bat.Vecs[i] = vec.GetDownstreamVector()
+		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+	if err != nil {
+		for _, col := range bat.Vecs {
+			if col != nil {
+				col.Free(m)
+			}
+		}
+		return nil, err
+	}
+	//TODO call CachedData.Release
+	return
+}
+
 func LoadColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+	vPool *containers.VectorPool,
+) (bat *batch.Batch, err error) {
+	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
+}
+
+func LoadTombstoneColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+	vPool *containers.VectorPool,
+) (bat *batch.Batch, err error) {
+	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
+}
+
+func LoadColumnsWithoutVPool(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
@@ -83,7 +159,7 @@ func LoadColumns(
 	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
 }
 
-func LoadTombstoneColumns(
+func LoadTombstoneColumnsWithoutVPool(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,

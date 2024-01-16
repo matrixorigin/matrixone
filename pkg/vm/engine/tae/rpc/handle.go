@@ -1012,6 +1012,7 @@ func (h *Handle) HandleWrite(
 				h.db.Runtime.Fs.Service,
 				location,
 				nil,
+				h.db.Runtime.VectorPool.Small,
 			)
 			if err != nil {
 				return

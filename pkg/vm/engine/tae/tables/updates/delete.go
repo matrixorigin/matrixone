@@ -268,6 +268,7 @@ func (node *DeleteNode) setPersistedRows() {
 		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 		node.deltaloc,
 		nil,
+		node.chain.Load().mvcc.meta.GetBlockData().GetRuntime().VectorPool.Transient,
 	)
 	if err != nil {
 		for {
@@ -279,6 +280,7 @@ func (node *DeleteNode) setPersistedRows() {
 				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 				node.deltaloc,
 				nil,
+				node.chain.Load().mvcc.meta.GetBlockData().GetRuntime().VectorPool.Transient,
 			)
 			if err == nil {
 				break
