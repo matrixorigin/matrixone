@@ -25,8 +25,9 @@ const (
 	SortKeyNamePrefx     = "_SORT_"
 
 	AttrRowID    = PhyAddrColumnName
-	AttrCommitTs = "commit_time"
-	AttrAborted  = "aborted"
+	AttrCommitTs = catalog.TableTailAttrCommitTs
+	AttrAborted  = catalog.TableTailAttrAborted
+	AttrPKVal    = catalog.TableTailAttrPKVal
 
 	TenantSysID = uint32(0)
 )

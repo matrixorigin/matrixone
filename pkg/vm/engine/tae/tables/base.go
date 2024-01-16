@@ -654,7 +654,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pkVec)
+	bat.AddVector(catalog.AttrPKVal, pkVec)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
