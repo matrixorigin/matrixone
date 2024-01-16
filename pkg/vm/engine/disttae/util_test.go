@@ -867,3 +867,60 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 
 	require.Equal(t, count, 0)
 }
+
+func TestGetPKExpr(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+	type myCase struct {
+		desc     []string
+		exprs    []*plan.Expr
+		valExprs []*plan.Expr
+	}
+	tc := myCase{
+		desc: []string{
+			"a=10",
+			"a=20 and a=10",
+			"30=a and 20=a",
+			// "a in (1,2)",
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(10),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					plan2.MakePlan2Int64ConstExprWithType(30),
+					makeColExprForTest(0, types.T_int64),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					plan2.MakePlan2Int64ConstExprWithType(20),
+					makeColExprForTest(0, types.T_int64),
+				}),
+			}),
+		},
+		valExprs: []*plan.Expr{
+			plan2.MakePlan2Int64ConstExprWithType(10),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+			plan2.MakePlan2Int64ConstExprWithType(30),
+		},
+	}
+	pkName := "a"
+	for i, expr := range tc.exprs {
+		rExpr := getPkExpr(expr, pkName, proc)
+		require.NotNil(t, rExpr)
+		// t.Log(plan2.FormatExpr(rExpr))
+		require.Equal(t, tc.valExprs[i], rExpr)
+	}
+	require.Zero(t, m.CurrNB())
+}
