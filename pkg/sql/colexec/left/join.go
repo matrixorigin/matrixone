@@ -171,7 +171,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 			// for left join, if left batch is sorted , then output batch is sorted
 			ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[rp.Pos].GetSorted())
 		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos].GetType(), ap.bat.RowCount(), proc.Mp())
+			ctr.rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], ap.bat.RowCount(), proc.Mp())
 		}
 	}
 	ctr.rbat.AddRowCount(ap.bat.RowCount())
