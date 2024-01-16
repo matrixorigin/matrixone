@@ -339,7 +339,7 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	val, err := proc.GetPrepareParamsAt(int(expr.pos))
+	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
 	}
@@ -352,14 +352,11 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 
 	if expr.vec == nil {
-		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+		expr.vec, err = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
 	} else {
-		err := vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
+		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
-	return expr.vec, nil
+	return expr.vec, err
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -600,86 +597,84 @@ func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (*vector.Vector, error) {
-	var vec *vector.Vector
-
+func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (vec *vector.Vector, err error) {
 	if con.GetIsnull() {
 		vec = vector.NewConstNull(typ, 1, proc.Mp())
 	} else {
 		switch con.GetValue().(type) {
 		case *plan.Literal_Bval:
-			vec = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
 		case *plan.Literal_I8Val:
-			vec = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
 		case *plan.Literal_I16Val:
-			vec = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
 		case *plan.Literal_I32Val:
-			vec = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
 		case *plan.Literal_I64Val:
-			vec = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
 		case *plan.Literal_U8Val:
-			vec = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
 		case *plan.Literal_U16Val:
-			vec = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
 		case *plan.Literal_U32Val:
-			vec = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
 		case *plan.Literal_U64Val:
-			vec = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
 		case *plan.Literal_Fval:
-			vec = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
 		case *plan.Literal_Dval:
-			vec = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
 		case *plan.Literal_Dateval:
-			vec = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
 		case *plan.Literal_Timeval:
-			vec = vector.NewConstFixed(constTimeType, types.Time(con.GetTimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
 		case *plan.Literal_Datetimeval:
-			vec = vector.NewConstFixed(constDatetimeType, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
 		case *plan.Literal_Decimal64Val:
 			cd64 := con.GetDecimal64Val()
 			d64 := types.Decimal64(cd64.A)
-			vec = vector.NewConstFixed(typ, d64, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, d64, 1, proc.Mp())
 		case *plan.Literal_Decimal128Val:
 			cd128 := con.GetDecimal128Val()
 			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-			vec = vector.NewConstFixed(typ, d128, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, d128, 1, proc.Mp())
 		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
 				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			}
-			vec = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
 		case *plan.Literal_Sval:
 			sval := con.GetSval()
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
-				array, err := types.StringToArray[float32](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float32](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float64 {
-				array, err := types.StringToArray[float64](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float64](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else {
-				vec = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}
 		case *plan.Literal_Defaultval:
 			defaultVal := con.GetDefaultval()
-			vec = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
 		case *plan.Literal_EnumVal:
-			vec = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		vec.SetIsBin(con.IsBin)
 	}
-	return vec, nil
+	return vec, err
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -1096,9 +1091,22 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval)
+				s := []byte(args[1].GetLit().GetSval())
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
+				return zms[expr.AuxId]
+
+			case "prefix_between":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lb := []byte(args[1].GetLit().GetSval())
+				ub := []byte(args[2].GetLit().GetSval())
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
 			case "prefix_in":
@@ -1188,6 +1196,16 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				}
+
+			case "between":
+				if f() {
+					return zms[expr.AuxId]
+				}
+				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)

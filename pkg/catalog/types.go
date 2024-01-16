@@ -101,6 +101,9 @@ const (
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
+
+	// MO_PUBS publication meta table
+	MO_PUBS = "mo_pubs"
 )
 
 const (

@@ -18,15 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"os"
+	"path"
+	"strings"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"os"
-	"path"
-	"strings"
-	"time"
 )
 
 // Backup
@@ -149,7 +150,7 @@ func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) 
 		//!!!neglect the error
 		return nil
 	}
-	uid, _ := uuid.NewUUID()
+	uid, _ := uuid.NewV7()
 	_, file := path.Split(configPath)
 	newfile := file + "_" + uid.String()
 	cfg.Metas.AppendLaunchconfig(typ, newfile)

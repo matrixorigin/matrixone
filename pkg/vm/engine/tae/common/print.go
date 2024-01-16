@@ -38,6 +38,14 @@ const (
 	PPL3
 )
 
+type ZonemapPrintKind int
+
+const (
+	ZonemapPrintKindNormal ZonemapPrintKind = iota
+	ZonemapPrintKindCompose
+	ZonemapPrintKindHex
+)
+
 const DefaultMaxRowsToPrint = 3
 
 func RepeatStr(str string, times int) string {

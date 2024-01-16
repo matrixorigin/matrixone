@@ -367,6 +367,9 @@ func (bat *Batch) IsEmpty() bool {
 }
 
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
+	if bat.AuxData == nil {
+		return
+	}
 	jm := bat.AuxData.(*hashmap.JoinMap)
 	if jm.IsDup() {
 		ret = jm.Dup()
