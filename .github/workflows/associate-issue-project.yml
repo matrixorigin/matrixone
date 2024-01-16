@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          repository: matrixorigin/js_file
+          repository: matrixorigin/CI
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -24,7 +24,7 @@ jobs:
           npm install node-fetch
           # downgrade node-fetch version
           npm i node-fetch@2.6.1
-      - run: node ./add-assignee-to-corr-project.js
+      - run: node .scripts/add-assignee-to-corr-project.js
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
           Issue_ID: ${{ github.event.issue.number }}
