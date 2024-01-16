@@ -44,8 +44,8 @@ func BenchmarkGet(b *testing.B) {
 	size := 65536
 	cache := New[int, int](size, nil, ShardInt[int])
 	nElements := size * 16
-	for i := 0; i < b.N; i++ {
-		cache.Set(i%nElements, i, 1+i%3)
+	for i := 0; i < nElements; i++ {
+		cache.Set(i, i, 1+i%3)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -57,8 +57,8 @@ func BenchmarkParallelGet(b *testing.B) {
 	size := 65536
 	cache := New[int, int](size, nil, ShardInt[int])
 	nElements := size * 16
-	for i := 0; i < b.N; i++ {
-		cache.Set(i%nElements, i, 1+i%3)
+	for i := 0; i < nElements; i++ {
+		cache.Set(i, i, 1+i%3)
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
