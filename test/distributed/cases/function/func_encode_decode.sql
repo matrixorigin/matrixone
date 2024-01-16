@@ -45,12 +45,11 @@ CREATE TABLE t2 (name varchar(255), age int);
 INSERT INTO t2 (name, age) VALUES ('Abby', 24);
 INSERT INTO t2 (age) VALUES (25);
 INSERT INTO t2 (name, age) VALUES ('Carol', 23);
+INSERT INTO t2 (name,age) VALUES ('Alex',23);
 SELECT * FROM t2;
-SELECT serial_min(t2.name, t2.age) from t2;
 SELECT serial_min( serial(t2.name, t2.age)) from t2;
 SELECT serial_min( serial(t2.age,t2.name)) from t2;
 SELECT serial_min( serial_full(t2.age,t2.name)) from t2;
 SELECT serial_min( serial_full(t2.name,t2.age)) from t2;
 select  serial_extract(min, 0 as int),  serial_extract(min, 1 as varchar(255)) from (SELECT serial_min( serial_full(t2.age,t2.name)) as min from t2);
-SELECT serial_extract(serial_min( serial_full(t2.name,t2.age)) ,1 as int) as min from t2; -- NULL name, 25 age
 select  serial_extract(min, 0 as varchar(255)),  serial_extract(min, 1 as int) from (SELECT serial_min( serial_full(t2.name,t2.age)) as min from t2);

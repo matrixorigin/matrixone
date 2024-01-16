@@ -801,13 +801,21 @@ func CompareTuple(v1, v2 []byte) (int, error) {
 		return 0, moerr.NewInternalErrorNoCtx("unable to compare tuples with different schemas")
 	}
 	for i := 0; i < len(s1); i++ {
+
+		if s1[i] == T_any || s2[i] == T_any {
+			// if one of the field is null.
+			continue
+		}
 		if s1[i] != s2[i] {
-			return 0, moerr.NewInternalErrorNoCtx("unable to compare tuples with different schemas")
+			return 0, moerr.NewInternalErrorNoCtx("unable to compare tuples with different schemas %s %s", s1[i].String(), s2[i].String())
 		}
 	}
 
 	var cmp int
 	for i := 0; i < len(s1); i++ {
+		if s1[i] == T_any || s2[i] == T_any {
+			continue
+		}
 		switch s1[i] {
 		case T_int8:
 			cmp = compareGeneric[int8](t1[i], t2[i])

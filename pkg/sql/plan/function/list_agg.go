@@ -80,7 +80,7 @@ var supportedAggregateFunctions = []FuncNew{
 				retType:    functionAgg.AggMinxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "serial_min",
-					aggNew: functionAgg.NewAggMin,
+					aggNew: functionAgg.NewAggSerialMin,
 				},
 			},
 		},
