@@ -2445,6 +2445,13 @@ var (
 			input: "show subscriptions",
 		},
 		{
+			input: "show subscriptions all",
+		},
+		{
+			input:  "show subscriptions all like '%pub'",
+			output: "show subscriptions all like %pub",
+		},
+		{
 			input:  "insert into tbl values ($$this is a dollar-quoted string$$)",
 			output: "insert into tbl values (this is a dollar-quoted string)",
 		},

@@ -817,6 +817,10 @@ func (node *Subquery) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement Subquery Accept")
 }
 
+func (node *Subquery) String() string {
+	return "subquery"
+}
+
 func NewSubquery(s SelectStatement, e bool) *Subquery {
 	return &Subquery{
 		Select: s,

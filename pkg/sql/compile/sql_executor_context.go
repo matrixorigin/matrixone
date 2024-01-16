@@ -179,11 +179,8 @@ func (c *compilerContext) GetUserName() string {
 	return "root"
 }
 
-func (c *compilerContext) GetAccountId() uint32 {
-	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
-		return v.(uint32)
-	}
-	return 0
+func (c *compilerContext) GetAccountId() (uint32, error) {
+	return defines.GetAccountId(c.ctx)
 }
 
 func (c *compilerContext) GetContext() context.Context {

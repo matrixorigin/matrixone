@@ -3632,6 +3632,10 @@ show_subscriptions_stmt:
     {
 	$$ = &tree.ShowSubscriptions{Like: $3}
     }
+|   SHOW SUBSCRIPTIONS ALL like_opt
+    {
+	$$ = &tree.ShowSubscriptions{All: true, Like: $4}
+    }
 
 like_opt:
     {
