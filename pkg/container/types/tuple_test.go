@@ -495,3 +495,64 @@ func encodeBufToPacker(tuple Tuple, p *Packer) {
 		}
 	}
 }
+
+func TestCompareTuple(t *testing.T) {
+	type args struct {
+		v1 Tuple
+		v2 Tuple
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    int
+		wantErr bool
+	}{
+		{
+			name: "Equal",
+			args: args{
+				v1: Tuple{int8(1), float32(2)},
+				v2: Tuple{int8(1), float32(2)},
+			},
+			want:    0,
+			wantErr: false,
+		},
+		{
+			name: "Less",
+			args: args{
+				v1: Tuple{int8(1), float32(2)},
+				v2: Tuple{int8(2), float32(2)},
+			},
+			want:    -1,
+			wantErr: false,
+		},
+		{
+			name: "Greater",
+			args: args{
+				v1: Tuple{int8(2), float32(2)},
+				v2: Tuple{int8(1), float32(2)},
+			},
+			want:    1,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+
+			packer1 := NewPacker(mp)
+			encodeBufToPacker(tt.args.v1, packer1)
+
+			packer2 := NewPacker(mp)
+			encodeBufToPacker(tt.args.v2, packer2)
+
+			got, err := CompareTuple(packer1.GetBuf(), packer2.GetBuf())
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CompareTuple() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("CompareTuple() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

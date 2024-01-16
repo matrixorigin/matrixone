@@ -839,7 +839,7 @@ func CompareTuple(v1, v2 []byte) (int, error) {
 		case T_decimal64:
 			cmp = Decimal64.Compare(t1[i].(Decimal64), t2[i].(Decimal64))
 		case T_decimal128:
-			cmp = t1[i].(Decimal128).Compare(t2[i].(Decimal128))
+			cmp = Decimal128.Compare(t1[i].(Decimal128), t2[i].(Decimal128))
 		case T_varchar:
 			cmp = bytes.Compare(t1[i].([]byte), t2[i].([]byte))
 		}
