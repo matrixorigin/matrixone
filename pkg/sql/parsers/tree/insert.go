@@ -14,6 +14,18 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[Insert](
+		func() *Insert { return &Insert{} },
+		func(i *Insert) {
+			i.release()
+		},
+		reuse.DefaultOptions[Insert]().
+			WithEnableChecker())
+}
+
 // the INSERT statement.
 type Insert struct {
 	statementImpl
@@ -23,6 +35,16 @@ type Insert struct {
 	Columns           IdentifierList
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
+}
+
+func (node *Insert) release() {
+	if node.Rows != nil {
+		reuse.Free(node.Rows, nil)
+	}
+}
+
+func (node *Insert) Free() {
+	reuse.Free[Insert](node, nil)
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -58,16 +80,17 @@ func (node *Insert) Format(ctx *FmtCtx) {
 func (node *Insert) GetStatementType() string { return "Insert" }
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }
 
-func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Insert {
-	return &Insert{
-		Table:          t,
-		Columns:        c,
-		Rows:           r,
-		PartitionNames: p,
-	}
+func NewInsert(columns IdentifierList, rows *Select) *Insert {
+	insert := reuse.Alloc[Insert](nil)
+	insert.Rows = rows
+	return insert
 }
 
 type Assignment struct {
 	Column Identifier
 	Expr   Expr
+}
+
+func (node Insert) Name() string {
+	return "tree.Insert"
 }

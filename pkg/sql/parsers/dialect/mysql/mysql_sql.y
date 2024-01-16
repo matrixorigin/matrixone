@@ -4081,37 +4081,45 @@ insert_data:
     VALUES values_list
     {
         vc := tree.NewValuesClause($2)
-        $$ = &tree.Insert{
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            nil,
+            tree.NewSelect(vc, nil, nil),
+        )
     }
 |   select_stmt
     {
-        $$ = &tree.Insert{
-            Rows: $1,
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            nil,
+            $1,
+        )
     }
 |   '(' insert_column_list ')' VALUES values_list
     {
         vc := tree.NewValuesClause($5)
-        $$ = &tree.Insert{
-            Columns: $2,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            $2,
+            tree.NewSelect(vc, nil, nil),   
+        )
     }
 |   '(' ')' VALUES values_list
     {
         vc := tree.NewValuesClause($4)
-        $$ = &tree.Insert{
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            nil,
+            tree.NewSelect(vc, nil, nil),   
+        )
     }
 |   '(' insert_column_list ')' select_stmt
     {
-        $$ = &tree.Insert{
-            Columns: $2,
-            Rows: $4,
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            $2,
+            $4,   
+        )
     }
 |   SET set_value_list
     {
@@ -4126,10 +4134,11 @@ insert_data:
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
-        $$ = &tree.Insert{
-            Columns: identList,
-            Rows: tree.NewSelect(vc, nil, nil),
-        }
+        // columns rows
+        $$ = tree.NewInsert(
+            identList,
+            tree.NewSelect(vc, nil, nil),
+        )
     }
 
 on_duplicate_key_update_opt:
