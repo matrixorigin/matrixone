@@ -342,7 +342,10 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 
 			if ap.HashOnPK {
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j].UnionBatch(vec, int64(i), n, nil, proc.Mp())
+					err = ap.ctr.uniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
+					if err != nil {
+						return err
+					}
 				}
 			} else {
 				if sels == nil {
@@ -358,7 +361,13 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 				}
 
 				for j, vec := range ctr.vecs[vecIdx1] {
-					ap.ctr.uniqueJoinKeys[j].Union(vec, sels, proc.Mp())
+					for _, sel := range sels {
+						_, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+						err = ap.ctr.uniqueJoinKeys[j].UnionOne(vec, int64(idx2), proc.Mp())
+						if err != nil {
+							return err
+						}
+					}
 				}
 			}
 		}
