@@ -123,6 +123,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
 	closecbs := make([]func(), 0)
+	var readCount, applyCount, totalCount int
+	totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
 		checkpointEntry := entries[i]
 		if checkpointEntry.end.Less(maxGlobalEnd) {
@@ -134,6 +136,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
 		} else if readType == PrefetchMetaIdx {
+			readCount++
 			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
 			if err != nil {
 				return
@@ -209,6 +212,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
 		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
+		applyCount++
 		if err != nil {
 			return
 		}
@@ -246,6 +250,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
+		applyCount++
 		if err != nil {
 			return
 		}
@@ -277,7 +282,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
 		common.AnyField("apply cost", applyDuration),
-		common.AnyField("read cost", readDuration))
+		common.AnyField("read cost", readDuration),
+		common.AnyField("total count", totalCount),
+		common.AnyField("read count", readCount),
+		common.AnyField("apply count", applyCount))
 	r.source.Init(maxTs)
 	return
 }
