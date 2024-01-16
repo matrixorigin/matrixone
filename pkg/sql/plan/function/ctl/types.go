@@ -43,8 +43,6 @@ const (
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
-
-	RunTaskMethod = "RUNTASK"
 )
 
 var (
@@ -73,8 +71,6 @@ var (
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
-
-		RunTaskMethod: handleRunTask,
 	}
 )
 
