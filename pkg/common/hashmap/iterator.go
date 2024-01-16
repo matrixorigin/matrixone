@@ -36,7 +36,7 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector, inB
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
+func (itr *strHashmapIterator) Insert(start, count, dataOffset int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
 
 	defer func() {
@@ -82,7 +82,7 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector, inB
 	return itr.mp.values[:count], itr.mp.zValues[:count]
 }
 
-func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
+func (itr *intHashMapIterator) Insert(start, count, dataOffset int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
 
 	defer func() {

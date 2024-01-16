@@ -232,7 +232,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 			n = hashmap.UnitLimit
 		}
 
-		groupList, _, err = iterator.Insert(i, n, ctr.groupVectors)
+		groupList, _, err = iterator.Insert(i, n, i, ctr.groupVectors)
 		if err != nil {
 			return err
 		}

@@ -334,7 +334,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 
 		vecIdx1 := i / colexec.DefaultBatchSize
 		vecIdx2 := i % colexec.DefaultBatchSize
-		vals, zvals, err := itr.Insert(vecIdx2, n, ctr.vecs[vecIdx1])
+		vals, zvals, err := itr.Insert(vecIdx2, n, i, ctr.vecs[vecIdx1])
 		if err != nil {
 			return err
 		}

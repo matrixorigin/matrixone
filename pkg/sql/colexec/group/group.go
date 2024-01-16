@@ -401,7 +401,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 			n = hashmap.UnitLimit
 		}
 		rows := ctr.intHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		vals, _, err := itr.Insert(i, n, i, ctr.vecs)
 		if err != nil {
 			return err
 		}
@@ -422,7 +422,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 			n = hashmap.UnitLimit
 		}
 		rows := ctr.strHashMap.GroupCount()
-		vals, _, err := itr.Insert(i, n, ctr.vecs)
+		vals, _, err := itr.Insert(i, n, i, ctr.vecs)
 		if err != nil {
 			return err
 		}
