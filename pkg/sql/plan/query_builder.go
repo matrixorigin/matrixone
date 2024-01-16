@@ -907,7 +907,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 
 		//for _, expr := range node.AggList {
 		//	increaseRefCnt(expr, 1, colRefCnt)
@@ -2707,7 +2707,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if astTimeWindow.Fill != nil {
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_Fill,
+				NodeType:    plan.Node_FILL,
 				Children:    []int32{nodeID},
 				AggList:     fillCols,
 				BindingTags: []int32{ctx.timeTag},

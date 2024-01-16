@@ -192,17 +192,15 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			}
 
 			idxTableNodeID := builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_TABLE_SCAN,
-				ObjRef:      idxObjRef,
-				TableDef:    idxTableDef,
-				FilterList:  node.FilterList,
-				Limit:       node.Limit,
-				Offset:      node.Offset,
-				BindingTags: []int32{idxTag},
+				NodeType:     plan.Node_TABLE_SCAN,
+				TableDef:     idxTableDef,
+				ObjRef:       idxObjRef,
+				ParentObjRef: node.ObjRef,
+				FilterList:   node.FilterList,
+				Limit:        node.Limit,
+				Offset:       node.Offset,
+				BindingTags:  []int32{idxTag},
 			}, builder.ctxByNode[nodeID])
-
-			node.FilterList = nil
-			node.Limit, node.Offset = nil, nil
 
 			return idxTableNodeID
 		}
@@ -347,13 +345,14 @@ END0:
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			ObjRef:      idxObjRef,
-			TableDef:    idxTableDef,
-			FilterList:  []*plan.Expr{idxFilter},
-			Limit:       node.Limit,
-			Offset:      node.Offset,
-			BindingTags: []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -457,13 +456,14 @@ END0:
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			ObjRef:      idxObjRef,
-			TableDef:    idxTableDef,
-			FilterList:  []*plan.Expr{idxFilter},
-			Limit:       node.Limit,
-			Offset:      node.Offset,
-			BindingTags: []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -547,13 +547,14 @@ END0:
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			ObjRef:      idxObjRef,
-			TableDef:    idxTableDef,
-			FilterList:  []*plan.Expr{idxFilter},
-			Limit:       node.Limit,
-			Offset:      node.Offset,
-			BindingTags: []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -691,10 +692,11 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			ObjRef:      idxObjRef,
-			TableDef:    idxTableDef,
-			BindingTags: []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(leftChild.ObjRef),
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
