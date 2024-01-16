@@ -126,7 +126,7 @@ type InternalCmdFieldList struct {
 }
 
 // Free implements tree.Statement.
-func (i *InternalCmdFieldList) Free() {
+func (icfl *InternalCmdFieldList) Free() {
 }
 
 func (icfl *InternalCmdFieldList) String() string {
