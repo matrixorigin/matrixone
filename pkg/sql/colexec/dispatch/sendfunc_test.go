@@ -179,14 +179,14 @@ func TestDispatchToRemoteReceiver(t *testing.T) {
 	}
 
 	// case 1: send a batch to all remote receivers successfully.
-	cancels := mockRemoteReceivers(arg, 3)
+	mockRemoteReceivers(arg, 3)
 	input1 := mockSimpleInput(mp)
 	require.NoError(t, arg.sendToAllRemoteReceivers(proc, input1))
 	require.Equal(t, int64(1), input1.GetCnt())
 	input1.Clean(mp)
 
 	// case 2: send a batch to any remote receiver successfully.
-	cancels = mockRemoteReceivers(arg, 3)
+	mockRemoteReceivers(arg, 3)
 	input2 := mockSimpleInput(mp)
 	require.NoError(t, arg.sendToAnyRemoteReceiver(proc, input2))
 	require.Equal(t, int64(1), input2.GetCnt())
@@ -194,7 +194,7 @@ func TestDispatchToRemoteReceiver(t *testing.T) {
 
 	// case 3: the sender context canceled, it may stop the sending work.
 	// but the batch's reference should be 1.
-	cancels = mockRemoteReceivers(arg, 3)
+	mockRemoteReceivers(arg, 3)
 	input3 := mockSimpleInput(mp)
 	proc.Ctx = deadCtx
 	require.NoError(t, arg.sendToAllRemoteReceivers(proc, input3))
@@ -206,7 +206,7 @@ func TestDispatchToRemoteReceiver(t *testing.T) {
 	// case 4: one remote receiver has been closed.
 	// it will cause send to all failed. but send to any should be successful.
 	// and the batch's reference should be 1.
-	cancels = mockRemoteReceivers(arg, 3)
+	cancels := mockRemoteReceivers(arg, 3)
 	cancels[1]()
 	proc.Ctx = aliveCtx
 	input4 := mockSimpleInput(mp)
