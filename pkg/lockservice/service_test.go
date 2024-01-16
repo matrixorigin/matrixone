@@ -1350,7 +1350,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					bind := lt.getBind()
 					bind.Version = bind.Version + 1
 					new := newLocalLockTable(bind, s.fsp, s.events, s.clock)
-					s.tables.Store(table, new)
+					s.tables.set(table, new)
 					lt.close()
 
 					// txn2 get lock, shared
