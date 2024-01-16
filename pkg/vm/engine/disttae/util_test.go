@@ -915,6 +915,7 @@ func TestGetPKExpr(t *testing.T) {
 			"a in (1,2)",
 			"b=40 and a=50",
 			"a=60 or b=70",
+			"b=80 and c=90",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("=", []*plan.Expr{
@@ -965,6 +966,16 @@ func TestGetPKExpr(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(70),
 				}),
 			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(80),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(90),
+				}),
+			}),
 		},
 		valExprs: []*plan.Expr{
 			plan2.MakePlan2Int64ConstExprWithType(10),
@@ -972,6 +983,7 @@ func TestGetPKExpr(t *testing.T) {
 			plan2.MakePlan2Int64ConstExprWithType(30),
 			plan2.MakePlan2Int64VecExprWithType(int64(1), int64(2)),
 			plan2.MakePlan2Int64ConstExprWithType(50),
+			nil,
 			nil,
 		},
 	}
