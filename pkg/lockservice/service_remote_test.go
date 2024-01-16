@@ -389,10 +389,8 @@ func TestLockWithBindTimeout(t *testing.T) {
 				})
 				if err == nil {
 					// l2 get the bind
-					v, ok := l2.tables.Load(table)
-					assert.True(t, ok)
-					l := v.(lockTable)
-					assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
+					v := l2.tables.get(table)
+					assert.Equal(t, l2.serviceID, v.getBind().ServiceID)
 					return
 				}
 				time.Sleep(time.Millisecond * 100)
@@ -418,10 +416,8 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			assert.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			// l2 get the bind
-			v, ok := l2.tables.Load(table)
-			assert.True(t, ok)
-			l := v.(lockTable)
-			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
+			v := l2.tables.get(table)
+			assert.Equal(t, l2.serviceID, v.getBind().ServiceID)
 		},
 	)
 }
@@ -445,10 +441,8 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			require.NoError(t, err)
 			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
-			v, ok := l2.tables.Load(table)
-			assert.True(t, ok)
-			l := v.(lockTable)
-			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
+			v := l2.tables.get(table)
+			assert.Equal(t, l2.serviceID, v.getBind().ServiceID)
 		},
 	)
 }
@@ -553,9 +547,9 @@ func TestIssue12554(t *testing.T) {
 			oldBind := alloc.Get(l1.serviceID, table)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.tables.Delete(table)
+			l1.tables.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table })
 			newLockTable := l1.createLockTableByBind(oldBind)
-			l1.tables.Store(table, newLockTable)
+			l1.tables.set(table, newLockTable)
 
 			_, err := l2.Lock(ctx, table, [][]byte{row1}, txn2, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
@@ -664,8 +658,6 @@ func checkBind(
 	t *testing.T,
 	bind pb.LockTable,
 	s *service) {
-	v, ok := s.tables.Load(bind.Table)
-	assert.True(t, ok)
-	l := v.(lockTable)
-	assert.Equal(t, bind, l.getBind())
+	v := s.tables.get(bind.Table)
+	assert.Equal(t, bind, v.getBind())
 }
