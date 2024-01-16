@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -40,6 +41,7 @@ const (
 	AddFaultPointMethod = "ADDFAULTPOINT"
 	BackupMethod        = "BACKUP"
 	TraceSpanMethod     = "TRACESPAN"
+	CoreDumpMethod      = "COREDUMP"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -68,6 +70,7 @@ var (
 		AddFaultPointMethod: handleAddFaultPoint(),
 		BackupMethod:        handleBackup(),
 		TraceSpanMethod:     handleTraceSpan,
+		CoreDumpMethod:      handleCoreDump,
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
