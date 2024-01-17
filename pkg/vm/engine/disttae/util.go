@@ -355,11 +355,7 @@ func getNonCompositePKSearchFuncByExpr(
 	return false, false, nil
 }
 
-func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (isNull bool, val any) {
-	if expr.Lit.Isnull {
-		isNull = true
-		return
-	}
+func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
 	switch val := expr.Lit.Value.(type) {
 	case *plan.Literal_I8Val:
 		return transferIval(val.I8Val, oid)
@@ -419,14 +415,14 @@ func getPkValueByExpr(
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		isNull, val := evalLiteralExpr(exprImpl, oid)
-		if isNull {
+		if expr.Lit.Isnull {
 			return false, true, nil
 		}
-		if val == nil {
-			return false, false, nil
-		} else {
+		canEval, val := evalLiteralExpr(exprImpl, oid)
+		if canEval {
 			return true, false, val
+		} else {
+			return false, false, nil
 		}
 
 		// case *plan.Expr_Vec:
