@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 
@@ -318,6 +319,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	if deletes == nil || err != nil {
 		return
 	}
+	//defer deletes.Close()
 	if persistedByCN {
 		if deltalocCommitTS.Equal(txnif.UncommitTS) {
 			return
@@ -422,6 +424,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	if err != nil {
 		return
 	}
+	logutil.Infof("load persisted column data %v", vec.IsConstNull())
 	view.SetData(vec)
 
 	if skipDeletes {

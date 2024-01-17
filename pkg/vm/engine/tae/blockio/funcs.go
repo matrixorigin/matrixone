@@ -54,19 +54,8 @@ func LoadColumnsData(
 		if err != nil {
 			return
 		}
-		typ := *obj.(*vector.Vector).GetType()
-		if err = vector.GetUnionAllFunction(typ, m)(bat.Vecs[i], obj.(*vector.Vector)); err != nil {
-			break
-		}
+		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
-	}
-	if err != nil {
-		for _, col := range bat.Vecs {
-			if col != nil {
-				col.Free(m)
-			}
-		}
-		return nil, err
 	}
 	//TODO call CachedData.Release
 	return
@@ -101,12 +90,10 @@ func LoadColumnsDataWithVPool(
 		if err != nil {
 			return
 		}
-		typ := *obj.(*vector.Vector).GetType()
-		vec := vPool.GetVector(&typ)
-		err = vec.ExtendVec(obj.(*vector.Vector))
-		if err != nil {
-			break
-		}
+
+		srcVec := containers.ToTNVector(obj.(*vector.Vector), vPool.GetAllocator())
+		defer srcVec.Close()
+		vec := srcVec.CloneWindowWithPool(0, srcVec.Length(), vPool)
 		bat.Vecs[i] = vec.GetDownstreamVector()
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}

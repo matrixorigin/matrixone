@@ -708,6 +708,7 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 					return err
 				}
 				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
+				//defer vec.Close()
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
