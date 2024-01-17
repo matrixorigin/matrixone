@@ -61,9 +61,6 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
-select sleep(3);
-sleep(3)
-0
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
@@ -168,6 +165,9 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+select sleep(3);
+sleep(3)
+0
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
@@ -244,6 +244,8 @@ create database if not exists db1    DDL    external_sql
 create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
+insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
+select sleep(3)    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show tables    Other    external_sql
@@ -321,8 +323,6 @@ drop database if exists test_db    DDL    external_sql
 rollback    TCL    external_sql
 start transaction    TCL    external_sql
 commit    TCL    external_sql
-begin    TCL    external_sql
-create database statement_query_type    DDL    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;
@@ -595,9 +595,10 @@ test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) D
 /* cloud_nonuser */ insert into test_01 values (1,'a');
 /* cloud_nonuser */ insert into test_01 values (2,'b');
 /* cloud_nonuser */ update test_01 set a=100 where b='b';
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+/* cloud_nonuser */ select * from test_01;
+a    b
+1    a
+100    b
 /* cloud_nonuser */ explain select * from test_01;
 QUERY PLAN
 Project
@@ -610,10 +611,9 @@ Project
 /* cloud_nonuser */ select sleep(5);
 sleep(5)
 0
-/* cloud_nonuser */ select * from test_01;
-a    b
-1    a
-100    b
+/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 select sleep(15);
 sleep(15)
 0
