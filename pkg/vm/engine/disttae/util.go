@@ -415,7 +415,7 @@ func getPkValueByExpr(
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		if expr.Lit.Isnull {
+		if exprImpl.Lit.Isnull {
 			return false, true, nil
 		}
 		canEval, val := evalLiteralExpr(exprImpl, oid)
