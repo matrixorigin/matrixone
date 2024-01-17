@@ -355,6 +355,56 @@ func getNonCompositePKSearchFuncByExpr(
 	return false, false, nil
 }
 
+func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (isNull bool, val any) {
+	if expr.Lit.Isnull {
+		isNull = true
+		return
+	}
+	switch val := expr.Lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return transferIval(val.I8Val, oid)
+	case *plan.Literal_I16Val:
+		return transferIval(val.I16Val, oid)
+	case *plan.Literal_I32Val:
+		return transferIval(val.I32Val, oid)
+	case *plan.Literal_I64Val:
+		return transferIval(val.I64Val, oid)
+	case *plan.Literal_Dval:
+		return transferDval(val.Dval, oid)
+	case *plan.Literal_Sval:
+		return transferSval(val.Sval, oid)
+	case *plan.Literal_Bval:
+		return transferBval(val.Bval, oid)
+	case *plan.Literal_U8Val:
+		return transferUval(val.U8Val, oid)
+	case *plan.Literal_U16Val:
+		return transferUval(val.U16Val, oid)
+	case *plan.Literal_U32Val:
+		return transferUval(val.U32Val, oid)
+	case *plan.Literal_U64Val:
+		return transferUval(val.U64Val, oid)
+	case *plan.Literal_Fval:
+		return transferFval(val.Fval, oid)
+	case *plan.Literal_Dateval:
+		return transferDateval(val.Dateval, oid)
+	case *plan.Literal_Timeval:
+		return transferTimeval(val.Timeval, oid)
+	case *plan.Literal_Datetimeval:
+		return transferDatetimeval(val.Datetimeval, oid)
+	case *plan.Literal_Decimal64Val:
+		return transferDecimal64val(val.Decimal64Val.A, oid)
+	case *plan.Literal_Decimal128Val:
+		return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
+	case *plan.Literal_Timestampval:
+		return transferTimestampval(val.Timestampval, oid)
+	case *plan.Literal_Jsonval:
+		return transferSval(val.Jsonval, oid)
+	case *plan.Literal_EnumVal:
+		return transferUval(val.EnumVal, oid)
+	}
+	return
+}
+
 func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
@@ -369,50 +419,14 @@ func getPkValueByExpr(
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		if exprImpl.Lit.Isnull {
+		isNull, val := evalLiteralExpr(exprImpl, oid)
+		if isNull {
 			return false, true, nil
 		}
-		switch val := exprImpl.Lit.Value.(type) {
-		case *plan.Literal_I8Val:
-			return transferIval(val.I8Val, oid)
-		case *plan.Literal_I16Val:
-			return transferIval(val.I16Val, oid)
-		case *plan.Literal_I32Val:
-			return transferIval(val.I32Val, oid)
-		case *plan.Literal_I64Val:
-			return transferIval(val.I64Val, oid)
-		case *plan.Literal_Dval:
-			return transferDval(val.Dval, oid)
-		case *plan.Literal_Sval:
-			return transferSval(val.Sval, oid)
-		case *plan.Literal_Bval:
-			return transferBval(val.Bval, oid)
-		case *plan.Literal_U8Val:
-			return transferUval(val.U8Val, oid)
-		case *plan.Literal_U16Val:
-			return transferUval(val.U16Val, oid)
-		case *plan.Literal_U32Val:
-			return transferUval(val.U32Val, oid)
-		case *plan.Literal_U64Val:
-			return transferUval(val.U64Val, oid)
-		case *plan.Literal_Fval:
-			return transferFval(val.Fval, oid)
-		case *plan.Literal_Dateval:
-			return transferDateval(val.Dateval, oid)
-		case *plan.Literal_Timeval:
-			return transferTimeval(val.Timeval, oid)
-		case *plan.Literal_Datetimeval:
-			return transferDatetimeval(val.Datetimeval, oid)
-		case *plan.Literal_Decimal64Val:
-			return transferDecimal64val(val.Decimal64Val.A, oid)
-		case *plan.Literal_Decimal128Val:
-			return transferDecimal128val(val.Decimal128Val.A, val.Decimal128Val.B, oid)
-		case *plan.Literal_Timestampval:
-			return transferTimestampval(val.Timestampval, oid)
-		case *plan.Literal_Jsonval:
-			return transferSval(val.Jsonval, oid)
-		case *plan.Literal_EnumVal:
-			return transferUval(val.EnumVal, oid)
+		if val == nil {
+			return false, false, nil
+		} else {
+			return true, false, val
 		}
 
 		// case *plan.Expr_Vec:
