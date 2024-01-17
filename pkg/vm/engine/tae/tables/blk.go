@@ -227,18 +227,18 @@ func (blk *block) getPersistedRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, offset uint32, err error) {
-	ok, err := pnode.ContainsKey(ctx, filter.Val)
-	if err != nil {
-		return
-	}
-	if !ok {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
 	var sortKey containers.Vector
 	schema := blk.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
 	for blkID = uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
+		var ok bool
+		ok, err = pnode.ContainsKey(ctx, filter.Val, uint32(blkID))
+		if err != nil {
+			return
+		}
+		if !ok {
+			continue
+		}
 		if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx, mp, blkID); err != nil {
 			continue
 		}

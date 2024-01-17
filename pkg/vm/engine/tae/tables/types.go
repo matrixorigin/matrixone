@@ -55,7 +55,7 @@ type NodeT interface {
 		rowmask *roaring.Bitmap,
 		bf objectio.BloomFilter,
 	) (err error)
-	ContainsKey(ctx context.Context, key any) (ok bool, err error)
+	ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error)
 
 	Rows() (uint32,error)
 

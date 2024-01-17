@@ -564,16 +564,23 @@ func (blk *baseBlock) PersistedBatchDedup(
 	if err != nil {
 		return
 	}
-	sels, err := pkIndex.BatchDedup(
-		ctx,
-		keys,
-		keysZM,
-		blk.rt,
-	)
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-		return
+	for i := 0; i < blk.meta.BlockCnt(); i++ {
+		sels, err := pkIndex.BatchDedup(
+			ctx,
+			keys,
+			keysZM,
+			blk.rt,
+			uint32(i),
+		)
+		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			return err
+		}
+		err = blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, isAblk, mp)
+		if err != nil {
+			return err
+		}
 	}
-	return blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, isAblk, mp)
+	return nil
 }
 
 func (blk *baseBlock) getPersistedValue(

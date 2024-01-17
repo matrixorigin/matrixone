@@ -68,12 +68,12 @@ func (node *persistedNode) BatchDedup(
 	panic("should not be called")
 }
 
-func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
+func (node *persistedNode) ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error) {
 	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.rt)
 	if err != nil {
 		return
 	}
-	if err = pkIndex.Dedup(ctx, key, node.block.rt); err == nil {
+	if err = pkIndex.Dedup(ctx, key, node.block.rt, blkID); err != nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
@@ -149,15 +149,15 @@ func (node *persistedNode) GetRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, row uint32, err error) {
-	ok, err := node.ContainsKey(ctx, filter.Val)
-	if err != nil {
-		return
-	}
-	if !ok {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
 	for blkID = uint16(0); blkID < uint16(node.block.meta.BlockCnt()); blkID++ {
+		var ok bool
+		ok, err = node.ContainsKey(ctx, filter.Val, uint32(blkID))
+		if err != nil {
+			return
+		}
+		if !ok {
+			continue
+		}
 		// Note: sort key do not change
 		schema := node.block.meta.GetSchema()
 		var sortKey containers.Vector

@@ -110,7 +110,7 @@ func (node *memoryNode) doBatchDedup(
 	return node.pkIndex.BatchDedup(ctx, keys.GetDownstreamVector(), keysZM, skipFn, bf)
 }
 
-func (node *memoryNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
+func (node *memoryNode) ContainsKey(ctx context.Context, key any, _ uint32) (ok bool, err error) {
 	if err = node.pkIndex.Dedup(ctx, key, nil); err != nil {
 		return
 	}
@@ -172,11 +172,11 @@ func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
 	return node.pkIndex.GetActiveRow(key)
 }
 
-func (node *memoryNode) Rows() (uint32,error) {
+func (node *memoryNode) Rows() (uint32, error) {
 	if node.data == nil {
-		return 0,nil
+		return 0, nil
 	}
-	return uint32(node.data.Length()),nil
+	return uint32(node.data.Length()), nil
 }
 
 func (node *memoryNode) EstimateMemSize() int {
