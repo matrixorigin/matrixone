@@ -150,7 +150,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	if src.RowCount() == colexec.DefaultBatchSize {
 		ctr.batches = append(ctr.batches, src)
 		return nil
-	} else if src.RowCount() != colexec.DefaultBatchSize {
+	} else {
 		offset := 0
 		appendRows := 0
 		length := src.RowCount()
@@ -165,6 +165,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 			}
 			offset += appendRows
 		}
+		proc.PutBatch(src)
 	}
 	return nil
 }
