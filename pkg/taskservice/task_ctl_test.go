@@ -23,9 +23,9 @@ import (
 func TestDisableTaskFramework(t *testing.T) {
 	assert.False(t, taskFrameworkDisabled())
 
-	DebugCtlTaskFramwork(true)
+	DebugCtlTaskFramework(true)
 	assert.True(t, taskFrameworkDisabled())
 
-	DebugCtlTaskFramwork(false)
+	DebugCtlTaskFramework(false)
 	assert.False(t, taskFrameworkDisabled())
 }
