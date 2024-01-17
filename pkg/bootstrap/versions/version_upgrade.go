@@ -36,7 +36,8 @@ func MustGetLatestReadyVersion(
 func GetUpgradeVersions(
 	finalVersion string,
 	txn executor.TxnExecutor,
-	forUpdate bool) ([]VersionUpgrade, error) {
+	forUpdate bool,
+	mustHave bool) ([]VersionUpgrade, error) {
 	sql := fmt.Sprintf(`select 
 			id,
 			from_version, 
@@ -59,7 +60,7 @@ func GetUpgradeVersions(
 	if err != nil {
 		return nil, err
 	}
-	if len(values) == 0 {
+	if len(values) == 0 && mustHave {
 		panic("BUG: missing version upgrade")
 	}
 	return values, nil
@@ -110,7 +111,7 @@ func GetUpgradeVersionForUpdateByID(
 			total_tenant,
 			ready_tenant
 			from %s 
-			where id = %d`,
+			where id = %d for update`,
 		catalog.MOUpgradeTable,
 		id)
 	values, err := getVersionUpgradesBySQL(sql, txn)

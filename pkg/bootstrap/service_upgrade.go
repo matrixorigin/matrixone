@@ -86,18 +86,38 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
+			final := s.getFinalVersionHandle().Metadata()
+
 			// First version as a genesis version, always need to be PREPARE.
 			// Because the first version need to init upgrade framework tables.
-			if len(handles) == 1 {
-				return handles[0].Prepare(ctx, txn)
+			if len(s.handles) == 1 {
+				return s.handles[0].Prepare(ctx, txn, true)
+			}
+
+			// Deploy mo first time without 1.2.0, init framework first.
+			// And upgrade to current version.
+			created, err := versions.IsFrameworkTablesCreated(txn)
+			if err != nil {
+				return err
+			}
+			if !created {
+				if err := s.handles[0].Prepare(ctx, txn, false); err != nil {
+					return err
+				}
+
+				res, err := txn.Exec(final.GetInsertSQL(versions.StateReady), executor.StatementOption{})
+				if err == nil {
+					res.Close()
+				}
+				return err
+
 			}
 
 			// lock version table
 			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
-				return nil
+				return err
 			}
 
-			final := getFinalVersionHandle().Metadata()
 			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				return err
@@ -159,7 +179,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					append(final)
 				} else {
 					from := latest
-					for _, v := range handles {
+					for _, v := range s.handles {
 						if versions.Compare(v.Metadata().Version, from) > 0 &&
 							v.Metadata().CanDirectUpgrade(from) {
 							append(v.Metadata())
@@ -229,7 +249,7 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 func (s *service) performUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) (bool, error) {
-	final := getFinalVersionHandle().Metadata()
+	final := s.getFinalVersionHandle().Metadata()
 
 	// make sure only one cn can execute upgrade logic
 	state, ok, err := versions.GetVersionState(final.Version, txn, true)
@@ -244,7 +264,7 @@ func (s *service) performUpgrade(
 	}
 
 	// get upgrade steps, and perform upgrade one by one
-	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true)
+	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true, true)
 	if err != nil {
 		return false, err
 	}
@@ -294,8 +314,8 @@ func (s *service) doUpgrade(
 	}
 
 	state := versions.StateReady
-	h := getVersionHandle(upgrade.ToVersion)
-	if err := h.Prepare(ctx, txn); err != nil {
+	h := s.getVersionHandle(upgrade.ToVersion)
+	if err := h.Prepare(ctx, txn, h.Metadata().Version == s.getFinalVersionHandle().Metadata().Version); err != nil {
 		return 0, err
 	}
 

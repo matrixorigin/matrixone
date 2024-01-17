@@ -56,6 +56,7 @@ type Cluster interface {
 	Close() error
 	// Options returns the adjusted options
 	Options() Options
+	Clock() clock.Clock
 
 	ClusterOperation
 	ClusterAwareness
@@ -310,7 +311,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	// build tn service configurations
 	c.tn.cfgs, c.tn.opts = c.buildTNConfigs(c.network.addresses)
 	// build cn service configurations
-	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
+	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses, opt)
 	// build FileService instances
 	c.fileservices = c.buildFileServices(ctx)
 
@@ -349,6 +350,10 @@ func (c *testCluster) Start() error {
 
 func (c *testCluster) Options() Options {
 	return c.opt
+}
+
+func (c *testCluster) Clock() clock.Clock {
+	return c.clock
 }
 
 func (c *testCluster) Close() error {
@@ -1302,6 +1307,7 @@ func (c *testCluster) buildLogConfigs(
 
 func (c *testCluster) buildCNConfigs(
 	address serviceAddresses,
+	opt Options,
 ) ([]*cnservice.Config, []cnOptions) {
 	batch := c.opt.initial.cnServiceNum
 
@@ -1311,7 +1317,7 @@ func (c *testCluster) buildCNConfigs(
 		cfg := buildCNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
-		opt := buildCNOptions()
+		opt := opt.cn.optionFunc(i)
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		opts = append(opts, opt)
 	}

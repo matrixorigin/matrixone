@@ -18,22 +18,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0"
 )
 
-var (
-	handles = []VersionHandle{}
-)
-
-// All versions need create a upgrade handle in pkg/bootstrap/versions
+// initUpgrade all versions need create a upgrade handle in pkg/bootstrap/versions
 // package. And register the upgrade logic into handles.
-func init() {
-	handles = append(handles, v1_2_0.Handler)
+func (s *service) initUpgrade() {
+	s.handles = append(s.handles, v1_2_0.Handler)
 }
 
-func getFinalVersionHandle() VersionHandle {
-	return handles[len(handles)-1]
+func (s *service) getFinalVersionHandle() VersionHandle {
+	return s.handles[len(s.handles)-1]
 }
 
-func getVersionHandle(version string) VersionHandle {
-	for _, h := range handles {
+func (s *service) getVersionHandle(version string) VersionHandle {
+	for _, h := range s.handles {
 		if h.Metadata().Version == version {
 			return h
 		}

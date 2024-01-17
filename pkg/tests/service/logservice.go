@@ -242,7 +242,7 @@ func (c *testCluster) setInitialClusterInfo() error {
 
 		err = selected[0].SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
-			c.opt.initial.tnShartnum,
+			c.opt.initial.tnShardNum,
 			c.opt.initial.logReplicaNum,
 		)
 		if err != nil {

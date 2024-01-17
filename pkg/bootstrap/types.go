@@ -62,10 +62,20 @@ type VersionHandle interface {
 	// Metadata version metadata
 	Metadata() versions.Version
 	// Prepare prepare upgrade. This upgrade will be executed before cluster and tenant upgrade.
-	Prepare(ctx context.Context, txn executor.TxnExecutor) error
+	Prepare(ctx context.Context, txn executor.TxnExecutor, final bool) error
 	// ClusterNeedUpgrade handle upgrade cluster metadata. This upgrade will be executed before
 	// tenant upgrade.
 	HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error
 	// HandleTenantUpgrade handle upgrade a special tenant.
 	HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error
+}
+
+// Option option for bootstrap service
+type Option func(s *service)
+
+// WithUpgradeHandles reset upgrade handles
+func WithUpgradeHandles(handles []VersionHandle) Option {
+	return func(s *service) {
+		s.handles = handles
+	}
 }

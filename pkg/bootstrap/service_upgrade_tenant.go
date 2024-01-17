@@ -38,7 +38,7 @@ func (s *service) MaybeUpgradeTenant(
 		func(txn executor.TxnExecutor) error {
 			txn.Use(catalog.MO_CATALOG)
 			// tenant create at current cn, can work correctly
-			currentCN := getFinalVersionHandle().Metadata()
+			currentCN := s.getFinalVersionHandle().Metadata()
 			if currentCN.Version == version {
 				return nil
 			} else if versions.Compare(currentCN.Version, version) < 0 {
@@ -69,7 +69,7 @@ func (s *service) MaybeUpgradeTenant(
 					break
 				}
 
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false)
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false, true)
 				if err != nil {
 					return err
 				}
@@ -88,7 +88,7 @@ func (s *service) MaybeUpgradeTenant(
 				return err
 			}
 			from := version
-			for _, v := range handles {
+			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) > 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
@@ -136,7 +136,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				// no upgrade logic on current cn, skip
-				v := getFinalVersionHandle().Metadata().Version
+				v := s.getFinalVersionHandle().Metadata().Version
 				if versions.Compare(upgrade.ToVersion, v) > 0 {
 					return nil
 				}
@@ -151,7 +151,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				hasUpgradeTenants = true
-				h := getVersionHandle(upgrade.ToVersion)
+				h := s.getVersionHandle(upgrade.ToVersion)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
 					// createVersion >= upgrade.ToVersion already upgrade

@@ -160,6 +160,7 @@ type service struct {
 	client  client.TxnClient
 	exec    executor.SQLExecutor
 	stopper *stopper.Stopper
+	handles []VersionHandle
 
 	mu struct {
 		sync.RWMutex
@@ -172,7 +173,8 @@ func NewService(
 	lock Locker,
 	clock clock.Clock,
 	client client.TxnClient,
-	exec executor.SQLExecutor) Service {
+	exec executor.SQLExecutor,
+	opts ...Option) Service {
 	s := &service{
 		clock:   clock,
 		exec:    exec,
@@ -181,6 +183,11 @@ func NewService(
 		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
+	s.initUpgrade()
+
+	for _, opt := range opts {
+		opt(s)
+	}
 	return s
 }
 
@@ -188,7 +195,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
 
 	if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
-		getLogger().Info("mo already boostrapped")
+		getLogger().Info("mo already bootstrapped")
 		return nil
 	} else if err != nil {
 		return err

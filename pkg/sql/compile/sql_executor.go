@@ -153,10 +153,10 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 func (s *sqlExecutor) getCompileContext(
 	ctx context.Context,
 	proc *process.Process,
-	opts executor.Options) *compilerContext {
+	db string) *compilerContext {
 	return newCompilerContext(
 		ctx,
-		opts.Database(),
+		db,
 		s.eng,
 		proc)
 }
@@ -169,6 +169,11 @@ func (s *sqlExecutor) adjustOptions(
 			ctx,
 			defines.TenantIDKey{},
 			opts.AccountID())
+	} else if ctx.Value(defines.TenantIDKey{}) == nil {
+		ctx = context.WithValue(
+			ctx,
+			defines.TenantIDKey{},
+			uint32(0))
 	}
 
 	if !opts.HasExistsTxn() {
@@ -256,7 +261,7 @@ func (exec *txnExecutor) Exec(
 	}()
 
 	pn, err := plan.BuildPlan(
-		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
+		exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
 		stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
@@ -266,7 +271,7 @@ func (exec *txnExecutor) Exec(
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
-			exec.s.getCompileContext(exec.ctx, proc, exec.opts),
+			exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
 			stmts[0], false)
 	})
 

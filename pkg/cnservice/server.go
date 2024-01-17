@@ -164,6 +164,10 @@ func NewService(
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
+	for _, opt := range options {
+		opt(srv)
+	}
+
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
@@ -203,9 +207,6 @@ func NewService(
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
 		return nil
-	}
-	for _, opt := range options {
-		opt(srv)
 	}
 
 	// TODO: global client need to refactor
@@ -640,6 +641,10 @@ func (s *service) initLockService() {
 	}
 }
 
+func (s *service) GetSQLExecutor() executor.SQLExecutor {
+	return s.sqlExecutor
+}
+
 // put the waiting-next type msg into client session's cache and return directly
 func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	msg, _ := message.(*pipeline.Message)
@@ -684,7 +689,7 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 }
 
 func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
-	exec := compile.NewSQLExecutor(
+	s.sqlExecutor = compile.NewSQLExecutor(
 		s.pipelineServiceServiceAddr(),
 		s.storeEngine,
 		mp,
@@ -694,17 +699,11 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s._hakeeperClient,
 		s.udfService,
 		s.aicm)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }
 
 func (s *service) initIncrService() {
-	rt := runtime.ProcessLevelRuntime()
-	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		panic("missing internal sql executor")
-	}
-
-	store, err := incrservice.NewSQLStore(v.(executor.SQLExecutor))
+	store, err := incrservice.NewSQLStore(s.sqlExecutor)
 	if err != nil {
 		panic(err)
 	}
@@ -721,16 +720,12 @@ func (s *service) initIncrService() {
 func (s *service) bootstrap() error {
 	s.initIncrService()
 	rt := runtime.ProcessLevelRuntime()
-	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		panic("missing internal sql executor")
-	}
-
 	b := bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
 		rt.Clock(),
 		s._txnClient,
-		v.(executor.SQLExecutor))
+		s.sqlExecutor,
+		s.options.bootstrapOptions...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()

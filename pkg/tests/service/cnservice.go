@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 // CNService describes expected behavior for tn service.
@@ -46,6 +47,8 @@ type CNService interface {
 	GetTaskRunner() taskservice.TaskRunner
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
+	// GetSQLExecutor returns sql executor
+	GetSQLExecutor() executor.SQLExecutor
 	// WaitSystemInitCompleted wait system init task completed
 	WaitSystemInitCompleted(ctx context.Context) error
 	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
@@ -121,6 +124,10 @@ func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 	return c.svc.GetTaskService()
 }
 
+func (c *cnService) GetSQLExecutor() executor.SQLExecutor {
+	return c.svc.GetSQLExecutor()
+}
+
 func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
 	return c.svc.WaitSystemInitCompleted(ctx)
 }
@@ -185,8 +192,4 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 
 	return cfg
-}
-
-func buildCNOptions() cnOptions {
-	return nil
 }

@@ -30,11 +30,11 @@ func (v Version) CanDirectUpgrade(version string) bool {
 	return Compare(v.MinUpgradeVersion, version) <= 0
 }
 
-func (v Version) GetInsertSQL() string {
+func (v Version) GetInsertSQL(state int32) string {
 	return fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
 		v.Version,
-		StateCreated,
+		state,
 	)
 }
 
@@ -55,7 +55,7 @@ func AddVersion(
 }
 
 func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version, state from %s where order by create_at desc limit 1`, catalog.MOVersionTable)
+	sql := fmt.Sprintf(`select version, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return Version{}, err
@@ -164,4 +164,24 @@ func parseVersion(version string) (int, int, int) {
 	return format.MustParseStringInt(fields[0]),
 		format.MustParseStringInt(fields[1]),
 		format.MustParseStringInt(fields[2])
+}
+
+func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
+	res, err := txn.Exec("show tables", executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var tables []string
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		tables = append(tables, executor.GetStringRows(cols[0])...)
+		return true
+	})
+	for _, t := range tables {
+		if strings.EqualFold(t, catalog.MOVersionTable) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
