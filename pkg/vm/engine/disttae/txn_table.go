@@ -1556,7 +1556,7 @@ func (tbl *txnTable) makeEncodedPK(
 			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
 			hasNull = isNull
 			if hasNull {
 				return

@@ -359,6 +359,7 @@ func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
+	mustOne bool,
 	proc *process.Process,
 ) (bool, bool, any) {
 	valExpr := getPkExpr(expr, pkName, proc)
@@ -414,7 +415,20 @@ func getPkValueByExpr(
 			return transferUval(val.EnumVal, oid)
 		}
 
-	case *plan.Expr_Vec:
+		// case *plan.Expr_Vec:
+		// if mustOne {
+		// 	return false, false, nil
+		// }
+		// vec := vector.NewVec(types.T_any.ToType())
+		// _ = vec.UnmarshalBinary(exprImpl.Vec.Data)
+		// return true, false, vec
+
+		// case *plan.Expr_List:
+		// if mustOne {
+		// 	return false, false, nil
+		// }
+		// for _, expr := range exprImpl.List.List {
+		// }
 	}
 
 	return false, false, nil
@@ -838,7 +852,7 @@ func extractPKValueFromEqualExprs(
 	name := column.Name
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		if ok, _, v := getPkValueByExpr(expr, name, colType, proc); ok {
+		if ok, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
 			val = types.EncodeValue(v, colType)
 			break
 		}
