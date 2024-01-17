@@ -452,8 +452,7 @@ func evalExprList(
 	put = func() {
 		proc.PutVector(vec)
 	}
-	// sort.Sort()
-
+	vec.InplaceSort()
 	return
 }
 
@@ -499,7 +498,6 @@ func recurEvalExprList(
 			return false, outputVec
 		}
 	}
-	// sort outputVec: TODO
 	return true, outputVec
 }
 
