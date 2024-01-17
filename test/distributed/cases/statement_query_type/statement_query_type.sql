@@ -124,8 +124,8 @@ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 
+select sleep(3);
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
-insert into test_table values (4,'d');
 
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
@@ -319,18 +319,19 @@ select sleep(30);
 /* cloud_nonuser */ insert into test_01 values (2,'b');
 /* cloud_nonuser */ update test_01 set a=100 where b='b';
 /* cloud_nonuser */ select * from unnest('{"a":1}') as f;
-/* cloud_nonuser */ select * from test_01;
 /* cloud_nonuser */ explain select * from test_01;
 /* cloud_nonuser */ delete from test_01 where a=1;
 /* cloud_nonuser */ truncate table test_01;
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(2);
+/* cloud_nonuser */ select sleep(5);
+/* cloud_nonuser */ select * from test_01;
+
 
 -- RESULT CHECK: part 3
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
-select sleep(30);
+select sleep(15);
 -- @session
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 

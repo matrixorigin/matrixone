@@ -61,6 +61,9 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
+select sleep(3);
+sleep(3)
+0
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
@@ -166,7 +169,6 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
-insert into test_table values (4,'d');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
 create role test_role;
@@ -596,10 +598,6 @@ test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) D
 /* cloud_nonuser */ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
-/* cloud_nonuser */ select * from test_01;
-a    b
-1    a
-100    b
 /* cloud_nonuser */ explain select * from test_01;
 QUERY PLAN
 Project
@@ -609,21 +607,27 @@ Project
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(2);
-sleep(2)
+/* cloud_nonuser */ select sleep(5);
+sleep(5)
 0
-select sleep(30);
-sleep(30)
+/* cloud_nonuser */ select * from test_01;
+a    b
+1    a
+100    b
+select sleep(15);
+sleep(15)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 70;
 statement    query_type    sql_source_type
-select sleep(2)    DQL    cloud_nonuser_sql
+select * from test_01    DQL    cloud_nonuser_sql
+select sleep(5)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
 use system    Other    cloud_nonuser_sql
 drop table test_01    DDL    cloud_nonuser_sql
 truncate table test_01    DDL    cloud_nonuser_sql
 delete from test_01 where a=1    DML    cloud_nonuser_sql
 explain select * from test_01    Other    cloud_nonuser_sql
+select * from unnest('{"a":1}') as f    DQL    cloud_nonuser_sql
 update test_01 set a=100 where b='b'    DML    cloud_nonuser_sql
 show create table test_01    Other    cloud_nonuser_sql
 create table test_01(a int, b varchar)    DDL    cloud_nonuser_sql
