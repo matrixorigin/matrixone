@@ -140,6 +140,19 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 	}
 }
 
+func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
+	for i := 0; i < len(s.Instructions); i++ {
+		s.Instructions[i].CnAddr = s.NodeInfo.Addr
+		s.Instructions[i].OperatorID = cb()
+		s.Instructions[i].ParallelID = 0
+		s.Instructions[i].MaxParallel = 1
+	}
+
+	for _, scope := range s.PreScopes {
+		scope.SetOperatorInfoRecursively(cb)
+	}
+}
+
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	var wg sync.WaitGroup
@@ -543,7 +556,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope, err := newParallelScope(s, ss)
+	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -580,7 +593,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	var err error
-	s, err = newParallelScope(s, ss)
+	s, err = newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -648,7 +661,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope, err := newParallelScope(s, ss)
+	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -657,7 +670,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	return newScope.MergeRun(c)
 }
 
-func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
+func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
 	idx := 0
@@ -686,6 +699,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Arg: mergetop.NewArgument().
 					WithFs(arg.Fs).
 					WithLimit(arg.Limit),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -695,6 +713,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Arg: top.NewArgument().
 						WithFs(arg.Fs).
 						WithLimit(arg.Limit),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -729,6 +752,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergelimit.NewArgument().
 					WithLimit(arg.Limit),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -737,6 +765,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					IsFirst: in.IsFirst,
 					Arg: limit.NewArgument().
 						WithLimit(arg.Limit),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -750,6 +783,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergegroup.NewArgument().
 					WithNeedEval(false),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -761,6 +799,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
 						WithMultiAggs(arg.MultiAggs),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -779,12 +822,22 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Idx:     in.Idx,
 						IsFirst: false,
 						Arg:     sample.NewMergeSample(arg),
+
+						CnAddr:      in.CnAddr,
+						OperatorID:  c.allocOperatorID(),
+						ParallelID:  0,
+						MaxParallel: 1,
 					}
 				}
 				s.Instructions[0] = vm.Instruction{
 					Op:  vm.Merge,
 					Idx: s.Instructions[0].Idx,
 					Arg: merge.NewArgument(),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  c.allocOperatorID(),
+					ParallelID:  0,
+					MaxParallel: 1,
 				}
 
 				for j := range ss {
@@ -793,6 +846,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Idx:     in.Idx,
 						IsFirst: in.IsFirst,
 						Arg:     arg.SimpleDup(),
+
+						CnAddr:      in.CnAddr,
+						OperatorID:  in.OperatorID,
+						MaxParallel: int32(len(ss)),
+						ParallelID:  int32(j),
 					})
 				}
 			}
@@ -807,6 +865,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergeoffset.NewArgument().
 					WithOffset(arg.Offset),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -815,6 +878,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					IsFirst: in.IsFirst,
 					Arg: offset.NewArgument().
 						WithOffset(arg.Offset),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -839,6 +907,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: merge.NewArgument(),
+
+			CnAddr:      s.Instructions[0].CnAddr,
+			OperatorID:  c.allocOperatorID(),
+			ParallelID:  0,
+			MaxParallel: 1,
 		}
 		//Add log for cn panic which reported on issue 10656
 		//If you find this log is printed, please report the repro details
@@ -884,6 +957,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Op: vm.Connector,
 				Arg: connector.NewArgument().
 					WithReg(s.Proc.Reg.MergeReceivers[j]),
+
+				CnAddr:      ss[i].Instructions[0].CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			})
 			j++
 		}
