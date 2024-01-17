@@ -573,7 +573,7 @@ func TestIssue12554(t *testing.T) {
 			})
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
-			assert.Nil(t, l1.tables.get(table))
+			assert.Nil(t, l1.tableGroups.get(0, table))
 		},
 	)
 }

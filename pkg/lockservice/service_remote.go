@@ -277,7 +277,7 @@ func (s *service) getLocalLockTable(
 			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
 				zap.String("bind", bind.DebugString()))
 			// only remove old bind lock table
-			s.tables.removeWithFilter(
+			s.tableGroups.removeWithFilter(
 				func(table uint64, lt lockTable) bool {
 					return lt.getBind().Equal(bind)
 				})
