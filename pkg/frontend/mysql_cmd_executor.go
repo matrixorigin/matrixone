@@ -3933,6 +3933,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	}()
 
 	canCache := true
+	Cached := false
+	defer func() {
+		if !Cached {
+			for i := 0; i < len(cws); i++ {
+				if cwft, ok := cws[i].(*TxnComputationWrapper); ok {
+					cwft.Free()
+				}
+			}
+		}
+	}()
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	for i, cw := range cws {
@@ -4015,11 +4025,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 					plans[i] = cwft.plan
 					stmts[i] = cwft.stmt
 				} else {
-					cwft.Free()
 					return nil
 				}
 			}
 		}
+		Cached = true	
 		ses.cachePlan(input.getSql(), stmts, plans)
 	}
 

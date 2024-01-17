@@ -466,7 +466,11 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 	}
 	sql := buf.String()
 	stmt, err := getRewriteSQLStmt(ctx, sql)
-	defer stmt.Free()
+	defer func() {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return "", err
 	}
