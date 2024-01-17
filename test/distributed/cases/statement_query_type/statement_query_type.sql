@@ -124,7 +124,7 @@ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 
-select sleep(3);
+select sleep(5);
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
