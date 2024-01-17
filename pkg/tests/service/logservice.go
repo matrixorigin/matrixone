@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -188,6 +189,7 @@ func buildLogConfig(
 func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
 	return []logservice.Option{
 		logservice.WithBackendFilter(filter),
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
 	}
 }
 

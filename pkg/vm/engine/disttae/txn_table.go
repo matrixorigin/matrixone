@@ -738,7 +738,7 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+		plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -1210,6 +1210,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1229,6 +1230,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	}
 	if err = tbl.db.txn.WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1311,6 +1313,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return tbl.db.txn.dumpBatch(tbl.writesOffset)
@@ -1439,6 +1442,7 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return nil
@@ -1993,7 +1997,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, columnMap)
 	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
 		location := blk.MetaLocation()
