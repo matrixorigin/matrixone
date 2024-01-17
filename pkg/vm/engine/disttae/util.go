@@ -165,17 +165,17 @@ func getCompositPKVals(
 }
 
 func getPkExpr(
-	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
+	expr *plan.Expr, pkName string, proc *process.Process,
 ) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "and":
-			pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, oid, proc)
+			pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, proc)
 			if pkBytes != nil {
 				return pkBytes
 			}
-			return getPkExpr(exprImpl.F.Args[1], pkName, oid, proc)
+			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
 			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
@@ -226,7 +226,7 @@ func getPkExpr(
 func getNonCompositePKSearchFuncByExpr(
 	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
 ) (bool, bool, blockio.ReadFilter) {
-	valExpr := getPkExpr(expr, pkName, oid, proc)
+	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
 		return false, false, nil
 	}
@@ -341,7 +341,7 @@ func getPkValueByExpr(
 	oid types.T,
 	proc *process.Process,
 ) (bool, bool, any) {
-	valExpr := getPkExpr(expr, pkName, oid, proc)
+	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
 		return false, false, nil
 	}
