@@ -49,9 +49,9 @@ const (
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
-	TableTailAttrCommitTs = "__mo_tabletail_attr_commit_time"
-	TableTailAttrAborted  = "__mo_tabletail_attr_aborted"
-	TableTailAttrPKVal    = "__mo_tabletail_attr_pk_val"
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
 )
 
 var InternalColumns = map[string]int8{
