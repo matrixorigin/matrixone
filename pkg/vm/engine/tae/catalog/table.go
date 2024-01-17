@@ -518,7 +518,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		objIt.Next()
 	}
-	tombstones:= entry.deleteList.Copy().Items()
+	tombstones := entry.deleteList.Copy().Items()
 	for _, deletes := range tombstones {
 		processor.OnTombstone(deletes)
 	}

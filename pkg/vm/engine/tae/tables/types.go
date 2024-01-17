@@ -57,7 +57,7 @@ type NodeT interface {
 	) (err error)
 	ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error)
 
-	Rows() (uint32,error)
+	Rows() (uint32, error)
 
 	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter, mp *mpool.MPool) (bid uint16, row uint32, err error)
 	CollectAppendInRange(

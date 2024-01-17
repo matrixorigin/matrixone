@@ -34,7 +34,7 @@ import (
 
 type CheckpointUnit interface {
 	MutationInfo() string
-	RunCalibration() (int,error)
+	RunCalibration() (int, error)
 	// EstimateScore(time.Duration, bool) int
 }
 
@@ -73,7 +73,7 @@ type Block interface {
 	PrepareCompactInfo() (bool, string)
 	GetDeltaPersistedTS() types.TS
 
-	Rows() (int,error)
+	Rows() (int, error)
 	GetColumnDataById(
 		ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, blkID uint16, colIdx int, mp *mpool.MPool,
 	) (*containers.ColumnView, error)
@@ -163,8 +163,8 @@ type Tombstone interface {
 	UpgradeDeleteChain(blkID uint16)
 	UpgradeDeleteChainByTS(ts types.TS)
 	ReplayDeltaLoc(any, uint16)
-	VisitDeletes(ctx context.Context, start, end types.TS, bat *containers.Batch)(*containers.Batch,error)
-	GetObject()any
-	InMemoryDeletesExisted()bool
+	VisitDeletes(ctx context.Context, start, end types.TS, bat *containers.Batch) (*containers.Batch, error)
+	GetObject() any
+	InMemoryDeletesExisted() bool
 	GetLatestDeltaloc(uint16) objectio.Location
 }

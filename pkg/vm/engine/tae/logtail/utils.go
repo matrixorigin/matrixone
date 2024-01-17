@@ -3056,7 +3056,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 }
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
-	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) && !entry.InMemoryDeletesExisted(){
+	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) && !entry.InMemoryDeletesExisted() {
 		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
 		return nil
 	}

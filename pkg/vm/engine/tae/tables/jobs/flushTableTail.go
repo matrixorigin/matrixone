@@ -664,7 +664,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 			bufferBatch.Close()
 		}
 	}()
-	emtpyDelBlkIdx = make([]*bitmap.Bitmap, 0)
+	emtpyDelBlkIdx = make([]*bitmap.Bitmap, len(task.delSrcMetas))
 	for i, blk := range task.delSrcMetas {
 		blkData := blk.GetBlockData()
 		var deletes *containers.Batch

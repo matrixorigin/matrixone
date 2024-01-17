@@ -508,8 +508,8 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 						containers.MakeVector(types.T_TS.ToType(), common.LogtailAllocator),
 					)
 					delBatch.AddVector(
-						delBat.Attrs[2],
-						containers.MakeVector(*delBat.Vecs[2].GetType(), common.LogtailAllocator),
+						catalog.AttrPKVal,
+						containers.MakeVector(*delBat.GetVectorByName(catalog.AttrPKVal).GetType(), common.LogtailAllocator),
 					)
 				}
 				delBatch.Extend(delBat)
@@ -797,7 +797,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pk)
+	bat.AddVector(catalog.AttrPKVal, pk)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
@@ -894,7 +894,7 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 
 	node := &catalog.MVCCNode[*catalog.MetadataMVCCNode]{
 		EntryMVCCNode: &catalog.EntryMVCCNode{},
-		BaseNode: baseNode,
+		BaseNode:      baseNode,
 	}
 	node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 	n.deltaloc.Insert(node)
