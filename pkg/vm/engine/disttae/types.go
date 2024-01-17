@@ -356,7 +356,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.writes[i].bat.Clean(txn.engine.mp)
+			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
 		txn.statements = txn.statements[:txn.statementID]
