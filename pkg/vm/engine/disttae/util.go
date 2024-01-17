@@ -434,14 +434,73 @@ func getPkValueByExpr(
 		// return true, false, vec
 
 		// case *plan.Expr_List:
-		// if mustOne {
-		// 	return false, false, nil
-		// }
-		// for _, expr := range exprImpl.List.List {
-		// }
+		// 	if mustOne {
+		// 		return false, false, nil
+		// 	}
 	}
 
 	return false, false, nil
+}
+
+func evalExprList(
+	oid types.T, expr *plan.Expr_List, proc *process.Process,
+) (canEval bool, vec *vector.Vector, put func()) {
+	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
+	if !canEval || vec == nil {
+		return false, nil, nil
+	}
+	put = func() {
+		proc.PutVector(vec)
+	}
+	// sort.Sort()
+
+	return
+}
+
+func recurEvalExprList(
+	oid types.T, inputExpr *plan.Expr_List, inputVec *vector.Vector, proc *process.Process,
+) (canEval bool, outputVec *vector.Vector) {
+	outputVec = inputVec
+	for _, expr := range inputExpr.List.List {
+		switch expr2 := expr.Expr.(type) {
+		case *plan.Expr_Lit:
+			canEval, val := evalLiteralExpr(expr2, oid)
+			if !canEval {
+				return false, outputVec
+			}
+			if outputVec == nil {
+				outputVec = proc.GetVector(oid.ToType())
+			}
+			// TODO: not use appendAny
+			if err := vector.AppendAny(outputVec, val, false, proc.Mp()); err != nil {
+				return false, outputVec
+			}
+		case *plan.Expr_Vec:
+			vec := vector.NewVec(oid.ToType())
+			if err := vec.UnmarshalBinary(expr2.Vec.Data); err != nil {
+				return false, outputVec
+			}
+			if outputVec == nil {
+				outputVec = proc.GetVector(oid.ToType())
+			}
+			sels := make([]int32, vec.Length())
+			for i := 0; i < vec.Length(); i++ {
+				sels[i] = int32(i)
+			}
+			union := vector.GetUnionAllFunction(*outputVec.GetType(), proc.Mp())
+			if err := union(outputVec, vec); err != nil {
+				return false, outputVec
+			}
+		case *plan.Expr_List:
+			if canEval, outputVec = recurEvalExprList(oid, expr2, outputVec, proc); !canEval {
+				return false, outputVec
+			}
+		default:
+			return false, outputVec
+		}
+	}
+	// sort outputVec: TODO
+	return true, outputVec
 }
 
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
