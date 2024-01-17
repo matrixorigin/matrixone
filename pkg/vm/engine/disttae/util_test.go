@@ -78,7 +78,13 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func makeInExprForTest[T any](arg0 *plan.Expr, vals []T) *plan.Expr {
+func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool) *plan.Expr {
+	vec := vector.NewVec(oid.ToType())
+	for _, val := range vals {
+		_ = vector.AppendAny(vec, val, false, mp)
+	}
+	data, _ := vec.MarshalBinary()
+	vec.Free(mp)
 	return &plan.Expr{
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
@@ -99,7 +105,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T) *plan.Expr {
 						Expr: &plan.Expr_Vec{
 							Vec: &plan.LiteralVec{
 								Len:  int32(len(vals)),
-								Data: types.EncodeSlice[T](vals),
+								Data: data,
 							},
 						},
 					},
@@ -656,10 +662,12 @@ func TestGetPKExpr(t *testing.T) {
 			"(b=10 and a=20) or a=30",
 		},
 		exprs: []*plan.Expr{
+			// a=10
 			makeFunctionExprForTest("=", []*plan.Expr{
 				makeColExprForTest(0, types.T_int64),
 				plan2.MakePlan2Int64ConstExprWithType(10),
 			}),
+			// a=20 and a=10
 			makeFunctionExprForTest("and", []*plan.Expr{
 				makeFunctionExprForTest("=", []*plan.Expr{
 					makeColExprForTest(0, types.T_int64),
@@ -670,6 +678,7 @@ func TestGetPKExpr(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(10),
 				}),
 			}),
+			// 30=a and 20=a
 			makeFunctionExprForTest("and", []*plan.Expr{
 				makeFunctionExprForTest("=", []*plan.Expr{
 					plan2.MakePlan2Int64ConstExprWithType(30),
@@ -680,9 +689,12 @@ func TestGetPKExpr(t *testing.T) {
 					makeColExprForTest(0, types.T_int64),
 				}),
 			}),
+			// a in (1,2)
 			makeInExprForTest[int64](
 				makeColExprForTest(0, types.T_int64),
 				[]int64{1, 2},
+				types.T_int64,
+				m,
 			),
 			makeFunctionExprForTest("and", []*plan.Expr{
 				makeFunctionExprForTest("=", []*plan.Expr{
@@ -732,6 +744,8 @@ func TestGetPKExpr(t *testing.T) {
 				makeInExprForTest[int64](
 					makeColExprForTest(0, types.T_int64),
 					[]int64{70, 80},
+					types.T_int64,
+					m,
 				),
 			}),
 			makeFunctionExprForTest("or", []*plan.Expr{
@@ -787,7 +801,7 @@ func TestGetPKExpr(t *testing.T) {
 			plan2.MakePlan2Int64ConstExprWithType(10),
 			plan2.MakePlan2Int64ConstExprWithType(20),
 			plan2.MakePlan2Int64ConstExprWithType(30),
-			plan2.MakePlan2Int64VecExprWithType(int64(1), int64(2)),
+			plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(2)),
 			plan2.MakePlan2Int64ConstExprWithType(50),
 			nil,
 			nil,
@@ -809,7 +823,7 @@ func TestGetPKExpr(t *testing.T) {
 					List: &plan.ExprList{
 						List: []*plan.Expr{
 							plan2.MakePlan2Int64ConstExprWithType(60),
-							plan2.MakePlan2Int64VecExprWithType(int64(70), int64(80)),
+							plan2.MakePlan2Int64VecExprWithType(m, int64(70), int64(80)),
 						},
 					},
 				},
@@ -840,7 +854,109 @@ func TestGetPKExpr(t *testing.T) {
 		// if rExpr != nil {
 		// 	t.Logf("%s||||%s||||%s", plan2.FormatExpr(expr), plan2.FormatExpr(rExpr), tc.desc[i])
 		// }
-		require.Equal(t, tc.valExprs[i], rExpr)
+		require.Equalf(t, tc.valExprs[i], rExpr, tc.desc[i])
 	}
+	require.Zero(t, m.CurrNB())
+}
+
+func TestEvalExprListToVec(t *testing.T) {
+	m := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcessWithMPool(m)
+	type testCase struct {
+		desc     []string
+		oids     []types.T
+		exprs    []*plan.Expr_List
+		canEvals []bool
+		expects  []*vector.Vector
+	}
+	tc := testCase{
+		desc: []string{
+			"nil",
+			"[i64(2), i64(1)]",
+			"[i64(1), i64(2)]",
+			"[i64(2), i64vec(1,10), [i64vec(4,8), i64(5)]]",
+		},
+		oids: []types.T{
+			types.T_int64, types.T_int64, types.T_int64, types.T_int64,
+		},
+		exprs: []*plan.Expr_List{
+			nil,
+			&plan.Expr_List{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						plan2.MakePlan2Int64ConstExprWithType(2),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					},
+				},
+			},
+			&plan.Expr_List{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						plan2.MakePlan2Int64ConstExprWithType(1),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					},
+				},
+			},
+			&plan.Expr_List{
+				List: &plan.ExprList{
+					List: []*plan.Expr{
+						plan2.MakePlan2Int64ConstExprWithType(2),
+						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+						&plan.Expr{
+							Expr: &plan.Expr_List{
+								List: &plan.ExprList{
+									List: []*plan.Expr{
+										plan2.MakePlan2Int64VecExprWithType(m, int64(4), int64(8)),
+										plan2.MakePlan2Int64ConstExprWithType(5),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		canEvals: []bool{
+			false, true, true, true,
+		},
+	}
+	tc.expects = append(tc.expects, nil)
+	vec := vector.NewVec(types.T_int64.ToType())
+	vector.AppendAny(vec, int64(1), false, m)
+	vector.AppendAny(vec, int64(2), false, m)
+	tc.expects = append(tc.expects, vec)
+	vec = vector.NewVec(types.T_int64.ToType())
+	vector.AppendAny(vec, int64(1), false, m)
+	vector.AppendAny(vec, int64(2), false, m)
+	tc.expects = append(tc.expects, vec)
+	vec = vector.NewVec(types.T_int64.ToType())
+	vector.AppendAny(vec, int64(1), false, m)
+	vector.AppendAny(vec, int64(2), false, m)
+	vector.AppendAny(vec, int64(4), false, m)
+	vector.AppendAny(vec, int64(5), false, m)
+	vector.AppendAny(vec, int64(8), false, m)
+	vector.AppendAny(vec, int64(10), false, m)
+	tc.expects = append(tc.expects, vec)
+
+	for i, expr := range tc.exprs {
+		// for _, e2 := range expr.List.List {
+		// 	t.Log(plan2.FormatExpr(e2))
+		// }
+		canEval, vec, put := evalExprListToVec(tc.oids[i], expr, proc)
+		require.Equal(t, tc.canEvals[i], canEval)
+		if canEval {
+			require.NotNil(t, vec)
+			require.Equal(t, tc.expects[i].String(), vec.String())
+		} else {
+			require.Equal(t, tc.expects[i], vec)
+		}
+		if put != nil {
+			put()
+		}
+		if tc.expects[i] != nil {
+			tc.expects[i].Free(m)
+		}
+	}
+	proc.FreeVectors()
 	require.Zero(t, m.CurrNB())
 }

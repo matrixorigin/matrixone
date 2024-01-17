@@ -442,9 +442,12 @@ func getPkValueByExpr(
 	return false, false, nil
 }
 
-func evalExprList(
+func evalExprListToVec(
 	oid types.T, expr *plan.Expr_List, proc *process.Process,
 ) (canEval bool, vec *vector.Vector, put func()) {
+	if expr == nil {
+		return false, nil, nil
+	}
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
 	if !canEval || vec == nil {
 		return false, nil, nil
