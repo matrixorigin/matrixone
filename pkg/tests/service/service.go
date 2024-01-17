@@ -56,6 +56,7 @@ type Cluster interface {
 	Close() error
 	// Options returns the adjusted options
 	Options() Options
+	// Clock get cluster clock
 	Clock() clock.Clock
 
 	ClusterOperation
@@ -96,6 +97,9 @@ type ClusterOperation interface {
 	// StartCNServiceIndexed starts cn service by its index.
 	StartCNServiceIndexed(index int) error
 
+	// StartCNServices start number of cn services.
+	StartCNServices(n int) error
+
 	// NewNetworkPartition constructs network partition from service index.
 	NewNetworkPartition(tnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
 	// RemainingNetworkPartition returns partition for the remaining services.
@@ -104,6 +108,10 @@ type ClusterOperation interface {
 	StartNetworkPartition(partitions ...NetworkPartition)
 	// CloseNetworkPartition disables network partition feature.
 	CloseNetworkPartition()
+}
+
+type TenantOperation interface {
+	CreateTenant(name, passwd string) error
 }
 
 // ClusterAwareness provides cluster awareness information.
@@ -311,7 +319,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	// build tn service configurations
 	c.tn.cfgs, c.tn.opts = c.buildTNConfigs(c.network.addresses)
 	// build cn service configurations
-	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses, opt)
+	c.buildCNConfigs(c.network.addresses, c.opt.initial.cnServiceNum)
 	// build FileService instances
 	c.fileservices = c.buildFileServices(ctx)
 
@@ -1226,6 +1234,19 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 	return cs.Start()
 }
 
+func (c *testCluster) StartCNServices(n int) error {
+	offset := len(c.cn.svcs)
+	c.buildCNConfigs(c.network.addresses, n)
+	c.initCNServices(c.fileservices, offset)
+
+	for _, cs := range c.cn.svcs[offset:] {
+		if err := cs.Start(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *testCluster) NewNetworkPartition(
 	tnIndexes, logIndexes, cnIndexes []uint32,
 ) NetworkPartition {
@@ -1255,6 +1276,16 @@ func (c *testCluster) CloseNetworkPartition() {
 	defer c.network.Unlock()
 
 	c.network.addressSets = nil
+}
+
+func (c *testCluster) CreateTenant(
+	account string,
+	useCNIndex int) error {
+	svc, err := c.GetCNServiceIndexed(useCNIndex)
+	if err != nil {
+		return err
+	}
+
 }
 
 // ------------------------------------------------------
@@ -1307,21 +1338,17 @@ func (c *testCluster) buildLogConfigs(
 
 func (c *testCluster) buildCNConfigs(
 	address serviceAddresses,
-	opt Options,
-) ([]*cnservice.Config, []cnOptions) {
-	batch := c.opt.initial.cnServiceNum
-
-	cfgs := make([]*cnservice.Config, 0, batch)
-	opts := make([]cnOptions, 0, batch)
+	n int,
+) {
+	offset := len(c.cn.opts)
+	batch := n
 	for i := 0; i < batch; i++ {
-		cfg := buildCNConfig(i, c.opt, address)
-		cfgs = append(cfgs, cfg)
+		c.cn.cfgs = append(c.cn.cfgs, buildCNConfig(i, c.opt, address))
 
-		opt := opt.cn.optionFunc(i)
+		opt := c.opt.cn.optionFunc(i + offset)
 		opt = append(opt, cnservice.WithLogger(c.logger))
-		opts = append(opts, opt)
+		c.cn.opts = append(c.cn.opts, opt)
 	}
-	return cfgs, opts
 }
 
 // initTNServices builds all tn services.
@@ -1387,13 +1414,13 @@ func (c *testCluster) initLogServices() []LogService {
 	return svcs
 }
 
-func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
-	batch := c.opt.initial.cnServiceNum
+func (c *testCluster) initCNServices(
+	fileservices *fileServices,
+	offset int) {
+	batch := len(c.cn.cfgs)
 
 	c.logger.Info("initialize cn services", zap.Int("batch", batch))
-
-	svcs := make([]CNService, 0, batch)
-	for i := 0; i < batch; i++ {
+	for i := offset; i < batch; i++ {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
@@ -1418,9 +1445,8 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			zap.Any("config", cfg),
 		)
 
-		svcs = append(svcs, cs)
+		c.cn.svcs = append(c.cn.svcs, cs)
 	}
-	return svcs
 }
 
 // startTNServices initializes and starts all tn services.
@@ -1466,7 +1492,7 @@ func (c *testCluster) startLogServices(ctx context.Context) error {
 }
 
 func (c *testCluster) startCNServices(ctx context.Context) error {
-	c.cn.svcs = c.initCNServices(c.fileservices)
+	c.initCNServices(c.fileservices, 0)
 
 	for _, cs := range c.cn.svcs {
 		if err := cs.Start(); err != nil {
