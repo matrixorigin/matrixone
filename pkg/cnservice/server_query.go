@@ -21,6 +21,7 @@ import (
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -48,6 +49,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -174,6 +176,39 @@ func (s *service) handleShowProcessList(ctx context.Context, req *query.Request,
 	}
 	resp.ShowProcessListResponse = &query.ShowProcessListResponse{
 		Sessions: sessions,
+	}
+	return nil
+}
+
+func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.RunTask == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	s.task.Lock()
+	defer s.task.Unlock()
+
+	code := task.TaskCode(req.RunTask.TaskCode)
+	if s.task.runner == nil {
+		resp.RunTask = &query.RunTaskResponse{
+			Result: "Task Runner Not Ready",
+		}
+		return nil
+	}
+	exec := s.task.runner.GetExecutor(code)
+	if exec == nil {
+		resp.RunTask = &query.RunTaskResponse{
+			Result: "Task Not Found",
+		}
+		return nil
+	}
+	go func() {
+		_ = exec(context.Background(), &task.AsyncTask{
+			ID:       0,
+			Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
+		})
+	}()
+	resp.RunTask = &query.RunTaskResponse{
+		Result: "OK",
 	}
 	return nil
 }
