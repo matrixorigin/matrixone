@@ -565,14 +565,23 @@ func (entry *ObjectEntry) PrepareCompact() bool {
 
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) ObjectPersisted() bool {
+	entry.RLock()
+	if entry.IsEmpty() {
+		entry.RUnlock()
+		return false
+	}
+	lastNode := entry.GetLatestNodeLocked()
+	entry.RUnlock()
 	if entry.IsAppendable() {
-		return entry.HasDropCommitted()
+		return lastNode.HasDropIntent()
 	} else {
-		return entry.HasCommittedNode()
+		return true
 	}
 }
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
-	baseNode := entry.GetLatestCommittedNode().BaseNode
+	entry.RLock()
+	baseNode := entry.GetLatestNodeLocked().BaseNode
+	entry.RUnlock()
 	if baseNode.IsEmpty() {
 		return entry.LoadObjectInfoForLastNode()
 	}

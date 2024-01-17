@@ -111,7 +111,7 @@ func NewFlushTableTailTask(
 	for _, blk := range blks {
 		task.scopes = append(task.scopes, *blk.AsCommonID())
 		var hdl handle.Object
-		hdl, err = rel.GetObject(&meta.ID)
+		hdl, err = rel.GetObject(&blk.ID)
 		if err != nil {
 			return
 		}
