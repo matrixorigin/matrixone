@@ -696,8 +696,9 @@ func (txn *Transaction) delTransaction() {
 	txn.createMap = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
-	txn.blockId_tn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
+
+	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
