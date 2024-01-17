@@ -132,7 +132,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		return true, nil
-	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
+	case *tree.CreateDatabase:
+		return true, nil
+	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
@@ -204,7 +206,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		return !st.IsUseRole(), nil
 	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable:
 		return true, nil
-	case *tree.DropDatabase, *tree.DropSequence: //Case1, Case3 above
+	case *tree.DropDatabase: //Case1, Case3 above
+		return true, nil
+	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.SetVar:
