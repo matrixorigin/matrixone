@@ -1121,7 +1121,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileTimeWin(n, c.compileSort(n, ss))
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)

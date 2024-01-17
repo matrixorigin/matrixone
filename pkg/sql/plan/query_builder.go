@@ -907,7 +907,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 
 		//for _, expr := range node.AggList {
 		//	increaseRefCnt(expr, 1, colRefCnt)
@@ -1445,7 +1445,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 
 		builder.pushdownLimit(rootID)
-		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
+
+		colRefCnt := make(map[[2]int32]int)
+		builder.countColRefs(rootID, colRefCnt)
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
@@ -1481,7 +1484,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.applyIndices(rootID)
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
@@ -2704,7 +2707,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if astTimeWindow.Fill != nil {
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_Fill,
+				NodeType:    plan.Node_FILL,
 				Children:    []int32{nodeID},
 				AggList:     fillCols,
 				BindingTags: []int32{ctx.timeTag},

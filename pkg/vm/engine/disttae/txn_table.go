@@ -773,7 +773,7 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+		plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -2166,7 +2166,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, columnMap)
 	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
 		location := blk.MetaLocation()
