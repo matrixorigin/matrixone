@@ -1276,9 +1276,7 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId: SERIAL_EXTRACT,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		//TODO: verify with @m-schen
-		//layout:     STANDARD_FUNCTION,
-		layout: CAST_EXPRESSION,
+		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
 				if inputs[0].Oid == types.T_varchar &&
