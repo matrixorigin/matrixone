@@ -119,12 +119,12 @@ func LoadPersistedDeletes(
 	}
 	bat = containers.NewBatch()
 	if isPersistedByCN {
-		colNames := []string{catalog.PhyAddrColumnName, pkName}
+		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}
 		for i := 0; i < 2; i++ {
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}
 	} else {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrPKVal, catalog.AttrAborted}
 		for i := 0; i < 4; i++ {
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}
