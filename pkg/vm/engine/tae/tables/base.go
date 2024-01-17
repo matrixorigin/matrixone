@@ -503,44 +503,43 @@ func (blk *baseBlock) dedupWithLoad(
 	keys containers.Vector,
 	sels *nulls.Bitmap,
 	rowmask *roaring.Bitmap,
+	blkOffset uint16,
 	isAblk bool,
 	mp *mpool.MPool,
 ) (err error) {
-	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
-		schema := blk.meta.GetSchema()
-		def := schema.GetSingleSortKey()
-		view, err := blk.ResolvePersistedColumnData(
-			ctx,
-			txn,
-			schema,
-			blkID,
-			def.Idx,
-			false,
-			mp,
-		)
-		if err != nil {
-			return err
-		}
-		if rowmask != nil {
-			if view.DeleteMask == nil {
-				view.DeleteMask = common.RoaringToMOBitmap(rowmask)
-			} else {
-				common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
-			}
-		}
-		defer view.Close()
-		var dedupFn any
-		if isAblk {
-			dedupFn = containers.MakeForeachVectorOp(
-				keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
-			)
-		} else {
-			dedupFn = containers.MakeForeachVectorOp(
-				keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
-			)
-		}
-		err = containers.ForeachVector(keys, dedupFn, sels)
+	schema := blk.meta.GetSchema()
+	def := schema.GetSingleSortKey()
+	view, err := blk.ResolvePersistedColumnData(
+		ctx,
+		txn,
+		schema,
+		blkOffset,
+		def.Idx,
+		false,
+		mp,
+	)
+	if err != nil {
+		return err
 	}
+	if rowmask != nil {
+		if view.DeleteMask == nil {
+			view.DeleteMask = common.RoaringToMOBitmap(rowmask)
+		} else {
+			common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
+		}
+	}
+	defer view.Close()
+	var dedupFn any
+	if isAblk {
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
+		)
+	} else {
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
+		)
+	}
+	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 
@@ -575,7 +574,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 			return err
 		}
-		err = blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, isAblk, mp)
+		err = blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, uint16(i), isAblk, mp)
 		if err != nil {
 			return err
 		}

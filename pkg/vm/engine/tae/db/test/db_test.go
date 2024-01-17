@@ -188,7 +188,7 @@ func TestAppend3(t *testing.T) {
 	testutils.WaitExpect(2000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	// t.Log(tae.Catalog.SimplePPString(common.PPL3))
 	wg.Add(1)
 	testutil.AppendFailClosure(t, bat, schema.Name, tae, &wg)()
 	wg.Wait()
