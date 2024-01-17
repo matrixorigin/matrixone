@@ -468,8 +468,8 @@ func (n *ObjectMVCCHandle) GetObject() any {
 	return n.meta
 }
 func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location {
-	mvcc:=n.TryGetDeleteChain(blkOffset)
-	if mvcc == nil{
+	mvcc := n.TryGetDeleteChain(blkOffset)
+	if mvcc == nil {
 		return nil
 	}
 	return mvcc.deltaloc.GetLatestCommittedNode().BaseNode.DeltaLoc
@@ -544,6 +544,13 @@ type DeltalocChain struct {
 	*catalog.BaseEntryImpl[*catalog.MetadataMVCCNode]
 }
 
+func NewDeltalocChain(mvcc *MVCCHandle) *DeltalocChain {
+	return &DeltalocChain{
+		mvcc:          mvcc,
+		BaseEntryImpl: catalog.NewBaseEntry(func() *catalog.MetadataMVCCNode { return &catalog.MetadataMVCCNode{} }),
+	}
+}
+
 func (d *DeltalocChain) Is1PC() bool { return false }
 func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return catalog.NewDeltalocCmd(id, catalog.IOET_WALTxnCommand_Block, d.mvcc.GetID(), d.BaseEntryImpl), nil
@@ -577,6 +584,7 @@ func NewMVCCHandle(meta *ObjectMVCCHandle, blkID uint16) *MVCCHandle {
 		return node
 	}
 	node.deletes = NewDeleteChain(node.RWMutex, node)
+	node.deltaloc = NewDeltalocChain(node)
 	return node
 }
 
@@ -874,14 +882,23 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 		DeltaLoc: deltaloc,
 	}
 	entry = n.deltaloc
-	node := n.deltaloc.GetLatestNodeLocked()
-	if !node.IsSameTxn(txn) {
-		node = node.CloneData()
-		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		n.deltaloc.Insert(node)
-		isNewNode = true
+
+	if !n.deltaloc.IsEmpty() {
+		node := n.deltaloc.GetLatestNodeLocked()
+		if node.IsSameTxn(txn) {
+			node.BaseNode.Update(baseNode)
+			return
+		}
+
 	}
-	node.BaseNode.Update(baseNode)
+
+	node := &catalog.MVCCNode[*catalog.MetadataMVCCNode]{
+		EntryMVCCNode: &catalog.EntryMVCCNode{},
+		BaseNode: baseNode,
+	}
+	node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+	n.deltaloc.Insert(node)
+	isNewNode = true
 	return
 }
 

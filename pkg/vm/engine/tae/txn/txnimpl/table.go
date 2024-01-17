@@ -791,17 +791,19 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 		err = nil
 	}
 	h := newRelation(tbl)
-	blockIt := h.MakeBlockIt()
+	blockIt := h.MakeObjectIt()
 	for blockIt.Valid() {
-		h := blockIt.GetBlock()
+		h := blockIt.GetObject()
 		defer h.Close()
 		if h.IsUncommitted() {
 			blockIt.Next()
 			continue
 		}
-		offset, err = h.GetByFilter(ctx, filter, common.WorkspaceAllocator)
+		var blkID uint16
+		blkID, offset, err = h.GetByFilter(ctx, filter, common.WorkspaceAllocator)
 		if err == nil {
 			id = h.Fingerprint()
+			id.SetBlockOffset(blkID)
 			break
 		}
 		blockIt.Next()
