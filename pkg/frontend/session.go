@@ -1996,12 +1996,16 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	prevProto := ses.ReplaceProtocol(&FakeProtocol{})
 	// inherit database
 	ses.SetDatabaseName(prevDB)
+	//backup the inside statement
+	prevInsideStmt := ses.ReplaceDerivedStmt(true)
 	//restore normal protocol and output callback
 	defer func() {
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
 		ses.ReplaceProtocol(prevProto)
+		//restore the inside statement
+		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
 	logDebug(ses, ses.GetDebugString(), "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
