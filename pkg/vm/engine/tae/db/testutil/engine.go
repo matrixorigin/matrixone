@@ -707,7 +707,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
-		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
+		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
 		blkCnt := obj.BlkCnt()
 		pkVectors := make([]*containers.ColumnView, blkCnt)
 		rowIDVectors := make([]*containers.ColumnView, blkCnt)
