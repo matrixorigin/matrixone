@@ -703,7 +703,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
-		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
+		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
 		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
