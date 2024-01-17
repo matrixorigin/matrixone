@@ -186,3 +186,45 @@ func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Re
 	rCsv.FieldsPerRecord = -1
 	return rCsv
 }
+
+func newReaderWithParam(param *ExternalParam) (*CSVParser, error) {
+	var fieldTerminatedBy, fieldEnclosedBy, fieldEscapedBy, lineTerminatedBy, lineStartingBy string
+
+	fieldTerminatedBy = "\t"
+	fieldEnclosedBy = ""
+	fieldEscapedBy = "\\"
+
+	lineTerminatedBy = "\n"
+	lineStartingBy = ""
+
+	if param.Extern.Tail.Fields != nil {
+		fieldTerminatedBy = param.Extern.Tail.Fields.Terminated
+		fieldEnclosedBy = string(param.Extern.Tail.Fields.EnclosedBy)
+		if param.Extern.Tail.Fields.EscapedBy != 0 {
+			fieldEscapedBy = string(param.Extern.Tail.Fields.EscapedBy)
+		}
+	}
+
+	if param.Extern.Tail.Lines != nil {
+		if param.Extern.Tail.Lines.TerminatedBy != "" {
+			lineTerminatedBy = param.Extern.Tail.Lines.TerminatedBy
+		}
+		if param.Extern.Tail.Lines.StartingBy != "" {
+			lineStartingBy = param.Extern.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Extern.Format == tree.JSONLINE {
+		fieldTerminatedBy = "\t"
+	}
+
+	config := CSVConfig{
+		FieldTerminatedBy: fieldTerminatedBy,
+		FieldEnclosedBy:   fieldEnclosedBy,
+		FieldEscapedBy:    fieldEscapedBy,
+		LineTerminatedBy:  lineTerminatedBy,
+		LineStartingBy:    lineStartingBy,
+	}
+
+	return NewCSVParser(&config, bufio.NewReader(param.reader), ReadBlockSize, false, false)
+}

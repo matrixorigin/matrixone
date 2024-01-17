@@ -69,6 +69,7 @@ require (
 	google.golang.org/grpc v1.57.0
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	github.com/spkg/bom v1.0.0
 )
 
 require (
