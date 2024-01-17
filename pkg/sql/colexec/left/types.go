@@ -138,8 +138,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
@@ -152,21 +151,21 @@ func (ctr *container) cleanExprExecutor() {
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
+func (ctr *container) cleanBatch(proc *process.Process) {
 	for i := range ctr.batches {
-		ctr.batches[i].Clean(mp)
+		proc.PutBatch(ctr.batches[i])
 	}
 	ctr.batches = nil
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
+		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(mp)
+		proc.PutBatch(ctr.joinBat1)
 		ctr.joinBat1 = nil
 	}
 	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(mp)
+		proc.PutBatch(ctr.joinBat2)
 		ctr.joinBat2 = nil
 	}
 }
