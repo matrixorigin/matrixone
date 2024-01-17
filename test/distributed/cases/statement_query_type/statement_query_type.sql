@@ -38,6 +38,7 @@ show collation like '%';
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select sleep(5);
 select * from unnest('{"a":1}') as f;
 
 
