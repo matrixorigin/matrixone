@@ -170,6 +170,26 @@ func getPkExpr(
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
+		case "or":
+			leftPK := getPkExpr(exprImpl.F.Args[0], pkName, proc)
+			if leftPK == nil {
+				return nil
+			}
+			rightPK := getPkExpr(exprImpl.F.Args[1], pkName, proc)
+			if rightPK == nil {
+				return nil
+			}
+			return &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{leftPK, rightPK},
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}
+
 		case "and":
 			pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, proc)
 			if pkBytes != nil {

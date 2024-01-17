@@ -649,6 +649,10 @@ func TestGetPKExpr(t *testing.T) {
 			"b=40 and a=50",
 			"a=60 or b=70",
 			"b=80 and c=90",
+			"a=60 or a=70",
+			"a=60 or (a in (70,80))",
+			"(a=10 or b=20) or a=30",
+			"(a=10 or b=20) and a=30",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("=", []*plan.Expr{
@@ -709,6 +713,58 @@ func TestGetPKExpr(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(90),
 				}),
 			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(60),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(70),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(60),
+				}),
+				makeInExprForTest[int64](
+					makeColExprForTest(0, types.T_int64),
+					[]int64{70, 80},
+				),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(1, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(30),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(1, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(30),
+				}),
+			}),
 		},
 		valExprs: []*plan.Expr{
 			plan2.MakePlan2Int64ConstExprWithType(10),
@@ -718,12 +774,42 @@ func TestGetPKExpr(t *testing.T) {
 			plan2.MakePlan2Int64ConstExprWithType(50),
 			nil,
 			nil,
+			&plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{
+							plan2.MakePlan2Int64ConstExprWithType(60),
+							plan2.MakePlan2Int64ConstExprWithType(70),
+						},
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			},
+			&plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{
+							plan2.MakePlan2Int64ConstExprWithType(60),
+							plan2.MakePlan2Int64VecExprWithType(int64(70), int64(80)),
+						},
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			},
+			nil,
+			plan2.MakePlan2Int64ConstExprWithType(30),
 		},
 	}
 	pkName := "a"
 	for i, expr := range tc.exprs {
 		rExpr := getPkExpr(expr, pkName, proc)
-		// t.Log(plan2.FormatExpr(rExpr))
+		// if rExpr != nil {
+		// 	t.Logf("%s||||%s||||%s", plan2.FormatExpr(expr), plan2.FormatExpr(rExpr), tc.desc[i])
+		// }
 		require.Equal(t, tc.valExprs[i], rExpr)
 	}
 	require.Zero(t, m.CurrNB())
