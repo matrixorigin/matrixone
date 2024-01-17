@@ -179,14 +179,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, typ, e.mp)
+		name, databaseId, typ, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	if err = txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(e.mp)
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
@@ -415,13 +415,14 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			return err
 		}
 	}
-	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
+	bat, err := genDropDatabaseTuple(db.databaseId, name, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	return nil
