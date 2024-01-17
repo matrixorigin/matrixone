@@ -622,6 +622,8 @@ sleep(15)
 0
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 70;
 statement    query_type    sql_source_type
+select * from unnest('{"a":1}') as f    DQL    cloud_nonuser_sql
+select sleep(5)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
 use system    Other    cloud_nonuser_sql
 drop table test_01    DDL    cloud_nonuser_sql
