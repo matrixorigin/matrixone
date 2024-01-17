@@ -170,6 +170,23 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	}
 }
 
+var MakePlan2Int64VecExprWithType = makePlan2Int64VecExprWithType
+
+func makePlan2Int64VecExprWithType(vals ...int64) *plan.Expr {
+	data := types.EncodeSlice[int64](vals)
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_tuple),
+		},
+		Expr: &plan.Expr_Vec{
+			Vec: &plan.LiteralVec{
+				Len:  int32(len(vals)),
+				Data: data,
+			},
+		},
+	}
+}
+
 func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_Lit {
 	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
