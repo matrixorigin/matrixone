@@ -15,11 +15,8 @@
 package function
 
 import (
-	"context"
 	"strconv"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -68,8 +66,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -177,8 +179,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -303,8 +309,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
@@ -313,6 +323,22 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			if err != nil {
 				return err
 			}
+
+			if db.IsSubscription(ctx) {
+				// get sub info
+				var sub *plan.SubscriptionMeta
+				if sub, err = proc.SessionInfo.SqlHelper.GetSubscriptionMeta(dbStr); err != nil {
+					return err
+				}
+
+				// replace with pub account id
+				ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
+				// replace with real dbname(sub.DbName)
+				if db, err = e.Database(ctx, sub.DbName, txn); err != nil {
+					return err
+				}
+			}
+
 			rel, err := db.Relation(ctx, tableStr, nil)
 			if err != nil {
 				return err
@@ -327,9 +353,9 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			if len(ranges) == 0 {
+			if ranges.Len() == 0 {
 				getValueFailed = true
-			} else if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
+			} else if ranges.Len() == 1 && engine.IsMemtable(ranges.GetBytes(0)) {
 				getValueFailed = true
 			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.

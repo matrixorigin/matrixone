@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,8 +41,11 @@ var (
 	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
+const argName = "lock_op"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("lock-op(")
+	buf.WriteString(argName)
+	buf.WriteString(": lock-op(")
 	n := len(arg.targets) - 1
 	for idx, target := range arg.targets {
 		buf.WriteString(fmt.Sprintf("%d-%d-%d",
@@ -420,7 +424,7 @@ func doLock(
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
-		Policy:          lock.WaitPolicy_Wait,
+		Policy:          proc.WaitPolicy,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
@@ -590,10 +594,10 @@ func (opts LockOptions) WithHasNewVersionInRangeFunc(fn hasNewVersionInRangeFunc
 }
 
 // NewArgument create new lock op argument.
-func NewArgument(engine engine.Engine) *Argument {
-	return &Argument{
-		engine: engine,
-	}
+func NewArgumentByEngine(engine engine.Engine) *Argument {
+	arg := reuse.Alloc[Argument](nil)
+	arg.engine = engine
+	return arg
 }
 
 // Block return if lock operator is a blocked node.

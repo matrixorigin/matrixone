@@ -16,9 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,8 +29,11 @@ import (
 
 const batchSize = 8192
 
+const argName = "hash_build"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" hash build ")
+	buf.WriteString(argName)
+	buf.WriteString(": hash build ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -114,26 +115,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-		case Eval:
+		case SendHashMap:
+			result.Batch = batch.NewWithSize(0)
 			if ctr.bat != nil && ctr.inputBatchRowCount != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
 				}
-				result.Batch = ctr.bat
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.multiSels = nil
 			} else {
 				ctr.cleanHashMap()
-				result.Batch = nil
 			}
-			ctr.state = End
+			ctr.state = SendBatch
 			return result, nil
-
+		case SendBatch:
+			ctr.state = End
+			result.Batch = ctr.bat
+			return result, nil
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -239,7 +242,9 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 			return err
 		}
 	} else {
-		ctr.multiSels = make([][]int32, count)
+		if ap.NeedAllocateSels {
+			ctr.multiSels = make([][]int32, count)
+		}
 	}
 
 	var (
@@ -290,7 +295,7 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 			}
 			ai := int64(v) - 1
 
-			if !ap.HashOnPK {
+			if !ap.HashOnPK && ap.NeedAllocateSels {
 				if ctr.multiSels[ai] == nil {
 					ctr.multiSels[ai] = make([]int32, 0)
 				}
@@ -354,7 +359,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if len(ap.RuntimeFilterSenders) == 0 {
-		ctr.state = Eval
+		ctr.state = SendHashMap
 		return nil
 	}
 
@@ -376,7 +381,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			ctr.state = End
 
 		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = Eval
+			ctr.state = SendHashMap
 		}
 
 		return nil
@@ -389,11 +394,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := int64(plan.InFilterCardLimit)
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
-	if ok {
-		inFilterCardLimit = v.(int64)
-	}
+	inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
 	//if ok {
@@ -448,7 +449,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		ctr.state = End
 
 	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = Eval
+		ctr.state = SendHashMap
 	}
 
 	return nil

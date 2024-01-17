@@ -15,6 +15,7 @@
 package connector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,8 +29,55 @@ type Argument struct {
 	Children []vm.Operator
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) Name() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithReg(reg *process.WaitRegister) *Argument {
+	arg.Reg = reg
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {

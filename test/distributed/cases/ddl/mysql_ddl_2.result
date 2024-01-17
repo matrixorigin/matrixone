@@ -191,3 +191,143 @@ is_deleted    INT(32)    YES        null
 deleted_by    VARCHAR(64)    YES        null        
 deleted_time    DATETIME(0)    YES        null        
 drop database if exists mysql_ddl_test_db;
+create database  mysql_ddl_test_db;
+use mysql_ddl_test_db;
+CREATE TABLE table_basic_for_alter_100m (
+col1 TINYINT DEFAULT NULL,
+col2 SMALLINT DEFAULT NULL,
+col3 INT NOT NULL,
+col4 BIGINT NOT NULL,
+col5 TINYINT UNSIGNED DEFAULT NULL,
+col6 SMALLINT UNSIGNED DEFAULT NULL,
+col7 INT UNSIGNED DEFAULT NULL,
+col8 BIGINT UNSIGNED DEFAULT NULL,
+col9 FLOAT DEFAULT NULL,
+col10 DOUBLE DEFAULT NULL,
+col11 VARCHAR(255) DEFAULT NULL,
+col12 DATE DEFAULT NULL,
+col13 DATETIME DEFAULT NULL,
+col14 TIMESTAMP DEFAULT NULL,
+col15 BOOL DEFAULT NULL,
+col16 DECIMAL(16,6) DEFAULT NULL,
+col17 TEXT DEFAULT NULL,
+col18 JSON DEFAULT NULL,
+col19 BLOB DEFAULT NULL,
+col20 BINARY(255) DEFAULT NULL,
+col21 VARBINARY(255) DEFAULT NULL,
+col22 VECF32(3) DEFAULT NULL,
+col23 VECF32(3) DEFAULT NULL,
+col24 VECF64(3) DEFAULT NULL,
+col25 VECF64(3) DEFAULT NULL,
+KEY col3_col4 (col3,col4),
+UNIQUE KEY col4 (col4)
+) ;
+desc table_basic_for_alter_100m;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    TINYINT(8)    YES        null        
+col2    SMALLINT(16)    YES        null        
+col3    INT(32)    NO    MUL    null        
+col4    BIGINT(64)    NO    PRI    null        
+col5    TINYINT UNSIGNED(8)    YES        null        
+col6    SMALLINT UNSIGNED(16)    YES        null        
+col7    INT UNSIGNED(32)    YES        null        
+col8    BIGINT UNSIGNED(64)    YES        null        
+col9    FLOAT(0)    YES        null        
+col10    DOUBLE(0)    YES        null        
+col11    VARCHAR(255)    YES        null        
+col12    DATE(0)    YES        null        
+col13    DATETIME(0)    YES        null        
+col14    TIMESTAMP(0)    YES        null        
+col15    BOOL(0)    YES        null        
+col16    DECIMAL64(16)    YES        null        
+col17    TEXT(0)    YES        null        
+col18    JSON(0)    YES        null        
+col19    BLOB(0)    YES        null        
+col20    BINARY(255)    YES        null        
+col21    VARBINARY(255)    YES        null        
+col22    VECF32(3)    YES        null        
+col23    VECF32(3)    YES        null        
+col24    VECF64(3)    YES        null        
+col25    VECF64(3)    YES        null        
+CREATE TABLE user_table (
+id INT(11),
+name VARCHAR(50),
+UNIQUE KEY (id)
+);
+desc user_table;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES    UNI    null        
+name    VARCHAR(50)    YES        null        
+CREATE TABLE users (
+id INT(11) NOT NULL,
+name VARCHAR(50),
+UNIQUE KEY (id)
+);
+desc users;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null        
+name    VARCHAR(50)    YES        null        
+drop database if exists mysql_ddl_test_db;
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t1;
+CREATE TABLE t1(
+a INTEGER,
+b CHAR(10),
+c date,
+d decimal(7,2),
+UNIQUE KEY(a, b)
+);
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+drop table if exists t2;
+CREATE TABLE t2(
+col1 TINYINT DEFAULT NULL,
+col2 SMALLINT DEFAULT NULL,
+col3 INT NOT NULL,
+col4 BIGINT NOT NULL,
+KEY (col3,col4),
+UNIQUE KEY (col4)
+) ;
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    TINYINT(8)    YES        null        
+col2    SMALLINT(16)    YES        null        
+col3    INT(32)    NO    MUL    null        
+col4    BIGINT(64)    NO    PRI    null        
+drop table if exists t3;
+CREATE TABLE t3(
+a INTEGER,
+b CHAR(10),
+c date,
+d decimal(7,2),
+KEY (c, d),
+UNIQUE KEY (d)
+);
+desc t3;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES    MUL    null        
+d    DECIMAL64(7)    YES    UNI    null        
+drop table if exists t4;
+CREATE TABLE t4(
+a INTEGER,
+b CHAR(10),
+c date,
+d decimal(7,2),
+KEY (a, b),
+UNIQUE KEY (a)
+);
+desc t4;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    UNI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+drop database if exists db1;

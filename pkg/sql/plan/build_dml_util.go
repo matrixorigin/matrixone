@@ -272,9 +272,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	canTruncate := delCtx.isDeleteWithoutFilters
 
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
 	if len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account) ||
+		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
 		canTruncate = false
 	}
@@ -572,7 +576,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable, delCtx.partitionInfos)
-	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
@@ -1878,6 +1882,50 @@ func haveSecondaryKey(tableDef *TableDef) bool {
 	return false
 }
 
+// Check if the unique key is the primary key of the table
+// When the unqiue key meet the following conditions, it is the primary key of the table
+// 1. There is no primary key in the table.
+// 2. The unique key is the only unique key of the table.
+// 3. The columns of the unique key are not null by default.
+func isPrimaryKey(tableDef *TableDef, colNames []string) bool {
+	// Ensure there is no real primary key in the table.
+	// FakePrimaryKeyColName is for tables without a primary key.
+	// So we need to exclude FakePrimaryKeyColName.
+	if len(tableDef.Pkey.Names) != 1 {
+		return false
+	}
+	if tableDef.Pkey.Names[0] != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	// Ensure the unique key is the only unique key of the table.
+	uniqueKeyCount := 0
+	for _, indexdef := range tableDef.Indexes {
+		if indexdef.Unique {
+			uniqueKeyCount++
+		}
+	}
+	// All the columns of the unique key are not null by default.
+	if uniqueKeyCount == 1 {
+		for _, col := range tableDef.Cols {
+			for _, colName := range colNames {
+				if col.Name == colName {
+					if col.Default.NullAbility {
+						return false
+					}
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// Check if the unique key is the multiple primary key of the table
+// When the unique key contains more than one column, it is the multiple primary key of the table.
+func isMultiplePriKey(indexdef *plan.IndexDef) bool {
+	return len(indexdef.Parts) > 1
+}
+
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
 	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type, lockTable bool, partitionInfos map[uint64]*partSubTableInfo) *deleteNodeInfo {
@@ -1921,7 +1969,14 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.TableExist {
-				delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				if catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+					delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				} else if catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					// apply deletes only for entries table.
+					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+						delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+					}
+				}
 			}
 		}
 	}

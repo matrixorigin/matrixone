@@ -375,8 +375,18 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
+func (c *Compile) allocOperatorID() int32 {
+	defer func() {
+		c.lastAllocID++
+	}()
+
+	return c.lastAllocID
+}
+
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	var writeOffset uint64
+
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -388,6 +398,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	for _, s := range c.scope {
+		s.SetOperatorInfoRecursively(c.allocOperatorID)
+	}
+
+	if c.proc.TxnOperator != nil {
+		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+	}
 	result = &util2.RunResult{}
 	var span trace.Span
 	var runC *Compile // compile structure for rerun.
@@ -450,7 +467,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
 }
@@ -960,10 +977,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.Output,
-			Arg: &output.Argument{
-				Data: c.u,
-				Func: c.fill,
-			},
+			Arg: output.NewArgument().
+				WithData(c.u).
+				WithFunc(c.fill),
 		})
 	}
 	return rs, nil
@@ -1132,7 +1148,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
 		return ss, nil
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1264,13 +1280,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
-				Arg: &mergedelete.Argument{
-					DelSource:        arg.DeleteCtx.Source,
-					PartitionSources: arg.DeleteCtx.PartitionSources,
-				},
+				Arg: mergedelete.NewArgument().
+					WithDelSource(arg.DeleteCtx.Source).
+					WithPartitionSources(arg.DeleteCtx.PartitionSources),
 			})
 			rs.Magic = MergeDelete
 			ss = []*Scope{rs}
+			arg.Release()
 			return ss, nil
 		}
 		rs := c.newMergeScope(ss)
@@ -1295,6 +1311,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 
 		rs := c.newMergeScope(ss)
+		rs.Instructions[0].Arg.Release()
 		rs.Instructions[0] = vm.Instruction{
 			Op:  vm.OnDuplicateKey,
 			Idx: c.anal.curr,
@@ -1401,12 +1418,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				rs.Magic = MergeInsert
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op: vm.MergeBlock,
-					Arg: &mergeblock.Argument{
-						Tbl:              insertArg.InsertCtx.Rel,
-						PartitionSources: insertArg.InsertCtx.PartitionSources,
-					},
+					Arg: mergeblock.NewArgument().
+						WithTbl(insertArg.InsertCtx.Rel).
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
 				})
 				ss = []*Scope{rs}
+				insertArg.Release()
 			} else {
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
@@ -1418,7 +1435,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				regs := make([]*process.WaitRegister, 0, mcpu)
 				for i := 0; i < mcpu; i++ {
 					s := newScope(Merge)
-					s.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}}
+					s.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument()}}
 					scopes = append(scopes, s)
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
 					if c.anal.qry.LoadTag {
@@ -1469,12 +1486,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				rs.Magic = MergeInsert
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op: vm.MergeBlock,
-					Arg: &mergeblock.Argument{
-						Tbl:              insertArg.InsertCtx.Rel,
-						PartitionSources: insertArg.InsertCtx.PartitionSources,
-					},
+					Arg: mergeblock.NewArgument().
+						WithTbl(insertArg.InsertCtx.Rel).
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
 				})
 				ss = []*Scope{rs}
+				insertArg.Release()
 			}
 		} else {
 			for i := range ss {
@@ -1517,6 +1534,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			}
 			lockOpArg.SetBlock(block)
 			if block {
+				ss[i].Instructions[len(ss[i].Instructions)-1].Arg.Release()
 				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
 					Op:      vm.LockOp,
 					Idx:     c.anal.curr,
@@ -1556,7 +1574,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
-		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{SinkScan: true}}}
+		rs.Instructions = []vm.Instruction{{Op: vm.Merge, Arg: merge.NewArgument().WithSinkScan(true)}}
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
 		}
@@ -1574,7 +1592,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
-		rs.Instructions = []vm.Instruction{{Op: vm.MergeRecursive, Arg: &mergerecursive.Argument{}}}
+		rs.Instructions = []vm.Instruction{{Op: vm.MergeRecursive, Arg: mergerecursive.NewArgument()}}
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1593,7 +1611,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := newScope(Merge)
 		rs.NodeInfo = engine.Node{Addr: c.addr, Mcpu: ncpu}
 		rs.Proc = process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes())
-		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: &mergecte.Argument{}}}
+		rs.Instructions = []vm.Instruction{{Op: vm.MergeCTE, Arg: mergecte.NewArgument()}}
 
 		for _, r := range receivers {
 			r.Ctx = rs.Proc.Ctx
@@ -1665,7 +1683,7 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg:     merge.NewArgument(),
 	})
 	return ds
 }
@@ -2029,10 +2047,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	{
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -2152,6 +2170,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Minus,
 				Idx: c.anal.curr,
@@ -2160,6 +2179,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 	case plan.Node_INTERSECT:
 		for i := range rs {
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.Intersect,
 				Idx: c.anal.curr,
@@ -2168,6 +2188,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 	case plan.Node_INTERSECT_ALL:
 		for i := range rs {
+			rs[i].Instructions[0].Arg.Release()
 			rs[i].Instructions[0] = vm.Instruction{
 				Op:  vm.IntersectAll,
 				Idx: c.anal.curr,
@@ -2490,6 +2511,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Partition,
 		Idx: c.anal.curr,
@@ -2578,6 +2600,7 @@ func (c *Compile) compileTop(n *plan.Node, topN int64, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeTop,
 		Idx: c.anal.curr,
@@ -2603,6 +2626,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOrder,
 		Idx: c.anal.curr,
@@ -2613,6 +2637,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Window,
 		Idx: c.anal.curr,
@@ -2623,6 +2648,7 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
@@ -2633,6 +2659,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.Fill,
 		Idx: c.anal.curr,
@@ -2651,6 +2678,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeOffset,
 		Idx: c.anal.curr,
@@ -2676,6 +2704,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
@@ -2709,21 +2738,21 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{
 		Op: vm.Output,
-		Arg: &output.Argument{
-			Data: outData,
-			Func: func(data any, bat *batch.Batch) error {
-				if bat == nil || bat.IsEmpty() {
-					return nil
-				}
-				c.fuzzy = data.(*fuzzyCheck)
-				// the batch will contain the key that fuzzyCheck
-				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
-					return err
-				}
+		Arg: output.NewArgument().
+			WithData(outData).
+			WithFunc(
+				func(data any, bat *batch.Batch) error {
+					if bat == nil || bat.IsEmpty() {
+						return nil
+					}
+					c.fuzzy = data.(*fuzzyCheck)
+					// the batch will contain the key that fuzzyCheck
+					if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+						return err
+					}
 
-				return nil
-			},
-		},
+					return nil
+				}),
 	})
 
 	return []*Scope{rs}, nil
@@ -2784,6 +2813,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 		ss[0].PartialResults = nil
 		ss[0].PartialResultTypes = nil
 	}
+	rs.Instructions[0].Arg.Release()
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.MergeGroup,
 		Idx: c.anal.curr,
@@ -2958,9 +2988,11 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 
 	rs := make([]*Scope, 0, len(ss2))
 	uuids := make([]uuid.UUID, 0, len(ss2))
+	var uid uuid.UUID
 	for i := 0; i < len(ss2); i++ {
 		rs = append(rs, newScope(Merge))
-		uuids = append(uuids, uuid.New())
+		uid, _ = uuid.NewV7()
+		uuids = append(uuids, uid)
 	}
 
 	// for every scope, it should dispatch its
@@ -3005,7 +3037,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg:     merge.NewArgument(),
 	})
 	c.anal.isFirst = false
 
@@ -3014,9 +3046,8 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Reg: rs.Proc.Reg.MergeReceivers[j],
-				},
+				Arg: connector.NewArgument().
+					WithReg(rs.Proc.Reg.MergeReceivers[j]),
 			})
 			j++
 		}
@@ -3077,7 +3108,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 			Op:      vm.Merge,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     &merge.Argument{},
+			Arg:     merge.NewArgument(),
 		})
 	}
 	c.anal.isFirst = false
@@ -3164,9 +3195,8 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: rs[i].Proc.Reg.MergeReceivers[0],
-			},
+			Arg: connector.NewArgument().
+				WithReg(rs[i].Proc.Reg.MergeReceivers[0]),
 		})
 	}
 
@@ -3278,7 +3308,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     &merge.Argument{},
+		Arg:     merge.NewArgument(),
 	})
 	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, s.BuildIdx, c.anal.Nodes())
 	for i := 0; i < s.BuildIdx; i++ {
@@ -3292,9 +3322,8 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: s.Proc.Reg.MergeReceivers[0],
-			},
+			Arg: connector.NewArgument().
+				WithReg(s.Proc.Reg.MergeReceivers[0]),
 		})
 		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
 		s.BuildIdx = 1
@@ -3331,9 +3360,8 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: s.Proc.Reg.MergeReceivers[s.BuildIdx],
-			},
+			Arg: connector.NewArgument().
+				WithReg(s.Proc.Reg.MergeReceivers[s.BuildIdx]),
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
 	} else {
@@ -3433,7 +3461,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var err error
 	var db engine.Database
 	var rel engine.Relation
-	var ranges [][]byte
+	var ranges engine.Ranges
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
@@ -3441,13 +3469,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
@@ -3493,11 +3521,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into catalog.BlockInfo.
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
+				//add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
+					ranges.Append(blkSlice.GetBytes(j))
 				}
 			}
 		} else {
@@ -3514,19 +3543,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				//add partition number into catalog.BlockInfo.
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
+				//add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
 					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
+					ranges.Append(blkSlice.GetBytes(j))
 				}
 			}
 		}
 	}
 
-	if len(n.AggList) > 0 && len(ranges) > 1 {
-		newranges := make([][]byte, 0, len(ranges))
-		newranges = append(newranges, ranges[0])
+	if len(n.AggList) > 0 && ranges.Len() > 1 {
+		newranges := make([]byte, 0, ranges.Size())
+		newranges = append(newranges, ranges.GetBytes(0)...)
 		partialResults = make([]any, 0, len(n.AggList))
 		partialResultTypes = make([]types.T, len(n.AggList))
 
@@ -3568,13 +3598,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
 			}
-			for _, buf := range ranges[1:] {
+			for i := 1; i < ranges.Len(); i++ {
 				if partialResults == nil {
 					break
 				}
-				blk := catalog.DecodeBlockInfo(buf)
+				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-					newranges = append(newranges, buf)
+					newranges = append(newranges, ranges.GetBytes(i)...)
 					continue
 				}
 				var objMeta objectio.ObjectMeta
@@ -3855,10 +3885,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if len(ranges) == len(newranges) {
+			if ranges.Size() == len(newranges) {
 				partialResults = nil
 			} else if partialResults != nil {
-				ranges = newranges
+				ranges.SetBytes(newranges)
 			}
 		}
 		if partialResults == nil {
@@ -3869,11 +3899,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
-	expectedLen := len(ranges)
+	expectedLen := ranges.Len()
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	//if len(ranges) == 0 indicates that it's a temporary table.
-	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
+	if ranges.Len() == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
 			if isPartitionTable {
@@ -3901,23 +3931,23 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		return putBlocksInCurrentCN(c, ranges, rel, n), partialResults, partialResultTypes, nil
+		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges.(*objectio.BlockInfoSlice), rel, n)
 		return nodes, partialResults, partialResultTypes, err
 	}
 	// maybe temp table on memengine , just put payloads in average
 	return putBlocksInAverage(c, ranges, rel, n), partialResults, partialResultTypes, nil
 }
 
-func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInAverage(c *Compile, ranges engine.Ranges, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
-	step := (len(ranges) + len(c.cnList) - 1) / len(c.cnList)
-	for i := 0; i < len(ranges); i += step {
+	step := (ranges.Len() + len(c.cnList) - 1) / len(c.cnList)
+	for i := 0; i < ranges.Len(); i += step {
 		j := i / step
-		if i+step >= len(ranges) {
+		if i+step >= ranges.Len() {
 			if isSameCN(c.cnList[j].Addr, c.addr) {
 				if len(nodes) == 0 {
 					nodes = append(nodes, engine.Node{
@@ -3926,14 +3956,14 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
-				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
+				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, ranges.Len())...)
 			} else {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: ranges[i:],
+					Data: ranges.Slice(i, ranges.Len()),
 				})
 			}
 		} else {
@@ -3945,14 +3975,14 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
-				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
+				nodes[0].Data = append(nodes[0].Data, ranges.Slice(i, i+step)...)
 			} else {
 				nodes = append(nodes, engine.Node{
 					Rel:  rel,
 					Id:   c.cnList[j].Id,
 					Addr: c.cnList[j].Addr,
 					Mcpu: c.generateCPUNumber(c.cnList[j].Mcpu, int(n.Stats.BlockNum)),
-					Data: ranges[i : i+step],
+					Data: ranges.Slice(i, i+step),
 				})
 			}
 		}
@@ -3960,7 +3990,7 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 	return nodes
 }
 
-func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
+func shuffleBlocksToMultiCN(c *Compile, ranges *objectio.BlockInfoSlice, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{
@@ -3969,26 +3999,25 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	//add memory table block
-	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
-	ranges = ranges[1:]
+	nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(0)...)
+	*ranges = ranges.Slice(1, ranges.Len())
 	// only memory table block
-	if len(ranges) == 0 {
+	if ranges.Len() == 0 {
 		return nodes, nil
 	}
 	//only one cn
 	if len(c.cnList) == 1 {
-		nodes[0].Data = append(nodes[0].Data, ranges...)
+		nodes[0].Data = append(nodes[0].Data, ranges.GetAllBytes()...)
 		return nodes, nil
 	}
 	// put dirty blocks which can't be distributed remotely in current CN.
-	newRanges := make([][]byte, 0, len(ranges))
-	for _, blk := range ranges {
-		blkInfo := catalog.DecodeBlockInfo(blk)
-		if blkInfo.CanRemote {
-			newRanges = append(newRanges, blk)
-			continue
+	newRanges := make(objectio.BlockInfoSlice, 0, ranges.Len())
+	for i := 0; i < ranges.Len(); i++ {
+		if ranges.Get(i).CanRemote {
+			newRanges = append(newRanges, ranges.GetBytes(i)...)
+		} else {
+			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
 		}
-		nodes[0].Data = append(nodes[0].Data, blk)
 	}
 
 	//add the rest of CNs in list
@@ -4040,17 +4069,17 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	return newNodes, nil
 }
 
-func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
-	for i, blk := range ranges {
-		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+func shuffleBlocksByHash(c *Compile, ranges objectio.BlockInfoSlice, nodes engine.Nodes) {
+	for i := 0; i < ranges.Len(); i++ {
+		unmarshalledBlockInfo := ranges.Get(i)
 		// get timestamp in objName to make sure it is random enough
 		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
 		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
-		nodes[index].Data = append(nodes[index].Data, blk)
+		nodes[index].Data = append(nodes[index].Data, ranges.GetBytes(i)...)
 	}
 }
 
-func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
+func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.Node, nodes engine.Nodes) error {
 	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
@@ -4058,8 +4087,8 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	var shuffleRangeInt64 []int64
 	var init bool
 	var index uint64
-	for i, blk := range ranges {
-		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+	for i := 0; i < ranges.Len(); i++ {
+		unmarshalledBlockInfo := ranges.Get(i)
 		location := unmarshalledBlockInfo.MetaLocation()
 		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
 		if err != nil {
@@ -4075,7 +4104,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		if !zm.IsInited() {
 			// a block with all null will send to first CN
-			nodes[0].Data = append(nodes[0].Data, blk)
+			nodes[0].Data = append(nodes[0].Data, ranges.GetBytes(i)...)
 			continue
 		}
 		if !init {
@@ -4094,12 +4123,12 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		} else {
 			index = plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		}
-		nodes[index].Data = append(nodes[index].Data, blk)
+		nodes[index].Data = append(nodes[index].Data, ranges.GetBytes(i)...)
 	}
 	return nil
 }
 
-func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func putBlocksInCurrentCN(c *Compile, ranges []byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{

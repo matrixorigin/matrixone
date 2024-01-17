@@ -20,7 +20,6 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -79,16 +78,47 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
+func makeInExprForTest[T any](arg0 *plan.Expr, vals []T) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					arg0,
+					{
+						Typ: &plan.Type{
+							Id: int32(types.T_tuple),
+						},
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  int32(len(vals)),
+								Data: types.EncodeSlice[T](vals),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
-	var info catalog.BlockInfo
+	var info objectio.BlockInfo
 	info.SetMetaLocation(location)
-	data := catalog.EncodeBlockInfo(info)
-	info2 := catalog.DecodeBlockInfo(data)
+	data := objectio.EncodeBlockInfo(info)
+	info2 := objectio.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }
 
-func TestCheckExprIsMonotonic(t *testing.T) {
+func TestCheckExprIsZonemappable(t *testing.T) {
 	type asserts = struct {
 		result bool
 		expr   *plan.Expr
@@ -110,11 +140,11 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 		})},
 	}
 
-	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
+	t.Run("test checkExprIsZonemappable", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := plan2.CheckExprIsZonemappable(context.TODO(), testCase.expr)
-			if isMonotonic != testCase.result {
-				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
+			zonemappable := plan2.ExprIsZonemappable(context.TODO(), testCase.expr)
+			if zonemappable != testCase.result {
+				t.Fatalf("checkExprIsZonemappable testExprs[%d] is different with expected", i)
 			}
 		}
 	})
@@ -827,7 +857,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -835,7 +865,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return false
 	}, statsList...)
@@ -843,7 +873,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)
@@ -856,7 +886,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *catalog.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
 		count++
 		return true
 	}, statsList...)
@@ -867,4 +897,101 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	}, statsList...)
 
 	require.Equal(t, count, 0)
+}
+
+func TestGetPKExpr(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+	type myCase struct {
+		desc     []string
+		exprs    []*plan.Expr
+		valExprs []*plan.Expr
+	}
+	tc := myCase{
+		desc: []string{
+			"a=10",
+			"a=20 and a=10",
+			"30=a and 20=a",
+			"a in (1,2)",
+			"b=40 and a=50",
+			"a=60 or b=70",
+			"b=80 and c=90",
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64ConstExprWithType(10),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					plan2.MakePlan2Int64ConstExprWithType(30),
+					makeColExprForTest(0, types.T_int64),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					plan2.MakePlan2Int64ConstExprWithType(20),
+					makeColExprForTest(0, types.T_int64),
+				}),
+			}),
+			makeInExprForTest[int64](
+				makeColExprForTest(0, types.T_int64),
+				[]int64{1, 2},
+			),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(40),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(50),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(60),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(70),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(80),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(90),
+				}),
+			}),
+		},
+		valExprs: []*plan.Expr{
+			plan2.MakePlan2Int64ConstExprWithType(10),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+			plan2.MakePlan2Int64ConstExprWithType(30),
+			plan2.MakePlan2Int64VecExprWithType(int64(1), int64(2)),
+			plan2.MakePlan2Int64ConstExprWithType(50),
+			nil,
+			nil,
+		},
+	}
+	pkName := "a"
+	for i, expr := range tc.exprs {
+		rExpr := getPkExpr(expr, pkName, proc)
+		// t.Log(plan2.FormatExpr(rExpr))
+		require.Equal(t, tc.valExprs[i], rExpr)
+	}
+	require.Zero(t, m.CurrNB())
 }

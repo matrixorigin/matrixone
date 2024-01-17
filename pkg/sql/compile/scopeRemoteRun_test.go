@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -110,7 +112,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
 
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	pipe := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -282,7 +284,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
-		Ctx:         context.TODO(),
+		Ctx:         defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		TxnOperator: txnOperator,
 		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{
@@ -327,7 +329,7 @@ func Test_refactorScope(t *testing.T) {
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	p := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -340,7 +342,7 @@ func Test_convertPipelineUuid(t *testing.T) {
 }
 
 func Test_convertScopeRemoteReceivInfo(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	s := reuse.Alloc[Scope](nil)
 	s.RemoteReceivRegInfos = []RemoteReceivRegInfo{
 		{Idx: 1, Uuid: id},

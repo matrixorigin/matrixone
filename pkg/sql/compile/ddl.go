@@ -202,6 +202,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	tblId := rel.GetTableID(c.ctx)
 
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	oldDefs, err := rel.TableDefs(c.ctx)
@@ -237,7 +238,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
-	tblId := rel.GetTableID(c.ctx)
 	removeRefChildTbls := make(map[string]uint64)
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
@@ -246,11 +246,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
 
-	var alterKind []api.AlterKind
+	var alterKinds []api.AlterKind
 	var comment string
 	var oldName, newName string
-	var addCol []*plan.AlterAddCol
-	var dropCol []*plan.AlterDropCol
+	var addCol []*plan.AlterAddColumn
+	var dropCol []*plan.AlterDropColumn
+	var changePartitionDef *plan.PartitionByDef
+
 	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
@@ -259,7 +261,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
-				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				for i, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
@@ -268,7 +270,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
-				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
@@ -296,11 +298,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				// Avoid modifying slice directly during iteration
 				tableDef.Indexes = notDroppedIndex
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
-				alterKind = append(alterKind, api.AlterKind_DropColumn)
+				alterKinds = append(alterKinds, api.AlterKind_DropColumn)
 				var idx int
 				for idx = 0; idx < len(cols); idx++ {
 					if cols[idx].Name == constraintName {
-						drop := &plan.AlterDropCol{
+						drop := &plan.AlterDropColumn{
 							Idx: uint32(idx),
 							Seq: cols[idx].Seqnum,
 						}
@@ -312,19 +314,19 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
 
-			// IVF -> meta      -> indexDef
-			//     -> centroids -> indexDef
-			//     -> entries   -> indexDef
-			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			// indexName -> meta      -> indexDef
+			//     		 -> centroids -> indexDef
+			//     		 -> entries   -> indexDef
+			multiTableIndexes := make(map[string]*MultiTableIndex)
 			for _, indexDef := range indexTableDef.Indexes {
 
 				for i := range addIndex {
@@ -342,20 +344,23 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 					// 3. IVF indexDefs are aggregated and handled later
-					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
-						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+							IndexDefs: make(map[string]*plan.IndexDef),
+						}
 					}
-					multiTableIndexes[catalog.ToLower(indexDef.IndexAlgo)][catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+
 				}
 				if err != nil {
 					return err
 				}
 			}
-
-			for indexAlgoType, indexDefs := range multiTableIndexes {
-				switch indexAlgoType { // no need for catalog.ToLower() here
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -375,7 +380,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterIndex:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterIndex
 			constraintName := tableAlterIndex.IndexName
 			for i, indexdef := range tableDef.Indexes {
@@ -399,12 +404,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterReindex:
-			// NOTE: We hold lock during alter reindex, as "alter table" takes an exclusive lock in the beginning.
-			// We need to see how to reduce the critical section.
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
+			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
-			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			multiTableIndexes := make(map[string]*MultiTableIndex)
 
 			for i, indexDef := range tableDef.Indexes {
 				if indexDef.IndexName == constraintName {
@@ -445,22 +450,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 
 					// 4. Add to multiTableIndexes
-					if _, ok := multiTableIndexes[indexAlgo]; !ok {
-						multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+							IndexDefs: make(map[string]*plan.IndexDef),
+						}
 					}
-					multiTableIndexes[indexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
+					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 				}
 			}
 
-			if len(multiTableIndexes) == 0 {
+			if len(multiTableIndexes) != 1 {
 				return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
 			}
 
 			// update the hidden tables
-			for indexAlgoType, indexDefs := range multiTableIndexes {
-				switch catalog.ToLower(indexAlgoType) {
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, tableDef, nil)
 				}
 
 				if err != nil {
@@ -468,26 +476,47 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AlterComment:
-			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateComment)
 			comment = act.AlterComment.NewComment
 		case *plan.AlterTable_Action_AlterName:
-			alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
+			alterKinds = addAlterKind(alterKinds, api.AlterKind_RenameTable)
 			oldName = act.AlterName.OldName
 			newName = act.AlterName.NewName
-		case *plan.AlterTable_Action_AddCol:
-			alterKind = append(alterKind, api.AlterKind_AddColumn)
+		case *plan.AlterTable_Action_AddColumn:
+			alterKinds = append(alterKinds, api.AlterKind_AddColumn)
 			col := &plan.ColDef{
-				Name: act.AddCol.Name,
+				Name: act.AddColumn.Name,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddCol.Type,
+				Typ:  act.AddColumn.Type,
 			}
 			var pos int32
-			cols, pos, err = getAddColPos(cols, col, act.AddCol.PreName, act.AddCol.Pos)
+			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
 			if err != nil {
 				return err
 			}
-			act.AddCol.Pos = pos
-			addCol = append(addCol, act.AddCol)
+			act.AddColumn.Pos = pos
+			addCol = append(addCol, act.AddColumn)
+		case *plan.AlterTable_Action_AddPartition:
+			alterKinds = append(alterKinds, api.AlterKind_AddPartition)
+			changePartitionDef = act.AddPartition.PartitionDef
+			partitionTables := act.AddPartition.GetPartitionTables()
+			for _, table := range partitionTables {
+				storageCols := planColsToExeCols(table.GetCols())
+				storageDefs, err := planDefsToExeDefs(table)
+				if err != nil {
+					return err
+				}
+				err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
+				if err != nil {
+					return err
+				}
+			}
+
+			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tblId, act.AddPartition.PartitionDef, act.AddPartition.Definitions)
+			err = c.runSql(insertMoTablePartitionSql)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -561,7 +590,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var addColIdx int
 	var dropColIdx int
 	constraint := make([][]byte, 0)
-	for _, kind := range alterKind {
+	for _, kind := range alterKinds {
 		var req *api.AlterTableReq
 		switch kind {
 		case api.AlterKind_UpdateConstraint:
@@ -583,6 +612,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
+		case api.AlterKind_AddPartition:
+			req = api.NewAddPartitionReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), changePartitionDef)
 		default:
 		}
 		tmp, err := req.Marshal()
@@ -1112,10 +1143,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
-	// IVF -> meta 		-> indexDef[0]
-	// 	   -> centroids -> indexDef[1]
-	// 	   -> entries 	-> indexDef[2]
-	multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+	// indexName -> meta      -> indexDef[0]
+	//     		 -> centroids -> indexDef[1]
+	//     		 -> entries   -> indexDef[2]
+	multiTableIndexes := make(map[string]*MultiTableIndex)
 	for _, indexDef := range indexTableDef.Indexes {
 
 		indexAlgo := indexDef.IndexAlgo
@@ -1127,21 +1158,23 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
 			// 3. IVF indexDefs are aggregated and handled later
-			if _, ok := multiTableIndexes[indexAlgo]; !ok {
-				multiTableIndexes[indexAlgo] = make(map[string]*plan.IndexDef)
+			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+					IndexDefs: make(map[string]*plan.IndexDef),
+				}
 			}
-			indexAlgoTableType := catalog.ToLower(indexDef.IndexAlgoTableType)
-			multiTableIndexes[indexAlgo][indexAlgoTableType] = indexDef
+			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 		if err != nil {
 			return err
 		}
 	}
 
-	for indexAlgoType, indexDefs := range multiTableIndexes {
-		switch catalog.ToLower(indexAlgoType) {
+	for _, multiTableIndex := range multiTableIndexes {
+		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1363,7 +1396,8 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 		var indexdef *engine.IndexDef
 		for i, ct := range oldCt.Cts {
 			if indexdef, ok = ct.(*engine.IndexDef); ok {
-				indexdef.Indexes = append(indexdef.Indexes, t.Indexes[0])
+				//TODO: verify if this is correct @ouyuanning & @qingx
+				indexdef.Indexes = append(indexdef.Indexes, t.Indexes...)
 				oldCt.Cts = append(oldCt.Cts[:i], oldCt.Cts[i+1:]...)
 				oldCt.Cts = append(oldCt.Cts, indexdef)
 				break
@@ -2354,30 +2388,75 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	return &bat, nil
 }
 
-func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) error {
-	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	if stmt.Cycle {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
-	} else {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
 	}
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if stmt.Cycle {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	} else {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	}
+	if err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) error {
-	vecs[0] = vector.NewConstFixed(typ, lastV, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp())
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, lastV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp()); err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
 func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
@@ -2710,6 +2789,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
+	defer vec.Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}

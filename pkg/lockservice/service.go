@@ -37,7 +37,7 @@ import (
 type service struct {
 	cfg                  Config
 	serviceID            string
-	tableGroups          sync.Map // group -> sync.Map -> table id -> locktable
+	tableGroups          *lockTableHolders
 	activeTxnHolder      activeTxnHolder
 	fsp                  *fixedSlicePool
 	deadlockDetector     *detector
@@ -75,6 +75,7 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
+	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
@@ -189,15 +190,7 @@ func (s *service) Close() error {
 	var err error
 	s.stopOnce.Do(func() {
 		s.stopper.Stop()
-		s.tableGroups.Range(func(key, value any) bool {
-			tables := value.(*sync.Map)
-			tables.Range(func(key, value any) bool {
-				value.(lockTable).close()
-				return true
-			})
-			return true
-		})
-
+		s.tableGroups.removeWithFilter(func(_ uint64, _ lockTable) bool { return true })
 		if err = s.remote.client.Close(); err != nil {
 			return
 		}
@@ -264,7 +257,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 func (s *service) getLockTable(
 	group uint32,
 	tableID uint64) (lockTable, error) {
-	if v := s.loadLockTable(group, tableID); v != nil {
+	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
 	return s.waitLockTableBind(
@@ -295,7 +288,7 @@ func (s *service) waitLockTableBind(
 	if c != nil {
 		<-c
 	}
-	return s.loadLockTable(group, tableID)
+	return s.tableGroups.get(group, tableID)
 }
 
 func (s *service) getLockTableWithCreate(
@@ -308,7 +301,7 @@ func (s *service) getLockTableWithCreate(
 		tableID = shardingByRow(rows[0])
 	}
 
-	if v := s.loadLockTable(group, tableID); v != nil {
+	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
 
@@ -319,10 +312,10 @@ func (s *service) getLockTableWithCreate(
 		if waitC != nil {
 			s.mu.Unlock()
 			<-waitC
-			return s.loadLockTable(group, tableID)
+			s.mu.Lock()
 		}
 
-		v := s.loadLockTable(group, tableID)
+		v := s.tableGroups.get(group, tableID)
 		if v == nil {
 			c = make(chan struct{})
 			m, ok := s.mu.allocating[group]
@@ -355,35 +348,14 @@ func (s *service) getLockTableWithCreate(
 	if err != nil {
 		return nil, err
 	}
-	l := s.createLockTableByBind(bind)
-	if _, loaded := s.getTables(group).LoadOrStore(tableID, l); loaded {
-		getLogger().Fatal("BUG: cannot loaded lock table from tables")
-	}
-	return l, nil
+
+	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
+	return v, nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
-	var oldBind pb.LockTable
 	new := s.createLockTableByBind(newBind)
-	var tables *sync.Map
-
-	v, ok := s.tableGroups.Load(newBind.Group)
-	if !ok {
-		tables = &sync.Map{}
-		v, loaded := tables.LoadOrStore(newBind.Table, new)
-		if loaded {
-			tables = v.(*sync.Map)
-		}
-	} else {
-		tables = v.(*sync.Map)
-	}
-
-	old, loaded := tables.Swap(newBind.Table, new)
-	if loaded {
-		old.(lockTable).close()
-		oldBind = old.(lockTable).getBind()
-	}
-	logRemoteBindChanged(s.serviceID, oldBind, newBind)
+	s.tableGroups.set(newBind.Group, newBind.Table, new)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -411,29 +383,6 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 		}
 		return newLockTableProxy(s.serviceID, remote)
 	}
-}
-
-func (s *service) loadLockTable(
-	group uint32,
-	tableID uint64) lockTable {
-	if v, ok := s.getTables(group).Load(tableID); ok {
-		return v.(lockTable)
-	}
-	return nil
-}
-
-func (s *service) getTables(group uint32) *sync.Map {
-	v, ok := s.tableGroups.Load(group)
-	if ok {
-		return v.(*sync.Map)
-	}
-
-	tables := &sync.Map{}
-	v, loaded := s.tableGroups.LoadOrStore(group, tables)
-	if loaded {
-		return v.(*sync.Map)
-	}
-	return tables
 }
 
 type activeTxnHolder interface {
@@ -613,4 +562,115 @@ func getUUIDFromServiceIdentifier(id string) string {
 
 func shardingByRow(row []byte) uint64 {
 	return crc64.Checksum(row, crc64.MakeTable(crc64.ECMA))
+}
+
+type lockTableHolders struct {
+	sync.RWMutex
+	service string
+	holders map[uint32]*lockTableHolder
+}
+
+func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
+	return m.mustGetHolder(group).get(id)
+}
+
+func (m *lockTableHolders) set(group uint32, id uint64, new lockTable) lockTable {
+	return m.mustGetHolder(group).set(id, new)
+}
+
+func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
+	m.RLock()
+	h, ok := m.holders[group]
+	m.RUnlock()
+	if ok {
+		return h
+	}
+
+	m.Lock()
+	defer m.Unlock()
+	if h, ok := m.holders[group]; ok {
+		return h
+	}
+	h = &lockTableHolder{
+		service: m.service,
+		tables:  map[uint64]lockTable{},
+	}
+	m.holders[group] = h
+	return h
+}
+
+func (m *lockTableHolders) iter(fn func(uint64, lockTable) bool) {
+	m.RLock()
+	defer m.RUnlock()
+	for _, h := range m.holders {
+		if !h.iter(fn) {
+			return
+		}
+	}
+}
+
+func (m *lockTableHolders) removeWithFilter(filter func(uint64, lockTable) bool) {
+	m.RLock()
+	defer m.RUnlock()
+
+	for _, h := range m.holders {
+		h.removeWithFilter(filter)
+	}
+}
+
+type lockTableHolder struct {
+	sync.RWMutex
+	service string
+	tables  map[uint64]lockTable
+}
+
+func (m *lockTableHolder) get(id uint64) lockTable {
+	m.RLock()
+	defer m.RUnlock()
+	return m.tables[id]
+}
+
+func (m *lockTableHolder) set(id uint64, new lockTable) lockTable {
+	m.Lock()
+	defer m.Unlock()
+
+	old, ok := m.tables[id]
+
+	if !ok {
+		m.tables[id] = new
+		return new
+	}
+
+	oldBind := old.getBind()
+	newBind := new.getBind()
+	if oldBind.Changed(newBind) {
+		old.close()
+		m.tables[id] = new
+		logRemoteBindChanged(m.service, oldBind, newBind)
+		return new
+	}
+	new.close()
+	return old
+}
+
+func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
+	m.RLock()
+	defer m.RUnlock()
+	for id, v := range m.tables {
+		if !fn(id, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) {
+	m.Lock()
+	defer m.Unlock()
+	for id, v := range m.tables {
+		if filter(id, v) {
+			v.close()
+			delete(m.tables, id)
+		}
+	}
 }

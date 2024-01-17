@@ -274,6 +274,8 @@ type Compile struct {
 	needLockMeta bool
 	metaTables   map[string]struct{}
 	disableRetry bool
+
+	lastAllocID int32
 }
 
 // runtimeFilterSender is in hashbuild.Argument and fuzzyFilter.Arguement
@@ -304,4 +306,9 @@ type fuzzyCheck struct {
 	compoundCols []*plan.ColDef
 
 	cnt int
+}
+
+type MultiTableIndex struct {
+	IndexAlgo string
+	IndexDefs map[string]*plan.IndexDef
 }
