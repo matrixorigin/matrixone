@@ -1818,3 +1818,30 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	}
 	return schemas, paramTypes, nil
 }
+
+// HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
+func HasMoCtrl(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "mo_ctl" {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if HasMoCtrl(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if HasMoCtrl(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}

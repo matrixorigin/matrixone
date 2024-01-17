@@ -241,7 +241,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = searchFunc
-	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
+	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
@@ -302,7 +302,7 @@ func (r *blockReader) Read(
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+) (bat *batch.Batch, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
@@ -339,9 +339,12 @@ func (r *blockReader) Read(
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+		}
+		if err != nil {
+			return nil, err
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -359,7 +362,7 @@ func (r *blockReader) Read(
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
-	bat, err := blockio.BlockRead(
+	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
@@ -441,9 +444,8 @@ func newBlockMergeReader(
 }
 
 func (r *blockMergeReader) Close() error {
-	r.blockReader.Close()
 	r.table = nil
-	return nil
+	return r.blockReader.Close()
 }
 
 func (r *blockMergeReader) prefetchDeletes() error {
