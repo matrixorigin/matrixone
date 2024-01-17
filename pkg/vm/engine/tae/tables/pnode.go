@@ -73,7 +73,7 @@ func (node *persistedNode) ContainsKey(ctx context.Context, key any, blkID uint3
 	if err != nil {
 		return
 	}
-	if err = pkIndex.Dedup(ctx, key, node.block.rt, blkID); err != nil {
+	if err = pkIndex.Dedup(ctx, key, node.block.rt, blkID); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {

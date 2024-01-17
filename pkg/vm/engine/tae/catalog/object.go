@@ -207,7 +207,7 @@ func NewSysObjectEntry(table *TableEntry, id types.Uuid) *ObjectEntry {
 func (entry *ObjectEntry) GetLocation() objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
-	node := entry.GetLatestCommittedNode()
+	node := entry.GetLatestNodeLocked()
 	location := node.BaseNode.ObjectStats.ObjectLocation()
 	return location
 }

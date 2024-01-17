@@ -411,7 +411,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		rel, err := database.GetRelationByName(schema.Name)
 		readSchema := rel.Schema()
 		assert.Nil(t, err)
-		obj, err := rel.CreateObject(false)
+		obj, err := rel.CreateNonAppendableObject(false)
 		assert.Nil(t, err)
 		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetBlockData()
 		sid := objectio.NewObjectid()
@@ -651,11 +651,11 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 				assert.True(t, view.GetData().Equals(bats[1].Vecs[3]))
 
 			}
-			cntOfblk++
+			cntOfblk += blk.BlkCnt()
 			return
 		})
-		assert.True(t, cntOfblk == 2)
-		assert.True(t, cntOfAblk == 2)
+		assert.Equal(t, 2, cntOfblk)
+		assert.Equal(t, 2, cntOfAblk)
 		assert.Nil(t, txn.Commit(context.Background()))
 
 		//check count of committed Objects.
@@ -713,6 +713,7 @@ func TestCompactMemAlter(t *testing.T) {
 		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
+		newBlockFp = task.GetCreatedBlocks().Fingerprint()
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
