@@ -30,11 +30,13 @@ import (
 )
 
 const (
-	minIDAllocCapacity uint64 = 1024
-	defaultIDBatchSize uint64 = 1024 * 10
+	minIDAllocCapacity   uint64 = 1024
+	defaultIDBatchSize   uint64 = 1024 * 10
+	checkBootstrapCycles        = 100
+)
 
+var (
 	hakeeperDefaultTimeout = 2 * time.Second
-	checkBootstrapCycles   = 100
 )
 
 type idAllocator struct {
