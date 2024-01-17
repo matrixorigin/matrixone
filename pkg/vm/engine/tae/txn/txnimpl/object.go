@@ -167,6 +167,9 @@ func (it *ObjectIt) Next() {
 }
 
 func (it *ObjectIt) GetObject() handle.Object {
+	if isSysTableId(it.table.GetID()) {
+		return newSysObject(it.table, it.curr)
+	}
 	return newObject(it.table, it.curr)
 }
 
