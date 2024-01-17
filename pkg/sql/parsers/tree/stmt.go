@@ -14,12 +14,15 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type Statement interface {
 	fmt.Stringer
 	NodeFormatter
 	StatementType
+	Free()
 }
 
 type StatementType interface {
@@ -31,6 +34,9 @@ type StatementType interface {
 
 type statementImpl struct {
 	Statement
+}
+
+func (s *statementImpl) Free() {
 }
 
 const (

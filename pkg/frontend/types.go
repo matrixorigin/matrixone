@@ -125,6 +125,10 @@ type InternalCmdFieldList struct {
 	tableName string
 }
 
+// Free implements tree.Statement.
+func (icfl *InternalCmdFieldList) Free() {
+}
+
 func (icfl *InternalCmdFieldList) String() string {
 	return makeCmdFieldListSql(icfl.tableName)
 }
@@ -213,6 +217,9 @@ func (prepareStmt *PrepareStmt) Close() {
 				expr.Free()
 			}
 		}
+	}
+	if prepareStmt.PrepareStmt != nil {
+		prepareStmt.PrepareStmt.Free()
 	}
 }
 

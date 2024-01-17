@@ -1204,11 +1204,12 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSQLStmt(ctx, sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
@@ -1216,6 +1217,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
@@ -1227,6 +1229,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
