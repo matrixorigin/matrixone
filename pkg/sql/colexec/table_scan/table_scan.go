@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const argName = "table_scan"
 const maxBatchMemSize = 8192 * 1024
 
 func (arg *Argument) String(buf *bytes.Buffer) {
@@ -94,7 +92,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		tmpSize := arg.tmpBuf.Size()
 		batSize := bat.Size()
-		if arg.tmpBuf.RowCount()+bat.RowCount() < colexec.DefaultBatchSize && tmpSize+batSize < maxBatchMemSize {
+		if arg.tmpBuf.RowCount()+bat.RowCount() < 8192 && tmpSize+batSize < maxBatchMemSize {
 			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
 			proc.PutBatch(bat)
 			if err != nil {
