@@ -331,17 +331,6 @@ func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
 }
 
-func (bat *Batch) Truncate(rowCount int) {
-	if rowCount > bat.RowCount() {
-		logutil.Infof("################rowcount %v, bat rowcount %v", rowCount, bat.rowCount)
-		panic("truncate batch size must be smaller than origin size!")
-	}
-	bat.rowCount = rowCount
-	for i := range bat.Vecs {
-		bat.Vecs[i].SetLength(rowCount)
-	}
-}
-
 func (bat *Batch) AddCnt(cnt int) {
 	atomic.AddInt64(&bat.Cnt, int64(cnt))
 }

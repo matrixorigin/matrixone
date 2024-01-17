@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -151,66 +150,21 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 	if src.RowCount() == colexec.DefaultBatchSize {
 		ctr.batches = append(ctr.batches, src)
 		return nil
-	} else if src.RowCount() < colexec.DefaultBatchSize {
-		if ctr.tmpBatch == nil {
-			ctr.tmpBatch, err = proc.NewBatchFromSrc(src, 0)
-			if err != nil {
-				return err
-			}
-		}
-		if ctr.tmpBatch.RowCount()+src.RowCount() >= colexec.DefaultBatchSize {
-			offset := ctr.tmpBatch.RowCount() + src.RowCount() - colexec.DefaultBatchSize
-			if offset > src.RowCount() {
-				logutil.Infof("################tmpbatch1 %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
-			}
-			length := colexec.DefaultBatchSize - ctr.tmpBatch.RowCount()
-			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length)
-			if err != nil {
-				return err
-			}
-			ctr.batches = append(ctr.batches, ctr.tmpBatch)
-			if offset > src.RowCount() {
-				logutil.Infof("################tmpbatch2 %v, src %v, offset %v", ctr.tmpBatch.RowCount(), src.RowCount(), offset)
-			}
-			src.Truncate(offset)
-			ctr.tmpBatch = src
-			return nil
-		} else {
-			ctr.tmpBatch, err = ctr.tmpBatch.Append(proc.Ctx, proc.Mp(), src)
-			if err != nil {
-				return err
-			}
-			proc.PutBatch(src)
-		}
-	} else { // src.RowCount() > colexec.DefaultBatchSize
-		if ctr.tmpBatch != nil {
-			src, err = src.Append(proc.Ctx, proc.Mp(), ctr.tmpBatch)
-			if err != nil {
-				return err
-			}
-			proc.PutBatch(ctr.tmpBatch)
-			ctr.tmpBatch = nil
-		}
-
-		offset := colexec.DefaultBatchSize
+	} else if src.RowCount() != colexec.DefaultBatchSize {
+		offset := 0
+		appendRows := 0
 		length := src.RowCount()
-		for offset+colexec.DefaultBatchSize <= length {
-			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, colexec.DefaultBatchSize)
+		for offset < length {
+			ctr.tmpBatch, appendRows, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset)
 			if err != nil {
 				return err
 			}
-			ctr.batches = append(ctr.batches, ctr.tmpBatch)
-			ctr.tmpBatch = nil
-			offset += colexec.DefaultBatchSize
-		}
-		if offset < length {
-			ctr.tmpBatch, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset, length-offset)
-			if err != nil {
-				return err
+			if ctr.tmpBatch.RowCount() == colexec.DefaultBatchSize {
+				ctr.batches = append(ctr.batches, ctr.tmpBatch)
+				ctr.tmpBatch = nil
 			}
+			offset += appendRows
 		}
-		src.Truncate(colexec.DefaultBatchSize)
-		ctr.batches = append(ctr.batches, src)
 	}
 	return nil
 }
@@ -388,7 +342,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err != nil {
 		return err
 	}
-
 	err = ctr.buildHashmap(ap, proc)
 	if err != nil {
 		return err
