@@ -882,19 +882,26 @@ func extractPKValueFromEqualExprs(
 	pkIdx int,
 	proc *process.Process,
 	pool *fileservice.Pool[*types.Packer],
-) (val []byte) {
+) (val []byte, isVec bool) {
 	pk := def.Pkey
 	if pk.CompPkeyCol != nil {
-		return extractCompositePKValueFromEqualExprs(
+		val = extractCompositePKValueFromEqualExprs(
 			exprs, pk, proc, pool,
 		)
+		return
 	}
+	var canEval bool
 	column := def.Cols[pkIdx]
 	name := column.Name
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		if ok, _, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
-			val = types.EncodeValue(v, colType)
+		var v any
+		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, true, proc); canEval {
+			if isVec {
+				val = v.([]byte)
+			} else {
+				val = types.EncodeValue(v, colType)
+			}
 			break
 		}
 	}

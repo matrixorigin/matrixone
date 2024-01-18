@@ -903,14 +903,14 @@ func (tbl *txnTable) tryFastRanges(
 		return
 	}
 
-	val := extractPKValueFromEqualExprs(
+	val, isVec := extractPKValueFromEqualExprs(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
 		tbl.proc.Load(),
 		tbl.db.txn.engine.packerPool,
 	)
-	if len(val) == 0 {
+	if len(val) == 0 || isVec {
 		done = false
 		return
 	}
