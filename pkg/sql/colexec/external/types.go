@@ -74,7 +74,7 @@ type ExParam struct {
 	Fileparam      *ExFileparam
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
-	MoCsvLineArray [][]string
+	MoCsvLineArray [][]Field
 }
 
 type ExFileparam struct {
@@ -169,11 +169,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 type ParseLineHandler struct {
-	csvReader *csv.Reader
+	csvReader *CSVParser
 	//batch
 	batchSize int
 	//mo csv
-	moCsvLineArray [][]string
+	moCsvLineArray [][]Field
 }
 
 // NewReader returns a new Reader with options that reads from r.

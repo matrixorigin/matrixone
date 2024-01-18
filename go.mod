@@ -57,6 +57,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.22.4
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.7.0
+	github.com/spkg/bom v1.0.0
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
@@ -69,7 +70,6 @@ require (
 	google.golang.org/grpc v1.57.0
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-	github.com/spkg/bom v1.0.0
 )
 
 require (
