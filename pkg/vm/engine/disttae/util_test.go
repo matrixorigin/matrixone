@@ -891,9 +891,11 @@ func TestGetPkExprValue(t *testing.T) {
 	tc := testCase{
 		desc: []string{
 			"a=2 and a=1",
+			"a in vec(1,2)",
+			// "a=2 or a=1",
 		},
 		canEvals: []bool{
-			true,
+			true, true,
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -906,21 +908,35 @@ func TestGetPkExprValue(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(1),
 				}),
 			}),
+			makeFunctionExprForTest("in", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(2)),
+			}),
+			// makeFunctionExprForTest("or", []*plan.Expr{
+			// 	makeFunctionExprForTest("=", []*plan.Expr{
+			// 		makeColExprForTest(0, types.T_int64),
+			// 		plan2.MakePlan2Int64ConstExprWithType(2),
+			// 	}),
+			// 	makeFunctionExprForTest("=", []*plan.Expr{
+			// 		makeColExprForTest(0, types.T_int64),
+			// 		plan2.MakePlan2Int64ConstExprWithType(1),
+			// 	}),
+			// }),
 		},
 		expectVals: [][]int64{
-			{2},
+			{2}, {1, 2},
 		},
 	}
-	for _, expr := range tc.exprs {
+	for i, expr := range tc.exprs {
 		canEval, _, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
-		require.Equalf(t, tc.canEvals[0], canEval, tc.desc[0])
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
 		if !canEval {
 			continue
 		}
 		if isVec {
-			require.Truef(t, equalToVecFn(tc.expectVals[0], val.(*vector.Vector)), tc.desc[0])
+			require.Truef(t, equalToVecFn(tc.expectVals[i], val.(*vector.Vector)), tc.desc[i])
 		} else {
-			require.Truef(t, equalToValFn(tc.expectVals[0], val), tc.desc[0])
+			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
 		}
 	}
 }
