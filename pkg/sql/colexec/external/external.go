@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -122,7 +123,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
-	param.MoCsvLineArray = make([][]Field, OneBatchMaxRow)
+	param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	return nil
 }
 
@@ -586,7 +587,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
-				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]Field, param.IgnoreLine))
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]csvparser.Field, param.IgnoreLine))
 			} else {
 				plh.moCsvLineArray = nil
 				cnt = 0
@@ -777,7 +778,7 @@ func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Proce
 	}
 }
 
-func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]Field, error) {
+func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]csvparser.Field, error) {
 	switch jsonData {
 	case tree.OBJECT:
 		return transJsonObject2Lines(ctx, str, attrs, cols, param)
@@ -788,10 +789,10 @@ func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*pl
 	}
 }
 
-func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]Field, error) {
+func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]csvparser.Field, error) {
 	var (
 		err error
-		res = make([]Field, 0, len(attrs))
+		res = make([]csvparser.Field, 0, len(attrs))
 	)
 	if param.prevStr != "" {
 		str = param.prevStr + str
@@ -815,12 +816,12 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 		}
 		if val, ok := jsonMap[attr]; ok {
 			if val == nil {
-				res = append(res, Field{IsNull: true})
+				res = append(res, csvparser.Field{IsNull: true})
 				continue
 			}
 			tp := cols[idx].Typ.Id
 			if tp != int32(types.T_json) {
-				res = append(res, Field{Val: fmt.Sprintf("%v", val)})
+				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val)})
 				continue
 			}
 			var bj bytejson.ByteJson
@@ -832,7 +833,7 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 			if err != nil {
 				return nil, err
 			}
-			res = append(res, Field{Val: string(dt)})
+			res = append(res, csvparser.Field{Val: string(dt)})
 		} else {
 			return nil, moerr.NewInvalidInput(ctx, "the attr %s is not in json", attr)
 		}
@@ -840,10 +841,10 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 	return res, nil
 }
 
-func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]Field, error) {
+func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]csvparser.Field, error) {
 	var (
 		err error
-		res = make([]Field, 0, len(attrs))
+		res = make([]csvparser.Field, 0, len(attrs))
 	)
 	if param.prevStr != "" {
 		str = param.prevStr + str
@@ -862,7 +863,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 	}
 	for idx, val := range jsonArray {
 		if val == nil {
-			res = append(res, Field{IsNull: true})
+			res = append(res, csvparser.Field{IsNull: true})
 			continue
 		}
 		if idx >= len(cols) {
@@ -870,7 +871,7 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
-			res = append(res, Field{Val: fmt.Sprintf("%v", val)})
+			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val)})
 			continue
 		}
 		var bj bytejson.ByteJson
@@ -882,19 +883,19 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, Field{Val: string(dt)})
+		res = append(res, csvparser.Field{Val: string(dt)})
 	}
 	return res, nil
 }
 
-func getFieldFromLine(line []Field, colIdx int, param *ExternalParam) Field {
+func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
-		return Field{Val: param.Fileparam.Filepath}
+		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
 	return line[param.Name2ColIndex[param.Attrs[colIdx]]]
 }
 
-func getOneRowData(bat *batch.Batch, line []Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
 	for colIdx := range param.Attrs {
 		vec := bat.Vecs[colIdx]
@@ -1291,7 +1292,7 @@ func getOneRowData(bat *batch.Batch, line []Field, rowIdx int, param *ExternalPa
 // A successful call returns err == nil, not err == io.EOF. Because ReadAll is
 // defined to read until EOF, it does not treat an end of file as an error to be
 // reported.
-func readCountStringLimitSize(r *CSVParser, ctx context.Context, size uint64, records [][]Field) (int, bool, error) {
+func readCountStringLimitSize(r *csvparser.CSVParser, ctx context.Context, size uint64, records [][]csvparser.Field) (int, bool, error) {
 	var curBatchSize uint64 = 0
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
