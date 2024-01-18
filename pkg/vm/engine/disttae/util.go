@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -42,45 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
-
-const (
-	HASH_VALUE_FUN string = "hash_value"
-	MAX_RANGE_SIZE int64  = 200
-)
-
-func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
-	args := []*plan.Expr{constExpr}
-	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	fGet, err := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
-	if err != nil {
-		panic(err)
-	}
-	funId, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
-	funExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&returnType),
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj:     funId,
-					ObjName: HASH_VALUE_FUN,
-				},
-				Args: args,
-			},
-		},
-	}
-
-	bat := batch.NewWithSize(0)
-	bat.SetRowCount(1)
-
-	ret, err := colexec.EvalExpressionOnce(proc, funExpr, []*batch.Batch{bat})
-	if err != nil {
-		return false, 0
-	}
-	value := vector.MustFixedCol[int64](ret)[0]
-	ret.Free(proc.Mp())
-
-	return true, uint64(value)
-}
 
 func compPkCol(colName string, pkName string) bool {
 	dotIdx := strings.Index(colName, ".")
