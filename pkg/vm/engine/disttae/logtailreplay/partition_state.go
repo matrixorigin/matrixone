@@ -191,6 +191,10 @@ func (o ObjectEntry) Location() objectio.Location {
 	return o.ObjectLocation()
 }
 
+func (o ObjectInfo) StatsValid() bool {
+	return o.ObjectStats.Rows() != 0
+}
+
 type ObjectIndexByCreateTSEntry struct {
 	ObjectInfo
 }
