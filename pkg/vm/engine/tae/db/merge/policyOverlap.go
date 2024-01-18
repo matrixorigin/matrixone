@@ -49,8 +49,8 @@ func (o *Overlap) OnObject(obj *catalog.ObjectEntry) {
 		if o.schema.Name == "bmsql_new_order" {
 			minv := sortKeyZonemap.GetMinBuf()
 			maxv := sortKeyZonemap.GetMaxBuf()
-			mint, _, _ := types.DecodeTuple(minv)
-			maxt, _, _ := types.DecodeTuple(maxv)
+			mint, _, _, _ := types.DecodeTuple(minv)
+			maxt, _, _, _ := types.DecodeTuple(maxv)
 			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(nil), maxt.ErrString(nil))
 		}
 	}
