@@ -859,6 +859,72 @@ func TestGetPKExpr(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestGetPkExprValue(t *testing.T) {
+	m := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcessWithMPool(m)
+	type testCase struct {
+		desc       []string
+		exprs      []*plan.Expr
+		expectVals [][]int64
+		canEvals   []bool
+	}
+	equalToVecFn := func(expect []int64, actual *vector.Vector) bool {
+		actualVals := vector.MustFixedCol[int64](actual)
+		if len(expect) != len(actualVals) {
+			return false
+		}
+		for i := range expect {
+			if expect[i] != actualVals[i] {
+				return false
+			}
+		}
+		return true
+	}
+	equalToValFn := func(expect []int64, actual any) bool {
+		if len(expect) != 1 {
+			return false
+		}
+		actualVal := actual.(int64)
+		return expect[0] == actualVal
+	}
+
+	tc := testCase{
+		desc: []string{
+			"a=2 and a=1",
+		},
+		canEvals: []bool{
+			true,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+		},
+		expectVals: [][]int64{
+			{2},
+		},
+	}
+	for _, expr := range tc.exprs {
+		canEval, _, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+		require.Equalf(t, tc.canEvals[0], canEval, tc.desc[0])
+		if !canEval {
+			continue
+		}
+		if isVec {
+			require.Truef(t, equalToVecFn(tc.expectVals[0], val.(*vector.Vector)), tc.desc[0])
+		} else {
+			require.Truef(t, equalToValFn(tc.expectVals[0], val), tc.desc[0])
+		}
+	}
+}
+
 func TestEvalExprListToVec(t *testing.T) {
 	m := mpool.MustNewZeroNoFixed()
 	proc := testutil.NewProcessWithMPool(m)

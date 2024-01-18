@@ -386,18 +386,21 @@ func getPkValueByExpr(
 			return false, false, false, nil
 		}
 
-		// case *plan.Expr_Vec:
-		// if mustOne {
-		// 	return false, false, nil
-		// }
-		// vec := vector.NewVec(types.T_any.ToType())
-		// _ = vec.UnmarshalBinary(exprImpl.Vec.Data)
-		// return true, false, vec
+	case *plan.Expr_Vec:
+		// TODO: extract one from vector later
+		if mustOne {
+			return false, false, false, nil
+		}
+		vec := vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(exprImpl.Vec.Data)
+		return true, false, true, vec
 
 		// case *plan.Expr_List:
+		// 	// TODO: extract one from vector later
 		// 	if mustOne {
-		// 		return false, false, nil
+		// 		return false, false, false, nil
 		// 	}
+		// 	canEval, vec, put := evalExprListToVec(oid, exprImpl, proc)
 	}
 
 	return false, false, false, nil
