@@ -4604,10 +4604,11 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 
 			statsByte.WithTimeConsumed(
 				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration) +
-					float64(statsInfo.CompileDuration) +
-					float64(statsInfo.PlanDuration))
-
+					float64(statsInfo.ParseDuration+
+						statsInfo.CompileDuration+
+						statsInfo.CompileDuration+
+						statsInfo.PlanDuration) -
+					float64(statsInfo.DiskAccessTimeConsumption+statsInfo.S3AccessTimeConsumption))
 		}
 
 	} else {
