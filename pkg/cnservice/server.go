@@ -257,15 +257,22 @@ func (s *service) Close() error {
 	}
 	// stop I/O pipeline
 	blockio.Stop()
-	if err := s.gossipNode.Leave(time.Second); err != nil {
-		return err
+
+	if s.gossipNode != nil {
+		if err := s.gossipNode.Leave(time.Second); err != nil {
+			return err
+		}
 	}
+
 	if s.cacheServer != nil {
 		if err := s.cacheServer.Close(); err != nil {
 			return err
 		}
 	}
-	return s.server.Close()
+	if err := s.server.Close(); err != nil {
+		return err
+	}
+	return s.lockService.Close()
 }
 
 // ID implements the frontend.BaseService interface.

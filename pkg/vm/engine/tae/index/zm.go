@@ -112,7 +112,7 @@ func (zm ZM) StringForCompose() string {
 		if len(b) >= 30 {
 			return hex.EncodeToString(b)
 		}
-		if r, _, e := types.DecodeTuple(b); e == nil {
+		if r, _, _, e := types.DecodeTuple(b); e == nil {
 			return r.ErrString(nil)
 		}
 		return string(b)

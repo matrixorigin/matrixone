@@ -103,6 +103,11 @@ func (m LockTable) Changed(v LockTable) bool {
 		m.ServiceID != v.ServiceID
 }
 
+// Equal return true means same bind
+func (m LockTable) Equal(v LockTable) bool {
+	return m.Table == v.Table && m.Version == v.Version
+}
+
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
 	return fmt.Sprintf("%d-%s-%d", m.Table, m.ServiceID, m.Version)

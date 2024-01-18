@@ -376,6 +376,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
+func (c *Compile) allocOperatorID() int32 {
+	defer func() {
+		c.lastAllocID++
+	}()
+
+	return c.lastAllocID
+}
+
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	var writeOffset uint64
@@ -390,6 +398,10 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		stats.ExecutionEnd()
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	for _, s := range c.scope {
+		s.SetOperatorInfoRecursively(c.allocOperatorID)
+	}
 
 	if c.proc.TxnOperator != nil {
 		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
@@ -1142,7 +1154,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileProjection(n, c.compileRestrict(n, c.compileTimeWin(n, c.compileSort(n, ss))))
 		return ss, nil
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err = c.compilePlanScope(ctx, step, n.Children[0], ns)

@@ -6778,7 +6778,7 @@ func TestAlterFakePk(t *testing.T) {
 	for _, v := range tnDelBat.Vecs {
 		require.Equal(t, 2, v.Length())
 	}
-	t.Log(tnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnDelBat.GetVectorByName(catalog.AttrPKVal).PPString(10))
 
 }
 
