@@ -189,6 +189,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
+		defer func() {
+			mpool.DeleteMPool(c.proc.Mp())
+		}()
 
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
