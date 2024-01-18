@@ -1005,7 +1005,7 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			bat, err = blockio.LoadTombstoneColumnsByTN(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,

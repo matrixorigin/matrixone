@@ -42,7 +42,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(
+	bat, err := blockio.LoadColumnsBytTN(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
@@ -86,7 +86,7 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	bat, err := blockio.LoadColumns(
+	bat, err := blockio.LoadColumnsBytTN(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,

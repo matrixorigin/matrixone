@@ -48,7 +48,7 @@ func ReadByFilter(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (sels []int32, err error) {
-	bat, err := LoadColumnsWithoutVPool(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
+	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -179,7 +179,7 @@ func BlockCompactionRead(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 
-	loaded, err := LoadColumnsWithoutVPool(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
+	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +452,7 @@ func readBlockData(
 			return
 		}
 
-		if loaded, err = LoadColumnsWithoutVPool(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
+		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
 
@@ -505,13 +505,13 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadTombstoneColumnsWithoutVPool(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
 		return
 	} else {
-		bat, err = LoadTombstoneColumnsWithoutVPool(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}

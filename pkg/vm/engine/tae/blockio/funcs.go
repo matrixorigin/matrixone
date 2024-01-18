@@ -117,9 +117,8 @@ func LoadColumns(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
-	vPool *containers.VectorPool,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
+	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
 }
 
 func LoadTombstoneColumns(
@@ -129,12 +128,11 @@ func LoadTombstoneColumns(
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-	vPool *containers.VectorPool,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
 }
 
-func LoadColumnsWithoutVPool(
+func LoadColumnsBytTN(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
@@ -142,19 +140,21 @@ func LoadColumnsWithoutVPool(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
+	vPool *containers.VectorPool,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy)
+	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
 }
 
-func LoadTombstoneColumnsWithoutVPool(
+func LoadTombstoneColumnsByTN(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
+	vPool *containers.VectorPool,
 ) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
+	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
 }
 
 func LoadOneBlock(
