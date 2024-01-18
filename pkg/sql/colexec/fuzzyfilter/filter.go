@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -355,7 +354,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
-	colexec.SortInFilter(arg.pass2RuntimeFilter)
+	arg.pass2RuntimeFilter.InplaceSort()
 	data, err := arg.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {
 		return err
