@@ -1189,7 +1189,11 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
+	if constExpr == nil {
+		return false
+	}
+
 	//TODO: Check if T_array is required here?
 	if constT.Eq(columnT) {
 		return true
@@ -1224,7 +1228,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool 
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.Lit.Value.(*plan.Literal_I64Val)
+		val, valOk := constExpr.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1261,7 +1265,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool 
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.Lit.Value.(*plan.Literal_U64Val)
+		val_u, valOk := constExpr.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
