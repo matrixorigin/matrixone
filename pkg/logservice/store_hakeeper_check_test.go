@@ -277,6 +277,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	fn := func(t *testing.T, services []*Service) {
 		// bootstrap the cluster, 1 TN 1 Log shard, Log and HAKeeper have
 		// 3 replicas
+		hakeeperDefaultTimeout = 10 * time.Second
+
 		store1 := services[0].store
 		state, err := store1.getCheckerState()
 		require.NoError(t, err)

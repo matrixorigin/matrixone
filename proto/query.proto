@@ -49,6 +49,8 @@ enum CmdMethod {
   SyncCommit = 8;
   // GetCommit get latest commit timestamp of cn.
   GetCommit = 9;
+
+  RunTask = 13;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -88,6 +90,14 @@ message GetCommitResponse {
   timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
 }
 
+message RunTaskRequest {
+  int32 TaskCode = 1;
+}
+
+message RunTaskResponse {
+  string Result = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -113,6 +123,8 @@ message Request {
 
   SyncCommitRequest        SycnCommit          = 11;
   GetCommitRequest        GetCommit           = 12;
+
+  RunTaskRequest RunTask = 16;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -145,6 +157,8 @@ message Response {
 
   SyncCommitResponse        SyncCommit        = 11;
   GetCommitResponse         GetCommit         = 12;
+
+  RunTaskResponse RunTask = 16;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
