@@ -302,7 +302,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 			return dst, 0, err
 		}
 	}
-	dst.SetRowCount(dst.RowCount() + length)
+	dst.AddRowCount(length)
 	return dst, length, nil
 }
 

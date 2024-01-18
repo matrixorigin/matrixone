@@ -120,7 +120,7 @@ func (arg *Argument) initShuffle() {
 
 func (arg *Argument) getSels() [][]int32 {
 	for i := range arg.ctr.sels {
-		arg.ctr.sels[i] = nil
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
 	}
 	return arg.ctr.sels
 }
@@ -280,16 +280,6 @@ func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
 	return sels
-}
-
-func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) error {
-	newBatch, err := proc.NewBatchFromSrc(bat, colexec.DefaultBatchSize)
-	if err != nil {
-		return err
-	}
-	newBatch.ShuffleIDX = regIndex
-	ap.ctr.shufflePool[regIndex] = newBatch
-	return nil
 }
 
 func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
@@ -709,27 +699,38 @@ func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
-	shuffledBats := ap.ctr.shufflePool
-	for regIndex := range shuffledBats {
-		lenSels := len(sels[regIndex])
-		if lenSels > 0 {
-			b := shuffledBats[regIndex]
-			if b == nil {
-				err := initShuffledBats(ap, bat, proc, regIndex)
+func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
+	shuffledPool := ap.ctr.shufflePool
+	var err error
+	for regIndex := range shuffledPool {
+		newSels := sels[regIndex]
+		for len(newSels) > 0 {
+			bat := shuffledPool[regIndex]
+			if bat == nil {
+				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
 				if err != nil {
 					return err
 				}
-				b = shuffledBats[regIndex]
+				bat.ShuffleIDX = regIndex
+				ap.ctr.shufflePool[regIndex] = bat
 			}
-			for vecIndex := range b.Vecs {
-				v := b.Vecs[vecIndex]
-				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
+			length := len(newSels)
+			if length+bat.RowCount() > colexec.DefaultBatchSize {
+				length = colexec.DefaultBatchSize - bat.RowCount()
+			}
+			for vecIndex := range bat.Vecs {
+				v := bat.Vecs[vecIndex]
+				err = v.Union(srcBatch.Vecs[vecIndex], newSels[:length], proc.Mp())
 				if err != nil {
 					return err
 				}
 			}
-			b.AddRowCount(lenSels)
+			bat.AddRowCount(length)
+			newSels = newSels[length:]
+			if bat.RowCount() == colexec.DefaultBatchSize {
+				ap.ctr.sendPool = append(ap.ctr.sendPool, bat)
+				shuffledPool[regIndex] = nil
+			}
 		}
 	}
 	return nil
