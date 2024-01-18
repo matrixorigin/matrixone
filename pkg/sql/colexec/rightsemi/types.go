@@ -80,6 +80,8 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	rbat       []*batch.Batch
+	lastpos    int
 
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap
@@ -122,6 +124,22 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {

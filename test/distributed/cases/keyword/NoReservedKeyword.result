@@ -4,9 +4,9 @@ account    accounts    modify    action    against    algorithm    any    ascii 
 select 1 as auto_random, 1 as avg_row_length, 1 as avg, 1 as bsi, 1 as begin;
 auto_random    avg_row_length    avg    bsi    begin
 1    1    1    1    1
-select 1 as _binary, 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
-_binary    bindings    bit    bit_cast    bool
-1    1    1    1    1
+select 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
+bindings    bit    bit_cast    bool
+1    1    1    1
 select 1 as boolean, 1 as btree, 1 as ivfflat, 1 as bit_or, 1 as bit_and, 1 as cancel, 1 as charset, 1 as checksum;
 boolean    btree    ivfflat    bit_or    bit_and    cancel    charset    checksum
 1    1    1    1    1    1    1    1

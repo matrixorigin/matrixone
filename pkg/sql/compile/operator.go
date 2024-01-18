@@ -99,7 +99,16 @@ func init() {
 }
 
 func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
-	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx, IsFirst: sourceIns.IsFirst, IsLast: sourceIns.IsLast}
+	res := vm.Instruction{
+		Op:          sourceIns.Op,
+		Idx:         sourceIns.Idx,
+		IsFirst:     sourceIns.IsFirst,
+		IsLast:      sourceIns.IsLast,
+		CnAddr:      sourceIns.CnAddr,
+		OperatorID:  sourceIns.OperatorID,
+		MaxParallel: sourceIns.MaxParallel,
+		ParallelID:  sourceIns.ParallelID,
+	}
 	switch sourceIns.Op {
 	case vm.Anti:
 		t := sourceIns.Arg.(*anti.Argument)

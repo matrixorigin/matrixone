@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testutil
+package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	_ "unsafe"
 )
 
-var (
-	int8Type    = types.T_int8.ToType()
-	int16Type   = types.T_int16.ToType()
-	int32Type   = types.T_int32.ToType()
-	int64Type   = types.T_int64.ToType()
-	uint16Type  = types.T_uint16.ToType()
-	varcharType = types.T_varchar.ToType()
-	textType    = types.T_text.ToType()
-	rowIdType   = types.T_Rowid.ToType()
-)
+var enable bool
+
+//go:linkname throw runtime.throw
+func throw(s string)
+
+func EnableCoreDump() {
+	enable = true
+}
+
+func DisableCoreDump() {
+	enable = false
+}
+
+func CoreDump() {
+	if !enable {
+		return
+	}
+	throw("core dump")
+}
