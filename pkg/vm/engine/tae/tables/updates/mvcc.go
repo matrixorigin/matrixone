@@ -472,7 +472,7 @@ func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location
 	if mvcc == nil {
 		return nil
 	}
-	return mvcc.deltaloc.GetLatestCommittedNode().BaseNode.DeltaLoc
+	return mvcc.deltaloc.GetLatestNodeLocked().BaseNode.DeltaLoc
 }
 func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch) (delBatch *containers.Batch, err error) {
 	n.RLock()

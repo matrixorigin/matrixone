@@ -1061,13 +1061,15 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 				continue
 			}
 		}
-		if bf, err = tbl.tryGetCurrentObjectBF(
-			ctx,
-			stats.ObjectLocation(),
-			bf,
-			&name,
-		); err != nil {
-			return
+		if blk.HasPersistedData() {
+			if bf, err = tbl.tryGetCurrentObjectBF(
+				ctx,
+				stats.ObjectLocation(),
+				bf,
+				&name,
+			); err != nil {
+				return
+			}
 		}
 		name = *stats.ObjectShortName()
 
