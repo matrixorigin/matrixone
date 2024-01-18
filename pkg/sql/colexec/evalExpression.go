@@ -15,11 +15,9 @@
 package colexec
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1299,159 +1296,6 @@ func GetExprZoneMap(
 	}
 
 	return zms[expr.AuxId]
-}
-
-func SortInFilter(vec *vector.Vector) {
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		col := vector.MustFixedCol[bool](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
-		})
-
-	case types.T_int8:
-		col := vector.MustFixedCol[int8](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int16:
-		col := vector.MustFixedCol[int16](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int32:
-		col := vector.MustFixedCol[int32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int64:
-		col := vector.MustFixedCol[int64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint8:
-		col := vector.MustFixedCol[uint8](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint16:
-		col := vector.MustFixedCol[uint16](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint32:
-		col := vector.MustFixedCol[uint32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint64:
-		col := vector.MustFixedCol[uint64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_float32:
-		col := vector.MustFixedCol[float32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_float64:
-		col := vector.MustFixedCol[float64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_date:
-		col := vector.MustFixedCol[types.Date](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_datetime:
-		col := vector.MustFixedCol[types.Datetime](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_time:
-		col := vector.MustFixedCol[types.Time](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_timestamp:
-		col := vector.MustFixedCol[types.Timestamp](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_enum:
-		col := vector.MustFixedCol[types.Enum](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_decimal64:
-		col := vector.MustFixedCol[types.Decimal64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_decimal128:
-		col := vector.MustFixedCol[types.Decimal128](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_TS:
-		col := vector.MustFixedCol[types.TS](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_uuid:
-		col := vector.MustFixedCol[types.Uuid](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
-		})
-
-	case types.T_Rowid:
-		col := vector.MustFixedCol[types.Rowid](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
-		})
-
-	case types.T_array_float32:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
-		})
-	case types.T_array_float64:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
-		})
-	}
 }
 
 // RewriteFilterExprList will convert an expression list to be an AndExpr
