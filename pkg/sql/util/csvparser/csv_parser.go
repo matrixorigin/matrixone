@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package external
+package csvparser
 
 import (
 	"bytes"
@@ -288,6 +288,9 @@ func (parser *CSVParser) unescapeString(input field) (unescaped string, isNull b
 	// Convert the input from another charset to utf8mb4 before we return the string.
 	unescaped = input.content
 	if parser.escFlavor == escapeFlavorMySQLWithNull && unescaped == parser.escapedBy+`N` {
+		return input.content, true, nil
+	}
+	if parser.cfg.FieldEnclosedBy != "" && !input.quoted && unescaped == "NULL" {
 		return input.content, true, nil
 	}
 	if len(parser.escapedBy) > 0 {
