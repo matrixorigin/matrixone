@@ -424,7 +424,6 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	if err != nil {
 		return
 	}
-	logutil.Infof("load persisted column data %v", vec.IsConstNull())
 	view.SetData(vec)
 
 	if skipDeletes {

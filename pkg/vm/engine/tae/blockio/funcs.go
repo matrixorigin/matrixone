@@ -103,7 +103,6 @@ func LoadColumnsDataWithVPool(
 		}
 		return nil, err
 	}
-	//TODO call CachedData.Release
 	return
 }
 
