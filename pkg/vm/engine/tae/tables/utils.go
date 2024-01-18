@@ -42,7 +42,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumnsBytTN(
+	vectors, err := blockio.LoadColumnsBytTN(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
@@ -53,7 +53,7 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.ToTNVector(bat.Vecs[0], mp), nil
+	return vectors[0], nil
 }
 
 func LoadPersistedColumnDatas(
@@ -86,7 +86,7 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	bat, err := blockio.LoadColumnsBytTN(
+	vecs, err := blockio.LoadColumnsBytTN(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
@@ -97,12 +97,12 @@ func LoadPersistedColumnDatas(
 	if err != nil {
 		return nil, err
 	}
-	for i, vec := range bat.Vecs {
+	for i, vec := range vecs {
 		idx := i
 		if idx >= phyAddIdx && phyAddIdx > -1 {
 			idx++
 		}
-		vectors[idx] = containers.ToTNVector(vec, mp)
+		vectors[idx] = vec
 	}
 	return vectors, nil
 }

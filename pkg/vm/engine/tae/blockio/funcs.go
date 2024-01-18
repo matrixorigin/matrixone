@@ -71,7 +71,7 @@ func LoadColumnsDataWithVPool(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	vPool *containers.VectorPool,
-) (bat *batch.Batch, err error) {
+) (vectors []containers.Vector, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -83,8 +83,8 @@ func LoadColumnsDataWithVPool(
 		return
 	}
 	defer objectio.ReleaseIOVector(ioVectors)
-	bat = batch.NewWithSize(len(cols))
 	var obj any
+	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
@@ -93,14 +93,12 @@ func LoadColumnsDataWithVPool(
 
 		srcVec := containers.ToTNVector(obj.(*vector.Vector), vPool.GetAllocator())
 		defer srcVec.Close()
-		vec := srcVec.CloneWindowWithPool(0, srcVec.Length(), vPool)
-		bat.Vecs[i] = vec.GetDownstreamVector()
-		bat.SetRowCount(bat.Vecs[i].Length())
+		vectors[i] = srcVec.CloneWindowWithPool(0, srcVec.Length(), vPool)
 	}
 	if err != nil {
-		for _, col := range bat.Vecs {
+		for _, col := range vectors {
 			if col != nil {
-				col.Free(m)
+				col.Close()
 			}
 		}
 		return nil, err
@@ -141,7 +139,7 @@ func LoadColumnsBytTN(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	vPool *containers.VectorPool,
-) (bat *batch.Batch, err error) {
+) (vectors []containers.Vector, err error) {
 	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
 }
 
@@ -153,7 +151,7 @@ func LoadTombstoneColumnsByTN(
 	location objectio.Location,
 	m *mpool.MPool,
 	vPool *containers.VectorPool,
-) (bat *batch.Batch, err error) {
+) (vectors []containers.Vector, err error) {
 	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
 }
 

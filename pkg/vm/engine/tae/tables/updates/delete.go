@@ -261,7 +261,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadTombstoneColumnsByTN(
+	vectors, err := blockio.LoadTombstoneColumnsByTN(
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
@@ -273,7 +273,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadTombstoneColumnsByTN(
+			vectors, err = blockio.LoadTombstoneColumnsByTN(
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
@@ -288,7 +288,7 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
+	rowids := vectors[0]
 	defer rowids.Close()
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()

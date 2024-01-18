@@ -186,7 +186,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	bat, err := blockio.LoadColumnsBytTN(
+	vectors, err := blockio.LoadColumnsBytTN(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
@@ -199,10 +199,10 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if err != nil {
 		return
 	}
-	if bat.Vecs[0].GetType().Oid != types.T_TS {
+	if vectors[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToTNVector(bat.Vecs[0], common.DefaultAllocator)
+	vec = vectors[0]
 	return
 }
 
