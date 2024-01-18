@@ -391,9 +391,7 @@ func getPkValueByExpr(
 		if mustOne {
 			return false, false, false, nil
 		}
-		vec := vector.NewVec(types.T_any.ToType())
-		_ = vec.UnmarshalBinary(exprImpl.Vec.Data)
-		return true, false, true, vec
+		return true, false, true, exprImpl.Vec.Data
 
 	case *plan.Expr_List:
 		// TODO: extract one from vector later
@@ -405,10 +403,8 @@ func getPkValueByExpr(
 			return false, false, false, nil
 		}
 		defer put()
-		buf, _ := vec.MarshalBinary()
-		vec = vector.NewVec(types.T_any.ToType())
-		_ = vec.UnmarshalBinary(buf)
-		return true, false, true, vec
+		data, _ := vec.MarshalBinary()
+		return true, false, true, data
 	}
 
 	return false, false, false, nil

@@ -868,8 +868,10 @@ func TestGetPkExprValue(t *testing.T) {
 		expectVals [][]int64
 		canEvals   []bool
 	}
-	equalToVecFn := func(expect []int64, actual *vector.Vector) bool {
-		actualVals := vector.MustFixedCol[int64](actual)
+	equalToVecFn := func(expect []int64, actual any) bool {
+		vec := vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(actual.([]byte))
+		actualVals := vector.MustFixedCol[int64](vec)
 		if len(expect) != len(actualVals) {
 			return false
 		}
@@ -963,7 +965,7 @@ func TestGetPkExprValue(t *testing.T) {
 			continue
 		}
 		if isVec {
-			require.Truef(t, equalToVecFn(tc.expectVals[i], val.(*vector.Vector)), tc.desc[i])
+			require.Truef(t, equalToVecFn(tc.expectVals[i], val), tc.desc[i])
 		} else {
 			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
 		}
