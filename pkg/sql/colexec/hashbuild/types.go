@@ -138,9 +138,8 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatches(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.cleanBatches(proc)
+		ctr.cleanEvalVectors(proc.Mp())
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -153,9 +152,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
-func (ctr *container) cleanBatches(mp *mpool.MPool) {
+func (ctr *container) cleanBatches(proc *process.Process) {
 	for i := range ctr.batches {
-		ctr.batches[i].Clean(mp)
+		proc.PutBatch(ctr.batches[i])
 	}
 	ctr.batches = nil
 }
