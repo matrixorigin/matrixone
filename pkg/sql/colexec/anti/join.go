@@ -16,8 +16,6 @@ package anti
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -133,7 +131,6 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 			return err
 		}
 		if bat != nil {
-			logutil.Infof("##################anti join receive batch %v", bat.RowCount())
 			ctr.batchRowCount += bat.RowCount()
 			ctr.batches = append(ctr.batches, bat)
 		} else {
@@ -145,7 +142,6 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 			panic("wrong batch received for hash build!")
 		}
 	}
-	logutil.Infof("##################anti join receive batch total %v", ctr.batchRowCount)
 	return nil
 }
 
