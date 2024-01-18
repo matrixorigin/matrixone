@@ -78,6 +78,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableRows", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -143,6 +149,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
+// TODO(ghs)
+// is debug for #13151, will remove later
+var DebugGetDatabaseExpectedEOB func(caller string, proc *process.Process)
+
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
@@ -181,6 +191,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableSize", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
