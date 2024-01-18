@@ -337,6 +337,9 @@ var (
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
+		input:  "select serial_extract(col, 1 as varchar(3)) from t1",
+		output: "select serial_extract(col, 1 as varchar(3)) from t1",
+	}, {
 		input:  "select binary('Geeksforgeeks')",
 		output: "select binary(Geeksforgeeks)",
 	}, {

@@ -1272,6 +1272,33 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `serial_extract`
+	{
+		functionId: SERIAL_EXTRACT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				if inputs[0].Oid == types.T_varchar &&
+					inputs[1].Oid == types.T_int64 {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[2]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSerialExtract
+				},
+			},
+		},
+	},
+
 	// function `space`
 	{
 		functionId: SPACE,
@@ -5709,7 +5736,7 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, err := types.DecodeTuple(value)
+										tuples, _, _, err := types.DecodeTuple(value)
 										scales := make([]int32, len(coltypes))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
