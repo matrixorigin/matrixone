@@ -1061,7 +1061,7 @@ func (h *Handle) HandleWrite(
 			}
 			if vec.Length() == 0 {
 				logutil.Errorf("the vec:%d in req.Batch is empty", i)
-				panic("invalid vector: vector is empty")
+				return moerr.NewInternalErrorNoCtx("vector's length is 0")
 			}
 			if i == 0 {
 				len = vec.Length()
