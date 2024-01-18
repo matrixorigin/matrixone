@@ -2903,10 +2903,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if err != nil {
 		return err
 	}
-	ses.GetTxnHandler().disableStartStmt()
+
 	if txnOp != nil && !ses.IsDerivedStmt() {
-		txnOp.GetWorkspace().StartStatement()
-		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		ok, _ := ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
 	}
 
 	// defer Start/End Statement management, called after finishTxnFunc()
