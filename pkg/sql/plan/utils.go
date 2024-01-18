@@ -879,7 +879,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	if expr == nil {
 		return
 	}
@@ -899,11 +899,11 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		if len(tableDef.Cols) > 0 {
 			seqnum = int(tableDef.Cols[colIdx].Seqnum)
 		}
-		(*columnMap)[int(idx)] = seqnum
+		columnMap[int(idx)] = seqnum
 	}
 }
 
-func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	for _, expr := range exprs {
 		GetColumnMapByExpr(expr, tableDef, columnMap)
 	}
@@ -915,7 +915,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	GetColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, columnMap)
 
 	if len(columnMap) == 0 {
 		return
@@ -1074,7 +1074,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err

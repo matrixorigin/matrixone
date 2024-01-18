@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"

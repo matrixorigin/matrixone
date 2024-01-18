@@ -208,9 +208,9 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	var pkVec containers.Vector
 	if len(batch.Vecs) == 2 {
 		pkVec = containers.MakeVector(pkDef.Type, common.LogtailAllocator)
-		batch.AddVector(pkDef.Name, pkVec)
+		batch.AddVector(catalog.AttrPKVal, pkVec)
 	} else {
-		pkVec = batch.GetVectorByName(pkDef.Name)
+		pkVec = batch.GetVectorByName(catalog.AttrPKVal)
 	}
 
 	it := deletes.Iterator()

@@ -245,7 +245,7 @@ CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQU
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES    UNI    null        
+b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
@@ -293,7 +293,7 @@ CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES    MUL    null        
+b    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
