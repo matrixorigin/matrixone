@@ -54,6 +54,7 @@ enum CmdMethod {
   SetProtocolVersion = 11;
 
   CoreDumpConfig = 12;
+  RunTask = 13;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -119,6 +120,14 @@ message SetProtocolVersionResponse {
   int64 Version = 1;
 }
 
+message RunTaskRequest {
+  int32 TaskCode = 1;
+}
+
+message RunTaskResponse {
+  string Result = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -149,6 +158,7 @@ message Request {
   SetProtocolVersionRequest SetProtocolVersion = 14;
 
   CoreDumpConfigRequest CoreDumpConfig = 15;
+  RunTaskRequest RunTask = 16;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -186,6 +196,7 @@ message Response {
   SetProtocolVersionResponse SetProtocolVersion = 14;
 
   CoreDumpConfigResponse CoreDumpConfig = 15;
+  RunTaskResponse RunTask = 16;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
