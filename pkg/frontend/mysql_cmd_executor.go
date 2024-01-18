@@ -4029,7 +4029,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				}
 			}
 		}
-		Cached = true	
+		Cached = true
 		ses.cachePlan(input.getSql(), stmts, plans)
 	}
 
