@@ -31,12 +31,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
-	}
-	if stmt.Param.Tail.Fields != nil && stmt.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support EscapedBy field.")
-	}
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
