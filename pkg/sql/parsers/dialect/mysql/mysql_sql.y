@@ -417,7 +417,7 @@ import (
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
@@ -8103,6 +8103,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
+    {
+	$$ = tree.NewSerialExtractExpr($3, $5, $7)
+    }
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
@@ -11031,6 +11035,7 @@ not_keyword:
 |   CURRVAL
 |   LASTVAL
 |   HEADERS
+|   SERIAL_EXTRACT
 |   BIT_CAST
 
 //mo_keywords:
