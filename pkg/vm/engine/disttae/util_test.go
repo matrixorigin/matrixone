@@ -537,7 +537,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
+			result, _, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}

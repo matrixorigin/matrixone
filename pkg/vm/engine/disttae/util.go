@@ -361,28 +361,29 @@ func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
 	return
 }
 
+// return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
 	mustOne bool,
 	proc *process.Process,
-) (bool, bool, any) {
+) (bool, bool, bool, any) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
-		return false, false, nil
+		return false, false, false, nil
 	}
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
-			return false, true, nil
+			return false, true, false, nil
 		}
 		canEval, val := evalLiteralExpr(exprImpl, oid)
 		if canEval {
-			return true, false, val
+			return true, false, false, val
 		} else {
-			return false, false, nil
+			return false, false, false, nil
 		}
 
 		// case *plan.Expr_Vec:
@@ -399,7 +400,7 @@ func getPkValueByExpr(
 		// 	}
 	}
 
-	return false, false, nil
+	return false, false, false, nil
 }
 
 func evalExprListToVec(
@@ -882,7 +883,7 @@ func extractPKValueFromEqualExprs(
 	name := column.Name
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		if ok, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
+		if ok, _, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
 			val = types.EncodeValue(v, colType)
 			break
 		}
