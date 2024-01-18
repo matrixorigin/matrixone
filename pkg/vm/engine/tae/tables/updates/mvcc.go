@@ -479,16 +479,20 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 	defer n.RUnlock()
 	for blkOffset, mvcc := range n.deletes {
 		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
-		blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
-		for _, node := range nodes {
-			VisitDeltaloc(deltalocBat, n.meta, blkID, node, node.End, node.CreatedAt)
+		var skipData bool
+		if len(nodes) != 0 {
+			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
+			for _, node := range nodes {
+				VisitDeltaloc(deltalocBat, n.meta, blkID, node, node.End, node.CreatedAt)
+			}
+			newest := nodes[len(nodes)-1]
+			// block has newer delta data on s3, no need to collect data
+			skipData = newest.GetStart().GreaterEq(end)
+			start = newest.GetStart()
 		}
-		newest := nodes[len(nodes)-1]
-		// block has newer delta data on s3, no need to collect data
-		skipData := newest.GetStart().GreaterEq(end)
 		if !skipData {
 			deletes := n.deletes[blkOffset]
-			delBat, _, err := deletes.InMemoryCollectDeleteInRange(ctx, newest.GetStart(), end, false, common.LogtailAllocator)
+			delBat, _, err := deletes.InMemoryCollectDeleteInRange(ctx, start, end, false, common.LogtailAllocator)
 			if err != nil {
 				if delBatch != nil {
 					delBatch.Close()
@@ -526,7 +530,7 @@ func VisitDeltaloc(bat *containers.Batch, object *catalog.ObjectEntry, blkID *ob
 	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
 		is_sorted = true
 	}
-	bat.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(&blkID, false)
+	bat.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(*blkID, false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(object.IsAppendable(), false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)

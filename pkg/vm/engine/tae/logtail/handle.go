@@ -514,11 +514,6 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 	}
 
 	for _, node := range mvccNodes {
-		if node.HasDropCommitted() {
-			// send Object deletation event
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
-		}
 		if e.IsAppendable() && node.BaseNode.IsEmpty() {
 			continue
 		}
@@ -611,7 +606,7 @@ const (
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
 	tryAppendEntry := func(typ api.Entry_EntryType, kind TableRespKind, batch *containers.Batch, version uint32) error {
-		if batch.Length() == 0 {
+		if batch == nil || batch.Length() == 0 {
 			return nil
 		}
 		bat, err := containersBatchToProtoBatch(batch)

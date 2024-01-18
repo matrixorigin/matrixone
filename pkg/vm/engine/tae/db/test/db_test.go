@@ -2446,19 +2446,15 @@ func TestSegDelLogtail(t *testing.T) {
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, false)
 	require.Nil(t, err)
-	require.Equal(t, 3, len(resp.Commands)) // block insert + block delete + object info
+	require.Equal(t, 2, len(resp.Commands)) // block insert + object info
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[0].TableName, "meta"))
-	require.Equal(t, uint32(12), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) + 3 old ablks(delete) + 3 old nablks(delete)*/
+	require.Equal(t, uint32(1), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) + 3 old ablks(delete) + 3 old nablks(delete)*/
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "meta"))
-	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) + 3 old nablks(delete) */
-
-	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "obj"))
-	require.Equal(t, uint32(6), resp.Commands[2].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
+	require.Equal(t, api.Entry_Insert, resp.Commands[1].EntryType)
+	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "obj"))
+	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 2 Objects (create) + 4 (update object info) */
 
 	close()
 
@@ -2482,8 +2478,8 @@ func TestSegDelLogtail(t *testing.T) {
 		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
 		require.Nil(t, ins)                             // 0 blk, skip blks without deltaloc
-		require.Equal(t, uint32(1), del.Vecs[0].Len)    // 1 deltaloc
-		require.Equal(t, uint32(1), cnins.Vecs[0].Len)  // 1 deltaloc
+		require.Nil(t, del)                             // 0  del
+		require.Nil(t, cnins)                           // 0  del
 		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
 		require.Equal(t, 12, len(segdel.Vecs))
 	}

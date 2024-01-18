@@ -107,7 +107,6 @@ func NewMergeBlocksTask(
 		if err != nil {
 			return nil, err
 		}
-		defer obj.Close()
 		task.compacted = append(task.compacted, obj)
 		task.scopes = append(task.scopes, *meta.AsCommonID())
 	}
@@ -187,7 +186,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	blkOffset := 0
 	for i, object := range task.compacted {
-		for j := 0; j < object.GetMeta().(*catalog.ObjectEntry).BlockCnt(); i++ {
+		for j := 0; j < object.GetMeta().(*catalog.ObjectEntry).BlockCnt(); j++ {
 			blkOffset = task.mergedBlkCnt[i] + j
 			if views[blkOffset], err = object.GetColumnDataByIds(ctx, uint16(j), Idxs, common.MergeAllocator); err != nil {
 				return
@@ -286,6 +285,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	phaseNumber = 2
 	for _, vec := range sortedVecs {
 		defer vec.Close()
+		batchs = append(batchs, containers.NewBatch())
 	}
 
 	// Build and flush block index if sort key is defined
@@ -307,13 +307,17 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 
 		vecs = vecs[:0]
+		totalBlkCnt := 0
 		for i := range task.compacted {
-			vec := views[i].Columns[def.Idx].Orphan().TryConvertConst()
-			defer vec.Close()
-			if vec.Length() == 0 {
-				continue
+			for j := 0; j < task.compacted[i].BlkCnt(); j++ {
+				vec := views[totalBlkCnt+j].Columns[def.Idx].Orphan().TryConvertConst()
+				defer vec.Close()
+				if vec.Length() == 0 {
+					continue
+				}
+				vecs = append(vecs, vec)
 			}
-			vecs = append(vecs, vec)
+			totalBlkCnt += task.compacted[i].BlkCnt()
 		}
 		var outvecs []containers.Vector
 		if schema.HasSortKey() {
