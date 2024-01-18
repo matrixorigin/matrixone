@@ -511,7 +511,7 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-prefetch
-func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
+func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS, bool) {
 	newEnd := b.end
 	e.RLock()
 	// try to find new end
@@ -536,16 +536,20 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 		if e.IsAppendable() {
 			if !newest.BaseNode.MetaLoc.IsEmpty() {
 				// appendable block has been flushed, no need to collect data
-				return true
+				return types.MaxTs(), true
 			}
 		} else {
-			if !newest.BaseNode.DeltaLoc.IsEmpty() && newest.GetEnd().GreaterEq(b.end) {
-				// non-appendable block has newer delta data on s3, no need to collect data
-				return true
+			if !newest.BaseNode.DeltaLoc.IsEmpty() {
+				if newest.GetEnd().GreaterEq(b.end) {
+					// non-appendable block has newer delta data on s3, no need to collect data
+					return types.MaxTs(), true
+				} else {
+					return newest.GetStart(), false
+				}
 			}
 		}
 	}
-	return false
+	return types.ZeroTs(), false
 }
 
 // appendBlkMeta add block metadata into api entry according to logtail protocol
@@ -597,9 +601,12 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 }
 
 // visitBlkData collects logtail in memory
-func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
+func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, start types.TS, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
-	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
+	if b.start.Greater(start) {
+		start = b.start
+	}
+	insBatch, err := block.CollectAppendInRange(start, b.end, false)
 	if err != nil {
 		return
 	}
@@ -614,7 +621,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 			// insBatch is freed, don't use anymore
 		}
 	}
-	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false)
+	delBatch, err := block.CollectDeleteInRange(ctx, start, b.end, false)
 	if err != nil {
 		return
 	}
@@ -630,11 +637,12 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 
 // VisitBlk = catalog.Processor.OnBlock
 func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
-	if b.visitBlkMeta(entry) {
+	ts, skip := b.visitBlkMeta(entry)
+	if skip {
 		// data has been flushed, no need to collect data
 		return nil
 	}
-	return b.visitBlkData(b.ctx, entry)
+	return b.visitBlkData(b.ctx, ts, entry)
 }
 
 type TableRespKind int

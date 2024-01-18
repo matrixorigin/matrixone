@@ -98,6 +98,10 @@ func MaxTs() TS {
 	return BuildTS(math.MaxInt64, math.MaxUint32)
 }
 
+func ZeroTs() TS {
+	return BuildTS(math.MaxInt64, math.MaxUint32)
+}
+
 // Who use this function?
 func (ts TS) Prev() TS {
 	p, l := ts.Physical(), ts.Logical()
