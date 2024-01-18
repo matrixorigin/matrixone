@@ -221,7 +221,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
 	}
 
-	return motrace.ContextWithStatement(ctx, stm), nil
+	return ctx, nil
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
@@ -246,14 +246,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0, 0)
+			motrace.EndStatement(ctx, ses.tStmt, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0, 0)
+		motrace.EndStatement(ctx, ses.tStmt, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -273,7 +273,7 @@ var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
 	}
 	var txn TxnOperator
 	var err error
-	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
+	if stm := ses.tStmt; ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			// simplify the logic of TxnOperator. refer to https://github.com/matrixorigin/matrixone/pull/13436#pullrequestreview-1779063200
 			_, txn, err = handler.GetTxnOperator()

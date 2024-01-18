@@ -577,14 +577,11 @@ const TcpIpv4HeaderSize = 66
 // 13: avg payload prefix of err response
 const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
-func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
+var EndStatement = func(ctx context.Context, s *StatementInfo, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
-	s := StatementFromContext(ctx)
-	if s == nil {
-		panic(moerr.NewInternalError(ctx, "no statement info in context"))
-	}
+
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if !s.end { // cooperate with s.mux

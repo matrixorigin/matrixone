@@ -477,7 +477,7 @@ func (s statementStatus) String() string {
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
 	var stmtStr string
-	stm := motrace.StatementFromContext(ctx)
+	stm := ses.GetStmtInfo()
 	if stm == nil {
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 		stmt.Format(fmtCtx)
@@ -500,9 +500,8 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
-		motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+		motrace.EndStatement(ctx, ses.GetStmtInfo(), err, ses.SendRows(), outBytes, outPacket)
 	}
-
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }

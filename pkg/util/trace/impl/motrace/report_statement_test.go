@@ -18,9 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -174,8 +175,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 			require.Equal(t, tt.fields.doReport, s.reported)
 			require.Equal(t, tt.fields.doExport, s.exported)
 
-			stmCtx := ContextWithStatement(tt.args.ctx, s)
-			EndStatement(stmCtx, tt.args.err, 0, 0, 0)
+			EndStatement(tt.args.ctx, s, tt.args.err, 0, 0, 0)
 			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
