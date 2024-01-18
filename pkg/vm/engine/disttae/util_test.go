@@ -892,10 +892,11 @@ func TestGetPkExprValue(t *testing.T) {
 		desc: []string{
 			"a=2 and a=1",
 			"a in vec(1,2)",
-			// "a=2 or a=1",
+			"a=2 or a=1 or a=3",
+			"a in vec(1,10) or a=5 or (a=6 and a=7)",
 		},
 		canEvals: []bool{
-			true, true,
+			true, true, true, true,
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -912,19 +913,47 @@ func TestGetPkExprValue(t *testing.T) {
 				makeColExprForTest(0, types.T_int64),
 				plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(2)),
 			}),
-			// makeFunctionExprForTest("or", []*plan.Expr{
-			// 	makeFunctionExprForTest("=", []*plan.Expr{
-			// 		makeColExprForTest(0, types.T_int64),
-			// 		plan2.MakePlan2Int64ConstExprWithType(2),
-			// 	}),
-			// 	makeFunctionExprForTest("=", []*plan.Expr{
-			// 		makeColExprForTest(0, types.T_int64),
-			// 		plan2.MakePlan2Int64ConstExprWithType(1),
-			// 	}),
-			// }),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(3),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("in", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(5),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(6),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(7),
+					}),
+				}),
+			}),
 		},
 		expectVals: [][]int64{
-			{2}, {1, 2},
+			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10},
 		},
 	}
 	for i, expr := range tc.exprs {
