@@ -58,6 +58,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Stop()
 	}()
 
+	if ap.ctr.lastSentBatch != nil {
+		proc.PutBatch(ap.ctr.lastSentBatch)
+		ap.ctr.lastSentBatch = nil
+	}
+
 SENDLAST:
 	if ap.ctr.ending {
 		result := vm.NewCallResult()
@@ -65,6 +70,7 @@ SENDLAST:
 		for i, bat := range ap.ctr.shufflePool {
 			if bat != nil {
 				result.Batch = bat
+				ap.ctr.lastSentBatch = result.Batch
 				ap.ctr.shufflePool[i] = nil
 				return result, nil
 			}
@@ -104,6 +110,7 @@ SENDLAST:
 	result := vm.NewCallResult()
 	length := len(ap.ctr.sendPool)
 	result.Batch = ap.ctr.sendPool[length-1]
+	ap.ctr.lastSentBatch = result.Batch
 	ap.ctr.sendPool = ap.ctr.sendPool[:length-1]
 	return result, nil
 }

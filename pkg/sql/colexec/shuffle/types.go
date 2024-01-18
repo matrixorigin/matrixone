@@ -87,10 +87,11 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type container struct {
-	ending      bool
-	sels        [][]int32
-	shufflePool []*batch.Batch
-	sendPool    []*batch.Batch
+	ending        bool
+	sels          [][]int32
+	shufflePool   []*batch.Batch
+	sendPool      []*batch.Batch
+	lastSentBatch *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
