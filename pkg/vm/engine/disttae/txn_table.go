@@ -454,8 +454,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 }
 
 func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
 	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
+	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
 		if !state.BlockPersisted(blk) {
 			continue
 		}
@@ -465,7 +468,10 @@ func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) 
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch[bid]
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[bid]
 	if !ok {
 		return nil
 	}
@@ -501,7 +507,10 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
-	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
 		//if blk is in partitionState.blks, it means that blk is persisted.
 		if state.BlockPersisted(blk) {
 			continue
@@ -1349,6 +1358,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1368,6 +1378,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	}
 	if err = tbl.db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1444,6 +1455,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return tbl.db.txn.dumpBatch(tbl.writesOffset)
@@ -1482,8 +1494,14 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.tnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
-			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
+
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId] =
+			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
+
+		//tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
+		//	append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		tbl.db.txn.hasS3Op.Store(true)
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
@@ -1572,6 +1590,7 @@ func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) err
 	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
+		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
 	return nil
