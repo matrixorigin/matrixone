@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -433,7 +432,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
-	if stm := motrace.StatementFromContext(ctx); stm != nil {
+	if stm := cwft.ses.tStmt; stm != nil {
 		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.plan))
 	}
 	return nil

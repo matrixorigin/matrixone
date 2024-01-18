@@ -555,14 +555,11 @@ func (s *StatementInfo) MarkResponseAt() {
 // 13: avg payload prefix of err msg
 const ErrorPkgConst = 69
 
-var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes int64) {
+var EndStatement = func(ctx context.Context, s *StatementInfo, err error, sentRows int64, outBytes int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
-	s := StatementFromContext(ctx)
-	if s == nil {
-		panic(moerr.NewInternalError(ctx, "no statement info in context"))
-	}
+
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if !s.end { // cooperate with s.mux

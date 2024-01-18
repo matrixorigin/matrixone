@@ -714,7 +714,7 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses = NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm, sharedTxnHandler)
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
-	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
+	if stmt := ses.tStmt; stmt != nil {
 		// Reset background session id as frontend stmt id
 		ses.uuid = stmt.StatementID
 		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
