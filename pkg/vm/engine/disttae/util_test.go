@@ -805,7 +805,7 @@ func TestGetPKExpr(t *testing.T) {
 			plan2.MakePlan2Int64ConstExprWithType(50),
 			nil,
 			nil,
-			&plan.Expr{
+			{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
 						List: []*plan.Expr{
@@ -818,7 +818,7 @@ func TestGetPKExpr(t *testing.T) {
 					Id: int32(types.T_tuple),
 				},
 			},
-			&plan.Expr{
+			{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
 						List: []*plan.Expr{
@@ -833,7 +833,7 @@ func TestGetPKExpr(t *testing.T) {
 			},
 			nil,
 			plan2.MakePlan2Int64ConstExprWithType(30),
-			&plan.Expr{
+			{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
 						List: []*plan.Expr{
@@ -881,7 +881,7 @@ func TestEvalExprListToVec(t *testing.T) {
 		},
 		exprs: []*plan.Expr_List{
 			nil,
-			&plan.Expr_List{
+			{
 				List: &plan.ExprList{
 					List: []*plan.Expr{
 						plan2.MakePlan2Int64ConstExprWithType(2),
@@ -889,7 +889,7 @@ func TestEvalExprListToVec(t *testing.T) {
 					},
 				},
 			},
-			&plan.Expr_List{
+			{
 				List: &plan.ExprList{
 					List: []*plan.Expr{
 						plan2.MakePlan2Int64ConstExprWithType(1),
@@ -897,12 +897,12 @@ func TestEvalExprListToVec(t *testing.T) {
 					},
 				},
 			},
-			&plan.Expr_List{
+			{
 				List: &plan.ExprList{
 					List: []*plan.Expr{
 						plan2.MakePlan2Int64ConstExprWithType(2),
 						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
-						&plan.Expr{
+						{
 							Expr: &plan.Expr_List{
 								List: &plan.ExprList{
 									List: []*plan.Expr{
