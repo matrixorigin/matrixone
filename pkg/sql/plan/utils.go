@@ -1412,6 +1412,27 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
 }
 
+func StatFile(param *tree.ExternParam) error {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+	param.Filepath = filePath
+	fs, readPath, err := GetForETLWithType(param, filePath)
+	if err != nil {
+		return err
+	}
+	st, err := fs.StatFile(param.Ctx, readPath)
+	if err != nil {
+		return err
+	}
+	param.Ctx = nil
+	param.FileSize = st.Size
+	return nil
+}
+
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
 func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
 	filePath := strings.TrimSpace(param.Filepath)
