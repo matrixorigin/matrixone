@@ -16,6 +16,7 @@ package shuffle
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,15 +42,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func findBatchToSend(ap *Argument, threshHold int) int {
-	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
-			return i
-		}
-	}
-	return -1
-}
-
 // there are two ways for shuffle to send a batch
 // if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
 // else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
@@ -59,48 +51,39 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
 	ap := arg
-	var index int
-
 	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
-	// clean last sent batch
-	if ap.ctr.lastSentIdx != -1 {
-		// todo: reuse this batch, need to fix this
-		//	ap.ctr.shuffledBats[ap.ctr.lastSentIdx].SetRowCount(0)
-		ap.ctr.shuffledBats[ap.ctr.lastSentIdx] = nil
-		ap.ctr.lastSentIdx = -1
-	}
-
-	//find output
+SENDLAST:
 	if ap.ctr.ending {
-		index = findBatchToSend(ap, 0)
-		if index == -1 {
-			result := vm.NewCallResult()
-			result.Status = vm.ExecStop
-			return result, nil
+		result := vm.NewCallResult()
+		//send shuffle pool
+		for i, bat := range ap.ctr.shufflePool {
+			if bat != nil {
+				result.Batch = bat
+				ap.ctr.shufflePool[i] = nil
+				return result, nil
+			}
 		}
-	} else {
-		index = findBatchToSend(ap, shuffleBatchSize)
+		//end
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
-	for index == -1 {
+	for len(ap.ctr.sendPool) == 0 {
 		// do input
-
 		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
-
 		if err != nil {
 			return result, err
 		}
 		bat := result.Batch
-
 		if bat == nil {
 			ap.ctr.ending = true
+			goto SENDLAST
 		} else if !bat.IsEmpty() {
 			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(ap, bat, proc)
@@ -115,35 +98,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 		}
-
-		// find output again
-		if ap.ctr.ending {
-			index = findBatchToSend(ap, 0)
-			if index == -1 {
-				result.Batch = nil
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-		} else {
-			index = findBatchToSend(ap, shuffleBatchSize)
-		}
 	}
 
-	// do output
+	// send batch in send pool
 	result := vm.NewCallResult()
-	result.Batch = ap.ctr.shuffledBats[index]
-	ap.ctr.lastSentIdx = index
+	length := len(ap.ctr.sendPool)
+	result.Batch = ap.ctr.sendPool[length-1]
+	ap.ctr.sendPool = ap.ctr.sendPool[:length-1]
 	return result, nil
 }
 
 func (arg *Argument) initShuffle() {
-	arg.ctr.lastSentIdx = -1
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt*2)
+			arg.ctr.sels[i] = make([]int32, 0, colexec.DefaultBatchSize/arg.AliveRegCnt*2)
 		}
-		arg.ctr.shuffledBats = make([]*batch.Batch, arg.AliveRegCnt)
+		arg.ctr.shufflePool = make([]*batch.Batch, arg.AliveRegCnt)
 	}
 }
 
@@ -312,22 +283,12 @@ func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 
 }
 
 func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) error {
-	lenVecs := len(bat.Vecs)
-	shuffledBats := ap.ctr.shuffledBats
-
-	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-	shuffledBats[regIndex].ShuffleIDX = regIndex
-	for j := range shuffledBats[regIndex].Vecs {
-		v := proc.GetVector(*bat.Vecs[j].GetType())
-		if v.Capacity() < shuffleBatchSize {
-			err := v.PreExtend(shuffleBatchSize, proc.Mp())
-			if err != nil {
-				v.Free(proc.Mp())
-				return err
-			}
-		}
-		shuffledBats[regIndex].Vecs[j] = v
+	newBatch, err := proc.NewBatchFromSrc(bat, colexec.DefaultBatchSize)
+	if err != nil {
+		return err
 	}
+	newBatch.ShuffleIDX = regIndex
+	ap.ctr.shufflePool[regIndex] = newBatch
 	return nil
 }
 
@@ -749,7 +710,7 @@ func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 }
 
 func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
-	shuffledBats := ap.ctr.shuffledBats
+	shuffledBats := ap.ctr.shufflePool
 	for regIndex := range shuffledBats {
 		lenSels := len(sels[regIndex])
 		if lenSels > 0 {
