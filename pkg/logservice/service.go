@@ -539,8 +539,11 @@ func (s *Service) handleProxyHeartbeat(ctx context.Context, req pb.Request) pb.R
 func (s *Service) getBackendOptions() []morpc.BackendOption {
 	return []morpc.BackendOption{
 		morpc.WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return s.options.backendFilter == nil ||
-				s.options.backendFilter(msg.(*RPCRequest), backendAddr)
+			m, ok := msg.(*RPCRequest)
+			if !ok {
+				return true
+			}
+			return s.options.backendFilter == nil || s.options.backendFilter(m, backendAddr)
 		}),
 	}
 }

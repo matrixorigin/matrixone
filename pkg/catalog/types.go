@@ -33,6 +33,10 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
 )
 
 var InternalColumns = map[string]int8{
@@ -87,6 +91,9 @@ const (
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
+
+	// MO_PUBS publication meta table
+	MO_PUBS = "mo_pubs"
 )
 
 const (

@@ -282,4 +282,36 @@ PRIMARY KEY (`a`)
 );
 alter table t3 drop primary key;
 
+-- duplicate values add a unique key
+drop table if exists index03;
+create table index03(col1 int, col2 int, col3 int);
+insert into index03 values (1,2,1);
+insert into index03 values (2,3,4);
+insert into index03 values (1,2,10);
+select count(*) from index03;
+alter table index03 add unique key `tempKey`(col1,col2) comment 'abcTest';
+show index from index03;
+select count(*) from index03;
+drop table index03;
+
+-- varchar column add unique key
+drop table if exists t4;
+create table t4(col1 varchar(256) primary key, col2 int);
+insert into t4 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+select count(*) from t4;
+alter table t4 add unique key `title01`(`col1`);
+show create table t4;
+select count(*) from t4;
+drop table t4;
+
+-- add unique key with parser 'using btree'
+drop table if exists t5;
+create table t5(col1 varchar(256) primary key, col2 int);
+insert into t5 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+select count(*) from t5;
+alter table t5 add unique key `title01`(`col1`) using btree;
+show create table t5;
+select count(*) from t5;
+drop table t5;
+
 drop database test;

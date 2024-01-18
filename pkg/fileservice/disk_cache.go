@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -57,6 +58,7 @@ func NewDiskCache(
 	if err != nil {
 		return nil, err
 	}
+
 	ret = &DiskCache{
 		path:            path,
 		perfCounterSets: perfCounterSets,
@@ -70,6 +72,9 @@ func NewDiskCache(
 						set.FileService.Cache.Disk.Evict.Add(1)
 					}, perfCounterSets...)
 				}
+			},
+			func(key string) uint8 {
+				return uint8(xxhash.Sum64String(key))
 			},
 		),
 	}
@@ -462,6 +467,7 @@ func (d *DiskCache) DeletePaths(
 				return err
 			}
 		}
+		d.cache.Delete(diskPath)
 	}
 
 	return nil

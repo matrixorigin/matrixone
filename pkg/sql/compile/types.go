@@ -276,6 +276,8 @@ type Compile struct {
 	needLockMeta bool
 	metaTables   map[string]struct{}
 	disableRetry bool
+
+	lastAllocID int32
 }
 
 // runtimeFilterSender is in hashbuild.Argument and fuzzyFilter.Arguement

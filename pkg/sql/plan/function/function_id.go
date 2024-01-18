@@ -279,6 +279,7 @@ const (
 	UUID
 	SERIAL
 	SERIAL_FULL
+	SERIAL_EXTRACT
 	BIN
 
 	ENABLE_FAULT_INJECTION
@@ -342,6 +343,7 @@ const (
 	L2_DISTANCE     //L2_DISTANCE
 	COSINE_DISTANCE //COSINE_DISTANCE
 	CLUSTER_CENTERS // CLUSTER_CENTERS
+	SUB_VECTOR      // SUB_VECTOR
 
 	PYTHON_UDF
 
@@ -424,6 +426,7 @@ var functionIdRegister = map[string]int32{
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
 	"cluster_centers":       CLUSTER_CENTERS,
+	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
@@ -555,6 +558,7 @@ var functionIdRegister = map[string]int32{
 	"hex":                            HEX,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
+	"serial_extract":                 SERIAL_EXTRACT,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
