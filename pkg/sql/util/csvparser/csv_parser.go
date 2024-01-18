@@ -23,14 +23,14 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/spkg/bom"
 )
 
 var (
-	errUnterminatedQuotedField = errors.New("syntax error: unterminated quoted field")
-	errDanglingBackslash       = errors.New("syntax error: no character after backslash")
-	errUnexpectedQuoteField    = errors.New(
-		"syntax error: cannot have consecutive fields without separator")
+	errUnterminatedQuotedField = moerr.NewSyntaxErrorNoCtx("syntax error: unterminated quoted field")
+	errDanglingBackslash       = moerr.NewSyntaxErrorNoCtx("syntax error: no character after backslash")
+	errUnexpectedQuoteField    = moerr.NewSyntaxErrorNoCtx("syntax error: cannot have consecutive fields without separator")
 	// LargestEntryLimit is the max size for reading file to buf
 	LargestEntryLimit       = 120 * 1024 * 1024
 	BufferSizeScale         = int64(5)
@@ -187,7 +187,7 @@ func NewCSVParser(
 
 	if len(cfg.LineStartingBy) > 0 {
 		if strings.Contains(cfg.LineStartingBy, terminator) {
-			return nil, errors.New(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", cfg.LineStartingBy, terminator))
+			return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", cfg.LineStartingBy, terminator))
 		}
 	}
 
@@ -486,7 +486,7 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	for {
 		buf = append(buf, parser.buf...)
 		if len(buf) > LargestEntryLimit {
-			return buf, 0, errors.New("size of row cannot exceed the max value of txn-entry-size-limit")
+			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
 		}
 		parser.buf = nil
 		if err := parser.readBlock(); err != nil || len(parser.buf) == 0 {
