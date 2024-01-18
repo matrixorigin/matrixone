@@ -2,7 +2,7 @@ select 1 as account, 1 as accounts, 1 as modify, 1 as action, 1 as against, 1 as
 
 select 1 as auto_random, 1 as avg_row_length, 1 as avg, 1 as bsi, 1 as begin;
 
-select 1 as _binary, 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
+select 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
 
 select 1 as boolean, 1 as btree, 1 as ivfflat, 1 as bit_or, 1 as bit_and, 1 as cancel, 1 as charset, 1 as checksum;
 

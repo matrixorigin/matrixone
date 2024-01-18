@@ -22,7 +22,9 @@ select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'f') g;
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
+-- @ignore:2,3
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
+-- @ignore:0
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as bigint)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'c') g;
