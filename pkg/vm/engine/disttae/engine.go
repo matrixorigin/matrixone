@@ -367,7 +367,8 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		if tableId == 2 {
-			logutil.Errorf("can not find table by id %d: accountId: %v", tableId, accountId)
+			logutil.Errorf("can not find table by id %d: accountId: %v, txnId: %v",
+				tableId, accountId, op.Txn().DebugString())
 			tbls, tblIds := e.catalog.Tables(accountId, 1, op.SnapshotTS())
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 		}
