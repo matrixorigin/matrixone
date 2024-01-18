@@ -54,6 +54,9 @@ column_0    column_1
 3    3
 2    2
 1    1
+select sleep(5);
+sleep(5)
+0
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 1    2
@@ -304,6 +307,8 @@ update test_table set col2='xxx' where col1=1    DML    external_sql
 insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
 select * from unnest('{"a":1}') as f    DQL    external_sql
 select sleep(5)    DQL    external_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    external_sql
+select sleep(5)    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show collation like '%'    Other    external_sql
@@ -324,8 +329,6 @@ create table test_table(\ncol1 int,\ncol2 varchar\n)    DDL    external_sql
 drop table if exists test_table    DDL    external_sql
 use test_db    Other    external_sql
 create database test_db    DDL    external_sql
-drop database if exists test_db    DDL    external_sql
-rollback    TCL    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;
