@@ -243,6 +243,7 @@ select @@autocommit;
 drop database if exists test_xx;
 begin;
 create database test_xx;
+internal error: CREATE/DROP of database is not supported in transactions
 SET @@session.autocommit=1;
 SELECT @@session.autocommit;
 @@autocommit
@@ -262,16 +263,18 @@ SELECT @@session.autocommit;
 commit;
 show databases like 'test_xx';
 Database
-test_xx
 commit;
 drop database test_xx;
+Can't drop database 'test_xx'; database doesn't exist
 drop database if exists db;
 begin;
 create database db;
+internal error: CREATE/DROP of database is not supported in transactions
 show databases like 'db';
 Database
-db
 use db;
+invalid database db
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 begin;
 create table table3(a int, b int);
 insert into table3 values (2000, 3000);
@@ -290,10 +293,12 @@ SQL parser error: table "view_table3" does not exist
 drop database if exists db;
 begin;
 create database db;
+internal error: CREATE/DROP of database is not supported in transactions
 show databases like 'db';
 Database
-db
 use db;
+invalid database db
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 create table table3(a int, b int);
 insert into table3 values (2000, 3000);
 insert into table3 values (10, 10);
@@ -357,7 +362,7 @@ insert into t5 values(10),(20),(30);
 drop table t5;
 start transaction;
 insert into t5 values(100),(2000),(3000);
-no such table db.t5
+no such table autocommit_1.t5
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 set @autocommit=0;
 begin;
@@ -365,7 +370,7 @@ select * from t5;
 SQL parser error: table "t5" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into t5 values(1),(2),(3);
-no such table db.t5
+no such table autocommit_1.t5
 rollback;
 select * from t5;
 SQL parser error: table "t5" does not exist
@@ -374,9 +379,9 @@ select * from t5;
 SQL parser error: table "t5" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into t5 values(100),(2000),(3000);
-no such table db.t5
+no such table autocommit_1.t5
 delete from t5;
-no such table db.t5
+no such table autocommit_1.t5
 begin;
 select * from t5;
 SQL parser error: table "t5" does not exist

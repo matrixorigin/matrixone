@@ -163,7 +163,6 @@ grant role1 to role2;
 grant create table ,drop table on database * to role1;
 truncate table  t_code_rule;
 drop table t_code_rule;
-create database atomic_1;
 drop database atomic_1;
 drop role role1,role2;
 commit;
