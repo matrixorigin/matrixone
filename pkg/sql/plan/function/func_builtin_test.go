@@ -15,6 +15,8 @@
 package function
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -311,7 +313,7 @@ func Test_BuiltIn_Serial(t *testing.T) {
 	input2 := []int8{10, 1}
 
 	tc := tcTemp{
-		info: "test serial(a, b, c)",
+		info: "test serial(input1, input2)",
 		inputs: []testutil.FunctionTestInput{
 			testutil.NewFunctionTestInput(types.T_bool.ToType(),
 				input1, nil),
@@ -354,7 +356,7 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 	input2Nulls := []bool{false, true, false, true}
 
 	tc := tcTemp{
-		info: "test serial_full(a, b, c)",
+		info: "test serial_full(input1, input2)",
 		inputs: []testutil.FunctionTestInput{
 			testutil.NewFunctionTestInput(types.T_bool.ToType(), input1, input1Nulls),
 			testutil.NewFunctionTestInput(types.T_int8.ToType(), input2, input2Nulls),
@@ -400,6 +402,79 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
 	}
 
+}
+
+func initSerialExtractTestCase() []tcTemp {
+	mp := mpool.MustNewZero()
+
+	ps := types.NewPacker(mp)
+	ps.EncodeInt8(10)
+	ps.EncodeStringType([]byte("adam"))
+
+	return []tcTemp{
+		{
+			info: "test serial_extract( serial(10,'adam'), 0 as Int8)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{convertByteSliceToString(ps.Bytes())},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{10},
+				[]bool{false}),
+		},
+		{
+			info: "test serial_extract( serial(10,'adam'), 1 as varchar)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{convertByteSliceToString(ps.Bytes())},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"adam"},
+				[]bool{false}),
+		},
+		{
+			info: "test serial_extract( serial(10,'adam'), 2 as varchar)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{convertByteSliceToString(ps.Bytes())},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), true,
+				[]string{"adam"},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestSerialExtract(t *testing.T) {
+	testCases := initSerialExtractTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
 }
 
 func Test_BuiltIn_Math(t *testing.T) {

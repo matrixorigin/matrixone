@@ -112,6 +112,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
 
+	case *tree.SerialExtractExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
+
 	case *tree.CastExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
 		if err != nil {
@@ -1058,6 +1061,37 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 
 		args = []*Expr{binExpr, typeExpr}
+	} else if name == "serial_extract" {
+		serialExtractExpr := astArgs[0].(*tree.SerialExtractExpr)
+
+		// 1. bind serial expr
+		serialExpr, err := b.impl.BindExpr(serialExtractExpr.SerialExpr, depth, false)
+		if err != nil {
+			return nil, err
+		}
+
+		// 2. bind index expr
+		idxExpr, err := b.impl.BindExpr(serialExtractExpr.IndexExpr, depth, false)
+		if err != nil {
+			return nil, err
+		}
+
+		// 3. bind type
+		typ, err := getTypeFromAst(b.GetContext(), serialExtractExpr.ResultType)
+		if err != nil {
+			return nil, err
+		}
+		typeExpr := &Expr{
+			Typ: typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: DeepCopyType(typ),
+				},
+			},
+		}
+
+		// 4. return [serialExpr, idxExpr, typeExpr]. Used in list_builtIn.go
+		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
 		for idx, arg := range astArgs {
