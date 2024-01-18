@@ -603,7 +603,10 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 // visitBlkData collects logtail in memory
 func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, start types.TS, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
-	if b.start.Greater(start) {
+	//if b.start.Greater(start) {
+	//	start = b.start
+	//}
+	if start == types.ZeroTs() {
 		start = b.start
 	}
 	insBatch, err := block.CollectAppendInRange(start, b.end, false)
