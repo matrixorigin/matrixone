@@ -896,7 +896,7 @@ func extractPKValueFromEqualExprs(
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
 		var v any
-		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, true, proc); canEval {
+		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, false, proc); canEval {
 			if isVec {
 				val = v.([]byte)
 			} else {
