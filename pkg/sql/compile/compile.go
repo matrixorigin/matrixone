@@ -1785,7 +1785,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	if time.Since(t) > time.Second {
 		logutil.Infof("lock table %s.%s cost %v", n.ObjRef.SchemaName, n.ObjRef.ObjName, time.Since(t))
 	}
-
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1812,8 +1811,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.JsonData = n.ExternScan.JsonType
 	}
 	if param.ScanType == tree.S3 {
-		if err := plan2.InitS3Param(param); err != nil {
-			return nil, err
+		if !param.Init {
+			if err := plan2.InitS3Param(param); err != nil {
+				return nil, err
+			}
 		}
 		if param.Parallel {
 			mcpu = 0
@@ -1842,7 +1843,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	var err error
 	var fileList []string
 	var fileSize []int64
-	if !param.Local {
+	if !param.Local && !param.Init {
 		if param.QueryResult {
 			fileList = strings.Split(param.Filepath, ",")
 			for i := range fileList {
@@ -1866,6 +1867,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	} else {
 		fileList = []string{param.Filepath}
+		fileSize = []int64{param.FileSize}
 	}
 	if time.Since(t) > time.Second {
 		logutil.Infof("read dir cost %v", time.Since(t))
