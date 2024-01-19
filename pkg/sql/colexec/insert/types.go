@@ -61,7 +61,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -100,7 +100,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type InsertCtx struct {
-	//insert data into Rel.
+	// insert data into Rel.
 	Rel                   engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool
