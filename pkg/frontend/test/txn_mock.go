@@ -755,17 +755,17 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 }
 
 // Adjust mocks base method.
-func (m *MockWorkspace) Adjust() error {
+func (m *MockWorkspace) Adjust(writeOffset uint64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Adjust")
+	ret := m.ctrl.Call(m, "Adjust", writeOffset)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Adjust indicates an expected call of Adjust.
-func (mr *MockWorkspaceMockRecorder) Adjust() *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
 }
 
 // Commit mocks base method.
@@ -873,4 +873,18 @@ func (m *MockWorkspace) StartStatement() {
 func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+}
+
+// WriteOffset mocks base method.
+func (m *MockWorkspace) WriteOffset() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteOffset")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// WriteOffset indicates an expected call of WriteOffset.
+func (mr *MockWorkspaceMockRecorder) WriteOffset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteOffset", reflect.TypeOf((*MockWorkspace)(nil).WriteOffset))
 }

@@ -225,7 +225,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 		}
 		txn.writes = writes
-		txn.statements[txn.statementID-1] = len(txn.writes)
 	} else {
 		txn.workspaceSize -= size
 	}
@@ -447,7 +446,6 @@ func (txn *Transaction) deleteTableWrites(
 			}
 			if len(sels) != len(vs) {
 				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
-
 			}
 		}
 	}

@@ -301,11 +301,18 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	return txn.handleRCSnapshot(ctx, commit)
 }
 
-// Adjust adjust writes order
-func (txn *Transaction) Adjust() error {
+// writeOffset returns the offset of the first write in the workspace
+func (txn *Transaction) WriteOffset() uint64 {
 	txn.Lock()
 	defer txn.Unlock()
-	if err := txn.adjustUpdateOrderLocked(); err != nil {
+	return uint64(len(txn.writes))
+}
+
+// Adjust adjust writes order
+func (txn *Transaction) Adjust(writeOffset uint64) error {
+	txn.Lock()
+	defer txn.Unlock()
+	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
 		return err
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
@@ -316,23 +323,20 @@ func (txn *Transaction) Adjust() error {
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
 // may be the order of insert+delete that needs to be adjusted.
-func (txn *Transaction) adjustUpdateOrderLocked() error {
+func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	if txn.statementID > 0 {
-		start := txn.statements[txn.statementID-1]
-		writes := make([]Entry, 0, len(txn.writes[start:]))
-		for i := start; i < len(txn.writes); i++ {
-			if txn.writes[i].typ == DELETE {
+		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		for i := start; i < len(txn.writes); i++ {
-			if txn.writes[i].typ != DELETE {
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		txn.writes = append(txn.writes[:start], writes...)
-		// restore the scope of the statement
-		txn.statements[txn.statementID-1] = len(txn.writes)
+		txn.writes = append(txn.writes[:writeOffset], writes...)
 	}
 	return nil
 }
@@ -435,6 +439,13 @@ func (e *Entry) isGeneratedByTruncate() bool {
 		e.databaseId == catalog.MO_CATALOG_ID &&
 		e.tableId == catalog.MO_TABLES_ID &&
 		e.truncate
+}
+
+// isCatalog denotes the entry is apply the tree tables
+func (e *Entry) isCatalog() bool {
+	return e.tableId == catalog.MO_TABLES_ID ||
+		e.tableId == catalog.MO_COLUMNS_ID ||
+		e.tableId == catalog.MO_DATABASE_ID
 }
 
 // txnDatabase represents an opened database in a transaction
