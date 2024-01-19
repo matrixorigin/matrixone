@@ -139,6 +139,16 @@ func getPkExpr(
 			if rightPK == nil {
 				return nil
 			}
+			if litExpr, ok := leftPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return rightPK
+				}
+			}
+			if litExpr, ok := rightPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return leftPK
+				}
+			}
 			return &plan.Expr{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{

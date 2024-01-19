@@ -901,12 +901,13 @@ func TestGetPkExprValue(t *testing.T) {
 			"a=2 or a=1 or a=3",
 			"a in vec(1,10) or a=5 or (a=6 and a=7)",
 			"a=null",
+			"a=1 or a=null or a=2",
 		},
 		canEvals: []bool{
-			true, true, true, true, false,
+			true, true, true, true, false, true,
 		},
 		hasNull: []bool{
-			false, false, false, false, true,
+			false, false, false, false, true, false,
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -965,15 +966,31 @@ func TestGetPkExprValue(t *testing.T) {
 				makeColExprForTest(0, types.T_int64),
 				nullExpr,
 			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						nullExpr,
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+			}),
 		},
 		expectVals: [][]int64{
-			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10}, {},
+			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10}, {}, {1, 2},
 		},
 	}
 	for i, expr := range tc.exprs {
 		canEval, isNull, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
-		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
 		require.Equalf(t, tc.hasNull[i], isNull, tc.desc[i])
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
 		if !canEval {
 			continue
 		}
@@ -1069,7 +1086,7 @@ func TestEvalExprListToVec(t *testing.T) {
 		// 	t.Log(plan2.FormatExpr(e2))
 		// }
 		canEval, vec, put := evalExprListToVec(tc.oids[i], expr, proc)
-		require.Equal(t, tc.canEvals[i], canEval)
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
 		if canEval {
 			require.NotNil(t, vec)
 			require.Equal(t, tc.expects[i].String(), vec.String())
