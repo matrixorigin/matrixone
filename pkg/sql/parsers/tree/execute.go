@@ -32,7 +32,23 @@ func (node *Execute) Format(ctx *FmtCtx) {
 			varExpr.Format(ctx)
 		}
 	}
+	// edit for first issue 6b start
+	
+	// Format the new TopNStatement if present
+	if node.TopN != nil {
+		node.TopN.Format(ctx)
+	}
+
+	// Format the new BottomNStatement if present
+	if node.BottomN != nil {
+		node.BottomN.Format(ctx)
+	}
+
+	// edit for first issue 6b end
 }
+
+
+
 
 func (node *Execute) GetStatementType() string { return "Execute" }
 func (node *Execute) GetQueryType() string     { return QueryTypeOth }

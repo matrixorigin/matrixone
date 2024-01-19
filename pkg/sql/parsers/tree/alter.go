@@ -18,6 +18,16 @@ import (
 	"fmt"
 )
 
+const  (
+	AlterTableAddPartition AlterTableOptionType = iota + 1000
+)
+
+func (node *AlterTableAddPartitionClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("add partition ")
+	node.PartitionDef.Format(ctx)
+}
+
+
 type AlterUser struct {
 	statementImpl
 	IfExists bool
@@ -210,6 +220,46 @@ type AlterTableOption interface {
 type alterOptionImpl struct {
 	AlterTableOption
 }
+
+// second issue for 6b start
+
+// The new AlterTableAddPartitionClause
+type AlterTableAddPartitionClause struct {
+	alterOptionImpl
+	Typ          AlterTableOptionType
+	PartitionDef *PartitionDefinition
+}
+
+type PartitionDefinition struct {
+	NodeFormatter
+}
+
+func (node *PartitionDefinition) Format(ctx *FmtCtx) {
+	ctx.WriteString("partition ")
+	if node.Name != "" {
+		ctx.FormatNode(&node.Name)
+	}
+	if len(node.Values) > 0 {
+		ctx.WriteString(" values (")
+		for i, value := range node.Values {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.FormatNode(value)
+		}
+		ctx.WriteString(")")
+	}
+	if len(node.StorageOptions) > 0 {
+		ctx.WriteString(" storage (")
+		for key, value := range node.StorageOptions {
+			ctx.FormatNode(key)
+			ctx.WriteString(" = ")
+			ctx.FormatNode(value)
+		}
+		ctx.WriteString(")")
+	}
+}
+// second issue for 6b end
 
 type AlterOptionAlterIndex struct {
 	alterOptionImpl
@@ -527,6 +577,7 @@ const (
 	AlterTableOrderByColumn
 	AlterTableAddConstraint
 	AlterTableAddColumn
+	AlterTableAddPartition // New option for adding partitions for 6b issue 2
 )
 
 // ColumnPositionType is the type for ColumnPosition.

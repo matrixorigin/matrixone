@@ -26,6 +26,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// first edit for 6b
+
+func parseTopN(scanner *mysql.Scanner) (tree.Statement, error) {
+	// Assume that "TOP_N" has been recognized. Parse the rest of the syntax.
+	typ, colList := scanner.Scan()
+	if typ != mysql.LPAREN {
+		return nil, moerr.NewInternalError(ctx, "Expected '(' after TOP_N")
+	}
+
+	// Parse the number of rows
+	typ, nRows := scanner.Scan()
+	if typ != mysql.NUMBER {
+		return nil, moerr.NewInternalError(ctx, "Expected a number after TOP_N(")
+	}
+
+	// Parse the columns
+	typ, colList := scanner.Scan()
+	if typ != mysql.IDENT {
+		return nil, moerr.NewInternalError(ctx, "Expected column names after TOP_N(number)")
+	}
+
+	// Check for the closing parenthesis
+	typ, closingParen := scanner.Scan()
+	if typ != mysql.RPAREN {
+		return nil, moerr.NewInternalError(ctx, "Expected ')' to close TOP_N function")
+	}
+
+	// Create a new statement with the parsed information
+	return &tree.TopNStatement{
+		RowCount: nRows,
+		Columns:  colList,
+	}, nil
+}
+
+// end of first edit for 6b
+
 func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
 	_, task := gotrace.NewTask(context.TODO(), "parser.Parse")
 	defer task.End()
@@ -38,6 +74,40 @@ func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, low
 		return nil, moerr.NewInternalError(ctx, "type of dialect error")
 	}
 }
+
+// beginning of second edit for 6b
+
+func mysqlParse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	var statements []tree.Statement
+	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+
+	for scanner.Pos < len(sql) {
+		typ, token := scanner.Scan()
+
+		switch typ {
+		// Handle existing statement types
+
+		// Add cases for the new TOP_N statement
+		case mysql.TOP_N:
+			stmt, err := parseTopN(scanner)
+			if err != nil {
+				return nil, err
+			}
+			statements = append(statements, stmt)
+
+		// Handle other statement types as needed
+
+		case mysql.EofChar():
+			break
+		default:
+			return nil, moerr.NewInternalError(ctx, "Unknown statement type")
+		}
+	}
+
+	return statements, nil
+}
+
+// end of second edit for 6b
 
 func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) (tree.Statement, error) {
 	switch dialectType {
