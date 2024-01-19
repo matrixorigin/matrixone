@@ -542,6 +542,9 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 ) (ret oss.CredentialsProvider, err error) {
 
 	defer func() {
+		if err != nil {
+			return
+		}
 		// chain assume role provider
 		if o.RoleARN != "" {
 			logutil.Info("with role arn")
@@ -584,6 +587,12 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 	}
 
 	if config.Type == nil {
+
+		if o.NoDefaultCredentials {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"no valid credentials",
+			)
+		}
 
 		// check aws env
 		awsCredentials := awscredentials.NewEnvCredentials()
