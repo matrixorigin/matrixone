@@ -188,14 +188,12 @@ func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Re
 }
 
 func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
-	var fieldTerminatedBy, fieldEnclosedBy, fieldEscapedBy, lineTerminatedBy, lineStartingBy string
+	fieldTerminatedBy := ","
+	fieldEnclosedBy := "\""
+	fieldEscapedBy := "\\"
 
-	fieldTerminatedBy = ","
-	fieldEnclosedBy = "\""
-	fieldEscapedBy = "\\"
-
-	lineTerminatedBy = "\n"
-	lineStartingBy = ""
+	lineTerminatedBy := "\n"
+	lineStartingBy := ""
 
 	if param.Extern.Tail.Fields != nil {
 		fieldTerminatedBy = param.Extern.Tail.Fields.Terminated
@@ -218,6 +216,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 
 	if param.Extern.Format == tree.JSONLINE {
 		fieldTerminatedBy = "\t"
+		fieldEscapedBy = ""
 	}
 
 	config := csvparser.CSVConfig{

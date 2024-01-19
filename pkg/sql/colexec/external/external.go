@@ -789,6 +789,8 @@ func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*pl
 	}
 }
 
+const JsonNull = "\\N"
+
 func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, param *ExternalParam) ([]csvparser.Field, error) {
 	var (
 		err error
@@ -821,7 +823,8 @@ func transJsonObject2Lines(ctx context.Context, str string, attrs []string, cols
 			}
 			tp := cols[idx].Typ.Id
 			if tp != int32(types.T_json) {
-				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val)})
+				val = fmt.Sprintf("%v", val)
+				res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
 				continue
 			}
 			var bj bytejson.ByteJson
@@ -871,7 +874,8 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		}
 		tp := cols[idx].Typ.Id
 		if tp != int32(types.T_json) {
-			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val)})
+			val = fmt.Sprintf("%v", val)
+			res = append(res, csvparser.Field{Val: fmt.Sprintf("%v", val), IsNull: val == JsonNull})
 			continue
 		}
 		var bj bytejson.ByteJson
@@ -886,6 +890,19 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 		res = append(res, csvparser.Field{Val: string(dt)})
 	}
 	return res, nil
+}
+
+func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
+	if nullMap == nil || len(nullMap[attr]) == 0 {
+		return false
+	}
+	field = strings.ToLower(field)
+	for _, v := range nullMap[attr] {
+		if v == field {
+			return true
+		}
+	}
+	return false
 }
 
 func getFieldFromLine(line []csvparser.Field, colIdx int, param *ExternalParam) csvparser.Field {
@@ -909,7 +926,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
 			field.Val = strings.TrimSpace(field.Val)
 		}
-		isNullOrEmpty := field.IsNull
+		isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, param.Attrs[colIdx], field.Val))
 		if id != types.T_char && id != types.T_varchar &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
