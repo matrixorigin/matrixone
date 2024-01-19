@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -47,6 +48,8 @@ type Service interface {
 		ctx context.Context,
 		tenantFetchFunc func() (int32, string, error),
 		txnOp client.TxnOperator) (bool, error)
+	// Close close bootstrap service
+	Close() error
 }
 
 // Locker locker is used to get lock to bootstrap. Only one cn can get lock to bootstrap.
@@ -77,5 +80,33 @@ type Option func(s *service)
 func WithUpgradeHandles(handles []VersionHandle) Option {
 	return func(s *service) {
 		s.handles = handles
+	}
+}
+
+// WithUpgradeTenantBatch setup upgrade tenant batch
+func WithUpgradeTenantBatch(value int) Option {
+	return func(s *service) {
+		s.upgrade.upgradeTenantBatch = value
+	}
+}
+
+// WithCheckUpgradeDuration setup check upgrade duration
+func WithCheckUpgradeDuration(value time.Duration) Option {
+	return func(s *service) {
+		s.upgrade.checkUpgradeDuration = value
+	}
+}
+
+// WithCheckUpgradeDuration setup check upgrade duration
+func WithCheckUpgradeTenantDuration(value time.Duration) Option {
+	return func(s *service) {
+		s.upgrade.checkUpgradeTenantDuration = value
+	}
+}
+
+// WithCheckUpgradeTenantWorkers setup upgrade tenant workers
+func WithCheckUpgradeTenantWorkers(value int) Option {
+	return func(s *service) {
+		s.upgrade.upgradeTenantTasks = value
 	}
 }

@@ -571,7 +571,8 @@ type service struct {
 	// queryService is used to send query request between CN services.
 	queryService queryservice.QueryService
 	// udfService is used to handle non-sql udf
-	udfService udf.Service
+	udfService       udf.Service
+	bootstrapService bootstrap.Service
 
 	stopper     *stopper.Stopper
 	aicm        *defines.AutoIncrCacheManager

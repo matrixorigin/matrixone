@@ -65,7 +65,7 @@ func (s *service) MaybeUpgradeTenant(
 			upgraded = true
 			for {
 				// upgrade completed
-				if finalVersionCompleted.Load() {
+				if s.upgrade.finalVersionCompleted.Load() {
 					break
 				}
 
@@ -158,9 +158,6 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
 						continue
 					}
-					if !h.Metadata().CanDirectUpgrade(createVersion) {
-						panic("BUG: invalid upgrade")
-					}
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
 						return err
 					}
@@ -190,7 +187,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		return hasUpgradeTenants, nil
 	}
 
-	timer := time.NewTimer(checkUpgradeTenantDuration)
+	timer := time.NewTimer(s.upgrade.checkUpgradeTenantDuration)
 	defer timer.Stop()
 
 	for {
@@ -198,15 +195,18 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if finalVersionCompleted.Load() {
+			if s.upgrade.finalVersionCompleted.Load() {
 				return
 			}
 
-			if hasUpgradeTenants, err := fn(); err != nil ||
-				hasUpgradeTenants {
-				continue
+			for {
+				if hasUpgradeTenants, err := fn(); err != nil ||
+					hasUpgradeTenants {
+					continue
+				}
+				break
 			}
-			timer.Reset(checkUpgradeTenantDuration)
+			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}
 	}
 }
@@ -227,10 +227,12 @@ func fetchTenants(
 			return err
 		}
 		n := 0
-		res.ReadRows(func(cols []*vector.Vector) bool {
-			last = executor.GetFixedRows[int32](cols[0])[0]
-			ids = append(ids, last)
-			n++
+		res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				last = vector.GetFixedAt[int32](cols[0], i)
+				ids = append(ids, last)
+				n++
+			}
 			return true
 		})
 		res.Close()

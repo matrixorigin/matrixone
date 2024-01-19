@@ -157,7 +157,7 @@ func newLogService(
 
 // buildLogConfig builds configuration for a log service.
 func buildLogConfig(
-	index int, opt Options, address serviceAddresses,
+	index int, opt Options, address *serviceAddresses,
 ) logservice.Config {
 	cfg := logservice.DefaultConfig()
 	uid, _ := uuid.NewV7()

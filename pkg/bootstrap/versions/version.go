@@ -63,9 +63,9 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		version.Version = executor.GetStringRows(cols[0])[0]
-		version.State = executor.GetFixedRows[int32](cols[1])[0]
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		version.Version = cols[0].GetStringAt(0)
+		version.State = vector.GetFixedAt[int32](cols[1], 0)
 		return true
 	})
 	return version, nil
@@ -82,10 +82,35 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		version.Version = executor.GetStringRows(cols[0])[0]
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		version.Version = cols[0].GetStringAt(0)
 		return true
 	})
+	return version, nil
+}
+
+func MustGetLatestReadyVersion(
+	txn executor.TxnExecutor) (string, error) {
+	sql := fmt.Sprintf(`select version from %s 
+			where state = %d 
+			order by create_at desc limit 1`,
+		catalog.MOVersionTable,
+		StateReady)
+
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+
+	version := ""
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		version = cols[0].GetStringAt(0)
+		return true
+	})
+	if version == "" {
+		panic("missing latest ready version")
+	}
 	return version, nil
 }
 
@@ -111,8 +136,8 @@ func GetVersionState(
 	state := int32(0)
 	loaded := false
 	n := 0
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		state = executor.GetFixedRows[int32](cols[0])[0]
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		state = vector.GetFixedAt[int32](cols[0], 0)
 		loaded = true
 		n++
 		return true
@@ -174,8 +199,10 @@ func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
 	defer res.Close()
 
 	var tables []string
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		tables = append(tables, executor.GetStringRows(cols[0])...)
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			tables = append(tables, cols[0].GetStringAt(i))
+		}
 		return true
 	})
 	for _, t := range tables {

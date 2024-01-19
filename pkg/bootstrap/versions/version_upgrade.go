@@ -8,31 +8,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func MustGetLatestReadyVersion(
-	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf(`select version from %s 
-			where state = %d 
-			order by create_at desc limit 1`,
-		catalog.MOUpgradeTable,
-		StateReady)
-
-	res, err := txn.Exec(sql, executor.StatementOption{})
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-
-	version := ""
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		version = executor.GetStringRows(cols[0])[0]
-		return true
-	})
-	if version == "" {
-		panic("missing latest ready version")
-	}
-	return version, nil
-}
-
 func GetUpgradeVersions(
 	finalVersion string,
 	txn executor.TxnExecutor,
@@ -62,6 +37,32 @@ func GetUpgradeVersions(
 	}
 	if len(values) == 0 && mustHave {
 		panic("BUG: missing version upgrade")
+	}
+	return values, nil
+}
+
+func GetUpgradeVersionsByOrder(
+	finalVersion string,
+	order int32,
+	txn executor.TxnExecutor) ([]VersionUpgrade, error) {
+	sql := fmt.Sprintf(`select 
+			id,
+			from_version, 
+			to_version, 
+			final_version, 
+			state, 
+			upgrade_order,
+			upgrade_cluster,
+			upgrade_tenant,
+			total_tenant,
+			ready_tenant from %s 
+			where final_version = '%s' and upgrade_order = %d`,
+		catalog.MOUpgradeTable,
+		finalVersion,
+		order)
+	values, err := getVersionUpgradesBySQL(sql, txn)
+	if err != nil {
+		return nil, err
 	}
 	return values, nil
 }
@@ -128,7 +129,8 @@ func AddVersionUpgrades(
 	values []VersionUpgrade,
 	txn executor.TxnExecutor) error {
 	for _, v := range values {
-		res, err := txn.Exec(GetVersionUpgradeSQL(v), executor.StatementOption{})
+		sql := GetVersionUpgradeSQL(v)
+		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
@@ -157,15 +159,15 @@ func UpdateVersionUpgradeState(
 func UpdateVersionUpgradeTasks(
 	upgrade VersionUpgrade,
 	txn executor.TxnExecutor) error {
-	state := No
+	updateState := ""
 	if upgrade.TotalTenant == upgrade.ReadyTenant {
-		state = Yes
+		updateState = fmt.Sprintf("state = %d,", StateReady)
 	}
-	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, state = %d, update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
+	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d,%s update_at = current_timestamp() where final_version = '%s' and upgrade_order = %d",
 		catalog.MOUpgradeTable,
 		upgrade.TotalTenant,
 		upgrade.ReadyTenant,
-		state,
+		updateState,
 		upgrade.FinalVersion,
 		upgrade.UpgradeOrder)
 	res, err := txn.Exec(sql, executor.StatementOption{})
@@ -210,19 +212,22 @@ func getVersionUpgradesBySQL(
 	defer res.Close()
 
 	var values []VersionUpgrade
-	res.ReadRows(func(cols []*vector.Vector) bool {
-		value := VersionUpgrade{}
-		value.ID = executor.GetFixedRows[uint64](cols[0])[0]
-		value.FromVersion = executor.GetStringRows(cols[1])[0]
-		value.ToVersion = executor.GetStringRows(cols[2])[0]
-		value.FinalVersion = executor.GetStringRows(cols[3])[0]
-		value.State = executor.GetFixedRows[int32](cols[4])[0]
-		value.UpgradeOrder = executor.GetFixedRows[int32](cols[5])[0]
-		value.UpgradeCluster = executor.GetFixedRows[int32](cols[6])[0]
-		value.UpgradeTenant = executor.GetFixedRows[int32](cols[7])[0]
-		value.TotalTenant = executor.GetFixedRows[int32](cols[8])[0]
-		value.ReadyTenant = executor.GetFixedRows[int32](cols[9])[0]
-		values = append(values, value)
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			value := VersionUpgrade{}
+			value.ID = vector.GetFixedAt[uint64](cols[0], i)
+			value.FromVersion = cols[1].GetStringAt(i)
+			value.ToVersion = cols[2].GetStringAt(i)
+			value.FinalVersion = cols[3].GetStringAt(i)
+			value.State = vector.GetFixedAt[int32](cols[4], i)
+			value.UpgradeOrder = vector.GetFixedAt[int32](cols[5], i)
+			value.UpgradeCluster = vector.GetFixedAt[int32](cols[6], i)
+			value.UpgradeTenant = vector.GetFixedAt[int32](cols[7], i)
+			value.TotalTenant = vector.GetFixedAt[int32](cols[8], i)
+			value.ReadyTenant = vector.GetFixedAt[int32](cols[9], i)
+			values = append(values, value)
+		}
+
 		return true
 	})
 	return values, nil

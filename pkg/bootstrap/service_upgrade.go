@@ -17,7 +17,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -27,14 +26,15 @@ import (
 )
 
 var (
-	upgradeTenantBatch         = 256
-	checkUpgradeDuration       = time.Second * 5
-	checkUpgradeTenantDuration = time.Second * 10
-	upgradeTenantTasks         = 4
-	finalVersionCompleted      atomic.Bool
+	defaultUpgradeTenantBatch         = 256
+	defaultCheckUpgradeDuration       = time.Second * 5
+	defaultCheckUpgradeTenantDuration = time.Second * 10
+	defaultUpgradeTenantTasks         = 4
 )
 
 func (s *service) BootstrapUpgrade(ctx context.Context) error {
+	s.adjustUpgrade()
+
 	// MO's upgrade framework is automated, requiring no manual execution of any
 	// upgrade commands, and supports cross-version upgrades. All upgrade processes
 	// are executed at the CN node. Currently, rollback upgrade is not supported.
@@ -64,7 +64,7 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
 		return err
 	}
-	for i := 0; i < upgradeTenantTasks; i++ {
+	for i := 0; i < s.upgrade.upgradeTenantTasks; i++ {
 		if err := s.stopper.RunTask(s.asyncUpgradeTenantTask); err != nil {
 			return err
 		}
@@ -146,7 +146,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				state, ok, err := versions.GetVersionState(final.Version, txn, false)
 				if err == nil && ok && state == versions.StateReady {
-					finalVersionCompleted.Store(true)
+					s.upgrade.finalVersionCompleted.Store(true)
 				}
 				return ok, err
 			}
@@ -162,13 +162,15 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				}
 
 				var upgrades []versions.VersionUpgrade
+				from := latest
 				append := func(v versions.Version) {
+					order := int32(len(upgrades))
 					upgrades = append(upgrades, versions.VersionUpgrade{
-						FromVersion:    latest,
+						FromVersion:    from,
 						ToVersion:      v.Version,
-						FinalVersion:   v.Version,
+						FinalVersion:   final.Version,
 						State:          versions.StateCreated,
-						UpgradeOrder:   0,
+						UpgradeOrder:   order,
 						UpgradeCluster: v.UpgradeCluster,
 						UpgradeTenant:  v.UpgradeTenant,
 					})
@@ -178,7 +180,6 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				if final.CanDirectUpgrade(latest) {
 					append(final)
 				} else {
-					from := latest
 					for _, v := range s.handles {
 						if versions.Compare(v.Metadata().Version, from) > 0 &&
 							v.Metadata().CanDirectUpgrade(from) {
@@ -224,7 +225,7 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		return completed, err
 	}
 
-	timer := time.NewTimer(checkUpgradeDuration)
+	timer := time.NewTimer(s.upgrade.checkUpgradeDuration)
 	defer timer.Stop()
 
 	for {
@@ -232,16 +233,16 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if finalVersionCompleted.Load() {
+			if s.upgrade.finalVersionCompleted.Load() {
 				return
 			}
 
 			completed, err := fn()
 			if err == nil && completed {
-				finalVersionCompleted.Store(true)
+				s.upgrade.finalVersionCompleted.Store(true)
 				return
 			}
-			timer.Reset(checkUpgradeDuration)
+			timer.Reset(s.upgrade.checkUpgradeDuration)
 		}
 	}
 }
@@ -328,7 +329,7 @@ func (s *service) doUpgrade(
 	if upgrade.UpgradeTenant == versions.Yes {
 		state = versions.StateUpgradingTenant
 		err := fetchTenants(
-			upgradeTenantBatch,
+			s.upgrade.upgradeTenantBatch,
 			func(ids []int32) error {
 				upgrade.TotalTenant += int32(len(ids))
 				return versions.AddUpgradeTenantTask(upgrade.ID, upgrade.ToVersion, ids[0], ids[len(ids)-1], txn)
@@ -340,8 +341,10 @@ func (s *service) doUpgrade(
 		if err := versions.UpdateVersionUpgradeTasks(upgrade, txn); err != nil {
 			return 0, err
 		}
+		if upgrade.TotalTenant == upgrade.ReadyTenant {
+			state = versions.StateReady
+		}
 	}
-
 	return state, versions.UpdateVersionUpgradeState(upgrade, state, txn)
 }
 
@@ -350,7 +353,7 @@ func retryRun(
 	name string,
 	fn func(ctx context.Context) error) error {
 	wait := time.Second
-	maxWait := time.Second
+	maxWait := time.Second * 10
 	for {
 		err := fn(ctx)
 		if err == nil {
@@ -370,5 +373,20 @@ func retryRun(
 			return ctx.Err()
 		default:
 		}
+	}
+}
+
+func (s *service) adjustUpgrade() {
+	if s.upgrade.upgradeTenantBatch == 0 {
+		s.upgrade.upgradeTenantBatch = defaultUpgradeTenantBatch
+	}
+	if s.upgrade.checkUpgradeDuration == 0 {
+		s.upgrade.checkUpgradeDuration = defaultCheckUpgradeDuration
+	}
+	if s.upgrade.checkUpgradeTenantDuration == 0 {
+		s.upgrade.checkUpgradeTenantDuration = defaultCheckUpgradeTenantDuration
+	}
+	if s.upgrade.upgradeTenantTasks == 0 {
+		s.upgrade.upgradeTenantTasks = defaultUpgradeTenantTasks
 	}
 }

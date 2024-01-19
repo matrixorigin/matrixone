@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
@@ -108,10 +109,6 @@ type ClusterOperation interface {
 	StartNetworkPartition(partitions ...NetworkPartition)
 	// CloseNetworkPartition disables network partition feature.
 	CloseNetworkPartition()
-}
-
-type TenantOperation interface {
-	CreateTenant(name, passwd string) error
 }
 
 // ClusterAwareness provides cluster awareness information.
@@ -274,7 +271,7 @@ type testCluster struct {
 	}
 
 	network struct {
-		addresses serviceAddresses
+		addresses *serviceAddresses
 
 		sync.RWMutex
 		addressSets []addressSet
@@ -315,14 +312,15 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
 	// build log service configurations
-	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
+	c.log.cfgs, c.log.opts = c.buildLogConfigs()
 	// build tn service configurations
-	c.tn.cfgs, c.tn.opts = c.buildTNConfigs(c.network.addresses)
-	// build cn service configurations
-	c.buildCNConfigs(c.network.addresses, c.opt.initial.cnServiceNum)
+	c.tn.cfgs, c.tn.opts = c.buildTNConfigs()
+
 	// build FileService instances
 	c.fileservices = c.buildFileServices(ctx)
 
+	// build cn service configurations
+	c.buildCNConfigs(c.opt.initial.cnServiceNum)
 	return c, nil
 }
 
@@ -1236,7 +1234,7 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 
 func (c *testCluster) StartCNServices(n int) error {
 	offset := len(c.cn.svcs)
-	c.buildCNConfigs(c.network.addresses, n)
+	c.buildCNConfigs(n)
 	c.initCNServices(c.fileservices, offset)
 
 	for _, cs := range c.cn.svcs[offset:] {
@@ -1278,36 +1276,28 @@ func (c *testCluster) CloseNetworkPartition() {
 	c.network.addressSets = nil
 }
 
-func (c *testCluster) CreateTenant(
-	account string,
-	useCNIndex int) error {
-	svc, err := c.GetCNServiceIndexed(useCNIndex)
-	if err != nil {
-		return err
-	}
-
-}
-
 // ------------------------------------------------------
 // The following are private utilities for `testCluster`.
 // ------------------------------------------------------
 
 // buildServiceAddresses builds addresses for all services.
-func (c *testCluster) buildServiceAddresses() serviceAddresses {
-	return newServiceAddresses(c.t, c.opt.initial.logServiceNum,
-		c.opt.initial.tnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
+func (c *testCluster) buildServiceAddresses() *serviceAddresses {
+	return newServiceAddresses(
+		c.t,
+		c.opt.initial.logServiceNum,
+		c.opt.initial.tnServiceNum,
+		c.opt.initial.cnServiceNum,
+		c.opt.hostAddr)
 }
 
 // buildTNConfigs builds configurations for all tn services.
-func (c *testCluster) buildTNConfigs(
-	address serviceAddresses,
-) ([]*tnservice.Config, []tnOptions) {
+func (c *testCluster) buildTNConfigs() ([]*tnservice.Config, []tnOptions) {
 	batch := c.opt.initial.tnServiceNum
 
 	cfgs := make([]*tnservice.Config, 0, batch)
 	opts := make([]tnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildTNConfig(i, c.opt, address)
+		cfg := buildTNConfig(i, c.opt, c.network.addresses)
 		cfgs = append(cfgs, cfg)
 
 		localAddr := cfg.ListenAddress
@@ -1318,15 +1308,13 @@ func (c *testCluster) buildTNConfigs(
 }
 
 // buildLogConfigs builds configurations for all log services.
-func (c *testCluster) buildLogConfigs(
-	address serviceAddresses,
-) ([]logservice.Config, []logOptions) {
+func (c *testCluster) buildLogConfigs() ([]logservice.Config, []logOptions) {
 	batch := c.opt.initial.logServiceNum
 
 	cfgs := make([]logservice.Config, 0, batch)
 	opts := make([]logOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildLogConfig(i, c.opt, address)
+		cfg := buildLogConfig(i, c.opt, c.network.addresses)
 		cfgs = append(cfgs, cfg)
 
 		localAddr := cfg.LogServiceServiceAddr()
@@ -1336,18 +1324,20 @@ func (c *testCluster) buildLogConfigs(
 	return cfgs, opts
 }
 
-func (c *testCluster) buildCNConfigs(
-	address serviceAddresses,
-	n int,
-) {
+func (c *testCluster) buildCNConfigs(n int) {
 	offset := len(c.cn.opts)
 	batch := n
+	c.network.addresses.buildCNAddress(c.t, batch, c.opt.hostAddr)
 	for i := 0; i < batch; i++ {
-		c.cn.cfgs = append(c.cn.cfgs, buildCNConfig(i, c.opt, address))
-
+		cfg := buildCNConfig(i+offset, c.opt, c.network.addresses)
+		c.cn.cfgs = append(c.cn.cfgs, cfg)
 		opt := c.opt.cn.optionFunc(i + offset)
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		c.cn.opts = append(c.cn.opts, opt)
+
+		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs,
+			c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName))
+		c.fileservices.cnServiceNum++
 	}
 }
 

@@ -247,6 +247,9 @@ func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
 	s.stopper.Stop()
+	if err := s.bootstrapService.Close(); err != nil {
+		return err
+	}
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
@@ -720,7 +723,7 @@ func (s *service) initIncrService() {
 func (s *service) bootstrap() error {
 	s.initIncrService()
 	rt := runtime.ProcessLevelRuntime()
-	b := bootstrap.NewService(
+	s.bootstrapService = bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
 		rt.Clock(),
 		s._txnClient,
@@ -731,13 +734,13 @@ func (s *service) bootstrap() error {
 	defer cancel()
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
-	if err := b.Bootstrap(ctx); err != nil {
+	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		panic(err)
 	}
 	return s.stopper.RunTask(func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		if err := b.BootstrapUpgrade(ctx); err != nil {
+		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 			panic(err)
 		}
 	})

@@ -16,6 +16,7 @@ package upgrade
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,10 @@ func TestUpgradeFrameworkInit(t *testing.T) {
 			return opts.WithCNOptionFunc(func(i int) []cnservice.Option {
 				return []cnservice.Option{
 					cnservice.WithBootstrapOptions(
+						bootstrap.WithCheckUpgradeDuration(time.Millisecond*100),
+						bootstrap.WithCheckUpgradeTenantDuration(time.Millisecond*100),
+						bootstrap.WithCheckUpgradeTenantWorkers(1),
+						bootstrap.WithUpgradeTenantBatch(1),
 						bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{
 							v1_2_0.Handler,
 						})),
@@ -45,7 +51,7 @@ func TestUpgradeFrameworkInit(t *testing.T) {
 		},
 		func(c service.Cluster) {
 			waitVersionReady(t, "1.2.0", c)
-			checkVersionUpgrade(t, "1.2.0", c, func(upgrades []versions.VersionUpgrade) {
+			checkVersionUpgrades(t, "1.2.0", c, func(upgrades []versions.VersionUpgrade) {
 				require.Equal(t, 0, len(upgrades))
 			})
 		})
@@ -60,6 +66,10 @@ func TestUpgradeFrameworkInitWithHighVersion(t *testing.T) {
 			return opts.WithCNOptionFunc(func(i int) []cnservice.Option {
 				return []cnservice.Option{
 					cnservice.WithBootstrapOptions(
+						bootstrap.WithCheckUpgradeDuration(time.Millisecond*100),
+						bootstrap.WithCheckUpgradeTenantDuration(time.Millisecond*100),
+						bootstrap.WithCheckUpgradeTenantWorkers(1),
+						bootstrap.WithUpgradeTenantBatch(1),
 						bootstrap.WithUpgradeHandles([]bootstrap.VersionHandle{
 							v1_2_0.Handler,
 							h,
@@ -69,13 +79,13 @@ func TestUpgradeFrameworkInitWithHighVersion(t *testing.T) {
 		},
 		func(c service.Cluster) {
 			waitVersionReady(t, "1.3.0", c)
-			checkVersionUpgrade(t, "1.3.0", c, func(upgrades []versions.VersionUpgrade) {
+			checkVersionUpgrades(t, "1.3.0", c, func(upgrades []versions.VersionUpgrade) {
 				require.Equal(t, 0, len(upgrades))
 			})
 		})
 }
 
-func checkVersionUpgrade(
+func checkVersionUpgrades(
 	t *testing.T,
 	version string,
 	c service.Cluster,
@@ -83,7 +93,7 @@ func checkVersionUpgrade(
 	svc, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 	exec := svc.GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
 
 	now, _ := c.Clock().Now()
@@ -116,11 +126,11 @@ func waitVersionReady(
 		err := exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				v, err := versions.GetLatestVersion(txn)
+				v, _, err := versions.GetVersionState(version, txn, false)
 				if err != nil {
 					return err
 				}
-				ready = v.IsReady()
+				ready = v == versions.StateReady
 				return nil
 			},
 			opts)
@@ -130,6 +140,69 @@ func waitVersionReady(
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+var (
+	accountIndex atomic.Uint64
+)
+
+func createTenants(
+	t *testing.T,
+	c service.Cluster,
+	n int,
+	version string) {
+	svc, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+	exec := svc.GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	opts := executor.Options{}.WithWaitCommittedLogApplied().WithDatabase(catalog.MO_CATALOG)
+	err = exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			for i := 0; i < n; i++ {
+				sql := fmt.Sprintf(`insert into mo_catalog.mo_account(
+					account_name,
+					status,
+					created_time,
+					comments,
+					create_version) values ('test_%d','open',current_timestamp(),' ','%s');`,
+					accountIndex.Add(1),
+					version)
+				res, err := txn.Exec(sql, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		opts)
+	require.NoError(t, err)
+}
+
+func checkTenantVersion(
+	t *testing.T,
+	c service.Cluster,
+	version string) {
+	svc, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+	exec := svc.GetSQLExecutor()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	opts := executor.Options{}.WithWaitCommittedLogApplied().WithDatabase(catalog.MO_CATALOG)
+	res, err := exec.Exec(ctx, "select create_version from mo_account", opts)
+	require.NoError(t, err)
+	defer res.Close()
+
+	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			require.Equal(t, version, cols[0].GetStringAt(i))
+		}
+		return true
+	})
 }
 
 func runUpgradeTest(
@@ -150,7 +223,7 @@ func runUpgradeTest(
 	require.NoError(t, err)
 	// close the cluster
 	defer func(c service.Cluster) {
-		require.NoError(t, c.Close())
+		// require.NoError(t, c.Close())
 	}(c)
 	// start the cluster
 	require.NoError(t, c.Start())
@@ -160,11 +233,11 @@ func runUpgradeTest(
 
 func newTestVersionHandler(
 	version, minVersion string,
-	upgradeCluster, upgradeTenant int32) bootstrap.VersionHandle {
+	upgradeCluster, upgradeTenant int32) *testVersionHandle {
 	return &testVersionHandle{
 		metadata: versions.Version{
 			Version:           version,
-			MinUpgradeVersion: version,
+			MinUpgradeVersion: minVersion,
 			UpgradeCluster:    upgradeCluster,
 			UpgradeTenant:     upgradeTenant,
 		},

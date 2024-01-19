@@ -158,7 +158,7 @@ func newCNService(
 	}, nil
 }
 
-func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
+func buildCNConfig(index int, opt Options, address *serviceAddresses) *cnservice.Config {
 	port, err := tests.GetAvailablePort("127.0.0.1")
 	if err != nil {
 		panic(err)
@@ -184,6 +184,8 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.LockService.ListenAddress = address.getCNLockListenAddress(index)
 	cfg.LockService.ServiceAddress = cfg.LockService.ListenAddress
 	cfg.LockService.KeepBindTimeout.Duration = time.Second * 30
+	cfg.QueryServiceConfig.Address.ListenAddress = address.getCNQueryListenAddress(index)
+	cfg.QueryServiceConfig.Address.ServiceAddress = cfg.QueryServiceConfig.Address.ListenAddress
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.

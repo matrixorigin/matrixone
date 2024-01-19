@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -166,6 +167,14 @@ type service struct {
 		sync.RWMutex
 		tenants map[int32]bool
 	}
+
+	upgrade struct {
+		upgradeTenantBatch         int
+		checkUpgradeDuration       time.Duration
+		checkUpgradeTenantDuration time.Duration
+		upgradeTenantTasks         int
+		finalVersionCompleted      atomic.Bool
+	}
 }
 
 // NewService create service to bootstrap mo database
@@ -275,6 +284,11 @@ func (s *service) execBootstrap(ctx context.Context) error {
 func (s *service) now() timestamp.Timestamp {
 	n, _ := s.clock.Now()
 	return n
+}
+
+func (s *service) Close() error {
+	s.stopper.Stop()
+	return nil
 }
 
 func execFunc(sql []string) func(executor.TxnExecutor) error {
