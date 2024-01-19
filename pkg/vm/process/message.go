@@ -35,20 +35,6 @@ const (
 	MaxMessage          MsgType = 1024
 )
 
-var messageBlockTable []bool
-
-func init() {
-	messageBlockTable = make([]bool, MaxMessage)
-	messageBlockTable[MsgMinValueSigned] = false
-	messageBlockTable[MsgMinValueUnsigned] = false
-	messageBlockTable[MsgMaxValueSigned] = false
-	messageBlockTable[MsgMaxValueUnsigned] = false
-	messageBlockTable[MsgPipelineStart] = false
-	messageBlockTable[MsgPipelineStop] = false
-	messageBlockTable[MsgRuntimeFilter] = false
-	messageBlockTable[MsgHashMap] = false
-}
-
 func (m MsgType) MessageName() string {
 	switch m {
 	case MsgMinValueSigned:
@@ -65,7 +51,7 @@ func (m MsgType) MessageName() string {
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]*Message, 0, 1024),
+		Messages: make([]Message, 0, 1024),
 		RwMutex:  &sync.RWMutex{},
 		Mutex:    &sync.Mutex{},
 	}
@@ -75,71 +61,39 @@ func NewMessageBoard() *MessageBoard {
 
 type MessageAddress struct {
 	cnAddr     string
-	pipelineID int32
+	operatorID int32
 	parallelID int32
 }
 
-type Message struct {
-	tag      int32
-	msgType  MsgType
-	sender   *MessageAddress
-	receiver *MessageAddress
-	data     any
+type Message interface {
+	Serialize() []byte
+	Deserialize([]byte) Message
+	NeedBlock() bool
+	GetMsgTag() int32
+	GetReceiverAddr() MessageAddress
 }
 
 type MessageBoard struct {
-	Messages []*Message
+	Messages []Message
 	RwMutex  *sync.RWMutex // for nonblock message
 	Mutex    *sync.Mutex   // for block message
 	Cond     *sync.Cond    //for block message
 }
 
 type MessageReceiver struct {
-	offset  int32
-	tag     int32
-	msgType MsgType
-	addr    *MessageAddress
-	mb      *MessageBoard
+	offset int32
+	tags   []int32
+	addr   *MessageAddress
+	mb     *MessageBoard
 }
 
-func DeepCopyMessageAddr(m *MessageAddress) *MessageAddress {
-	if m == nil {
-		return nil
-	}
-	return &MessageAddress{
-		cnAddr:     m.cnAddr,
-		pipelineID: m.pipelineID,
-		parallelID: m.parallelID,
-	}
-}
-
-func DeepCopyMessage(m *Message) *Message {
-	return &Message{
-		tag:      m.tag,
-		msgType:  m.msgType,
-		sender:   DeepCopyMessageAddr(m.sender),
-		receiver: DeepCopyMessageAddr(m.receiver),
-		data:     m.data,
-	}
-}
-
-func NewMessage(tag int32, msgType MsgType, data any, sender *MessageAddress, receiver *MessageAddress) *Message {
-	return &Message{
-		tag:      tag,
-		msgType:  msgType,
-		sender:   sender,
-		receiver: receiver,
-		data:     data,
-	}
-}
-
-func (proc *Process) SendMessage(m *Message) {
+func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
 	mb.RwMutex.Lock()
 	defer mb.RwMutex.Unlock()
-	if m.receiver == nil || m.receiver.cnAddr == CURRENTCN { // message for current CN
+	if m.GetReceiverAddr().cnAddr == CURRENTCN { // message for current CN
 		mb.Messages = append(mb.Messages, m)
-		if messageBlockTable[m.msgType] {
+		if m.NeedBlock() {
 			// broadcast for block message
 			mb.Cond.Broadcast()
 		}
@@ -149,53 +103,35 @@ func (proc *Process) SendMessage(m *Message) {
 	}
 }
 
-func (proc *Process) AddrBroadCastToCurrentCN() *MessageAddress {
-	return nil
-}
-
-func (proc *Process) AddrBroadCastToALLCN() *MessageAddress {
-	return &MessageAddress{cnAddr: ALLCN}
-}
-
-func (proc *Process) AddrBroadCastToOneCN(addr string) *MessageAddress {
-	return &MessageAddress{cnAddr: addr}
-}
-
-func (proc *Process) AddrBroadCastToOneParallel(addr string, pipelineid int32, parallelid int32) *MessageAddress {
-	return &MessageAddress{
-		cnAddr:     addr,
-		pipelineID: pipelineid,
-		parallelID: parallelid,
-	}
-}
-
-func (proc *Process) NewMessageReceiver(tag int32, msgType MsgType, addr *MessageAddress) *MessageReceiver {
+func (proc *Process) NewMessageReceiver(tags []int32, addr *MessageAddress) *MessageReceiver {
 	return &MessageReceiver{
-		tag:     tag,
-		msgType: msgType,
-		addr:    addr,
-		mb:      proc.MessageBoard,
+		tags: tags,
+		addr: addr,
+		mb:   proc.MessageBoard,
 	}
 }
 
-func (mr *MessageReceiver) receiverMessageNonBlock(result []*Message) {
+func (mr *MessageReceiver) receiverMessageNonBlock(result []Message) {
 	mr.mb.RwMutex.RLock()
 	defer mr.mb.RwMutex.RUnlock()
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
 		message := mr.mb.Messages[mr.offset]
-		if message.tag != mr.tag || message.msgType != mr.msgType {
+		if !MatchAddress(message, mr.addr) {
 			continue
 		}
-		if message.MatchAddress(mr.addr) {
-			result = append(result, DeepCopyMessage(message))
+		for i := range mr.tags {
+			if mr.tags[i] == message.GetMsgTag() {
+				result = append(result, message)
+				break
+			}
 		}
 	}
 }
 
-func (mr *MessageReceiver) ReceiverMessage() []*Message {
-	result := make([]*Message, 0)
-	if !messageBlockTable[mr.msgType] {
+func (mr *MessageReceiver) ReceiverMessage(needBlock bool) []Message {
+	result := make([]Message, 0)
+	if !needBlock {
 		mr.receiverMessageNonBlock(result)
 		return result
 	}
@@ -208,13 +144,13 @@ func (mr *MessageReceiver) ReceiverMessage() []*Message {
 	return result
 }
 
-func (m *Message) MatchAddress(raddr *MessageAddress) bool {
-	mAddr := m.receiver
-	if mAddr == nil {
-		return true //it's a broadcast message on current CN
+func MatchAddress(m Message, raddr *MessageAddress) bool {
+	mAddr := m.GetReceiverAddr()
+	if mAddr.operatorID != raddr.operatorID && mAddr.operatorID != -1 {
+		return false
 	}
-	if raddr != nil && mAddr.pipelineID == raddr.pipelineID && mAddr.parallelID == raddr.parallelID {
-		return true //it's a unicast message
+	if mAddr.parallelID != raddr.parallelID && mAddr.parallelID != -1 {
+		return false
 	}
-	return false
+	return true
 }
