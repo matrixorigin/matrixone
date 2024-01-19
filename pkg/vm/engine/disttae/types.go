@@ -178,7 +178,11 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock()
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+	blockId_tn_delete_metaLoc_batch struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}
+	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -628,10 +632,4 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
-}
-
-type pkRange struct {
-	isRange bool
-	items   []int64
-	ranges  []int64
 }

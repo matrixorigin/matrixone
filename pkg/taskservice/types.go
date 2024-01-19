@@ -467,6 +467,8 @@ type TaskRunner interface {
 	Parallelism() int
 	// RegisterExecutor register the task executor
 	RegisterExecutor(code task.TaskCode, executor TaskExecutor)
+	// GetExecutor returns the task executor
+	GetExecutor(code task.TaskCode) TaskExecutor
 	// Attach attaches the active go-routine to the daemon task.
 	Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error
 }

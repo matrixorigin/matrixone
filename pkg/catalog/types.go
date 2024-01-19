@@ -33,6 +33,10 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
 
 	// MOVersionTable mo version table. This table records information about the
 	// versions of the MO cluster that have been upgraded. In other words, you can
