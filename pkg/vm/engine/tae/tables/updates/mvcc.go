@@ -481,9 +481,10 @@ func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location
 	}
 	return mvcc.deltaloc.GetLatestNodeLocked().BaseNode.DeltaLoc
 }
-func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch, tnInsertBat *containers.Batch) (delBatch *containers.Batch, err error) {
+func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch, tnInsertBat *containers.Batch) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	n.RLock()
 	defer n.RUnlock()
+	deltalocStart = deltalocBat.Length()
 	for blkOffset, mvcc := range n.deletes {
 		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
 		var skipData bool
@@ -505,7 +506,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 					delBatch.Close()
 				}
 				delBat.Close()
-				return nil, err
+				return nil, 0, 0, err
 			}
 			if delBat != nil && delBat.Length() > 0 {
 				if delBatch == nil {
@@ -529,6 +530,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 			}
 		}
 	}
+	deltalocEnd = deltalocBat.Length()
 	return
 }
 

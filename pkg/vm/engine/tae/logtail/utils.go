@@ -3072,7 +3072,11 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 }
 
 func (collector *BaseCollector) visitTombstone(entry data.Tombstone) {
-	entry.VisitDeletes(nil, collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX])
+	_, start, end, err := entry.VisitDeletes(nil, collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX])
+	if err != nil {
+		panic(err)
+	}
+	collector.data.UpdateBlkMeta(entry.GetObject().(*catalog.ObjectEntry).GetTable().ID, int32(start), int32(end), 0, 0)
 }
 
 // TODO
