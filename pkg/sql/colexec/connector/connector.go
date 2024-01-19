@@ -45,6 +45,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
+<<<<<<< HEAD
+=======
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Start()
+	defer anal.Stop()
+
+>>>>>>> 2f3a4e55f (Save a few lines with OperatorBase.)
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil

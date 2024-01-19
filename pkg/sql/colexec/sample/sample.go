@@ -17,6 +17,8 @@ package sample
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math/rand"
 )
 
 const argName = "sample"
@@ -109,11 +110,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	// duplicate code from other operators.
-	result, lastErr := arg.children[0].Call(proc)
+	result, lastErr := arg.GetChildren(0).Call(proc)
 	if lastErr != nil {
 		return result, lastErr
 	}
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -132,8 +133,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if bat == nil {
+<<<<<<< HEAD
 		result.Batch, lastErr = ctr.samplePool.Result(true)
 		anal.Output(result.Batch, arg.info.IsLast)
+=======
+		result.Batch, lastErr = ctr.samplePool.Output(true)
+		anal.Output(result.Batch, arg.GetIsLast())
+>>>>>>> 2f3a4e55f (Save a few lines with OperatorBase.)
 		arg.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
@@ -142,7 +148,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	if !bat.IsEmpty() {
-		anal.Input(bat, arg.info.IsFirst)
+		anal.Input(bat, arg.GetIsFirst())
 
 		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
 			return result, err
@@ -166,7 +172,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	} else {
 		result.Batch, err = ctr.samplePool.Result(false)
 	}
-	anal.Output(result.Batch, arg.info.IsLast)
+	anal.Output(result.Batch, arg.GetIsLast())
 	arg.buf = result.Batch
 	return result, err
 }

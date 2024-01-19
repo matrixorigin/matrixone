@@ -86,10 +86,12 @@ func TestInsertOperator(t *testing.T) {
 			AddAffectedRows: true,
 			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		},
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		ctr: &container{
 			state: vm.Build,
@@ -104,22 +106,18 @@ func TestInsertOperator(t *testing.T) {
 	// require.Equal(t, result.Batch, batch.EmptyBatch)
 
 	argument1.Free(proc, false, nil)
-	argument1.children[0].Free(proc, false, nil)
+	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.FreeVectors()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
 
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 	arg.ctr.state = vm.Build
 }
