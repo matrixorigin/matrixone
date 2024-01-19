@@ -63,6 +63,12 @@ type MOCluster interface {
 	// Since the query result may be a Slice, to avoid memory allocation overhead,
 	// we use apply to notify the caller of a Service that satisfies the condition.
 	GetTNService(selector Selector, apply func(metadata.TNService) bool)
+	// GetCNServiceWithoutWorkingState get services by selector, and the applyFunc used to save the
+	// cn service that matches the selector's conditions.
+	//
+	// Since the query result may be a Slice, to avoid memory allocation overhead,
+	// we use apply to notify the caller of a Service that satisfies the condition.
+	GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool)
 	// ForceRefresh when other modules use the cluster information and find out that
 	// the current cache information is out of date, you can force the cache to be
 	// refreshed.

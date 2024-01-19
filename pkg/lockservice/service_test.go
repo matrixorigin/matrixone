@@ -389,6 +389,56 @@ func TestRangeLockWithConflict(t *testing.T) {
 	}
 }
 
+func TestIssue2128(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			l := ss[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			lb, err := l.getLockTable(0)
+			require.NoError(t, err)
+			b := lb.getBind()
+			b.ServiceID = "1705661824807004000s3"
+			l.handleBindChanged(b)
+
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.Error(t, err)
+
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestRowLockWithWaitQueue(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
