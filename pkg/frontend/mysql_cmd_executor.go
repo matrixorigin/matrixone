@@ -1174,11 +1174,6 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	if err != nil {
 		return err
 	}
-
-	err = protocol.sendEOFOrOkPacket(0, ses.GetServerStatus())
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -2750,7 +2745,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
+			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
 			/*
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
@@ -3536,7 +3531,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
 		columns, err = cw.GetColumns()
 		if err != nil {
@@ -3762,15 +3757,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return
 			}
 
-			/*
-				Step 3: Say goodbye
-				mysql COM_QUERY response: End after the data row has been sent.
-				After all row data has been sent, it sends the EOF or OK packet.
-			*/
-			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
-			if err != nil {
-				return
-			}
 		}
 	}
 	return
