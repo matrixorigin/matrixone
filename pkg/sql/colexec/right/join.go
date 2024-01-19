@@ -96,7 +96,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					proc.PutBatch(bat)
 					continue
 				}
-				if ctr.batchRowCount == 0 {
+				if ctr.mp == nil {
 					proc.PutBatch(bat)
 					continue
 				}
