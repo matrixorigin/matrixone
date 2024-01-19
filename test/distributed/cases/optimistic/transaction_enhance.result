@@ -38,6 +38,7 @@ insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 begin ;
 truncate table atomic_table_10;
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
+
 select * from atomic_table_10;
 c1    c2
 3    a
@@ -57,6 +58,7 @@ insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
 insert into atomic_table_11 values (6,"a");
+
 select * from atomic_table_11;
 c1    c2
 3    a
@@ -72,6 +74,7 @@ insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
 insert into atomic_table_11 values (6,"a");
+
 select * from atomic_table_11;
 c1    c2
 3    a
@@ -79,6 +82,7 @@ c1    c2
 5    c
 6    a
 rollback ;
+
 select * from atomic_table_11;
 c1    c2
 3    a
@@ -107,8 +111,8 @@ show create table atomic_table_12;
 Table    Create Table
 atomic_table_12    CREATE TABLE `atomic_table_12` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`c1`)\n)
 show index from atomic_table_12;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-atomic_table_12    1    key1    1    c1    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+atomic_table_12    1    key1    1    c1    A    0    NULL    NULL    YES                    YES    NULL
 use transaction_enhance;
 drop table if exists atomic_table_12_1;
 create table atomic_table_12_1(c1 int,c2 varchar(25));
@@ -124,7 +128,7 @@ show create table atomic_table_12_1;
 Table    Create Table
 atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
 show index from atomic_table_12_1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 use transaction_enhance;
 drop table if exists atomic_table_12_2;
 drop table if exists atomic_table_13;
@@ -208,7 +212,7 @@ c1    c2
 5    c
 commit;
 show index from atomic_table_12_5;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 drop table if exists atomic_table_14;
 create table atomic_table_14(c1 int,c2 varchar(25));
 insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
@@ -216,7 +220,9 @@ start transaction ;
 alter table atomic_table_14 add  index key1(c1);
 drop table atomic_table_14;
 insert into atomic_table_14 values (6,"a"),(7,"b");
+
 select * from atomic_table_14;
+
 commit;
 w-w conflict
 select * from atomic_table_14;
@@ -297,7 +303,7 @@ show create table atomic_table_18;
 Table    Create Table
 atomic_table_18    CREATE TABLE `atomic_table_18` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
 show index from atomic_table_18;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 truncate table atomic_table_18;
 drop table atomic_table_18;
 select * from atomic_table_18;
