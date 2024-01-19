@@ -1000,6 +1000,23 @@ func TestGetPkExprValue(t *testing.T) {
 			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
 		}
 	}
+	expr := makeFunctionExprForTest("in", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+	})
+	canEval, _, _, _ := getPkValueByExpr(expr, "a", types.T_int64, true, proc)
+	require.False(t, canEval)
+	canEval, _, _, _ = getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+	require.True(t, canEval)
+
+	expr = makeFunctionExprForTest("in", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64VecExprWithType(m, int64(1)),
+	})
+	canEval, _, _, val := getPkValueByExpr(expr, "a", types.T_int64, true, proc)
+	require.True(t, canEval)
+	require.True(t, equalToValFn([]int64{1}, val))
+
 	proc.FreeVectors()
 	require.Zero(t, m.CurrNB())
 }
