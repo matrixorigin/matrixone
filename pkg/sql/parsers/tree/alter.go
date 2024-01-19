@@ -38,7 +38,7 @@ type AlterUser struct {
 	CommentOrAttribute AccountCommentOrAttribute
 }
 
-func (node AlterUser) Name() string { return "tree.AlterUser" }
+func (node AlterUser) TypeName() string { return "tree.AlterUser" }
 
 func (node *AlterUser) Free() {
 	reuse.Free[AlterUser](node, nil)
