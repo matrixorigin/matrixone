@@ -486,6 +486,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	if ec.needExportToFile() {
 		oq.rowIdx = uint64(n)
+		ec.addRowCount(uint64(n))
 		bat2 := preCopyBat(obj, bat)
 		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
 	}
@@ -2724,19 +2725,39 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			rspLen = runResult.AffectRows
 		}
 
-		switch stmt.(type) {
-		case *tree.Select, *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
+		switch st := stmt.(type) {
+		case *tree.Select:
+			if len(proc.SessionInfo.SeqAddValues) != 0 {
+				ses.AddSeqValues(proc)
+			}
+			ses.SetSeqLastValue(proc)
+
+			//for select ... into, it sends ok
+			if st.Ep != nil {
+				resp := mce.setResponse(i, len(cws), rspLen)
+				if err2 := mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+					err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, err)
+					return err
+				}
+			} else {
+				/*
+					mysql COM_QUERY response: End after the data row has been sent.
+					After all row data has been sent, it sends the EOF or OK packet.
+				*/
+				err2 := mce.GetSession().GetMysqlProtocol().sendEOFOrOkPacket(0, ses.GetServerStatus())
+				if err2 != nil {
+					err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, err)
+					return err
+				}
+			}
+
+		case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
 			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
-			switch stmt.(type) {
-			case *tree.Select:
-				if len(proc.SessionInfo.SeqAddValues) != 0 {
-					ses.AddSeqValues(proc)
-				}
-				ses.SetSeqLastValue(proc)
-			}
 			/*
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
@@ -3444,6 +3465,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			if err = ep.File.Close(); err != nil {
 				return
 			}
+
+			runResult = &util2.RunResult{AffectRows: ep.RowCount}
 
 			/*
 			   Serialize the execution plan by json
