@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -49,6 +50,8 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	}
 	return
 }
+
+var NoDefaultCredentialsForETL = os.Getenv("MO_NO_DEFAULT_CREDENTIALS") != ""
 
 // GetForETL get or creates a FileService instance for ETL operations
 // if service part of path is empty, a LocalETLFS will be created
@@ -110,6 +113,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				DisabledCacheConfig,
 				nil,
 				true,
+				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
 				return
@@ -141,6 +145,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				DisabledCacheConfig,
 				nil,
 				true,
+				NoDefaultCredentialsForETL,
 			)
 
 		case "s3-opts":
@@ -154,6 +159,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				DisabledCacheConfig,
 				nil,
 				true,
+				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
 				return
@@ -176,7 +182,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				name = arguments[6]
 			}
 
-			res, err = NewS3FSOnMinio(
+			res, err = NewS3FS(
 				ctx,
 				ObjectStorageArguments{
 					Endpoint:  endpoint,
@@ -186,10 +192,12 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					KeySecret: accessSecret,
 					KeyPrefix: keyPrefix,
 					Name:      name,
+					IsMinio:   true,
 				},
 				DisabledCacheConfig,
 				nil,
 				true,
+				NoDefaultCredentialsForETL,
 			)
 			if err != nil {
 				return
@@ -246,6 +254,7 @@ func GetForBackup(ctx context.Context, spec string) (res FileService, err error)
 				DisabledCacheConfig,
 				nil,
 				true,
+				false,
 			)
 			if err != nil {
 				return

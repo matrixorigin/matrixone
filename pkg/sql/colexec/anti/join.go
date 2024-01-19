@@ -91,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastrow = 0
 			}
 
-			if ctr.batchRowCount == 0 {
+			if ctr.mp == nil {
 				err := ctr.emptyProbe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 				return result, err
 			} else {
@@ -207,7 +207,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		// for anti join, if left batch is sorted , then output batch is sorted
 		ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[pos].GetSorted())
 	}
-	if (ctr.batchRowCount == 1 && ctr.hasNull) || ctr.batchRowCount == 0 {
+	if ctr.batchRowCount == 1 && ctr.hasNull {
 		result.Batch = ctr.rbat
 		anal.Output(ctr.rbat, isLast)
 		return nil
