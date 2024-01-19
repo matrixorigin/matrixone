@@ -85,10 +85,15 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if err != nil {
 		return
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
+	bats, ioVector, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return
 	}
+	defer func() {
+		if ioVector != nil {
+			objectio.ReleaseIOVector(ioVector)
+		}
+	}()
 	bat := containers.NewBatch()
 	defer bat.Close()
 	colNames := CheckpointSchema.Attrs()
@@ -316,7 +321,7 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	if err != nil {
 		return "", err
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
+	bats, ioVector, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return "", err
 	}
@@ -325,6 +330,9 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 			for j := range bats[i].Vecs {
 				bats[i].Vecs[j].Free(common.CheckpointAllocator)
 			}
+		}
+		if ioVector != nil {
+			objectio.ReleaseIOVector(ioVector)
 		}
 	}()
 	bat := containers.NewBatch()

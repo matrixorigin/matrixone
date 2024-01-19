@@ -927,7 +927,7 @@ func (data *CNCheckpointData) InitMetaIdx(
 ) error {
 	if data.bats[MetaIDX] == nil {
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
-		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
+		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
 		if err != nil {
 			return err
 		}
@@ -2041,12 +2041,21 @@ func LoadBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
+	var ioVectors []*fileservice.IOVector
+	defer func() {
+		for i := range ioVectors {
+			if ioVectors[i] != nil {
+				objectio.ReleaseIOVector(ioVectors[i])
+			}
+		}
+	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioVectors = make([]*fileservice.IOVector, 1)
+		ioResults[0], ioVectors[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+		ioResults, ioVectors, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -2060,7 +2069,9 @@ func LoadBlkColumnsByMeta(
 			if pkgVec.Length() == 0 {
 				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				vec = containers.ToTNVector(pkgVec, mp)
+				srcVec := containers.ToTNVector(pkgVec, mp)
+				defer srcVec.Close()
+				vec = srcVec.CloneWindow(0, srcVec.Length(), mp)
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec
@@ -2086,21 +2097,38 @@ func LoadCNSubBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
+	var bats []*batch.Batch
+	var ioVectors []*fileservice.IOVector
+	defer func() {
+		for i := range ioVectors {
+			if ioVectors[i] != nil {
+				objectio.ReleaseIOVector(ioVectors[i])
+			}
+		}
+	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioVectors = make([]*fileservice.IOVector, 1)
+		ioResults[0], ioVectors[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
+		ioResults, ioVectors, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	}
 	if err != nil {
 		return nil, err
 	}
+	bats = make([]*batch.Batch, 0)
 	for i := range ioResults {
 		ioResults[i].Attrs = make([]string, len(colNames))
 		copy(ioResults[i].Attrs, colNames)
+		var bat *batch.Batch
+		bat, err = ioResults[i].Dup(m)
+		if err != nil {
+			return nil, err
+		}
+		bats = append(bats, bat)
 	}
-	return ioResults, nil
+	return bats, nil
 }
 
 func LoadCNSubBlkColumnsByMetaWithId(
@@ -2112,23 +2140,30 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	version uint32,
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
-) (ioResult *batch.Batch, err error) {
+) (bat *batch.Batch, err error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
+	var ioResult *batch.Batch
+	var ioVectors *fileservice.IOVector
+	defer func() {
+		if ioVectors != nil {
+			objectio.ReleaseIOVector(ioVectors)
+		}
+	}()
 	if version <= CheckpointVersion3 {
-		ioResult, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioResult, ioVectors, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResult, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
+		ioResult, ioVectors, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
 	}
 	if err != nil {
 		return nil, err
 	}
 	ioResult.Attrs = make([]string, len(colNames))
 	copy(ioResult.Attrs, colNames)
-	return ioResult, nil
+	return ioResult.Dup(m)
 }
 func (data *CheckpointData) ReadTNMetaBatch(
 	ctx context.Context,
