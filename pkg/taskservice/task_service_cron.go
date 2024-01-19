@@ -41,6 +41,7 @@ type crons struct {
 
 func (s *taskService) StartScheduleCronTask() {
 	if !s.crons.state.canStart() {
+		s.rt.Logger().Info("cron task scheduler started or is stopping")
 		return
 	}
 
@@ -56,6 +57,7 @@ func (s *taskService) StartScheduleCronTask() {
 
 func (s *taskService) StopScheduleCronTask() {
 	if !s.crons.state.canStop() {
+		s.rt.Logger().Info("cron task scheduler stopped or is stopping")
 		return
 	}
 
@@ -70,6 +72,11 @@ func (s *taskService) StopScheduleCronTask() {
 }
 
 func (s *taskService) fetchCronTasks(ctx context.Context) {
+	s.rt.Logger().Info("start to fetch cron tasks")
+	defer func() {
+		s.rt.Logger().Info("stop to fetch cron tasks")
+	}()
+
 	ticker := time.NewTicker(fetchInterval)
 	defer ticker.Stop()
 
@@ -85,7 +92,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 		if err != nil {
 			s.rt.Logger().Error("query cron tasks failed",
 				zap.Error(err))
-			break
+			continue
 		}
 
 		s.rt.Logger().Debug("new cron tasks fetched",
@@ -213,10 +220,10 @@ func (j *cronJob) doRun() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
+	cronTask.TriggerTimes++
 	asyncTask := newTaskFromMetadata(cronTask.Metadata)
 	asyncTask.ParentTaskID = asyncTask.Metadata.ID
 	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
-	cronTask.TriggerTimes++
 
 	_, err := j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {

@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/maphash"
 	"sync"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/shirou/gopsutil/v3/mem"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -92,10 +92,8 @@ func metaCacheSize() int64 {
 	return 2 * mpool.GB
 }
 
-var hashSeed = maphash.MakeSeed()
-
 func shardMetaCacheKey(key mataCacheKey) uint8 {
-	return uint8(maphash.Bytes(hashSeed, key[:]))
+	return uint8(xxhash.Sum64(key[:]))
 }
 
 func init() {

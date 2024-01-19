@@ -207,7 +207,9 @@ func ConstructRowidColumnTo(
 	vec *vector.Vector,
 	id *Blockid, start, length uint32, mp *mpool.MPool,
 ) (err error) {
-	vec.PreExtend(int(length), mp)
+	if err = vec.PreExtend(int(length), mp); err != nil {
+		return
+	}
 	for i := uint32(0); i < length; i++ {
 		rid := NewRowid(id, start+i)
 		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
@@ -226,7 +228,9 @@ func ConstructRowidColumnToWithSels(
 	sels []int32,
 	mp *mpool.MPool,
 ) (err error) {
-	vec.PreExtend(len(sels), mp)
+	if err = vec.PreExtend(len(sels), mp); err != nil {
+		return
+	}
 	for _, row := range sels {
 		rid := NewRowid(id, uint32(row))
 		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
