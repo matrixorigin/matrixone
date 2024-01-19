@@ -633,9 +633,3 @@ type mergeReader struct {
 
 type emptyReader struct {
 }
-
-type pkRange struct {
-	isRange bool
-	items   []int64
-	ranges  []int64
-}

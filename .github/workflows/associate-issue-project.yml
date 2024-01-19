@@ -1,0 +1,28 @@
+name: Associate-issue-project
+
+on:
+  issues:
+    types:
+      - assigned
+      
+jobs:
+  auto-assign-to-project:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: matrixorigin/CI
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm install dependency
+        run: |
+          cd ${GITHUB_WORKSPACE}/scripts/projects
+          npm install
+      - run: node ${GITHUB_WORKSPACE}/scripts/projects/add-assignee-to-corr-project.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+          Issue_ID: ${{ github.event.issue.number }}
