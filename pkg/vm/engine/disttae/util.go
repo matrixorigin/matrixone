@@ -397,14 +397,30 @@ func getPkValueByExpr(
 		}
 
 	case *plan.Expr_Vec:
-		// TODO: extract one from vector later
 		if mustOne {
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.Vec.Data)
+			if vec.Length() != 1 {
+				return false, false, false, nil
+			}
+			exprLit := rule.GetConstantValue(vec, true, 0)
+			if exprLit == nil {
+				return false, false, false, nil
+			}
+			if exprLit.Isnull {
+				return false, true, false, nil
+			}
+			canEval, val := evalLiteralExpr(&plan.Expr_Lit{
+				Lit: exprLit,
+			}, oid)
+			if canEval {
+				return true, false, false, val
+			}
 			return false, false, false, nil
 		}
 		return true, false, true, exprImpl.Vec.Data
 
 	case *plan.Expr_List:
-		// TODO: extract one from vector later
 		if mustOne {
 			return false, false, false, nil
 		}
@@ -412,8 +428,8 @@ func getPkValueByExpr(
 		if !canEval || vec == nil || vec.Length() == 0 {
 			return false, false, false, nil
 		}
-		defer put()
 		data, _ := vec.MarshalBinary()
+		put()
 		return true, false, true, data
 	}
 

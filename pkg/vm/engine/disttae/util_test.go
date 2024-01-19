@@ -1000,6 +1000,8 @@ func TestGetPkExprValue(t *testing.T) {
 			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
 		}
 	}
+	proc.FreeVectors()
+	require.Zero(t, m.CurrNB())
 }
 
 func TestEvalExprListToVec(t *testing.T) {
