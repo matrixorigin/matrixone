@@ -28,6 +28,9 @@ import (
 type MetadataMVCCNode struct {
 	MetaLoc  objectio.Location
 	DeltaLoc objectio.Location
+
+	// For deltaloc from CN, it needs to ensure that deleteChain is empty.
+	NeedCheckDeleteChainWhenCommit bool
 }
 
 func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {

@@ -4462,7 +4462,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry)
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
-		assert.True(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 		err = meta.GetTable().RemoveEntry(meta)
@@ -4495,7 +4495,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.True(t, !rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
 		created := task.GetCreatedObjects()[0]
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
-		assert.True(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID).GetLatestDeltaloc(0).IsEmpty())
+		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
@@ -8168,6 +8168,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
+	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = tae.GetRelation()
 	blk = rel.MakeObjectIt().GetObject()
 	deletes, _, err := blk.GetMeta().(*catalog.ObjectEntry).GetBlockData().CollectDeleteInRange(

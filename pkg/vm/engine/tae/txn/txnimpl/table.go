@@ -778,6 +778,7 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 	if err == nil && ok {
 		tbl.txnEntries.Append(node2)
 		tbl.store.warChecker.Insert(blk)
+		tbl.store.IncreateWriteCnt()
 	}
 	return
 }

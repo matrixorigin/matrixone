@@ -674,7 +674,7 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 		return
 	}
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc)
+	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
 }
 
 func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) string {
@@ -918,7 +918,7 @@ func (blk *baseBlock) CollectAppendInRange(
 
 func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
 	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	return mvcc.UpdateDeltaLoc(txn, deltaLoc)
+	return mvcc.UpdateDeltaLoc(txn, deltaLoc, false)
 }
 
 func (blk *baseBlock) GetDeltaPersistedTS() types.TS {

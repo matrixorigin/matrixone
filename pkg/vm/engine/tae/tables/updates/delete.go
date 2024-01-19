@@ -223,11 +223,6 @@ func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
-	if node.nt == NT_Persisted {
-		if found, _ := node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
-			return txnif.ErrTxnNeedRetry
-		}
-	}
 	_, err = node.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return

@@ -570,7 +570,21 @@ func NewDeltalocChain(mvcc *MVCCHandle) *DeltalocChain {
 		BaseEntryImpl: catalog.NewBaseEntry(func() *catalog.MetadataMVCCNode { return &catalog.MetadataMVCCNode{} }),
 	}
 }
-
+func (d *DeltalocChain) PrepareCommit() (err error) {
+	d.Lock()
+	defer d.Unlock()
+	node := d.GetLatestNodeLocked()
+	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
+		if found, _ := d.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
+			return txnif.ErrTxnNeedRetry
+		}
+	}
+	_, err = node.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
+	return
+}
 func (d *DeltalocChain) Is1PC() bool { return false }
 func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return catalog.NewDeltalocCmd(id, catalog.IOET_WALTxnCommand_Block, d.mvcc.GetID(), d.BaseEntryImpl), nil
@@ -876,20 +890,20 @@ func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS) {
 	ts := node.End
 	return str, ts
 }
-func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location) (entry txnif.TxnEntry, ok bool, err error) {
+func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
 	if n.deltaloc.Depth() != 0 {
 		return
 	}
 	if !n.deletes.IsEmpty() {
 		return
 	}
-	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc)
+	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)
 	if err == nil {
 		ok = true
 	}
 	return
 }
-func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location) (isNewNode bool, entry txnif.TxnEntry, err error) {
+func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
 	n.Lock()
 	defer n.Unlock()
 	needWait, txnToWait := n.deltaloc.NeedWaitCommitting(txn.GetStartTS())
@@ -903,7 +917,8 @@ func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Locat
 		return
 	}
 	baseNode := &catalog.MetadataMVCCNode{
-		DeltaLoc: deltaloc,
+		DeltaLoc:                       deltaloc,
+		NeedCheckDeleteChainWhenCommit: needCheckWhenCommit,
 	}
 	entry = n.deltaloc
 
