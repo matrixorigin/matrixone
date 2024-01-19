@@ -11,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 // MaybeUpgradeTenant used to check the tenant need upgrade or not. If need upgrade, it will
@@ -129,8 +130,14 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			func(txn executor.TxnExecutor) error {
 				upgrade, ok, err := versions.GetUpgradingTenantVersion(txn)
 				if err != nil {
+					getUpgradeLogger().Error("failed to get upgrading tenant version",
+						zap.Error(err))
 					return err
 				}
+
+				getUpgradeLogger().Info("get upgrading tenant version",
+					zap.String("upgrade", upgrade.String()),
+					zap.Bool("has", ok))
 				if !ok || upgrade.TotalTenant == upgrade.ReadyTenant {
 					return nil
 				}
@@ -138,14 +145,24 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				// no upgrade logic on current cn, skip
 				v := s.getFinalVersionHandle().Metadata().Version
 				if versions.Compare(upgrade.ToVersion, v) > 0 {
+					getUpgradeLogger().Info("skip upgrade tenant",
+						zap.String("final", v),
+						zap.String("to", upgrade.ToVersion))
 					return nil
 				}
 
 				// select task and tenants for update
 				taskID, tenants, createVersions, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
 				if err != nil {
+					getUpgradeLogger().Error("failed to load upgrade tenants",
+						zap.String("upgrade", upgrade.String()),
+						zap.Error(err))
 					return err
 				}
+
+				getUpgradeLogger().Info("load upgrade tenants",
+					zap.Int("count", len(tenants)),
+					zap.String("upgrade", upgrade.String()))
 				if len(tenants) == 0 {
 					return nil
 				}
@@ -154,34 +171,75 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				h := s.getVersionHandle(upgrade.ToVersion)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
+
+					getUpgradeLogger().Info("upgrade tenant",
+						zap.Int32("tenant", id),
+						zap.String("tenant-version", createVersion),
+						zap.String("upgrade", upgrade.String()))
+
 					// createVersion >= upgrade.ToVersion already upgrade
 					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
 						continue
 					}
+
+					getUpgradeLogger().Info("execute upgrade tenant",
+						zap.Int32("tenant", id),
+						zap.String("tenant-version", createVersion),
+						zap.String("upgrade", upgrade.String()))
+
 					if err := h.HandleTenantUpgrade(ctx, id, txn); err != nil {
+						getUpgradeLogger().Error("failed to execute upgrade tenant",
+							zap.Int32("tenant", id),
+							zap.String("tenant-version", createVersion),
+							zap.String("upgrade", upgrade.String()),
+							zap.Error(err))
 						return err
 					}
+
 					if err := versions.UpgradeTenantVersion(id, h.Metadata().Version, txn); err != nil {
+						getUpgradeLogger().Error("failed to update upgrade tenant create version",
+							zap.Int32("tenant", id),
+							zap.String("upgrade", upgrade.String()),
+							zap.Error(err))
 						return err
 					}
+
+					getUpgradeLogger().Info("execute upgrade tenant completed",
+						zap.Int32("tenant", id),
+						zap.String("tenant-version", createVersion),
+						zap.String("upgrade", upgrade.String()))
 				}
+
 				if err := versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
+					getUpgradeLogger().Error("failed to update upgrade tenant state",
+						zap.String("upgrade", upgrade.String()))
 					return err
 				}
+				getUpgradeLogger().Info("tenant state updated",
+					zap.Int32("from", tenants[0]),
+					zap.Int32("to", tenants[len(tenants)-1]),
+					zap.String("upgrade", upgrade.String()))
 
 				// update count, we need using select for update to avoid concurrent update
 				upgrade, err = versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
 				if err != nil {
+					getUpgradeLogger().Error("failed to get latest upgrade info",
+						zap.String("upgrade", upgrade.String()))
 					return err
 				}
 				upgrade.ReadyTenant += int32(len(tenants))
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
 					panic("BUG: invalid upgrade tenant")
 				}
+
+				getUpgradeLogger().Info("upgrade tenant ready count changed",
+					zap.String("upgrade", upgrade.String()))
 				return versions.UpdateVersionUpgradeTasks(upgrade, txn)
 			},
 			opts)
 		if err != nil {
+			getUpgradeLogger().Error("tenant task handle failed",
+				zap.Error(err))
 			return false, err
 		}
 		return hasUpgradeTenants, nil

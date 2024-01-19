@@ -59,6 +59,7 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// time.
 
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
+		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err
 	}
 	if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
@@ -91,6 +92,8 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// First version as a genesis version, always need to be PREPARE.
 			// Because the first version need to init upgrade framework tables.
 			if len(s.handles) == 1 {
+				getUpgradeLogger().Info("init upgrade framework",
+					zap.String("final-version", final.Version))
 				return s.handles[0].Prepare(ctx, txn, true)
 			}
 
@@ -98,10 +101,17 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// And upgrade to current version.
 			created, err := versions.IsFrameworkTablesCreated(txn)
 			if err != nil {
+				getUpgradeLogger().Error("failed to check upgrade framework",
+					zap.Error(err))
 				return err
 			}
 			if !created {
+				getUpgradeLogger().Info("init upgrade framework",
+					zap.String("final-version", final.Version))
+
 				if err := s.handles[0].Prepare(ctx, txn, false); err != nil {
+					getUpgradeLogger().Error("failed to init upgrade framework",
+						zap.Error(err))
 					return err
 				}
 
@@ -110,18 +120,26 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					res.Close()
 				}
 				return err
-
 			}
 
 			// lock version table
 			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
+				getUpgradeLogger().Error("failed to lock table",
+					zap.String("table", catalog.MOVersionTable),
+					zap.Error(err))
 				return err
 			}
 
 			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
+				getUpgradeLogger().Error("failed to get latest version",
+					zap.Error(err))
 				return err
 			}
+
+			getUpgradeLogger().Info("get current mo cluster latest version",
+				zap.String("latest", v.Version),
+				zap.String("final", final.Version))
 
 			// cluster is upgrading to v1, only v1's cn can start up.
 			if !v.IsReady() && v.Version != final.Version {
@@ -148,24 +166,42 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 				if err == nil && ok && state == versions.StateReady {
 					s.upgrade.finalVersionCompleted.Store(true)
 				}
+				if err != nil {
+					getUpgradeLogger().Error("failed to get final version state",
+						zap.String("final", final.Version),
+						zap.Error(err))
+				}
 				return ok, err
 			}
 
 			addUpgradesToFinalVersion := func() error {
 				if err := versions.AddVersion(final.Version, versions.StateCreated, txn); err != nil {
+					getUpgradeLogger().Error("failed to add final version",
+						zap.String("final", final.Version),
+						zap.Error(err))
 					return err
 				}
 
+				getUpgradeLogger().Error("final version added",
+					zap.String("final", final.Version))
+
 				latest, err := versions.MustGetLatestReadyVersion(txn)
 				if err != nil {
+					getUpgradeLogger().Error("failed to get latest ready version",
+						zap.String("latest", latest),
+						zap.Error(err))
 					return err
 				}
+
+				getUpgradeLogger().Info("current latest ready version loaded",
+					zap.String("latest", latest),
+					zap.String("final", final.Version))
 
 				var upgrades []versions.VersionUpgrade
 				from := latest
 				append := func(v versions.Version) {
 					order := int32(len(upgrades))
-					upgrades = append(upgrades, versions.VersionUpgrade{
+					u := versions.VersionUpgrade{
 						FromVersion:    from,
 						ToVersion:      v.Version,
 						FinalVersion:   final.Version,
@@ -173,7 +209,12 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 						UpgradeOrder:   order,
 						UpgradeCluster: v.UpgradeCluster,
 						UpgradeTenant:  v.UpgradeTenant,
-					})
+					}
+					upgrades = append(upgrades, u)
+
+					getUpgradeLogger().Info("version upgrade added",
+						zap.String("upgrade", u.String()),
+						zap.String("final", final.Version))
 				}
 
 				// can upgrade to final version directly.
@@ -228,6 +269,11 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 	timer := time.NewTimer(s.upgrade.checkUpgradeDuration)
 	defer timer.Stop()
 
+	defer func() {
+		getUpgradeLogger().Info("upgrade task exit",
+			zap.String("final", s.getFinalVersionHandle().Metadata().Version))
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -255,11 +301,21 @@ func (s *service) performUpgrade(
 	// make sure only one cn can execute upgrade logic
 	state, ok, err := versions.GetVersionState(final.Version, txn, true)
 	if err != nil {
+		getUpgradeLogger().Error("failed to load final version state",
+			zap.String("final", final.Version),
+			zap.Error(err))
 		return false, err
 	}
 	if !ok {
+		getUpgradeLogger().Info("final version not found, retry later",
+			zap.String("final", final.Version))
 		return false, nil
 	}
+
+	getUpgradeLogger().Info("final version state loaded",
+		zap.String("final", final.Version),
+		zap.Int32("state", state))
+
 	if state == versions.StateReady {
 		return true, nil
 	}
@@ -267,20 +323,37 @@ func (s *service) performUpgrade(
 	// get upgrade steps, and perform upgrade one by one
 	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true, true)
 	if err != nil {
+		getUpgradeLogger().Error("failed to load upgrades",
+			zap.String("final", final.Version),
+			zap.Error(err))
 		return false, err
 	}
 
 	for _, u := range upgrades {
+		getUpgradeLogger().Info("handle version upgrade",
+			zap.String("upgrade", u.String()))
+
 		state, err := s.doUpgrade(ctx, u, txn)
 		if err != nil {
+			getUpgradeLogger().Error("failed to handle version upgrade",
+				zap.String("upgrade", u.String()),
+				zap.String("final", final.Version),
+				zap.Error(err))
 			return false, err
 		}
+
 		switch state {
 		case versions.StateReady:
 			// upgrade was completed
+			getUpgradeLogger().Info("upgrade version completed",
+				zap.String("upgrade", u.String()),
+				zap.String("final", final.Version))
 		case versions.StateUpgradingTenant:
 			// we must wait all tenant upgrade completed, and then upgrade to
 			// next version
+			getUpgradeLogger().Info("upgrade version in tenant upgrading",
+				zap.String("upgrade", u.String()),
+				zap.String("final", final.Version))
 			return false, nil
 		default:
 			panic(fmt.Sprintf("BUG: invalid state %d", state))
@@ -289,8 +362,15 @@ func (s *service) performUpgrade(
 
 	// all upgrades completed, update final version to ready state.
 	if err := versions.UpdateVersionState(final.Version, versions.StateReady, txn); err != nil {
+		getUpgradeLogger().Error("failed to update state",
+			zap.String("final", final.Version),
+			zap.Error(err))
+
 		return false, err
 	}
+
+	getUpgradeLogger().Info("upgrade to final version completed",
+		zap.String("final", final.Version))
 	return true, nil
 }
 
@@ -316,14 +396,23 @@ func (s *service) doUpgrade(
 
 	state := versions.StateReady
 	h := s.getVersionHandle(upgrade.ToVersion)
+
+	getUpgradeLogger().Info("execute upgrade prepare",
+		zap.String("upgrade", upgrade.String()))
 	if err := h.Prepare(ctx, txn, h.Metadata().Version == s.getFinalVersionHandle().Metadata().Version); err != nil {
 		return 0, err
 	}
+	getUpgradeLogger().Info("execute upgrade prepare completed",
+		zap.String("upgrade", upgrade.String()))
 
 	if upgrade.UpgradeCluster == versions.Yes {
+		getUpgradeLogger().Info("execute upgrade cluster",
+			zap.String("upgrade", upgrade.String()))
 		if err := h.HandleClusterUpgrade(ctx, txn); err != nil {
 			return 0, err
 		}
+		getUpgradeLogger().Info("execute upgrade cluster completed",
+			zap.String("upgrade", upgrade.String()))
 	}
 
 	if upgrade.UpgradeTenant == versions.Yes {
@@ -332,6 +421,10 @@ func (s *service) doUpgrade(
 			s.upgrade.upgradeTenantBatch,
 			func(ids []int32) error {
 				upgrade.TotalTenant += int32(len(ids))
+				getUpgradeLogger().Info("add tenants to upgrade",
+					zap.String("upgrade", upgrade.String()),
+					zap.Int32("from", ids[0]),
+					zap.Int32("to", ids[len(ids)-1]))
 				return versions.AddUpgradeTenantTask(upgrade.ID, upgrade.ToVersion, ids[0], ids[len(ids)-1], txn)
 			},
 			txn)
@@ -341,10 +434,16 @@ func (s *service) doUpgrade(
 		if err := versions.UpdateVersionUpgradeTasks(upgrade, txn); err != nil {
 			return 0, err
 		}
+		getUpgradeLogger().Info("upgrade tenants task updated",
+			zap.String("upgrade", upgrade.String()))
 		if upgrade.TotalTenant == upgrade.ReadyTenant {
 			state = versions.StateReady
 		}
 	}
+
+	getUpgradeLogger().Info("upgrade update state",
+		zap.String("upgrade", upgrade.String()),
+		zap.Int32("state", state))
 	return state, versions.UpdateVersionUpgradeState(upgrade, state, txn)
 }
 
@@ -359,7 +458,7 @@ func retryRun(
 		if err == nil {
 			return nil
 		}
-		getLogger().Error("execute task failed, retry later",
+		getUpgradeLogger().Error("execute task failed, retry later",
 			zap.String("task", name),
 			zap.Duration("wait", wait),
 			zap.Error(err))
@@ -389,4 +488,9 @@ func (s *service) adjustUpgrade() {
 	if s.upgrade.upgradeTenantTasks == 0 {
 		s.upgrade.upgradeTenantTasks = defaultUpgradeTenantTasks
 	}
+	getUpgradeLogger().Info("upgrade config",
+		zap.Duration("check-upgrade-duration", s.upgrade.checkUpgradeDuration),
+		zap.Duration("check-upgrade-tenant-duration", s.upgrade.checkUpgradeTenantDuration),
+		zap.Int("upgrade-tenant-tasks", s.upgrade.upgradeTenantTasks),
+		zap.Int("tenant-batch", s.upgrade.upgradeTenantBatch))
 }

@@ -93,3 +93,15 @@ type VersionUpgrade struct {
 	// ReadyTenant ready tenant count
 	ReadyTenant int32
 }
+
+func (v VersionUpgrade) String() string {
+	return fmt.Sprintf("%dth: %s -> %s (%v, %v, %d, %d), state %d",
+		v.UpgradeOrder,
+		v.FromVersion,
+		v.ToVersion,
+		v.UpgradeCluster == Yes,
+		v.UpgradeTenant == Yes,
+		v.TotalTenant,
+		v.ReadyTenant,
+		v.State)
+}
