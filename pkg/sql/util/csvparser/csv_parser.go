@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/spkg/bom"
@@ -77,6 +78,9 @@ type CSVConfig struct {
 	// > The "BIG" boss      -> The "BIG" boss
 	// This means we will meet unescaped quote in an unquoted field
 	UnescapedQuote bool
+
+	// see csv.Reader
+	Comment byte
 }
 
 // CSVParser is basically a copy of encoding/csv, but special-cased for MySQL-like input.
@@ -148,6 +152,9 @@ type CSVParser struct {
 	appendBuf *bytes.Buffer
 
 	reuseRow bool
+
+	// see csv.Reader
+	comment byte
 }
 
 type field struct {
@@ -163,12 +170,21 @@ func NewCSVParser(
 	shouldParseHeader bool,
 	reuseRow bool,
 ) (*CSVParser, error) {
+	// see csv.Reader
+	if !validDelim(rune(cfg.FieldsTerminatedBy[0])) || (cfg.Comment != 0 && !validDelim(rune(cfg.Comment))) || cfg.Comment == cfg.FieldsTerminatedBy[0] {
+		return nil, moerr.NewInvalidInputNoCtx("invalid field or comment delimiter")
+	}
+
 	var err error
 	var separator, delimiter, terminator string
 
 	separator = cfg.FieldsTerminatedBy
 	delimiter = cfg.FieldsEnclosedBy
 	terminator = cfg.LinesTerminatedBy
+
+	if terminator == "\r\n" {
+		terminator = ""
+	}
 
 	var quoteStopSet, newLineStopSet []byte
 	unquoteStopSet := []byte{separator[0]}
@@ -241,6 +257,10 @@ func (parser *CSVParser) Read() (row []Field, err error) {
 
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
+}
+
+func validDelim(r rune) bool {
+	return r != 0 && r != '"' && r != '\r' && r != '\n' && utf8.ValidRune(r) && r != utf8.RuneError
 }
 
 // readRow reads a row from the datafile.
@@ -604,6 +624,19 @@ outside:
 					parser.recordBuffer = parser.recordBuffer[:0]
 					continue
 				}
+			}
+			// skip lines start with comment
+			if err == nil && parser.comment != 0 && parser.recordBuffer[0] == parser.comment {
+				parser.recordBuffer = parser.recordBuffer[:0]
+				parser.fieldIndexes = parser.fieldIndexes[:0]
+				parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
+
+				isEmptyLine = true
+				whitespaceLine = true
+				foundStartingByThisLine = false
+				prevToken = csvTokenNewLine
+				fieldIsQuoted = false
+				continue
 			}
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)

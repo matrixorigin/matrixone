@@ -180,7 +180,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
 
-	linesTerminatedBy := "\n"
+	linesTerminatedBy := ""
 	linesStartingBy := ""
 
 	if param.Extern.Tail.Fields != nil {
@@ -216,6 +216,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
+		Comment:            '#',
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
