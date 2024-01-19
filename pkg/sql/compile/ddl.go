@@ -2548,6 +2548,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
+	defer vec.Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
 		return err
 	}

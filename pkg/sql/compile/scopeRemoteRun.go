@@ -189,6 +189,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
+		defer func() {
+			mpool.DeleteMPool(c.proc.Mp())
+		}()
 
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
@@ -372,7 +375,11 @@ func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
-		procInfo.AccountId = defines.GetAccountId(proc.Ctx)
+		accountId, err := defines.GetAccountId(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+		procInfo.AccountId = accountId
 		snapshot, err := proc.TxnOperator.Snapshot()
 		if err != nil {
 			return nil, err

@@ -641,7 +641,7 @@ func (txn *Transaction) getCachedTable(
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
 			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
-				txn.tableCache.tableMap.Delete(genTableKey(ctx, k.name, k.databaseId))
+				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}
 		}
@@ -694,8 +694,9 @@ func (txn *Transaction) delTransaction() {
 	txn.createMap = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
-	txn.blockId_tn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
+
+	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)

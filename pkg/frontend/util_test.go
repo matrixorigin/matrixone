@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sort"
 	"strings"
@@ -506,7 +507,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 }
 
 func TestGetExprValue(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string

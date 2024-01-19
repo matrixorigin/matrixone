@@ -63,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -1970,10 +1971,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	{
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -3397,13 +3398,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
@@ -3490,9 +3491,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
 			switch name {
-			case "starcount", "count":
+			case "starcount":
 				partialResults = append(partialResults, int64(0))
 				partialResultTypes[i] = types.T_int64
+			case "count":
+				if (uint64(agg.F.Func.Obj) & function.Distinct) != 0 {
+					partialResults = nil
+				} else {
+					partialResults = append(partialResults, int64(0))
+					partialResultTypes[i] = types.T_int64
+				}
 			case "min", "max":
 				partialResults = append(partialResults, nil)
 			default:

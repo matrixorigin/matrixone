@@ -1510,7 +1510,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 
 		//non-sys account can not truncate the cluster table
-		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if truncateTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
@@ -1593,7 +1597,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		//non-sys account can not drop the cluster table
-		if dropTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
@@ -1973,7 +1981,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 	alterTable.Database = databaseName
 	alterTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
-	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if alterTable.IsClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
@@ -2351,7 +2363,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	// check Constraint Name (include index/ unique)
-	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return nil, err
 	}

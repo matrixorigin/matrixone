@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -423,6 +424,76 @@ func init() {
 	checkpointDataSchemas_Curr = checkpointDataSchemas_V11
 }
 
+func IDXString(idx uint16) string {
+	switch idx {
+	case MetaIDX:
+		return "MetaIDX"
+	case DBInsertIDX:
+		return "DBInsertIDX"
+	case DBInsertTxnIDX:
+		return "DBInsertTxnIDX"
+	case DBDeleteIDX:
+		return "DBDeleteIDX"
+	case DBDeleteTxnIDX:
+		return "DBDeleteTxnIDX"
+	case TBLInsertIDX:
+		return "TBLInsertIDX"
+	case TBLInsertTxnIDX:
+		return "TBLInsertTxnIDX"
+	case TBLDeleteIDX:
+		return "TBLDeleteIDX"
+	case TBLDeleteTxnIDX:
+		return "TBLDeleteTxnIDX"
+	case TBLColInsertIDX:
+		return "TBLColInsertIDX"
+	case TBLColDeleteIDX:
+		return "TBLColDeleteIDX"
+	case SEGInsertIDX:
+		return "SEGInsertIDX"
+	case SEGInsertTxnIDX:
+		return "SEGInsertTxnIDX"
+	case SEGDeleteIDX:
+		return "SEGDeleteIDX"
+	case SEGDeleteTxnIDX:
+		return "SEGDeleteTxnIDX"
+	case BLKMetaInsertIDX:
+		return "BLKMetaInsertIDX"
+	case BLKMetaInsertTxnIDX:
+		return "BLKMetaInsertTxnIDX"
+	case BLKMetaDeleteIDX:
+		return "BLKMetaDeleteIDX"
+	case BLKMetaDeleteTxnIDX:
+		return "BLKMetaDeleteTxnIDX"
+
+	case BLKTNMetaInsertIDX:
+		return "BLKTNMetaInsertIDX"
+	case BLKTNMetaInsertTxnIDX:
+		return "BLKTNMetaInsertTxnIDX"
+	case BLKTNMetaDeleteIDX:
+		return "BLKTNMetaDeleteIDX"
+	case BLKTNMetaDeleteTxnIDX:
+		return "BLKTNMetaDeleteTxnIDX"
+
+	case BLKCNMetaInsertIDX:
+		return "BLKCNMetaInsertIDX"
+
+	case TNMetaIDX:
+		return "TNMetaIDX"
+
+	case StorageUsageInsIDX:
+		return "StorageUsageInsIDX"
+
+	case ObjectInfoIDX:
+		return "ObjectInfoIDX"
+	case TNObjectInfoIDX:
+		return "TNObjectInfoIDX"
+	case StorageUsageDelIDX:
+		return "StorageUsageDelIDX"
+	default:
+		return fmt.Sprintf("UnknownIDX(%d)", idx)
+	}
+}
+
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
@@ -435,7 +506,7 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 	checkpointDataReferVersions[version] = checkpointDataRefer
 }
 
-func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) func(c *catalog.Catalog) (*CheckpointData, error) {
+func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, skipLoadObjectStats bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
@@ -446,7 +517,9 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool) fu
 		if err != nil {
 			return
 		}
-		err = collector.PostLoop(c)
+		if !skipLoadObjectStats {
+			err = collector.PostLoop(c)
+		}
 
 		if collectUsage {
 			collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
@@ -474,7 +547,8 @@ func BackupCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (
 
 func GlobalCheckpointDataFactory(
 	end types.TS,
-	versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+	versionInterval time.Duration,
+) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
@@ -2484,6 +2558,26 @@ func (data *CheckpointData) readAll(
 		common.AnyField("size", checkpointDataSize),
 		common.AnyField("duration", time.Since(readDuration)))
 	return
+}
+
+func (data *CheckpointData) ExportStats(prefix string) []zap.Field {
+	fields := make([]zap.Field, 0, len(data.bats)+2)
+	totalSize := 0
+	totalRow := 0
+	for idx := range data.bats {
+		if data.bats[idx] == nil || data.bats[idx].Length() == 0 {
+			continue
+		}
+		size := data.bats[idx].Allocated()
+		rows := data.bats[idx].Length()
+		totalSize += size
+		totalRow += rows
+		fields = append(fields, zap.Int(fmt.Sprintf("%s%s-Size", prefix, IDXString(uint16(idx))), size))
+		fields = append(fields, zap.Int(fmt.Sprintf("%s%s-Row", prefix, IDXString(uint16(idx))), rows))
+	}
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), totalSize))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), totalRow))
+	return fields
 }
 
 func (data *CheckpointData) Close() {
