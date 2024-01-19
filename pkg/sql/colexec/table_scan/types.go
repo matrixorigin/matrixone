@@ -30,7 +30,8 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 
-	buf *batch.Batch
+	buf    *batch.Batch
+	tmpBuf *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -45,5 +46,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
+	}
+
+	if arg.tmpBuf != nil {
+		arg.tmpBuf.Clean(proc.Mp())
+		arg.tmpBuf = nil
 	}
 }
