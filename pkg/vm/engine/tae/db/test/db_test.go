@@ -5227,6 +5227,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
+	logutil.Infof(tae.Catalog.SimplePPString(3))
 	tae.ForceLongCheckpoint()
 	{
 		txn, rel := tae.GetRelation()
@@ -5236,7 +5237,9 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
 	}
+	logutil.Infof(tae.Catalog.SimplePPString(3))
 	tae.Restart(ctx)
+	logutil.Infof(tae.Catalog.SimplePPString(3))
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)

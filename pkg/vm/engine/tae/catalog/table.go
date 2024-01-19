@@ -361,6 +361,15 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
 		it.Next()
 	}
+	it2 := entry.deleteList.Copy().Iter()
+	for it2.Next() {
+		_ = w.WriteByte('\n')
+		w.WriteString(common.RepeatStr("\t", depth+1))
+		w.WriteString(prefix)
+		objID := it2.Item().ObjectID
+		w.WriteString(objID.String())
+		w.WriteString(it2.Item().StringLocked())
+	}
 	return w.String()
 }
 

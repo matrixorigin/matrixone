@@ -44,7 +44,6 @@ func newBlock(
 ) *block {
 	blk := &block{}
 	blk.baseBlock = newBaseBlock(blk, meta, rt)
-	blk.getMVCC().SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)
 	node.Ref()
@@ -182,7 +181,12 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.getMVCC().GetChangeIntentionCnt() == 0 {
+	changeCnt := uint32(0)
+	objectMVCC := blk.tryGetMVCC()
+	if objectMVCC != nil {
+		changeCnt = objectMVCC.GetChangeIntentionCnt()
+	}
+	if changeCnt == 0 {
 		// No deletes found
 		score = 0
 	} else {
@@ -230,6 +234,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	schema := blk.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
+	objMVCC := blk.tryGetMVCC()
 	for blkID = uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
 		var ok bool
 		ok, err = pnode.ContainsKey(ctx, filter.Val, uint32(blkID))
@@ -249,10 +254,13 @@ func (blk *block) getPersistedRowByFilter(
 		}
 		offset = uint32(off)
 
-		blk.getMVCC().RLock()
-		defer blk.getMVCC().RUnlock()
+		if objMVCC == nil {
+			return
+		}
+		objMVCC.RLock()
+		defer objMVCC.RUnlock()
 		var deleted bool
-		deleted, err = blk.getMVCC().IsDeletedLocked(offset, txn, blkID)
+		deleted, err = objMVCC.IsDeletedLocked(offset, txn, blkID)
 		if err != nil {
 			return
 		}
@@ -278,7 +286,11 @@ func (blk *block) EstimateMemSize() (int, int) {
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	dsize := blk.getMVCC().EstimateMemSizeLocked()
+	objMVCC := blk.tryGetMVCC()
+	if objMVCC == nil {
+		return 0, 0
+	}
+	dsize := objMVCC.EstimateMemSizeLocked()
 	return 0, dsize
 }
 

@@ -341,7 +341,14 @@ func NewObjectMVCCHandle(meta *catalog.ObjectEntry) *ObjectMVCCHandle {
 		deletes: make(map[uint16]*MVCCHandle),
 	}
 	node.UpgradeAllDeleteChain()
+	node.SetDeletesListener(node.OnApplyDelete)
 	return node
+}
+func (n *ObjectMVCCHandle) OnApplyDelete(
+	deleted uint64,
+	ts types.TS) (err error) {
+	n.meta.GetTable().RemoveRows(deleted)
+	return
 }
 func (n *ObjectMVCCHandle) GetOrCreateDeleteChain(blkID uint16) *MVCCHandle {
 	deletes := n.deletes[blkID]
@@ -427,9 +434,9 @@ func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (objectio.Locati
 }
 
 func (n *ObjectMVCCHandle) StringLocked() string {
-	s := "deletes:\n"
+	s:=""
 	for blkID, deletes := range n.deletes {
-		s = fmt.Sprintf("%sBLK-%d:%s\n", s, blkID, deletes.StringLocked())
+		s = fmt.Sprintf("%s%d:%s", s, blkID, deletes.StringLocked())
 	}
 	return s
 }
@@ -606,7 +613,11 @@ func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
 func (n *MVCCHandle) StringLocked() string {
 	s := ""
 	if n.deletes.DepthLocked() > 0 {
-		s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
+		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
+		s = fmt.Sprintf("InMemory:Cnt %d\n",n.deletes.mask.GetCardinality())
+	}
+	if n.deltaloc.Depth() > 0 {
+		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())
 	}
 	return s
 }

@@ -47,7 +47,6 @@ func newABlock(
 ) *ablock {
 	blk := &ablock{}
 	blk.baseBlock = newBaseBlock(blk, meta, rt)
-	blk.getMVCC().SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
 		pnode := newPersistedNode(blk.baseBlock)
 		node := NewNode(pnode)
@@ -61,13 +60,6 @@ func newABlock(
 		blk.node.Store(node)
 	}
 	return blk
-}
-
-func (blk *ablock) OnApplyDelete(
-	deleted uint64,
-	ts types.TS) (err error) {
-	blk.meta.GetTable().RemoveRows(deleted)
-	return
 }
 
 func (blk *ablock) FreezeAppend() {
@@ -360,7 +352,12 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool, err error) {
 		return
 	}
 
-	if blk.getMVCC().GetChangeIntentionCnt() == 0 && rows == 0 {
+	changesCnt := uint32(0)
+	objectMVCC := blk.tryGetMVCC()
+	if objectMVCC != nil {
+		changesCnt = objectMVCC.GetChangeIntentionCnt()
+	}
+	if changesCnt == 0 && rows == 0 {
 		score = 0
 	} else {
 		score = 1
@@ -410,7 +407,11 @@ func (blk *ablock) EstimateMemSize() (int, int) {
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	dsize := blk.getMVCC().EstimateMemSizeLocked()
+	dsize := 0
+	objMVCC := blk.tryGetMVCC()
+	if objMVCC != nil {
+		dsize = objMVCC.EstimateMemSizeLocked()
+	}
 	asize := blk.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()
