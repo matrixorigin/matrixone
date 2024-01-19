@@ -65,7 +65,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -159,7 +159,8 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 }
 
 func splitObjectStats(arg *Argument, proc *process.Process,
-	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16) error {
+	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
+) error {
 	// bat comes from old CN, no object stats vec in it.
 	// to ensure all bats the TN received contain the object stats column, we should
 	// construct the object stats from block info here.
