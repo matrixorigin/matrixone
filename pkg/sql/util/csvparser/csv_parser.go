@@ -53,12 +53,12 @@ const (
 type CSVConfig struct {
 	// they can only be used by LOAD DATA
 	// https://dev.mysql.com/doc/refman/8.0/en/load-data.html#load-data-field-line-handling
-	LineStartingBy   string
-	LineTerminatedBy string
+	LinesStartingBy   string
+	LinesTerminatedBy string
 
-	FieldTerminatedBy string
-	FieldEnclosedBy   string
-	FieldEscapedBy    string
+	FieldsTerminatedBy string
+	FieldsEnclosedBy   string
+	FieldsEscapedBy    string
 
 	Null              []string
 	Header            bool
@@ -67,7 +67,7 @@ type CSVConfig struct {
 	NotNull           bool
 
 	AllowEmptyLine bool
-	// For non-empty FieldEnclosedBy (for example quotes), null elements inside quotes are not considered as null except for
+	// For non-empty FieldsEnclosedBy (for example quotes), null elements inside quotes are not considered as null except for
 	// `\N` (when escape-by is `\`). That is to say, `\N` is special for null because it always means null.
 	QuotedNullIsText bool
 	// ref https://dev.mysql.com/doc/refman/8.0/en/load-data.html
@@ -135,8 +135,7 @@ type CSVParser struct {
 	columns []string
 
 	lastRow []Field
-	rowID   int
-	length  int
+
 	// the reader position we have parsed, if the underlying reader is not
 	// a compressed file, it's the file position we have parsed too.
 	// this value may go backward when failed to read quoted field, but it's
@@ -167,9 +166,9 @@ func NewCSVParser(
 	var err error
 	var separator, delimiter, terminator string
 
-	separator = cfg.FieldTerminatedBy
-	delimiter = cfg.FieldEnclosedBy
-	terminator = cfg.LineTerminatedBy
+	separator = cfg.FieldsTerminatedBy
+	delimiter = cfg.FieldsEnclosedBy
+	terminator = cfg.LinesTerminatedBy
 
 	var quoteStopSet, newLineStopSet []byte
 	unquoteStopSet := []byte{separator[0]}
@@ -185,24 +184,24 @@ func NewCSVParser(
 	}
 	unquoteStopSet = append(unquoteStopSet, newLineStopSet...)
 
-	if len(cfg.LineStartingBy) > 0 {
-		if strings.Contains(cfg.LineStartingBy, terminator) {
-			return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", cfg.LineStartingBy, terminator))
+	if len(cfg.LinesStartingBy) > 0 {
+		if strings.Contains(cfg.LinesStartingBy, terminator) {
+			return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", cfg.LinesStartingBy, terminator))
 		}
 	}
 
 	escFlavor := escapeFlavorNone
 	var r *regexp.Regexp
 
-	if len(cfg.FieldEscapedBy) > 0 {
+	if len(cfg.FieldsEscapedBy) > 0 {
 		escFlavor = escapeFlavorMySQL
-		quoteStopSet = append(quoteStopSet, cfg.FieldEscapedBy[0])
-		unquoteStopSet = append(unquoteStopSet, cfg.FieldEscapedBy[0])
+		quoteStopSet = append(quoteStopSet, cfg.FieldsEscapedBy[0])
+		unquoteStopSet = append(unquoteStopSet, cfg.FieldsEscapedBy[0])
 		// we need special treatment of the NULL value \N, used by MySQL.
-		if !cfg.NotNull && slices.Contains(cfg.Null, cfg.FieldEscapedBy+`N`) {
+		if !cfg.NotNull && slices.Contains(cfg.Null, cfg.FieldsEscapedBy+`N`) {
 			escFlavor = escapeFlavorMySQLWithNull
 		}
-		r, err = regexp.Compile(`(?s)` + regexp.QuoteMeta(cfg.FieldEscapedBy) + `.`)
+		r, err = regexp.Compile(`(?s)` + regexp.QuoteMeta(cfg.FieldsEscapedBy) + `.`)
 		if err != nil {
 			return nil, err
 		}
@@ -216,8 +215,8 @@ func NewCSVParser(
 		comma:             []byte(separator),
 		quote:             []byte(delimiter),
 		newLine:           []byte(terminator),
-		startingBy:        []byte(cfg.LineStartingBy),
-		escapedBy:         cfg.FieldEscapedBy,
+		startingBy:        []byte(cfg.LinesStartingBy),
+		escapedBy:         cfg.FieldsEscapedBy,
 		unescapeRegexp:    r,
 		escFlavor:         escFlavor,
 		quoteByteSet:      makeByteSet(quoteStopSet),
@@ -290,7 +289,7 @@ func (parser *CSVParser) unescapeString(input field) (unescaped string, isNull b
 	if parser.escFlavor == escapeFlavorMySQLWithNull && unescaped == parser.escapedBy+`N` {
 		return input.content, true, nil
 	}
-	if parser.cfg.FieldEnclosedBy != "" && !input.quoted && unescaped == "NULL" {
+	if parser.cfg.FieldsEnclosedBy != "" && !input.quoted && unescaped == "NULL" {
 		return input.content, true, nil
 	}
 	if len(parser.escapedBy) > 0 {

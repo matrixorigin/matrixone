@@ -17,7 +17,6 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -176,58 +175,47 @@ type ParseLineHandler struct {
 	moCsvLineArray [][]csvparser.Field
 }
 
-// NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
-	rCsv := csv.NewReader(bufio.NewReader(r))
-	rCsv.Comma = cma
-	rCsv.Comment = cmnt
-	rCsv.LazyQuotes = lazyQt
-	rCsv.TrimLeadingSpace = tls
-	rCsv.FieldsPerRecord = -1
-	return rCsv
-}
-
 func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
-	fieldTerminatedBy := ","
-	fieldEnclosedBy := "\""
-	fieldEscapedBy := "\\"
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
 
-	lineTerminatedBy := "\n"
-	lineStartingBy := ""
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
 
 	if param.Extern.Tail.Fields != nil {
-		fieldTerminatedBy = param.Extern.Tail.Fields.Terminated
+		fieldsTerminatedBy = param.Extern.Tail.Fields.Terminated
 		if param.Extern.Tail.Fields.EnclosedBy != 0 {
-			fieldEnclosedBy = string(param.Extern.Tail.Fields.EnclosedBy)
+			fieldsEnclosedBy = string(param.Extern.Tail.Fields.EnclosedBy)
 		}
 		if param.Extern.Tail.Fields.EscapedBy != 0 {
-			fieldEscapedBy = string(param.Extern.Tail.Fields.EscapedBy)
+			fieldsEscapedBy = string(param.Extern.Tail.Fields.EscapedBy)
 		}
 	}
 
 	if param.Extern.Tail.Lines != nil {
 		if param.Extern.Tail.Lines.TerminatedBy != "" {
-			lineTerminatedBy = param.Extern.Tail.Lines.TerminatedBy
+			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy
 		}
 		if param.Extern.Tail.Lines.StartingBy != "" {
-			lineStartingBy = param.Extern.Tail.Lines.StartingBy
+			linesStartingBy = param.Extern.Tail.Lines.StartingBy
 		}
 	}
 
 	if param.Extern.Format == tree.JSONLINE {
-		fieldTerminatedBy = "\t"
-		fieldEscapedBy = ""
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
 	}
 
 	config := csvparser.CSVConfig{
-		FieldTerminatedBy: fieldTerminatedBy,
-		FieldEnclosedBy:   fieldEnclosedBy,
-		FieldEscapedBy:    fieldEscapedBy,
-		LineTerminatedBy:  lineTerminatedBy,
-		LineStartingBy:    lineStartingBy,
-		NotNull:           false,
-		Null:              []string{`\N`},
-		UnescapedQuote:    true,
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)

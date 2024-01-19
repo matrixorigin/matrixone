@@ -104,9 +104,9 @@ func TestTPCH(t *testing.T) {
 	reader := strings.NewReader(input)
 
 	cfg := CSVConfig{
-		FieldTerminatedBy: "|",
-		FieldEnclosedBy:   "",
-		TrimLastSep:       true,
+		FieldsTerminatedBy: "|",
+		FieldsEnclosedBy:   "",
+		TrimLastSep:        true,
 	}
 
 	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
@@ -175,9 +175,9 @@ func TestTPCHMultiBytes(t *testing.T) {
 		require.Len(t, allExpectedParserPos, len(datums))
 
 		cfg := CSVConfig{
-			FieldTerminatedBy: SepAndQuote[0],
-			FieldEnclosedBy:   SepAndQuote[1],
-			TrimLastSep:       false,
+			FieldsTerminatedBy: SepAndQuote[0],
+			FieldsEnclosedBy:   SepAndQuote[1],
+			TrimLastSep:        false,
 		}
 
 		reader := NewStringReader(inputStr)
@@ -196,8 +196,8 @@ func TestTPCHMultiBytes(t *testing.T) {
 
 func TestRFC4180(t *testing.T) {
 	cfg := CSVConfig{
-		FieldTerminatedBy: ",",
-		FieldEnclosedBy:   `"`,
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
 	}
 
 	// example 1, trailing new lines
@@ -314,12 +314,12 @@ zzz,yyy,xxx`), int64(ReadBlockSize), false, false)
 
 func TestMySQL(t *testing.T) {
 	cfg := CSVConfig{
-		FieldTerminatedBy: ",",
-		FieldEnclosedBy:   `"`,
-		LineTerminatedBy:  "\n",
-		FieldEscapedBy:    `\`,
-		NotNull:           false,
-		Null:              []string{`\N`},
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		LinesTerminatedBy:  "\n",
+		FieldsEscapedBy:    `\`,
+		NotNull:            false,
+		Null:               []string{`\N`},
 	}
 
 	parser, err := NewCSVParser(&cfg, NewStringReader(`"\"","\\","\?"
@@ -408,11 +408,11 @@ func TestMySQL(t *testing.T) {
 
 func TestCustomEscapeChar(t *testing.T) {
 	cfg := CSVConfig{
-		FieldTerminatedBy: ",",
-		FieldEnclosedBy:   `"`,
-		FieldEscapedBy:    `!`,
-		NotNull:           false,
-		Null:              []string{`!N`},
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    `!`,
+		NotNull:            false,
+		Null:               []string{`!N`},
 	}
 
 	parser, err := NewCSVParser(&cfg, NewStringReader(`"!"","!!","!\"
@@ -441,11 +441,11 @@ func TestCustomEscapeChar(t *testing.T) {
 	assertPosEqual(t, parser, 26)
 
 	cfg = CSVConfig{
-		FieldTerminatedBy: ",",
-		FieldEnclosedBy:   `"`,
-		FieldEscapedBy:    ``,
-		NotNull:           false,
-		Null:              []string{`NULL`},
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    ``,
+		NotNull:            false,
+		Null:               []string{`NULL`},
 	}
 
 	parser, err = NewCSVParser(
