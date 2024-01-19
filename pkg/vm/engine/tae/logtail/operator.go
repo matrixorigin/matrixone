@@ -81,7 +81,10 @@ func (c *BoundTableOperator) processTableData() error {
 		if err = c.visitor.OnObject(obj); err != nil {
 			return err
 		}
-		deletes := tbl.TryGetTombstone(obj.ID)
+
+	}
+	tombstones := tbl.GetDeleteList().Copy().Items()
+	for _, deletes := range tombstones {
 		err = c.visitor.OnTombstone(deletes)
 		if err != nil {
 			return err

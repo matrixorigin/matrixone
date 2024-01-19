@@ -580,7 +580,7 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *cata
 }
 
 func (b *TableLogtailRespBuilder) visitDelete(e data.Tombstone) error {
-	deletes, err := e.VisitDeletes(b.ctx, b.start, b.end, b.blkMetaInsBatch)
+	deletes, err := e.VisitDeletes(b.ctx, b.start, b.end, b.blkMetaInsBatch, nil)
 	if err != nil {
 		return err
 	}

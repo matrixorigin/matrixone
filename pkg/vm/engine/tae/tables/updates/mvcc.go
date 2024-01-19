@@ -434,7 +434,7 @@ func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (objectio.Locati
 }
 
 func (n *ObjectMVCCHandle) StringLocked() string {
-	s:=""
+	s := ""
 	for blkID, deletes := range n.deletes {
 		s = fmt.Sprintf("%s%d:%s", s, blkID, deletes.StringLocked())
 	}
@@ -481,7 +481,7 @@ func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location
 	}
 	return mvcc.deltaloc.GetLatestNodeLocked().BaseNode.DeltaLoc
 }
-func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch) (delBatch *containers.Batch, err error) {
+func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch, tnInsertBat *containers.Batch) (delBatch *containers.Batch, err error) {
 	n.RLock()
 	defer n.RUnlock()
 	for blkOffset, mvcc := range n.deletes {
@@ -490,7 +490,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 		if len(nodes) != 0 {
 			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
 			for _, node := range nodes {
-				VisitDeltaloc(deltalocBat, n.meta, blkID, node, node.End, node.CreatedAt)
+				VisitDeltaloc(deltalocBat, tnInsertBat, n.meta, blkID, node, node.End, node.CreatedAt)
 			}
 			newest := nodes[len(nodes)-1]
 			// block has newer delta data on s3, no need to collect data
@@ -532,7 +532,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 	return
 }
 
-func VisitDeltaloc(bat *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
+func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, blkID *objectio.Blockid, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], commitTS, createTS types.TS) {
 	is_sorted := false
 	if !object.IsAppendable() && object.GetSchema().HasSortKey() {
 		is_sorted = true
@@ -547,6 +547,13 @@ func VisitDeltaloc(bat *containers.Batch, object *catalog.ObjectEntry, blkID *ob
 	bat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(node.Start, false)
 	bat.GetVectorByName(catalog.AttrCommitTs).Append(createTS, false)
 	bat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(blkID), false)
+
+	// When pull and push, it doesn't collect tn batch
+	if tnBatch != nil {
+		tnBatch.GetVectorByName(catalog.SnapshotAttr_DBID).Append(object.GetTable().GetDB().ID, false)
+		tnBatch.GetVectorByName(catalog.SnapshotAttr_TID).Append(object.GetTable().ID, false)
+		node.TxnMVCCNode.AppendTuple(tnBatch)
+	}
 	return
 }
 
@@ -614,7 +621,7 @@ func (n *MVCCHandle) StringLocked() string {
 	s := ""
 	if n.deletes.DepthLocked() > 0 {
 		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
-		s = fmt.Sprintf("InMemory:Cnt %d\n",n.deletes.mask.GetCardinality())
+		s = fmt.Sprintf("InMemory:Cnt %d\n", n.deletes.mask.GetCardinality())
 	}
 	if n.deltaloc.Depth() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())

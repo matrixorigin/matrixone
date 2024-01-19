@@ -773,6 +773,22 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		nil,
 		dataFactory)
+	if !deltaloc.IsEmpty() {
+		obj, err := rel.GetObjectByID(objid)
+		if err != nil {
+			panic(err)
+		}
+		tombstone := rel.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
+		_, blkOffset := blkid.Offsets()
+		mvccNode := &MVCCNode[*MetadataMVCCNode]{
+			EntryMVCCNode: &EntryMVCCNode{},
+			TxnMVCCNode:   txnNode,
+			BaseNode: &MetadataMVCCNode{
+				DeltaLoc: deltaloc,
+			},
+		}
+		tombstone.ReplayDeltaLoc(mvccNode, blkOffset)
+	}
 }
 
 func (catalog *Catalog) onReplayDeleteBlock(

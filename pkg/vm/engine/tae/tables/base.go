@@ -103,8 +103,8 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 func (blk *baseBlock) tryGetMVCC() *updates.ObjectMVCCHandle {
-	tombstone:=blk.meta.GetTable().TryGetTombstone(blk.meta.ID)
-	if tombstone == nil{
+	tombstone := blk.meta.GetTable().TryGetTombstone(blk.meta.ID)
+	if tombstone == nil {
 		return nil
 	}
 	return tombstone.(*updates.ObjectMVCCHandle)
@@ -922,8 +922,8 @@ func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc
 }
 
 func (blk *baseBlock) GetDeltaPersistedTS() types.TS {
-	objMVCC:=blk.tryGetMVCC()
-	if objMVCC==nil{
+	objMVCC := blk.tryGetMVCC()
+	if objMVCC == nil {
 		return types.TS{}
 	}
 	return objMVCC.GetDeltaPersistedTS()

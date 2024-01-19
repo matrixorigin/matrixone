@@ -529,7 +529,10 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	}
 	tombstones := entry.deleteList.Copy().Items()
 	for _, deletes := range tombstones {
-		processor.OnTombstone(deletes)
+		err = processor.OnTombstone(deletes)
+		if err!=nil{
+			return
+		}
 	}
 	return
 }

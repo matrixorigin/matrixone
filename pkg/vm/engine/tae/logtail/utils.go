@@ -809,6 +809,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
 	collector.ObjectFn = collector.VisitObj
+	collector.TombstoneFn = collector.VisitTombstone
 	return collector
 }
 
@@ -846,6 +847,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
 	collector.ObjectFn = collector.VisitObj
+	collector.TombstoneFn = collector.VisitTombstone
 
 	collector.Usage.ReservedAccIds = make(map[uint64]struct{})
 
@@ -3070,7 +3072,7 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 }
 
 func (collector *BaseCollector) visitTombstone(entry data.Tombstone) {
-	entry.VisitDeletes(nil, collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX])
+	entry.VisitDeletes(nil, collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX])
 }
 
 // TODO

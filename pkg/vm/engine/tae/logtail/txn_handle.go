@@ -143,7 +143,7 @@ func (b *TxnLogtailRespBuilder) visitDeltaloc(ideltalocChain any) {
 	if createAt.Equal(txnif.UncommitTS) {
 		createAt = b.txn.GetPrepareTS()
 	}
-	updates.VisitDeltaloc(b.batches[blkMetaInsBatch], deltalocChain.GetMeta(), deltalocChain.GetBlockID(), node, commitTS, createAt)
+	updates.VisitDeltaloc(b.batches[blkMetaInsBatch], nil, deltalocChain.GetMeta(), deltalocChain.GetBlockID(), node, commitTS, createAt)
 }
 
 func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
