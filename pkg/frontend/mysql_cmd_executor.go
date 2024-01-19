@@ -434,6 +434,24 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		}
 	}
 
+	getRoleName := func(roleId uint32) (roleName string, err error) {
+		sql := getSqlForRoleNameOfRoleId(int64(roleId))
+
+		var rets []ExecResult
+		if rets, err = executeSQLInBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), sql); err != nil {
+			return "", err
+		}
+
+		if !execResultArrayHasData(rets) {
+			return "", moerr.NewInternalError(ctx, "get role name failed")
+		}
+
+		if roleName, err = rets[0].GetString(ctx, 0, 0); err != nil {
+			return "", err
+		}
+		return roleName, nil
+	}
+
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
@@ -448,6 +466,11 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 			return err
 		}
 		if row[5], err = r.Size(ctx, disttae.AllColumns); err != nil {
+			return err
+		}
+		roleId := row[17].(uint32)
+		// role name
+		if row[18], err = getRoleName(roleId); err != nil {
 			return err
 		}
 		mrs.AddRow(row)

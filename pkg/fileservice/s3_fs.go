@@ -828,7 +828,7 @@ func newTracePoint() *tracePoint {
 	return tp
 }
 
-func (tp tracePoint) Name() string {
+func (tp tracePoint) TypeName() string {
 	return "fileservice.tracePoint"
 }
 

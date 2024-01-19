@@ -260,11 +260,11 @@ func (m *WaitTxn) DebugString() string {
 		m.CreatedOn)
 }
 
-func (m Request) Name() string {
+func (m Request) TypeName() string {
 	return "lockservice.request"
 }
 
-func (m Response) Name() string {
+func (m Response) TypeName() string {
 	return "lockservice.response"
 }
 
