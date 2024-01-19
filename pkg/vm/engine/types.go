@@ -154,8 +154,7 @@ type PrimaryKeyDef struct {
 }
 
 type RefChildTableDef struct {
-	Tables         []uint64
-	ChildrenTables []*plan.ChildTable
+	Tables []uint64
 }
 
 type StreamConfigsDef struct {
@@ -428,7 +427,7 @@ func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 				l += 8
 				tables[i] = tblId
 			}
-			def.Cts = append(def.Cts, &RefChildTableDef{Tables: tables})
+			def.Cts = append(def.Cts, &RefChildTableDef{tables})
 
 		case ForeignKey:
 			length = binary.BigEndian.Uint64(data[l : l+8])

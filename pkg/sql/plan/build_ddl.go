@@ -1244,7 +1244,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//process self reference foreign keys after colDefs are processed.
 	for _, selfRefer := range selfRefFkDatas {
-		if err := evaluateFkCols(ctx, selfRefer, createTable.TableDef); err != nil {
+		if err := checkFkColsAreValid(ctx, selfRefer, createTable.TableDef); err != nil {
 			return err
 		}
 	}
@@ -2917,11 +2917,15 @@ func buildUnLockTables(stmt *tree.UnLockTableStmt, ctx CompilerContext) (*Plan, 
 }
 
 type fkData struct {
-	IsSelfRefer bool // fk reference to itself
-	DbName      string
-	TableName   string
+	// fk reference to itself
+	IsSelfRefer bool
+	// the database that the fk refers to
+	parentDbName string
+	// the table that the fk refers to
+	parentTableName string
 	//the columns in foreign key
 	Cols *plan.FkColName
+	//fk definition
 	Def  *plan.ForeignKeyDef
 	//the column typs in foreign key
 	ColTyps map[int]*plan.Type
@@ -2936,10 +2940,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			OnDelete:    getRefAction(refer.OnDelete),
 			OnUpdate:    getRefAction(refer.OnUpdate),
 			ForeignCols: make([]uint64, len(refer.KeyParts)),
-			ParentTable: &plan.ParentTable{
-				ColNames: make([]string, len(refer.KeyParts)),
-			},
-			ColNames: make([]string, len(def.KeyParts)),
 		},
 	}
 
@@ -2949,17 +2949,20 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	}
 	fkColTyp := make(map[int]*plan.Type)
 	fkColName := make(map[int]string)
+	//get the column (id,name,type) from tableDef for the foreign key
 	for i, keyPart := range def.KeyParts {
 		getCol := false
 		colName := keyPart.ColName.Parts[0]
 		for _, col := range tableDef.Cols {
 			if col.Name == colName {
+				//column id from tableDef
 				fkData.Def.Cols[i] = col.ColId
+				//column name from tableDef
 				fkCols.Cols[i] = colName
+				//column type from tableDef
 				fkColTyp[i] = col.Typ
+				//column name from tableDef
 				fkColName[i] = colName
-				//record foreign key column names
-				fkData.Def.ColNames[i] = colName
 				getCol = true
 				break
 			}
@@ -2972,27 +2975,25 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.ColTyps = fkColTyp
 
 	// get foreign table & their columns
-	fkTableName := string(refer.TableName.ObjectName)
-	fkDbName := string(refer.TableName.SchemaName)
-	if fkDbName == "" {
-		fkDbName = ctx.DefaultDatabase()
+	parentTableName := string(refer.TableName.ObjectName)
+	parentDbName := string(refer.TableName.SchemaName)
+	if parentDbName == "" {
+		parentDbName = ctx.DefaultDatabase()
 	}
-	fkData.Def.ParentTable.DatabaseName = fkDbName
-	fkData.Def.ParentTable.TableName = fkTableName
 
-	for i, part := range refer.KeyParts {
-		fkData.Def.ParentTable.ColNames[i] = part.ColName.Parts[0]
+	for _, part := range refer.KeyParts {
 		fmt.Fprintf(os.Stderr, "refer name %v\n", part.ColName.Parts[0])
 	}
 
 	//foreign key reference to itself
-	if IsFkSelfRefer(fkDbName, fkTableName, dbName, tableDef.Name) {
+	if IsFkSelfRefer(parentDbName, parentTableName, dbName, tableDef.Name) {
 		//should be handled later for fk self reference
 		//PK and unique key may not be processed now
 		//check fk columns can not reference to themselves
+		//In self refer, the parent table is the table itself
 		parentColumnsMap := make(map[string]int8)
-		for _, name := range fkData.Def.ParentTable.ColNames {
-			parentColumnsMap[name] = 0
+		for _, part := range refer.KeyParts {
+			parentColumnsMap[part.ColName.Parts[0]] = 0
 		}
 		for _, name := range fkData.Cols.Cols {
 			if _, ok := parentColumnsMap[name]; ok {
@@ -3000,27 +3001,27 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			}
 		}
 		fkData.IsSelfRefer = true
-		fkData.DbName = fkDbName
-		fkData.TableName = fkTableName
+		fkData.parentDbName = parentDbName
+		fkData.parentTableName = parentTableName
 		fkData.Def.ForeignTbl = 0
 		return &fkData, nil
 	}
 
-	_, tableRef := ctx.Resolve(fkDbName, fkTableName)
-	if tableRef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
+	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
+	if parentTableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), parentTableName)
 	}
 
-	if tableRef.IsTemporary {
+	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 	}
 
-	fkData.DbName = fkDbName
-	fkData.TableName = fkTableName
+	fkData.parentDbName = parentDbName
+	fkData.parentTableName = parentTableName
 
-	fkData.Def.ForeignTbl = tableRef.TblId
+	fkData.Def.ForeignTbl = parentTableDef.TblId
 
-	if err := evaluateFkCols(ctx, &fkData, tableRef); err != nil {
+	if err := checkFkColsAreValid(ctx, &fkData, parentTableDef); err != nil {
 		return nil, err
 	}
 
@@ -3028,55 +3029,57 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 }
 
 /*
-*
+checkFkColsAreValid check foreign key columns is valid or not, then it saves them.
+the columns referred by the foreign key must appear in the unique keys or primary key
+in the parent table.
 
-	 	evaluateFkCols check foreign key columns is valid or not then saves them.
-		the columns of foreign key must appear in the unique keys or primary in the parent table.
+For instance:
+create table f1 (a int ,b int, c int ,d int ,e int,
+	primary key(a,b),  unique key(c,d), unique key (e))
 
-		For instance:
-		create table f1 (a int ,b int, c int ,d int ,e int,
-			primary key(a,b),  unique key(c,d), unique key (e))
+Case 1:
+	single column like "a" ,"b", "c", "d", "e" can be used as the column in foreign key of the child table
+	due to they are the member of the primary key or some Unique key.
 
-		Case 1:
-			single column like "a" ,"b", "c", "d", "e" can be used as the column in foreign key of the child table
-			due to they are the member of the primary key or some Unique key.
+Case 2:
+	"a, b" can be used as the columns in the foreign key of the child table
+	due to they are the member of the primary key.
 
-		Case 2:
-			"a, b" can be used as the columns in the foreign key fo the child table
-			due to they are the member of the primary key.
+	"c, d" can be used as the columns in the foreign key of the child table
+	due to they are the member of some unique key.
 
-	        "c, d" can be used as the columns in the foreign key fo the child table
-			due to they are the member of some unique key.
+Case 3:
 
-		Case 3:
-
-			"a, c" can not be used due to they belong to the different primary key / unique key
+	"a, c" can not be used due to they belong to the different primary key / unique key
 */
-func evaluateFkCols(ctx CompilerContext, fkData *fkData, tableRef *TableDef) error {
-	columnIdPos := make(map[uint64]int)                               //fk colId -> pos
-	columnNamePos := make(map[string]int)                             //fk columnName -> pos
-	uniqueColumns := make([]map[string]uint64, 0, len(tableRef.Cols)) // columnName of index and pk of fk -> colId
-	for i, col := range tableRef.Cols {
+func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *TableDef) error {
+	//colId in parent table-> pos in parent table
+	columnIdPos := make(map[uint64]int)
+	//columnName in parent table -> pos in parent table
+	columnNamePos := make(map[string]int)
+	//columnName of index and pk of parent table -> colId in parent table
+	uniqueColumns := make([]map[string]uint64, 0, len(parentTableDef.Cols))
+	for i, col := range parentTableDef.Cols {
 		columnIdPos[col.ColId] = i
 		columnNamePos[col.Name] = i
 	}
-	if tableRef.Pkey != nil {
-		//primary key column -> its colId
+	if parentTableDef.Pkey != nil {
+		//primary key column -> its colId in the parent table
 		uniqueMap := make(map[string]uint64)
-		for _, colName := range tableRef.Pkey.Names {
-			uniqueMap[colName] = tableRef.Cols[columnNamePos[colName]].ColId
+		for _, colName := range parentTableDef.Pkey.Names {
+			uniqueMap[colName] = parentTableDef.Cols[columnNamePos[colName]].ColId
 		}
 		uniqueColumns = append(uniqueColumns, uniqueMap)
 	}
 
 	//secondary key?
 	// now tableRef.Indices is empty, you can not test it
-	for _, index := range tableRef.Indexes {
+	for _, index := range parentTableDef.Indexes {
 		if index.Unique {
-			//unique key column -> its colId
+			//unique key column -> its colId in parent table
 			uniqueMap := make(map[string]uint64)
 			for _, uniqueColName := range index.Parts {
-				colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
+				colId := parentTableDef.Cols[columnNamePos[uniqueColName]].ColId
 				uniqueMap[uniqueColName] = colId
 			}
 			uniqueColumns = append(uniqueColumns, uniqueMap)
@@ -3090,7 +3093,7 @@ func evaluateFkCols(ctx CompilerContext, fkData *fkData, tableRef *TableDef) err
 			if _, exists := columnNamePos[colName]; exists { // column exists in parent table
 				if colId, ok := uniqueColumn[colName]; ok {
 					// check column type
-					if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkData.ColTyps[i].Id {
+					if parentTableDef.Cols[columnIdPos[colId]].Typ.Id != fkData.ColTyps[i].Id {
 						return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkData.Cols.Cols[i])
 					}
 					matchCol = append(matchCol, colId)

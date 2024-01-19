@@ -1247,7 +1247,7 @@ func makeInsertPlan(
 				}
 				filters[i] = filterExpr
 			}
-			
+
 			// append filter node
 			filterNode := &Node{
 				NodeType:    plan.Node_FILTER,

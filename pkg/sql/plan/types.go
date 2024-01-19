@@ -69,7 +69,6 @@ type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
 type IndexDef = plan.IndexDef
 type SubscriptionMeta = plan.SubscriptionMeta
-type ChildTable = plan.ChildTable
 
 type CompilerContext interface {
 	// Default database/schema in context
