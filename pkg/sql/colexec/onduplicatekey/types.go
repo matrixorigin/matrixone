@@ -36,7 +36,7 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch //batch to check conflict
+	checkConflictBat *batch.Batch // batch to check conflict
 	rbat             *batch.Batch
 }
 
@@ -75,7 +75,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
