@@ -867,6 +867,7 @@ func TestGetPkExprValue(t *testing.T) {
 		exprs      []*plan.Expr
 		expectVals [][]int64
 		canEvals   []bool
+		hasNull    []bool
 	}
 	equalToVecFn := func(expect []int64, actual any) bool {
 		vec := vector.NewVec(types.T_any.ToType())
@@ -890,15 +891,22 @@ func TestGetPkExprValue(t *testing.T) {
 		return expect[0] == actualVal
 	}
 
+	nullExpr := plan2.MakePlan2Int64ConstExprWithType(0)
+	nullExpr.Expr.(*plan.Expr_Lit).Lit.Isnull = true
+
 	tc := testCase{
 		desc: []string{
 			"a=2 and a=1",
 			"a in vec(1,2)",
 			"a=2 or a=1 or a=3",
 			"a in vec(1,10) or a=5 or (a=6 and a=7)",
+			"a=null",
 		},
 		canEvals: []bool{
-			true, true, true, true,
+			true, true, true, true, false,
+		},
+		hasNull: []bool{
+			false, false, false, false, true,
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -953,14 +961,19 @@ func TestGetPkExprValue(t *testing.T) {
 					}),
 				}),
 			}),
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				nullExpr,
+			}),
 		},
 		expectVals: [][]int64{
-			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10},
+			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10}, {},
 		},
 	}
 	for i, expr := range tc.exprs {
-		canEval, _, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+		canEval, isNull, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
 		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
+		require.Equalf(t, tc.hasNull[i], isNull, tc.desc[i])
 		if !canEval {
 			continue
 		}
