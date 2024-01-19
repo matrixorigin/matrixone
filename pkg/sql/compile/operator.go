@@ -800,7 +800,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -821,7 +821,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -838,7 +838,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -858,7 +858,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -878,7 +878,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -897,7 +897,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -914,7 +914,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	return arg
 }
 
@@ -944,7 +944,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
