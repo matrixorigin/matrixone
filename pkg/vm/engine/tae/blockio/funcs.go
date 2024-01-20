@@ -62,7 +62,7 @@ func LoadColumnsData(
 	return
 }
 
-func LoadColumnsDataWithVPool(
+func LoadColumnsData2(
 	ctx context.Context,
 	metaType objectio.DataMetaType,
 	cols []uint16,
@@ -71,6 +71,7 @@ func LoadColumnsDataWithVPool(
 	location objectio.Location,
 	m *mpool.MPool,
 	policy fileservice.Policy,
+	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, err error) {
 	name := location.Name()
@@ -93,12 +94,16 @@ func LoadColumnsDataWithVPool(
 		}
 
 		var vec containers.Vector
-		if vec, err = containers.CloneVector(
-			obj.(*vector.Vector),
-			m,
-			vPool,
-		); err != nil {
-			return
+		if needCopy {
+			if vec, err = containers.CloneVector(
+				obj.(*vector.Vector),
+				m,
+				vPool,
+			); err != nil {
+				return
+			}
+		} else {
+			vec = containers.ToTNVector(obj.(*vector.Vector), m)
 		}
 		vectors[i] = vec
 	}
@@ -136,7 +141,9 @@ func LoadTombstoneColumns(
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
 }
 
-func LoadColumnsBytTN(
+// LoadColumns2 load columns data from file service for TN
+// need to copy data from vPool to avoid releasing cache
+func LoadColumns2(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
@@ -146,10 +153,12 @@ func LoadColumnsBytTN(
 	policy fileservice.Policy,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
+	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, true, vPool)
 }
 
-func LoadTombstoneColumnsByTN(
+// LoadTombstoneColumns2 load tombstone data from file service for TN
+// need to copy data from vPool to avoid releasing cache
+func LoadTombstoneColumns2(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
@@ -158,7 +167,7 @@ func LoadTombstoneColumnsByTN(
 	m *mpool.MPool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
+	return LoadColumnsData2(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), true, vPool)
 }
 
 func LoadOneBlock(

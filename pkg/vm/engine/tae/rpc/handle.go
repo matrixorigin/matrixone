@@ -1005,7 +1005,7 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var vectors []containers.Vector
-			vectors, err = blockio.LoadTombstoneColumnsByTN(
+			vectors, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,

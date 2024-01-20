@@ -185,7 +185,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	vectors, err := blockio.LoadColumnsBytTN(
+	vectors, err := blockio.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
