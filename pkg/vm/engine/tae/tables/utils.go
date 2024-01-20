@@ -16,10 +16,9 @@ package tables
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -42,13 +41,15 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	vectors, err := blockio.LoadColumns2(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vectors, _, err := blockio.LoadColumns2(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
-		nil,
 		fileservice.Policy(0),
+		true,
 		rt.VectorPool.Transient)
 	if err != nil {
 		return
@@ -86,13 +87,15 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	vecs, err := blockio.LoadColumns2(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vecs, _, err := blockio.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
 		location,
-		nil,
 		fileservice.Policy(0),
+		true,
 		rt.VectorPool.Transient)
 	if err != nil {
 		return nil, err

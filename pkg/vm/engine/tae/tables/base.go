@@ -185,14 +185,16 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	vectors, err := blockio.LoadColumns2(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vectors, _, err := blockio.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
 		blk.rt.Fs.Service,
 		location,
-		nil,
 		fileservice.Policy(0),
+		true,
 		blk.rt.VectorPool.Transient,
 	)
 	if err != nil {

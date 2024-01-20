@@ -69,11 +69,10 @@ func LoadColumnsData2(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
 	policy fileservice.Policy,
 	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
+) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -81,10 +80,18 @@ func LoadColumnsData2(
 		return
 	}
 	dataMeta := meta.MustGetMeta(metaType)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
-	defer objectio.ReleaseIOVector(ioVectors)
+	defer func() {
+		if needCopy {
+			objectio.ReleaseIOVector(ioVectors)
+			return
+		}
+		release = func() {
+			objectio.ReleaseIOVector(ioVectors)
+		}
+	}()
 	var obj any
 	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
@@ -97,13 +104,13 @@ func LoadColumnsData2(
 		if needCopy {
 			if vec, err = containers.CloneVector(
 				obj.(*vector.Vector),
-				m,
+				vPool.GetAllocator(),
 				vPool,
 			); err != nil {
 				return
 			}
 		} else {
-			vec = containers.ToTNVector(obj.(*vector.Vector), m)
+			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
 		}
 		vectors[i] = vec
 	}
@@ -113,7 +120,7 @@ func LoadColumnsData2(
 				col.Close()
 			}
 		}
-		return nil, err
+		return nil, release, err
 	}
 	return
 }
@@ -149,11 +156,11 @@ func LoadColumns2(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
 	policy fileservice.Policy,
+	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, true, vPool)
+) (vectors []containers.Vector, release func(), err error) {
+	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
 // LoadTombstoneColumns2 load tombstone data from file service for TN
@@ -164,10 +171,10 @@ func LoadTombstoneColumns2(
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
+	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
-	return LoadColumnsData2(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), true, vPool)
+) (vectors []containers.Vector, release func(), err error) {
+	return LoadColumnsData2(ctx, objectio.SchemaTombstone, cols, typs, fs, location, fileservice.Policy(0), needCopy, vPool)
 }
 
 func LoadOneBlock(
