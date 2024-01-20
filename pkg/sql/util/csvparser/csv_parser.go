@@ -183,7 +183,7 @@ func NewCSVParser(
 	terminator = cfg.LinesTerminatedBy
 
 	if terminator == "\r\n" {
-		terminator = ""
+		terminator = "\n"
 	}
 
 	var quoteStopSet, newLineStopSet []byte
@@ -637,6 +637,11 @@ outside:
 				prevToken = csvTokenNewLine
 				fieldIsQuoted = false
 				continue
+			}
+			if bytes.Equal(parser.newLine, []byte{'\n'}) {
+				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {
+					parser.recordBuffer = parser.recordBuffer[:n-1]
+				}
 			}
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)

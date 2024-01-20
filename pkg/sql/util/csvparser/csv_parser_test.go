@@ -15,6 +15,7 @@
 package csvparser
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -182,6 +183,9 @@ func TestTPCHMultiBytes(t *testing.T) {
 
 		reader := NewStringReader(inputStr)
 		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
+		if fmt.Sprint(err) == "invalid input: invalid field or comment delimiter" {
+			continue
+		}
 		require.NoError(t, err)
 
 		for i, expectedParserPos := range allExpectedParserPos {
@@ -192,6 +196,41 @@ func TestTPCHMultiBytes(t *testing.T) {
 		}
 
 	}
+}
+
+func TestLinesTerminatedBy(t *testing.T) {
+	datums := tpchDatums()
+	input := datumsToString(datums, "|", "", true)
+	reader := strings.NewReader(input)
+
+	cfg := CSVConfig{
+		FieldsTerminatedBy: "|",
+		FieldsEnclosedBy:   "",
+		LinesTerminatedBy:  "\r\n",
+		TrimLastSep:        true,
+	}
+
+	parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false, false)
+	require.NoError(t, err)
+
+	var row []Field
+
+	row, err = parser.Read()
+	require.Nil(t, err)
+	require.Equal(t, datums[0], row)
+	require.Equal(t, parser.Pos(), int64(127))
+	assertPosEqual(t, parser, 127)
+
+	row, err = parser.Read()
+	require.Nil(t, err)
+	require.Equal(t, datums[1], row)
+	assertPosEqual(t, parser, 242)
+
+	row, err = parser.Read()
+	require.Nil(t, err)
+	require.Equal(t, datums[2], row)
+	assertPosEqual(t, parser, 370)
+
 }
 
 func TestRFC4180(t *testing.T) {

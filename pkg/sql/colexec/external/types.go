@@ -180,7 +180,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 	fieldsEnclosedBy := "\""
 	fieldsEscapedBy := "\\"
 
-	linesTerminatedBy := ""
+	linesTerminatedBy := "\n"
 	linesStartingBy := ""
 
 	if param.Extern.Tail.Fields != nil {
