@@ -69,6 +69,8 @@ type Message interface {
 	Serialize() []byte
 	Deserialize([]byte) Message
 	NeedBlock() bool
+	NeedDestroy() bool
+	Destroy()
 	GetMsgTag() int32
 	GetReceiverAddr() MessageAddress
 }
@@ -81,10 +83,11 @@ type MessageBoard struct {
 }
 
 type MessageReceiver struct {
-	offset int32
-	tags   []int32
-	addr   *MessageAddress
-	mb     *MessageBoard
+	offset      int32
+	tags        []int32
+	destroyList []int32
+	addr        *MessageAddress
+	mb          *MessageBoard
 }
 
 func (proc *Process) SendMessage(m Message) {
@@ -111,7 +114,7 @@ func (proc *Process) NewMessageReceiver(tags []int32, addr *MessageAddress) *Mes
 	}
 }
 
-func (mr *MessageReceiver) receiverMessageNonBlock(result []Message) {
+func (mr *MessageReceiver) receiveMessageNonBlock(result []Message) {
 	mr.mb.RwMutex.RLock()
 	defer mr.mb.RwMutex.RUnlock()
 	lenMessages := int32(len(mr.mb.Messages))
@@ -123,23 +126,38 @@ func (mr *MessageReceiver) receiverMessageNonBlock(result []Message) {
 		for i := range mr.tags {
 			if mr.tags[i] == message.GetMsgTag() {
 				result = append(result, message)
+				if message.NeedDestroy() {
+					mr.destroyList = append(mr.destroyList, mr.offset)
+				}
 				break
 			}
 		}
 	}
 }
 
-func (mr *MessageReceiver) ReceiverMessage(needBlock bool) []Message {
+func (mr *MessageReceiver) DestroyMessage() {
+	if len(mr.destroyList) == 0 {
+		return
+	}
+	mr.mb.RwMutex.Lock()
+	defer mr.mb.RwMutex.Unlock()
+	for i := range mr.destroyList {
+		mr.mb.Messages[i].Destroy()
+	}
+	mr.destroyList = mr.destroyList[:0]
+}
+
+func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
 	result := make([]Message, 0)
 	if !needBlock {
-		mr.receiverMessageNonBlock(result)
+		mr.receiveMessageNonBlock(result)
 		return result
 	}
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
 		mr.mb.Cond.Wait()
 		mr.mb.Cond.L.Unlock()
-		mr.receiverMessageNonBlock(result)
+		mr.receiveMessageNonBlock(result)
 	}
 	return result
 }
