@@ -771,6 +771,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 	var err error = nil
 	var ok bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
+		var oldValueRaw interface{}
 		if system {
 			if global {
 				err = doCheckRole(ctx, ses)
@@ -786,6 +787,12 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 					return err
 				}
 			} else {
+				if strings.ToLower(name) == "autocommit" {
+					oldValueRaw, err = ses.GetSessionVar("autocommit")
+					if err != nil {
+						return err
+					}
+				}
 				err = ses.SetSessionVar(name, value)
 				if err != nil {
 					return err
@@ -793,11 +800,15 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			}
 
 			if strings.ToLower(name) == "autocommit" {
-				newValue, err2 := valueIsBoolTrue(value)
-				if err2 != nil {
-					return err2
+				oldValue, err := valueIsBoolTrue(oldValueRaw)
+				if err != nil {
+					return err
 				}
-				err = ses.SetAutocommit(newValue)
+				newValue, err := valueIsBoolTrue(value)
+				if err != nil {
+					return err
+				}
+				err = ses.SetAutocommit(oldValue, newValue)
 				if err != nil {
 					return err
 				}
@@ -2573,8 +2584,6 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
 			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
-		} else if IsParameterModificationStatement(stmt) {
-			return moerr.NewInternalError(requestCtx, parameterModificationInTxnErrorInfo())
 		} else {
 			return moerr.NewInternalError(requestCtx, unclassifiedStatementInUncommittedTxnErrorInfo())
 		}
@@ -2957,10 +2966,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if err != nil {
 		return err
 	}
-	ses.GetTxnHandler().disableStartStmt()
+
 	if txnOp != nil && !ses.IsDerivedStmt() {
-		txnOp.GetWorkspace().StartStatement()
-		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		ok, _ := ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
 	}
 
 	// defer Start/End Statement management, called after finishTxnFunc()
