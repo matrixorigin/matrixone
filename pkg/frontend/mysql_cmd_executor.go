@@ -546,6 +546,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	if ec.needExportToFile() {
 		oq.rowIdx = uint64(n)
+		ec.addRowCount(uint64(n))
 		bat2 := preCopyBat(obj, bat)
 		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
 	}
@@ -1231,11 +1232,6 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	}
 
 	err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
-	if err != nil {
-		return err
-	}
-
-	err = protocol.sendEOFOrOkPacket(0, ses.GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -2789,12 +2785,49 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			rspLen = runResult.AffectRows
 		}
 
-		switch stmt.(type) {
+		switch st := stmt.(type) {
 		case *tree.Select:
 			if len(proc.SessionInfo.SeqAddValues) != 0 {
 				ses.AddSeqValues(proc)
 			}
 			ses.SetSeqLastValue(proc)
+
+			//for select ... into, it sends ok
+			if st.Ep != nil {
+				resp := mce.setResponse(i, len(cws), rspLen)
+				if err2 := mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+					err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, err)
+					return err
+				}
+			} else {
+				/*
+					mysql COM_QUERY response: End after the data row has been sent.
+					After all row data has been sent, it sends the EOF or OK packet.
+				*/
+				err2 := mce.GetSession().GetMysqlProtocol().sendEOFOrOkPacket(0, ses.GetServerStatus())
+				if err2 != nil {
+					err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, err)
+					return err
+				}
+			}
+
+		case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
+			/*
+				mysql COM_QUERY response: End after the data row has been sent.
+				After all row data has been sent, it sends the EOF or OK packet.
+			*/
+			err2 := mce.GetSession().GetMysqlProtocol().sendEOFOrOkPacket(0, ses.GetServerStatus())
+			if err2 != nil {
+				err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err)
+				return err
+			}
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.Replace,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
@@ -3496,6 +3529,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return
 			}
 
+			runResult = &util2.RunResult{AffectRows: ep.RowCount}
+
 			/*
 			   Serialize the execution plan by json
 			*/
@@ -3563,17 +3598,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			/*
-				Step 3: Say goodbye
-				mysql COM_QUERY response: End after the data row has been sent.
-				After all row data has been sent, it sends the EOF or OK packet.
-			*/
-			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
-			if err != nil {
-				return
-			}
-
-			/*
-				Step 4: Serialize the execution plan by json`
+				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				_ = cwft.RecordExecPlan(requestCtx)
@@ -3583,7 +3608,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
 		columns, err = cw.GetColumns()
 		if err != nil {
@@ -3648,16 +3673,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
 			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
-		}
-
-		/*
-			Step 3: Say goodbye
-			mysql COM_QUERY response: End after the data row has been sent.
-			After all row data has been sent, it sends the EOF or OK packet.
-		*/
-		err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
-		if err != nil {
-			return
 		}
 
 		/*
@@ -3828,15 +3843,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return
 			}
 
-			/*
-				Step 3: Say goodbye
-				mysql COM_QUERY response: End after the data row has been sent.
-				After all row data has been sent, it sends the EOF or OK packet.
-			*/
-			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
-			if err != nil {
-				return
-			}
 		}
 	}
 	return
