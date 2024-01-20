@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,9 +92,15 @@ func LoadColumnsDataWithVPool(
 			return
 		}
 
-		srcVec := containers.ToTNVector(obj.(*vector.Vector), vPool.GetAllocator())
-		defer srcVec.Close()
-		vectors[i] = srcVec.CloneWindowWithPool(0, srcVec.Length(), vPool)
+		var vec containers.Vector
+		if vec, err = containers.CloneVector(
+			obj.(*vector.Vector),
+			m,
+			vPool,
+		); err != nil {
+			return
+		}
+		vectors[i] = vec
 	}
 	if err != nil {
 		for _, col := range vectors {
