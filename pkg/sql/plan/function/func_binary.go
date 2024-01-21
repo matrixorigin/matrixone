@@ -946,6 +946,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				return err
 			}
 		} else {
+			buf.Reset()
 			if err = datetimeFormat(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
@@ -960,7 +961,6 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error {
 	//var buf bytes.Buffer
-	buf.Reset()
 	switch format {
 	case "%d/%m/%Y":
 		date_format_combine_pattern1(ctx, datetime, buf)
