@@ -648,6 +648,10 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 	return s.sqlExecutor
 }
 
+func (s *service) GetBootstrapService() bootstrap.Service {
+	return s.bootstrapService
+}
+
 // put the waiting-next type msg into client session's cache and return directly
 func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	msg, _ := message.(*pipeline.Message)

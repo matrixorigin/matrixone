@@ -15,6 +15,7 @@
 package upgrade
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -116,7 +117,8 @@ func TestUpgradeCrossVersions(t *testing.T) {
 			})
 			createTenants(t, c, 100, "1.2.0")
 
-			require.NoError(t, c.StartCNServices(1))
+			// start new cn to upgrade to 1.5.0
+			require.NoError(t, c.StartCNServices(2))
 			waitVersionReady(t, "1.5.0", c)
 			checkVersionUpgrades(t, "1.5.0", c, func(upgrades []versions.VersionUpgrade) {
 				require.Equal(t, 3, len(upgrades))
@@ -125,6 +127,33 @@ func TestUpgradeCrossVersions(t *testing.T) {
 				checkVersionUpgrade(t, upgrades[2], "1.4.0", "1.5.0", "1.5.0", 101)
 			})
 			checkTenantVersion(t, c, "1.5.0")
+
+			// create old tenant
+			oldID := createTenants(t, c, 1, "1.2.0")[0]
+			checkTenantVersion(t, c, "1.2.0", oldID)
+
+			svc, err := c.GetCNServiceIndexed(1)
+			require.NoError(t, err)
+			bs := svc.GetBootstrapService()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			for i := 0; i < 2; i++ {
+				upgrade, err := bs.MaybeUpgradeTenant(
+					ctx,
+					func() (int32, string, error) {
+						return oldID, "1.2.0", nil
+					},
+					nil)
+				require.NoError(t, err)
+				if i == 0 {
+					require.True(t, upgrade)
+					checkTenantVersion(t, c, "1.5.0")
+				} else {
+					require.False(t, upgrade)
+				}
+			}
 		})
 }
 

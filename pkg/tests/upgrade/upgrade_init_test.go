@@ -150,13 +150,14 @@ func createTenants(
 	t *testing.T,
 	c service.Cluster,
 	n int,
-	version string) {
+	version string) []int32 {
 	svc, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 	exec := svc.GetSQLExecutor()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
+	var ids []int32
 	opts := executor.Options{}.WithWaitCommittedLogApplied().WithDatabase(catalog.MO_CATALOG)
 	err = exec.ExecTxn(
 		ctx,
@@ -174,18 +175,21 @@ func createTenants(
 				if err != nil {
 					return err
 				}
+				ids = append(ids, int32(res.LastInsertID))
 				res.Close()
 			}
 			return nil
 		},
 		opts)
 	require.NoError(t, err)
+	return ids
 }
 
 func checkTenantVersion(
 	t *testing.T,
 	c service.Cluster,
-	version string) {
+	version string,
+	ids ...int32) {
 	svc, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 	exec := svc.GetSQLExecutor()
@@ -193,13 +197,23 @@ func checkTenantVersion(
 	defer cancel()
 
 	opts := executor.Options{}.WithWaitCommittedLogApplied().WithDatabase(catalog.MO_CATALOG)
-	res, err := exec.Exec(ctx, "select create_version from mo_account", opts)
+
+	sql := "select account_id, create_version from mo_account"
+	if len(ids) > 0 {
+		sql += " where account_id in ("
+		for _, id := range ids {
+			sql += fmt.Sprintf("%d,", id)
+		}
+		sql = sql[:len(sql)-1] + ")"
+	}
+
+	res, err := exec.Exec(ctx, sql, opts)
 	require.NoError(t, err)
 	defer res.Close()
 
 	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			require.Equal(t, version, cols[0].GetStringAt(i))
+			require.Equal(t, version, cols[1].GetStringAt(i))
 		}
 		return true
 	})

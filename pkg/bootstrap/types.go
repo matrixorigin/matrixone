@@ -44,6 +44,8 @@ type Service interface {
 	// BootstrapUpgrade bootstrap upgrade framework
 	BootstrapUpgrade(ctx context.Context) error
 	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
+	// Return true, nil means tenant upgraded, the call need to load tenant again to get
+	// latest tenant info.
 	MaybeUpgradeTenant(
 		ctx context.Context,
 		tenantFetchFunc func() (int32, string, error),

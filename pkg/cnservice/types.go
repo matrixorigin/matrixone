@@ -74,6 +74,7 @@ type Service interface {
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
+	GetBootstrapService() bootstrap.Service
 	WaitSystemInitCompleted(ctx context.Context) error
 }
 

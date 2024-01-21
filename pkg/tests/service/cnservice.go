@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -49,6 +50,8 @@ type CNService interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	// GetSQLExecutor returns sql executor
 	GetSQLExecutor() executor.SQLExecutor
+	// GetBootstrapService returns bootstrap service
+	GetBootstrapService() bootstrap.Service
 	// WaitSystemInitCompleted wait system init task completed
 	WaitSystemInitCompleted(ctx context.Context) error
 	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
@@ -126,6 +129,10 @@ func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 
 func (c *cnService) GetSQLExecutor() executor.SQLExecutor {
 	return c.svc.GetSQLExecutor()
+}
+
+func (c *cnService) GetBootstrapService() bootstrap.Service {
+	return c.svc.GetBootstrapService()
 }
 
 func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
