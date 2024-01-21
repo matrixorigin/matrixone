@@ -937,6 +937,26 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
 
+	var dateFmtOperator DateFormatFunc
+	switch string(fmt) {
+	case "%d/%m/%Y":
+		dateFmtOperator = date_format_combine_pattern1
+	case "%Y%m%d":
+		dateFmtOperator = date_format_combine_pattern2
+	case "%Y":
+		dateFmtOperator = date_format_combine_pattern3
+	case "%Y-%m-%d":
+		dateFmtOperator = date_format_combine_pattern4
+	case "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %T":
+		dateFmtOperator = date_format_combine_pattern5
+	case "%Y/%m/%d":
+		dateFmtOperator = date_format_combine_pattern6
+	case "%Y/%m/%d %H:%i:%s", "%Y/%m/%d %T":
+		dateFmtOperator = date_format_combine_pattern7
+	default:
+		dateFmtOperator = datetimeFormat
+	}
+
 	//format := "%b %D %M"   -> []func{func1,func2,  func3}
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
@@ -947,7 +967,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 		} else {
 			buf.Reset()
-			if err = datetimeFormat(proc.Ctx, d, string(fmt), &buf); err != nil {
+			if err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -960,39 +980,21 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error {
-	//var buf bytes.Buffer
-	switch format {
-	case "%d/%m/%Y":
-		date_format_combine_pattern1(ctx, datetime, buf)
-	case "%Y%m%d":
-		date_format_combine_pattern2(ctx, datetime, buf)
-	case "%Y":
-		date_format_combine_pattern3(ctx, datetime, buf)
-	case "%Y-%m-%d":
-		date_format_combine_pattern4(ctx, datetime, buf)
-	case "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %T":
-		date_format_combine_pattern5(ctx, datetime, buf)
-	case "%Y/%m/%d":
-		date_format_combine_pattern6(ctx, datetime, buf)
-	case "%Y/%m/%d %H:%i:%s", "%Y/%m/%d %T":
-		date_format_combine_pattern7(ctx, datetime, buf)
-	default:
-		inPatternMatch := false
-		for _, b := range format {
-			if inPatternMatch {
-				if err := makeDateFormat(ctx, datetime, b, buf); err != nil {
-					return err
-				}
-				inPatternMatch = false
-				continue
+	inPatternMatch := false
+	for _, b := range format {
+		if inPatternMatch {
+			if err := makeDateFormat(ctx, datetime, b, buf); err != nil {
+				return err
 			}
+			inPatternMatch = false
+			continue
+		}
 
-			// It's not in pattern match now.
-			if b == '%' {
-				inPatternMatch = true
-			} else {
-				buf.WriteRune(b)
-			}
+		// It's not in pattern match now.
+		if b == '%' {
+			inPatternMatch = true
+		} else {
+			buf.WriteRune(b)
 		}
 	}
 	return nil

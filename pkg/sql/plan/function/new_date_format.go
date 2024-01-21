@@ -20,9 +20,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// type DateFormatFunc func(ctx context.Context, t types.Datetime, buf *bytes.Buffer)
+type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error
+
 // DATE_FORMAT       datetime
 // handle '%d/%m/%Y' ->	 22/04/2021
-func date_format_combine_pattern1(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	month := int(t.Month())
 	day := int(t.Day())
 	year := int(t.Year())
@@ -43,10 +46,11 @@ func date_format_combine_pattern1(ctx context.Context, t types.Datetime, buf *by
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
+	return nil
 }
 
 // handle '%Y%m%d' ->   20210422
-func date_format_combine_pattern2(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -67,20 +71,22 @@ func date_format_combine_pattern2(ctx context.Context, t types.Datetime, buf *by
 	// date conversion
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
 }
 
 // handle '%Y'  ->   2021
-func date_format_combine_pattern3(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern3(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := t.Year()
 	// Year conversion
 	buf.WriteByte(byte('0' + (year / 1000 % 10)))
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
+	return nil
 }
 
 // %Y-%m-%d	               2021-04-22
-func date_format_combine_pattern4(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -103,11 +109,12 @@ func date_format_combine_pattern4(ctx context.Context, t types.Datetime, buf *by
 	buf.WriteByte('-')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
 }
 
 // handle '%Y-%m-%d %H:%i:%s'  ->   2004-04-03 13:11:10
 // handle ' %Y-%m-%d %T'   ->   2004-04-03 13:11:10
-func date_format_combine_pattern5(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -153,10 +160,11 @@ func date_format_combine_pattern5(ctx context.Context, t types.Datetime, buf *by
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
+	return nil
 }
 
 // handle '%Y/%m/%d'  ->   2010/01/07
-func date_format_combine_pattern6(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -179,11 +187,12 @@ func date_format_combine_pattern6(ctx context.Context, t types.Datetime, buf *by
 	buf.WriteByte('/')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
 }
 
 // handle '%Y/%m/%d %H:%i:%s'   ->    2010/01/07 23:12:34
 // handle '%Y/%m/%d %T'   ->    2010/01/07 23:12:34
-func date_format_combine_pattern7(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -229,4 +238,5 @@ func date_format_combine_pattern7(ctx context.Context, t types.Datetime, buf *by
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
+	return nil
 }

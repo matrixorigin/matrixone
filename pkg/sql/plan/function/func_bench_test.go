@@ -92,7 +92,7 @@ func initFormatTestCase1() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat1-4   	1000000000	         2.610 ns/op
+// BenchmarkDateFormat1-4   	1000000000	         2.462 ns/op
 func BenchmarkDateFormat1(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase1()
@@ -175,7 +175,7 @@ func initFormatTestCase2() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat2-4   	1000000000	         0.3123 ns/op
+// BenchmarkDateFormat2-4   	1000000000	         0.3115 ns/op
 func BenchmarkDateFormat2(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase2()
@@ -258,7 +258,7 @@ func initFormatTestCase3() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat3-4   	1000000000	         0.1815 ns/op
+// BenchmarkDateFormat3-4   	1000000000	         0.1523 ns/op
 func BenchmarkDateFormat3(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase3()
@@ -341,7 +341,7 @@ func initFormatTestCase4() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat4-4   	1000000000	         0.2393 ns/op
+// BenchmarkDateFormat4-4   	1000000000	         0.1541 ns/op
 func BenchmarkDateFormat4(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase4()
@@ -424,7 +424,7 @@ func initFormatTestCase5() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat5-4   	1000000000	         0.2993 ns/op
+// BenchmarkDateFormat5-4   	1000000000	         0.2022 ns/op
 func BenchmarkDateFormat5(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase5()
@@ -507,7 +507,7 @@ func initFormatTestCase6() []tcTemp {
 	return cases
 }
 
-// BenchmarkDateFormat6-4   	1000000000	         0.3068 ns/op
+// BenchmarkDateFormat6-4   	1000000000	         0.1927 ns/op
 func BenchmarkDateFormat6(b *testing.B) {
 	b.N = 1000000000
 	testCases := initFormatTestCase6()
