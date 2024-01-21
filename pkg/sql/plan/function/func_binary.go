@@ -1635,6 +1635,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
+			buf.Reset()
 			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
@@ -1666,6 +1667,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 				return err
 			}
 		} else {
+			buf.Reset()
 			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v))
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
@@ -1697,6 +1699,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 				return err
 			}
 		} else {
+			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
