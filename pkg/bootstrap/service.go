@@ -244,7 +244,7 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 	defer res.Close()
 
 	var dbs []string
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		dbs = append(dbs, executor.GetStringRows(cols[0])...)
 		return true
 	})

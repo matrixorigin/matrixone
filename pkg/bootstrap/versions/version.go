@@ -77,7 +77,7 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version.Version = cols[0].GetStringAt(0)
 		version.State = vector.GetFixedAt[int32](cols[1], 0)
 		return true
@@ -96,7 +96,7 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version.Version = cols[0].GetStringAt(0)
 		return true
 	})
@@ -118,7 +118,7 @@ func MustGetLatestReadyVersion(
 	defer res.Close()
 
 	version := ""
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version = cols[0].GetStringAt(0)
 		return true
 	})
@@ -150,7 +150,7 @@ func GetVersionState(
 	state := int32(0)
 	loaded := false
 	n := 0
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		state = vector.GetFixedAt[int32](cols[0], 0)
 		loaded = true
 		n++
@@ -213,7 +213,7 @@ func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
 	defer res.Close()
 
 	var tables []string
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			tables = append(tables, cols[0].GetStringAt(i))
 		}

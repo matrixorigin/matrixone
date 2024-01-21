@@ -211,7 +211,7 @@ func checkTenantVersion(
 	require.NoError(t, err)
 	defer res.Close()
 
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			require.Equal(t, version, cols[1].GetStringAt(i))
 		}

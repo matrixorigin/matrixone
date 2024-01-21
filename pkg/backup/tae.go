@@ -19,6 +19,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,10 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"os"
-	"path"
-	"strconv"
-	"strings"
 )
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
@@ -79,7 +80,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	}
 
 	var retByts [][][]byte
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		retByts = append(retByts, executor.GetBytesRows(cols[0]))
 		return true
 	})

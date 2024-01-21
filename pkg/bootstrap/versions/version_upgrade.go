@@ -226,7 +226,7 @@ func getVersionUpgradesBySQL(
 	defer res.Close()
 
 	var values []VersionUpgrade
-	res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			value := VersionUpgrade{}
 			value.ID = vector.GetFixedAt[uint64](cols[0], i)

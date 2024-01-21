@@ -299,7 +299,7 @@ func fetchTenants(
 			return err
 		}
 		n := 0
-		res.ReadRowsWithRowCount(func(rows int, cols []*vector.Vector) bool {
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				last = vector.GetFixedAt[int32](cols[0], i)
 				ids = append(ids, last)
