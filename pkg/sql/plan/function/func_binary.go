@@ -950,7 +950,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			if err = datetimeFormat(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(buf.String()), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -1192,10 +1192,8 @@ func FormatInt2BufByWidth(num, n int, buf *bytes.Buffer) {
 	}
 
 	pad := strings.Repeat("0", n-len(numStr))
-
 	buf.WriteString(pad)
 	buf.WriteString(numStr)
-	return
 }
 
 // AbbrDayOfMonth: Get the abbreviation of month of day
@@ -1640,7 +1638,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(buf.String()), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -1672,7 +1670,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(buf.String()), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}

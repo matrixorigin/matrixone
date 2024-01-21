@@ -38,10 +38,10 @@ func initFormatTestCase1() []tcTemp {
 	r4 := `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -63,7 +63,7 @@ func initFormatTestCase1() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
@@ -121,10 +121,10 @@ func initFormatTestCase2() []tcTemp {
 	r4 := `2016,09,03 00:59:59`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -146,7 +146,7 @@ func initFormatTestCase2() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
@@ -204,10 +204,10 @@ func initFormatTestCase3() []tcTemp {
 	r4 := `2016-09-03`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -229,7 +229,7 @@ func initFormatTestCase3() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
@@ -287,10 +287,10 @@ func initFormatTestCase4() []tcTemp {
 	r4 := `2016/09/03`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -312,7 +312,7 @@ func initFormatTestCase4() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
@@ -370,10 +370,10 @@ func initFormatTestCase5() []tcTemp {
 	r4 := `2016-09-03 00:59:59`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -395,7 +395,7 @@ func initFormatTestCase5() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
@@ -453,10 +453,10 @@ func initFormatTestCase6() []tcTemp {
 	r4 := `2016/09/03 00:59:59`
 
 	cases := make([]tcTemp, 100)
-	for i, _ := range cases {
+	for i := range cases {
 		values := make([]types.Datetime, 8192)
 		nullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				values[j] = d1
@@ -478,7 +478,7 @@ func initFormatTestCase6() []tcTemp {
 
 		results := make([]string, 8192)
 		rnullList := make([]bool, 8192)
-		for j, _ := range values {
+		for j := range values {
 			mod := j % 4
 			if mod == 0 {
 				results[j] = r1
