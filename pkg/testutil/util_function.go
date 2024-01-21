@@ -740,17 +740,17 @@ func (fc *FunctionTestCase) DebugRun() (*vector.Vector, error) {
 
 // BenchMarkRun will run the function case N times without correctness check for result.
 func (fc *FunctionTestCase) BenchMarkRun() error {
-	num := 100000
-	for num > 0 {
-		num--
-		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
-		// XXX maybe free is unnecessary.
-		typ := fc.result.GetResultVector().GetType()
-		fc.result.GetResultVector().Reset(*typ)
-		if err != nil {
-			return err
-		}
+	//num := 100000
+	//for num > 0 {
+	//	num--
+	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
+	// XXX maybe free is unnecessary.
+	typ := fc.result.GetResultVector().GetType()
+	fc.result.GetResultVector().Reset(*typ)
+	if err != nil {
+		return err
 	}
+	//}
 	return nil
 }
 

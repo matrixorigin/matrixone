@@ -22,7 +22,7 @@ import (
 	"testing"
 )
 
-func initFormatTestCase2() []tcTemp {
+func initFormatTestCase1() []tcTemp {
 	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
 
 	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
@@ -92,27 +92,497 @@ func initFormatTestCase2() []tcTemp {
 	return cases
 }
 
-func TestDateFormat(t *testing.T) {
-	testCases := initFormatTestCase2()
-
-	// do the test work.
-	proc := testutil.NewProcess()
-	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateFormat)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func BenchmarkDateFormat(b *testing.B) {
-	testCases := initFormatTestCase2()
-
+// BenchmarkDateFormat1-4   	1000000000	         2.610 ns/op
+func BenchmarkDateFormat1(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase1()
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
 		_, _ = fcTC.Run()
+	}
+}
+
+func initFormatTestCase2() []tcTemp {
+	format := `%Y,%m,%d %H:%i:%s`
+
+	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
+	r1 := `2010,01,07 23:12:34`
+
+	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
+	r2 := "2012,12,21 23:12:34"
+
+	d3, _ := types.ParseDatetime("2021-01-01 00:00:00.123456", 6)
+	r3 := `2021,01,01 00:00:00`
+
+	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
+	r4 := `2016,09,03 00:59:59`
+
+	cases := make([]tcTemp, 100)
+	for i, _ := range cases {
+		values := make([]types.Datetime, 8192)
+		nullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				values[j] = d1
+				nullList[j] = false
+			} else if mod == 1 {
+				values[j] = d2
+				nullList[j] = false
+			} else if mod == 2 {
+				values[j] = d3
+				nullList[j] = false
+			} else {
+				values[j] = d4
+				nullList[j] = false
+			}
+		}
+		inputs := make([]testutil.FunctionTestInput, 2)
+		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+
+		results := make([]string, 8192)
+		rnullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				results[j] = r1
+				nullList[j] = false
+			} else if mod == 1 {
+				results[j] = r2
+				nullList[j] = false
+			} else if mod == 2 {
+				results[j] = r3
+				nullList[j] = false
+			} else {
+				results[j] = r4
+				nullList[j] = false
+			}
+		}
+
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+
+		cases[i] = tcTemp{
+			info:   "test format",
+			typ:    types.T_datetime,
+			inputs: inputs,
+			expect: expect,
+		}
+	}
+	return cases
+}
+
+// BenchmarkDateFormat2-4   	1000000000	         0.3123 ns/op
+func BenchmarkDateFormat2(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase2()
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+		fcTC.BenchMarkRun()
+		_, _ = fcTC.Run()
+	}
+}
+
+func initFormatTestCase3() []tcTemp {
+	format := `%Y-%m-%d`
+
+	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
+	r1 := `2010-01-07`
+
+	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
+	r2 := "2012-12-21"
+
+	d3, _ := types.ParseDatetime("2021-01-01 00:00:00.123456", 6)
+	r3 := `2021-01-01`
+
+	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
+	r4 := `2016-09-03`
+
+	cases := make([]tcTemp, 100)
+	for i, _ := range cases {
+		values := make([]types.Datetime, 8192)
+		nullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				values[j] = d1
+				nullList[j] = false
+			} else if mod == 1 {
+				values[j] = d2
+				nullList[j] = false
+			} else if mod == 2 {
+				values[j] = d3
+				nullList[j] = false
+			} else {
+				values[j] = d4
+				nullList[j] = false
+			}
+		}
+		inputs := make([]testutil.FunctionTestInput, 2)
+		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+
+		results := make([]string, 8192)
+		rnullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				results[j] = r1
+				nullList[j] = false
+			} else if mod == 1 {
+				results[j] = r2
+				nullList[j] = false
+			} else if mod == 2 {
+				results[j] = r3
+				nullList[j] = false
+			} else {
+				results[j] = r4
+				nullList[j] = false
+			}
+		}
+
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+
+		cases[i] = tcTemp{
+			info:   "test format",
+			typ:    types.T_datetime,
+			inputs: inputs,
+			expect: expect,
+		}
+	}
+	return cases
+}
+
+// BenchmarkDateFormat3-4   	1000000000	         0.1815 ns/op
+func BenchmarkDateFormat3(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase3()
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+		fcTC.BenchMarkRun()
+		_, _ = fcTC.Run()
+	}
+}
+
+func initFormatTestCase4() []tcTemp {
+	format := `%Y/%m/%d`
+
+	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
+	r1 := `2010/01/07`
+
+	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
+	r2 := "2012/12/21"
+
+	d3, _ := types.ParseDatetime("2021-01-01 00:00:00.123456", 6)
+	r3 := `2021/01/01`
+
+	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
+	r4 := `2016/09/03`
+
+	cases := make([]tcTemp, 100)
+	for i, _ := range cases {
+		values := make([]types.Datetime, 8192)
+		nullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				values[j] = d1
+				nullList[j] = false
+			} else if mod == 1 {
+				values[j] = d2
+				nullList[j] = false
+			} else if mod == 2 {
+				values[j] = d3
+				nullList[j] = false
+			} else {
+				values[j] = d4
+				nullList[j] = false
+			}
+		}
+		inputs := make([]testutil.FunctionTestInput, 2)
+		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+
+		results := make([]string, 8192)
+		rnullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				results[j] = r1
+				nullList[j] = false
+			} else if mod == 1 {
+				results[j] = r2
+				nullList[j] = false
+			} else if mod == 2 {
+				results[j] = r3
+				nullList[j] = false
+			} else {
+				results[j] = r4
+				nullList[j] = false
+			}
+		}
+
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+
+		cases[i] = tcTemp{
+			info:   "test format",
+			typ:    types.T_datetime,
+			inputs: inputs,
+			expect: expect,
+		}
+	}
+	return cases
+}
+
+// BenchmarkDateFormat4-4   	1000000000	         0.2393 ns/op
+func BenchmarkDateFormat4(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase4()
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+		fcTC.BenchMarkRun()
+		_, _ = fcTC.Run()
+	}
+}
+
+func initFormatTestCase5() []tcTemp {
+	format := `%Y-%m-%d %H:%i:%s`
+
+	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
+	r1 := `2010-01-07 23:12:34`
+
+	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
+	r2 := "2012-12-21 23:12:34"
+
+	d3, _ := types.ParseDatetime("2021-01-01 00:00:00.123456", 6)
+	r3 := `2021-01-01 00:00:00`
+
+	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
+	r4 := `2016-09-03 00:59:59`
+
+	cases := make([]tcTemp, 100)
+	for i, _ := range cases {
+		values := make([]types.Datetime, 8192)
+		nullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				values[j] = d1
+				nullList[j] = false
+			} else if mod == 1 {
+				values[j] = d2
+				nullList[j] = false
+			} else if mod == 2 {
+				values[j] = d3
+				nullList[j] = false
+			} else {
+				values[j] = d4
+				nullList[j] = false
+			}
+		}
+		inputs := make([]testutil.FunctionTestInput, 2)
+		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+
+		results := make([]string, 8192)
+		rnullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				results[j] = r1
+				nullList[j] = false
+			} else if mod == 1 {
+				results[j] = r2
+				nullList[j] = false
+			} else if mod == 2 {
+				results[j] = r3
+				nullList[j] = false
+			} else {
+				results[j] = r4
+				nullList[j] = false
+			}
+		}
+
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+
+		cases[i] = tcTemp{
+			info:   "test format",
+			typ:    types.T_datetime,
+			inputs: inputs,
+			expect: expect,
+		}
+	}
+	return cases
+}
+
+// BenchmarkDateFormat5-4   	1000000000	         0.2993 ns/op
+func BenchmarkDateFormat5(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase5()
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+		fcTC.BenchMarkRun()
+		_, _ = fcTC.Run()
+	}
+}
+
+func initFormatTestCase6() []tcTemp {
+	format := `%Y/%m/%d %H:%i:%s`
+
+	d1, _ := types.ParseDatetime("2010-01-07 23:12:34.12345", 6)
+	r1 := `2010/01/07 23:12:34`
+
+	d2, _ := types.ParseDatetime("2012-12-21 23:12:34.123456", 6)
+	r2 := "2012/12/21 23:12:34"
+
+	d3, _ := types.ParseDatetime("2021-01-01 00:00:00.123456", 6)
+	r3 := `2021/01/01 00:00:00`
+
+	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
+	r4 := `2016/09/03 00:59:59`
+
+	cases := make([]tcTemp, 100)
+	for i, _ := range cases {
+		values := make([]types.Datetime, 8192)
+		nullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				values[j] = d1
+				nullList[j] = false
+			} else if mod == 1 {
+				values[j] = d2
+				nullList[j] = false
+			} else if mod == 2 {
+				values[j] = d3
+				nullList[j] = false
+			} else {
+				values[j] = d4
+				nullList[j] = false
+			}
+		}
+		inputs := make([]testutil.FunctionTestInput, 2)
+		inputs[0] = testutil.NewFunctionTestInput(types.T_datetime.ToType(), values, nullList)
+		inputs[1] = testutil.NewFunctionTestConstInput(types.T_varchar.ToType(), []string{format}, []bool{false})
+
+		results := make([]string, 8192)
+		rnullList := make([]bool, 8192)
+		for j, _ := range values {
+			mod := j % 4
+			if mod == 0 {
+				results[j] = r1
+				nullList[j] = false
+			} else if mod == 1 {
+				results[j] = r2
+				nullList[j] = false
+			} else if mod == 2 {
+				results[j] = r3
+				nullList[j] = false
+			} else {
+				results[j] = r4
+				nullList[j] = false
+			}
+		}
+
+		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, results, rnullList)
+
+		cases[i] = tcTemp{
+			info:   "test format",
+			typ:    types.T_datetime,
+			inputs: inputs,
+			expect: expect,
+		}
+	}
+	return cases
+}
+
+// BenchmarkDateFormat6-4   	1000000000	         0.3068 ns/op
+func BenchmarkDateFormat6(b *testing.B) {
+	b.N = 1000000000
+	testCases := initFormatTestCase6()
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
+		fcTC.BenchMarkRun()
+		_, _ = fcTC.Run()
+	}
+}
+
+//DATE_FORMAT string      Formatted date
+// %d/%m/%Y	               22/04/2021
+// %Y%m%d	               20210422
+// %Y                      2021
+// %Y-%m-%d	               2021-04-22
+// %Y-%m-%d %H:%i:%s       2004-04-03 13:11:10
+// %Y/%m/%d                2010/01/07
+// %Y/%m/%d %H:%i:%s       2010/01/07 23:12:34
+
+func TestDateFormat(t *testing.T) {
+	testCases1 := initFormatTestCase1()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases1 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases2 := initFormatTestCase2()
+	// do the test work.
+	for _, tc := range testCases2 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases3 := initFormatTestCase3()
+	// do the test work.
+	for _, tc := range testCases3 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases4 := initFormatTestCase4()
+	// do the test work.
+	for _, tc := range testCases4 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases5 := initFormatTestCase5()
+	// do the test work.
+	for _, tc := range testCases5 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+
+	testCases6 := initFormatTestCase6()
+	// do the test work.
+	for _, tc := range testCases6 {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, DateFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }

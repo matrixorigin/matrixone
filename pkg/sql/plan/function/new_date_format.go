@@ -263,3 +263,118 @@ func date_format_default_pattern(ctx context.Context, t types.Datetime, b rune, 
 	buf.WriteRune(b)
 	return nil
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// DATE_FORMAT       datetime
+// %d/%m/%Y	         22/04/2021
+func date_format_combine_pattern1(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+}
+
+// %Y%m%d	               20210422
+func date_format_combine_pattern2(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+}
+
+// %Y                      2021
+func date_format_combine_pattern3(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+}
+
+// %Y-%m-%d	               2021-04-22
+func date_format_combine_pattern4(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	//buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	//buf.WriteByte('-')
+	//buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	//buf.WriteByte('-')
+	//buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+
+	FormatInt2BufByWidth(int(t.Year()), 4, buf)
+	buf.WriteByte('-')
+	FormatInt2BufByWidth(int(t.Month()), 2, buf)
+	buf.WriteByte('-')
+	FormatInt2BufByWidth(int(t.Day()), 2, buf)
+}
+
+// %Y-%m-%d %H:%i:%s       2004-04-03 13:11:10
+// %Y-%m-%d %T             2004-04-03 13:11:10
+func date_format_combine_pattern5(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	buf.WriteByte('-')
+	buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	buf.WriteByte('-')
+	buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+
+	buf.WriteByte(' ')
+	buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
+	buf.WriteByte(':')
+	buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
+	buf.WriteByte(':')
+	buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
+}
+
+// %Y/%m/%d                2010/01/07
+func date_format_combine_pattern6(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+}
+
+// %Y/%m/%d %H:%i:%s       2010/01/07 23:12:34
+// %Y/%m/%d %T            2010/01/07 23:12:34
+func date_format_combine_pattern7(ctx context.Context, t types.Datetime, buf *bytes.Buffer) {
+	buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+	buf.WriteByte('/')
+	buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+
+	buf.WriteByte(' ')
+	buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
+	buf.WriteByte(':')
+	buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
+	buf.WriteByte(':')
+	buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
+}
+
+//fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
+
+//-------------------------------------------------------------------------------------------------------------
+
+//func FormatIntByWidth2(num int) string {
+//	numStr := strconv.Itoa(num) // 将整数转换为字符串
+//
+//	if len(numStr) >= 2 {
+//		return numStr
+//	}
+//
+//	padBytes := padTwoZeroBytes[:2-len(numStr)]
+//	return string(padBytes) + numStr
+//}
+//
+//func FormatIntByWidth4(num int) string {
+//	numStr := strconv.Itoa(num) // 将整数转换为字符串
+//
+//	if len(numStr) >= 4 {
+//		return numStr
+//	}
+//
+//	padBytes := padFourZeroBytes[:4-len(numStr)]
+//	return string(padBytes) + numStr
+//}
+//
+//// 预先创建包含两个零的字节切片
+//var padTwoZeroBytes = []byte("00")
+//
+//// 预先创建包含四个零的字节切片
+//var padFourZeroBytes = []byte("0000")
+
+//-------------------------------------------------------------------------------------------------------------
