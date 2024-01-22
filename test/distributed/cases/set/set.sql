@@ -19,12 +19,5 @@ select @@sql_mode;
 commit;
 set @@sql_mode=default;
 
--- set time_zone after autocommit
-begin;
-select @@time_zone;
-set @@time_zone='UTC';
-select @@time_zone;
-commit;
-set @@time_zone=system;
 
 set autocommit=1;

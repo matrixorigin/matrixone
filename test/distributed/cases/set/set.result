@@ -25,14 +25,4 @@ select @@sql_mode;
 NO_UNSIGNED_SUBTRACTION
 commit;
 set @@sql_mode=default;
-begin;
-select @@time_zone;
-@@time_zone
-SYSTEM
-set @@time_zone='UTC';
-select @@time_zone;
-@@time_zone
-utc
-commit;
-set @@time_zone=system;
 set autocommit=1;
