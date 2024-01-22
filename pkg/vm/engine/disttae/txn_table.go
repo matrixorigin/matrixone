@@ -346,6 +346,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return -1, err
 	}
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		if obj.StatsValid() {
+			ret += int64(obj.Size())
+			return nil
+		}
+
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -404,14 +409,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
-		location := obj.Location()
-		objName := location.Name().String()
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-		if err != nil {
-			return err
-		}
-		meta := objMeta.MustDataMeta()
-		rowCnt := int64(meta.BlockHeader().Rows())
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -420,6 +417,34 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		if err != nil {
 			return err
 		}
+
+		location := obj.Location()
+		objName := location.Name().String()
+
+		if name == AllColumns && obj.StatsValid() {
+			// no need to load object meta
+			for _, col := range needCols {
+				infoList = append(infoList, &plan.MetadataScanInfo{
+					ColName:    col.Name,
+					IsHidden:   col.Hidden,
+					ObjectName: objName,
+					ObjLoc:     location,
+					CreateTs:   createTs,
+					DeleteTs:   deleteTs,
+					RowCnt:     int64(obj.Rows()),
+					ZoneMap:    objectio.EmptyZm[:],
+				})
+			}
+			return nil
+		}
+
+		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
+			return err
+		}
+		meta := objMeta.MustDataMeta()
+		rowCnt := int64(meta.BlockHeader().Rows())
+
 		for _, col := range needCols {
 			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
 			infoList = append(infoList, &plan.MetadataScanInfo{
@@ -456,8 +481,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 }
 
 func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
 	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
+	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
 		if !state.BlockPersisted(blk) {
 			continue
 		}
@@ -467,7 +495,10 @@ func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) 
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch[bid]
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[bid]
 	if !ok {
 		return nil
 	}
@@ -503,7 +534,10 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
-	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
+	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
+	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
 		//if blk is in partitionState.blks, it means that blk is persisted.
 		if state.BlockPersisted(blk) {
 			continue
@@ -688,7 +722,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -740,7 +774,7 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+		plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -790,12 +824,11 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
 					// eval filter expr on the block
-					blkMeta := meta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
 					for _, expr := range exprs {
 						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 							skipBlk = true
@@ -871,7 +904,7 @@ func (tbl *txnTable) tryFastRanges(
 		return
 	}
 
-	val := extractPKValueFromEqualExprs(
+	val, isVec := extractPKValueFromEqualExprs(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
@@ -897,6 +930,12 @@ func (tbl *txnTable) tryFastRanges(
 		}
 	}()
 
+	var vec *vector.Vector
+	if isVec {
+		vec = vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(val)
+	}
+
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -905,9 +944,16 @@ func (tbl *txnTable) tryFastRanges(
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().ContainsKey(val) {
-					zmHit++
-					return
+				if isVec {
+					if !obj.SortKeyZoneMap().AnyIn(vec) {
+						zmHit++
+						return
+					}
+				} else {
+					if !obj.SortKeyZoneMap().ContainsKey(val) {
+						zmHit++
+						return
+					}
 				}
 				zmCkecked = true
 			}
@@ -928,10 +974,16 @@ func (tbl *txnTable) tryFastRanges(
 
 			// check whether the object is skipped by zone map
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked &&
-				!meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-				return
-
+			if !zmCkecked {
+				if isVec {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+						return
+					}
+				} else {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+						return
+					}
+				}
 			}
 
 			bf = nil
@@ -941,17 +993,27 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo) bool {
+			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+					return true
+				}
+
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
 					return false
 				}
 				var exist bool
-				if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-					return false
-				} else if !exist {
-					return true
+				if isVec {
+					if exist = blkBfIdx.MayContainsAny(vec); !exist {
+						return true
+					}
+				} else {
+					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
+						return false
+					} else if !exist {
+						return true
+					}
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1530,8 +1592,14 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.tnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
-			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
+
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId] =
+			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
+
+		//tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
+		//	append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		tbl.db.txn.hasS3Op.Store(true)
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
@@ -1734,7 +1802,7 @@ func (tbl *txnTable) makeEncodedPK(
 			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			ok, isNull, _, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
 			hasNull = isNull
 			if hasNull {
 				return
@@ -2175,7 +2243,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, columnMap)
 	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
 		location := blk.MetaLocation()

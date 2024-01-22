@@ -48,7 +48,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -88,7 +88,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 
 type container struct {
 	projExecutors []colexec.ExpressionExecutor
-	uafs          []func(v, w *vector.Vector) error //vector.GetUnionAllFunction
+	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
