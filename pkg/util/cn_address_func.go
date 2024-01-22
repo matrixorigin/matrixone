@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -41,10 +42,9 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 		}
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
-		// get logging cn label name
-		loggingCNLabel, exist := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOLoggerLabel)
-		if !exist {
-			loggingCNLabel = LOGGING_CN_LABEL
+		selector := clusterservice.NewSelector().SelectByLabel(nil, clusterservice.EQ)
+		if s, exist := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOLoggerLabelSelector); exist {
+			selector = s.(clusterservice.Selector)
 		}
 		details, err := getClient().GetClusterDetails(ctx)
 		if err != nil {
@@ -55,14 +55,9 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 		for _, cn := range details.CNStores {
 			if cn.WorkState == metadata.WorkState_Working {
 				cns = append(cns, cn)
-				if cn.Labels != nil {
-					for _, labelList := range cn.Labels {
-						for _, label := range labelList.Labels {
-							if label == loggingCNLabel {
-								labeled_cns = append(labeled_cns, cn)
-							}
-						}
-					}
+				// get logging cn label name
+				if cn.Labels != nil && selector.Match(cn.Labels) {
+					labeled_cns = append(labeled_cns, cn)
 				}
 			}
 		}

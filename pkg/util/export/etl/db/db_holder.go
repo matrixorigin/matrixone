@@ -105,6 +105,7 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 			return errNotReady
 		}
 
+		// TODO: trigger with new selected-CN, converge all connections
 		addressFunc := GetSQLWriterDBAddressFunc()
 		if addressFunc == nil {
 			return errNotReady
