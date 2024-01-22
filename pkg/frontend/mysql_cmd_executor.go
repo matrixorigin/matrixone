@@ -2871,6 +2871,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			if st, ok := cw.GetAst().(*tree.DropDatabase); ok {
 				_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
 				_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
+				err = doDropFunctionWithDB(requestCtx, ses, stmt, func(path string) error {
+					return proc.FileService.Delete(requestCtx, path)
+				})
 			}
 
 			if err2 := mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
