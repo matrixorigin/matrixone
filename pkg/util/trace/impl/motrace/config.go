@@ -82,6 +82,8 @@ type tracerProviderConfig struct {
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
+	loggerLabel string // set by loggerLabel
+
 	mux sync.RWMutex
 }
 

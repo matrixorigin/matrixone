@@ -430,6 +430,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		nodeRole = mometric.LaunchMode
 	}
 
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOLoggerLabel, SV.LoggerLabel)
+
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)

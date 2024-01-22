@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -40,6 +41,11 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 		}
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
+		// get logging cn label name
+		loggingCNLabel, exist := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.MOLoggerLabel)
+		if !exist {
+			loggingCNLabel = LOGGING_CN_LABEL
+		}
 		details, err := getClient().GetClusterDetails(ctx)
 		if err != nil {
 			return "", err
@@ -52,7 +58,7 @@ func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (s
 				if cn.Labels != nil {
 					for _, labelList := range cn.Labels {
 						for _, label := range labelList.Labels {
-							if label == LOGGING_CN_LABEL {
+							if label == loggingCNLabel {
 								labeled_cns = append(labeled_cns, cn)
 							}
 						}
