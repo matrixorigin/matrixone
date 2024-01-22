@@ -2162,7 +2162,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		bat.SetRowCount(rowCount)
-		nodeUUID, _ := uuid.NewUUID()
+		nodeUUID, _ := uuid.NewV7()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_VALUE_SCAN,
 			RowsetData:   rowSetData,
