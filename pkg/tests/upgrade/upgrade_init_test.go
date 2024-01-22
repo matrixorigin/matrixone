@@ -237,7 +237,7 @@ func runUpgradeTest(
 	require.NoError(t, err)
 	// close the cluster
 	defer func(c service.Cluster) {
-		// require.NoError(t, c.Close())
+		require.NoError(t, c.Close())
 	}(c)
 	// start the cluster
 	require.NoError(t, c.Start())

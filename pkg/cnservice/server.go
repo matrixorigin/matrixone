@@ -745,7 +745,9 @@ func (s *service) bootstrap() error {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-			panic(err)
+			if err != context.Canceled {
+				panic(err)
+			}
 		}
 	})
 }
