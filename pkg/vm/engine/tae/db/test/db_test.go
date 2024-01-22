@@ -3008,18 +3008,16 @@ func TestCompactBlk2(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
-	t.Logf("v is %v**********", v)
 	filter := handle.NewEQFilter(v)
 	txn2, rel1 := tae.GetRelation()
-	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
 	_ = rel1.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	_, rel2 := tae.GetRelation()
+	txn4, rel2 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
+	assert.Nil(t, txn.Commit(context.Background()))
 
-	t.Log("************compact************")
 	txn, rel = tae.GetRelation()
 	it := rel.MakeObjectIt()
 	blk := it.GetObject()
@@ -3032,25 +3030,22 @@ func TestCompactBlk2(t *testing.T) {
 	assert.NoError(t, err)
 
 	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
-	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
 	txn2, rel3 := tae.GetRelation()
-	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel3, 4, true)
 	_ = rel3.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
 	v = testutil.GetSingleSortKeyValue(bat, schema, 4)
-	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
 	txn2, rel4 := tae.GetRelation()
-	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel4, 3, true)
 	_ = rel4.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
 	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
+	assert.Nil(t, txn4.Commit(context.Background()))
 
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 2, true)
