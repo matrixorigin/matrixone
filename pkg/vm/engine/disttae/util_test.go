@@ -362,6 +362,9 @@ func TestMustGetFullCompositePK(t *testing.T) {
 			"2. c=1 and d=2",
 			"3. d=1 and b=(1:2:3)",
 			"4. d=1 and b in ((1:2:3),(4:5:6))",
+			"5. (d=1 and a=2) or c=1",
+			"6. (d=1 and a=2) or (d=1 and a=2 and c=3)",
+			"7. (d=1 and a=2 and c=3) or (d=4 and a=5 and c=6)",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -410,12 +413,94 @@ func TestMustGetFullCompositePK(t *testing.T) {
 					plan2.MakePlan2StringVecExprWithType(m, util.UnsafeBytesToString(val_1_2_3), util.UnsafeBytesToString(val_4_5_6)),
 				}),
 			}),
+			// "5. (d=1 and a=2) or c=1",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+			// "6. (d=1 and a=2) or (d=1 and a=2 and c=3)",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(2),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(3),
+						}),
+					}),
+				}),
+			}),
+			// "7. (d=1 and a=2 and c=3) or (d=4 and a=5 and c=6)",
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(2),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(3),
+						}),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(4),
+					}),
+					makeFunctionExprForTest("and", []*plan.Expr{
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(0, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(5),
+						}),
+						makeFunctionExprForTest("=", []*plan.Expr{
+							makeColExprForTest(2, types.T_int64),
+							plan2.MakePlan2Int64ConstExprWithType(6),
+						}),
+					}),
+				}),
+			}),
 		},
 		can: []bool{
-			true, false, true, true,
+			true, false, true, true, false, false, true,
 		},
 		expects: []func(*plan.Expr) bool{
-			placeHolder, returnTrue, placeHolder, placeHolder,
+			placeHolder, returnTrue, placeHolder, placeHolder, returnTrue,
+			returnTrue, placeHolder,
 		},
 	}
 
@@ -439,6 +524,14 @@ func TestMustGetFullCompositePK(t *testing.T) {
 		vec.UnmarshalBinary(data)
 		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
 	}
+	tc.expects[6] = func(expr *plan.Expr) bool {
+		canEval, vec, put := evalExprListToVec(
+			types.T_char, expr.Expr.(*plan.Expr_List), proc,
+		)
+		require.True(t, canEval)
+		defer put()
+		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
+	}
 
 	pkName := "b"
 	keys := []string{"d", "a", "c"}
@@ -451,6 +544,7 @@ func TestMustGetFullCompositePK(t *testing.T) {
 		require.Truef(t, tc.expects[i](expr), tc.desc[i])
 	}
 	packer.FreeMem()
+	proc.FreeVectors()
 	require.Zero(t, m.CurrNB())
 }
 

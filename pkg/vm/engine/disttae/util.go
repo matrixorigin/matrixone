@@ -230,6 +230,38 @@ func mustGetFullCompositePK(
 			}
 			return true, nil
 		case "or":
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			ok, leftPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[0], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || leftPkExpr == nil {
+				return false, nil
+			}
+			ok, rightPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[1], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || rightPkExpr == nil {
+				return false, nil
+			}
+			return true, &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{leftPkExpr, rightPkExpr},
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}
+
 		case "in":
 			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
 				if !compPkCol(leftExpr.Col.Name, pkName) {
