@@ -298,7 +298,30 @@ func (blk *baseBlock) loadPersistedDeletes(
 	)
 	return
 }
-
+func (blk *baseBlock) loadPersistedDeletesByTxn(
+	ctx context.Context,
+	blkID uint16,
+	txn txnif.TxnReader,
+	mp *mpool.MPool,
+) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
+	mvcc := blk.tryGetMVCC()
+	if mvcc == nil {
+		return
+	}
+	location, deltalocCommitTS := mvcc.GetDeltaLocAndCommitTSByTxn(blkID, txn)
+	if location.IsEmpty() {
+		return
+	}
+	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
+	bat, persistedByCN, err = LoadPersistedDeletes(
+		ctx,
+		pkName,
+		blk.rt.Fs,
+		location,
+		mp,
+	)
+	return
+}
 func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	blkID uint16,
@@ -306,15 +329,22 @@ func (blk *baseBlock) FillPersistedDeletes(
 	view *containers.BaseView,
 	mp *mpool.MPool,
 ) (err error) {
-	blk.fillPersistedDeletesInRange(
+	return blk.foreachPersistedDeletesVisibleByTxn(
 		ctx,
+		txn,
 		blkID,
-		types.TS{},
-		txn.GetStartTS(),
-		view,
+		true,
+		func(i int, rowIdVec *vector.Vector) {
+			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
+			row := rowid.GetRowOffset()
+			if view.DeleteMask == nil {
+				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
+			}
+			view.DeleteMask.Add(uint64(row))
+		},
+		nil,
 		mp,
 	)
-	return nil
 }
 
 func (blk *baseBlock) fillPersistedDeletesInRange(
@@ -380,18 +410,58 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
+	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, err error) {
+		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
+		deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx, blkID, mp)
+		if deletes == nil || err != nil {
+			return
+		}
+		if persistedByCN {
+			if deltalocCommitTS.Equal(txnif.UncommitTS) {
+				return
+			}
+			if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
+				return
+			}
+		}
+		return deletes, persistedByCN, deltalocCommitTS, err
+	}
+	return blk.foreachPersistedDeletes(ctx, start, end, blkID, skipAbort, loadFn, loopOp, postOp, mp)
+}
+
+// for each deletes in [start,end]
+func (blk *baseBlock) foreachPersistedDeletesVisibleByTxn(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	blkID uint16,
+	skipAbort bool,
+	loopOp func(int, *vector.Vector),
+	postOp func(*containers.Batch),
+	mp *mpool.MPool,
+) (err error) {
+	loadFn := func() (deletes *containers.Batch, persistedByCN bool, commitTS types.TS, err error) {
+		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
+		deletes, persistedByCN, commitTS, err = blk.loadPersistedDeletesByTxn(ctx, blkID, txn, mp)
+		return
+	}
+	return blk.foreachPersistedDeletes(ctx, types.TS{}, txn.GetStartTS(), blkID, skipAbort, loadFn, loopOp, postOp, mp)
+}
+func (blk *baseBlock) foreachPersistedDeletes(
+	ctx context.Context,
+	start, end types.TS,
+	blkID uint16,
+	skipAbort bool,
+	loadFn func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, err error),
+	loopOp func(int, *vector.Vector),
+	postOp func(*containers.Batch),
+	mp *mpool.MPool,
+) (err error) {
 	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-	deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx, blkID, mp)
+	deletes, persistedByCN, deltalocCommitTS, err := loadFn()
 	if deletes == nil || err != nil {
 		return
 	}
 	if persistedByCN {
-		if deltalocCommitTS.Equal(txnif.UncommitTS) {
-			return
-		}
-		if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
-			return
-		}
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
@@ -424,7 +494,6 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	}
 	return
 }
-
 func (blk *baseBlock) Prefetch(idxes []uint16, blkID uint16) error {
 	node := blk.PinNode()
 	defer node.Unref()

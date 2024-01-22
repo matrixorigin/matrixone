@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -431,6 +432,13 @@ func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTS(blkID uint16) (objectio.Locati
 		return nil, types.TS{}
 	}
 	return deletes.GetDeltaLocAndCommitTS()
+}
+func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS) {
+	deletes := n.deletes[blkID]
+	if deletes == nil {
+		return nil, types.TS{}
+	}
+	return deletes.GetDeltaLocAndCommitTSByTxn(txn)
 }
 
 func (n *ObjectMVCCHandle) StringLocked() string {
@@ -890,6 +898,17 @@ func (n *MVCCHandle) GetDeltaLocAndCommitTS() (objectio.Location, types.TS) {
 	ts := node.End
 	return str, ts
 }
+func (n *MVCCHandle) GetDeltaLocAndCommitTSByTxn(txn txnif.TxnReader) (objectio.Location, types.TS) {
+	n.RLock()
+	defer n.RUnlock()
+	node := n.deltaloc.GetVisibleNode(txn)
+	if node == nil {
+		return nil, types.TS{}
+	}
+	str := node.BaseNode.DeltaLoc
+	ts := node.End
+	return str, ts
+}
 func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
 	if n.deltaloc.Depth() != 0 {
 		return
@@ -898,6 +917,21 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		return
 	}
 	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)
+	bat, err := blockio.LoadTombstoneColumns(
+		txn.GetContext(),
+		[]uint16{0},
+		nil,
+		n.meta.GetBlockData().GetFs().Service,
+		deltaLoc,
+		nil,
+	)
+	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
+	defer rowids.Close()
+	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
+		offset := rowid.GetRowOffset()
+		n.deletes.persistedMask.Add(uint64(offset))
+		return nil
+	}, nil)
 	if err == nil {
 		ok = true
 	}

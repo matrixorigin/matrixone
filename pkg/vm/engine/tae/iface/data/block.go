@@ -151,6 +151,7 @@ type Tombstone interface {
 	GetChangeIntentionCnt() uint32
 	GetDeleteCnt() uint32
 	GetDeletesListener() func(uint64, types.TS) error
+	GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.TxnReader) (objectio.Location, types.TS)
 	GetDeltaLocAndCommitTS(blkID uint16) (objectio.Location, types.TS)
 	GetDeltaPersistedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
