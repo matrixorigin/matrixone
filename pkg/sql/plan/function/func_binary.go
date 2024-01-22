@@ -1925,7 +1925,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(buf.String()), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
