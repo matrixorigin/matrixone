@@ -971,7 +971,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_DropColumn,
 		apipb.AlterKind_RenameTable,
 		apipb.AlterKind_UpdatePolicy,
-		apipb.AlterKind_AddPartition:
+		apipb.AlterKind_AddPartition,
+		apipb.AlterKind_RenameColumn:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
