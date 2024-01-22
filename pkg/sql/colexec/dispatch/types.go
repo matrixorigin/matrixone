@@ -181,5 +181,17 @@ func (arg *Argument) Free(proc *process.Process, executeFailed bool, err error) 
 		case <-arg.LocalRegs[i].Ctx.Done():
 		case arg.LocalRegs[i].Ch <- nil:
 		}
+		// todo: it seems that it was a bug here that we need to close the channel.
+		//  else sometimes the receiver will block forever.
+		//  so I kept the old code here.
+		//  it's a good case to reproduce the bug.
+		//   comment the close code below, and run the following sql:
+		//	 ```
+		// 	 create table t5(a int primary key, b int);
+		//	 create table t6(b int, c int, foreign key(b) references t5(a));
+		//   alter table t6 add column d int;
+		//   ```
+		//  the alter sql will be blocked.
+		close(arg.LocalRegs[i].Ch)
 	}
 }
