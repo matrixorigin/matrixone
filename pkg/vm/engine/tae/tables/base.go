@@ -595,7 +595,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 			uint32(i),
 		)
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-			return err
+			continue
 		}
 		err = blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, uint16(i), isAblk, mp)
 		if err != nil {
@@ -757,15 +757,16 @@ func (blk *baseBlock) CollectDeleteInRange(
 		if err != nil {
 			return nil, nil, err
 		}
-		if !minTS.IsEmpty() && end.Greater(minTS) {
-			end = minTS.Prev()
+		currentEnd := end
+		if !minTS.IsEmpty() && currentEnd.Greater(minTS) {
+			currentEnd = minTS.Prev()
 		}
 		deletes, err = blk.persistedCollectDeleteInRange(
 			ctx,
 			deletes,
 			blkID,
 			start,
-			end,
+			currentEnd,
 			withAborted,
 			mp,
 		)

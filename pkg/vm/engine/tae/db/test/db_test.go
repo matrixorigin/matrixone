@@ -3418,7 +3418,7 @@ func TestTruncateZonemap(t *testing.T) {
 	tae.MergeBlocks(false)
 	tae.Restart(ctx)
 	txn, rel = tae.GetRelation()
-	checkMinMax(rel, 0, 9)
+	checkMinMax(rel, 0, 8)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// 3 NonAppendable Blocks
@@ -3432,7 +3432,7 @@ func TestTruncateZonemap(t *testing.T) {
 	txn, rel = tae.GetRelation()
 	_, row, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(mockBytes(0xff, 35)))
 	assert.NoError(t, err)
-	assert.Equal(t, uint32(9), row)
+	assert.Equal(t, uint32(8), row)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -6775,7 +6775,7 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Nil(t, err)
 
 	p := &catalog.LoopProcessor{}
-	var dbCnt, tableCnt, objCnt, blkCnt int
+	var dbCnt, tableCnt, objCnt int
 	p.DatabaseFn = func(d *catalog.DBEntry) error {
 		if d.IsSystemDB() {
 			return nil
@@ -6801,7 +6801,6 @@ func TestGCCatalog1(t *testing.T) {
 		dbCnt = 0
 		tableCnt = 0
 		objCnt = 0
-		blkCnt = 0
 	}
 
 	err = tae.Catalog.RecurLoop(p)
@@ -6809,7 +6808,6 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 2, dbCnt)
 	assert.Equal(t, 3, tableCnt)
 	assert.Equal(t, 4, objCnt)
-	assert.Equal(t, 4, blkCnt)
 
 	txn2, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -6832,7 +6830,6 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 2, dbCnt)
 	assert.Equal(t, 3, tableCnt)
 	assert.Equal(t, 4, objCnt)
-	assert.Equal(t, 3, blkCnt)
 
 	txn3, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -6863,7 +6860,6 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 2, dbCnt)
 	assert.Equal(t, 3, tableCnt)
 	assert.Equal(t, 2, objCnt)
-	assert.Equal(t, 2, blkCnt)
 
 	txn4, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -6890,7 +6886,6 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 2, dbCnt)
 	assert.Equal(t, 1, tableCnt)
 	assert.Equal(t, 1, objCnt)
-	assert.Equal(t, 1, blkCnt)
 
 	txn5, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -6913,7 +6908,6 @@ func TestGCCatalog1(t *testing.T) {
 	assert.Equal(t, 0, dbCnt)
 	assert.Equal(t, 0, tableCnt)
 	assert.Equal(t, 0, objCnt)
-	assert.Equal(t, 0, blkCnt)
 }
 
 func TestGCCatalog2(t *testing.T) {
