@@ -281,11 +281,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		var fkTableDef *TableDef
 
 		//fk self reference
-		fmt.Fprintf(os.Stderr, "fk parent %v", fk.ParentTable)
-		isSelfRef := false
-		if fk.ParentTable.DatabaseName == dbName && fk.ParentTable.TableName == tblName {
+		fmt.Fprintf(os.Stderr, "fk parent %v", fk.ForeignTbl)
+		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
-			isSelfRef = true
 		} else {
 			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
 		}
@@ -295,12 +293,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			fkColIdToName[col.ColId] = col.Name
 		}
 		fkColNames := make([]string, len(fk.ForeignCols))
-		if isSelfRef {
-			fkColNames = fk.ParentTable.ColNames
-		} else {
-			for i, colId := range fk.ForeignCols {
-				fkColNames[i] = fkColIdToName[colId]
-			}
+		for i, colId := range fk.ForeignCols {
+			fkColNames[i] = fkColIdToName[colId]
 		}
 
 		if rowCount != 0 {

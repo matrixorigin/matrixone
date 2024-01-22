@@ -1066,8 +1066,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			createTable.FkDbs = append(createTable.FkDbs, fkData.DbName)
-			createTable.FkTables = append(createTable.FkTables, fkData.TableName)
+			createTable.FkDbs = append(createTable.FkDbs, fkData.parentDbName)
+			createTable.FkTables = append(createTable.FkTables, fkData.parentTableName)
 			createTable.FkCols = append(createTable.FkCols, fkData.Cols)
 			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkData.Def)
 
@@ -2478,8 +2478,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
 						AddFk: &plan.AlterTableAddFk{
-							DbName:    fkData.DbName,
-							TableName: fkData.TableName,
+							DbName:    fkData.parentDbName,
+							TableName: fkData.parentTableName,
 							Cols:      fkData.Cols.Cols,
 							Fkey:      fkData.Def,
 						},
@@ -2929,6 +2929,8 @@ type fkData struct {
 	Def  *plan.ForeignKeyDef
 	//the column typs in foreign key
 	ColTyps map[int]*plan.Type
+	//the referred parent table info
+	Refer *tree.AttributeReference
 }
 
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*fkData, error) {
@@ -2941,6 +2943,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			OnUpdate:    getRefAction(refer.OnUpdate),
 			ForeignCols: make([]uint64, len(refer.KeyParts)),
 		},
+		Refer: def.Refer,
 	}
 
 	// get fk columns of create table
@@ -3030,7 +3033,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 /*
 checkFkColsAreValid check foreign key columns is valid or not, then it saves them.
-the columns referred by the foreign key must appear in the unique keys or primary key
+the columns referred by the foreign key in the children table must appear in the unique keys or primary key
 in the parent table.
 
 For instance:
@@ -3053,57 +3056,72 @@ Case 3:
 	"a, c" can not be used due to they belong to the different primary key / unique key
 */
 func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *TableDef) error {
-	//colId in parent table-> pos in parent table
+	//colId in parent table-> position in parent table
 	columnIdPos := make(map[uint64]int)
-	//columnName in parent table -> pos in parent table
+	//columnName in parent table -> position in parent table
 	columnNamePos := make(map[string]int)
 	//columnName of index and pk of parent table -> colId in parent table
 	uniqueColumns := make([]map[string]uint64, 0, len(parentTableDef.Cols))
+
+	//1. collect parent column info
 	for i, col := range parentTableDef.Cols {
 		columnIdPos[col.ColId] = i
 		columnNamePos[col.Name] = i
 	}
-	if parentTableDef.Pkey != nil {
-		//primary key column -> its colId in the parent table
-		uniqueMap := make(map[string]uint64)
-		for _, colName := range parentTableDef.Pkey.Names {
-			uniqueMap[colName] = parentTableDef.Cols[columnNamePos[colName]].ColId
+
+	//2. check if the referred column does not exist in the parent table
+	for _, keyPart := range fkData.Refer.KeyParts {
+		colName := keyPart.ColName.Parts[0]
+		if _, exists := columnNamePos[colName]; !exists { // column exists in parent table
+			return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkData.parentTableName)
 		}
-		uniqueColumns = append(uniqueColumns, uniqueMap)
 	}
 
+	//columnName in uk or pk -> its colId in the parent table
+	collectIndexColumn := func(names []string) {
+		ret := make(map[string]uint64)
+		//columnName -> its colId in the parent table
+		for _, colName := range names {
+			ret[colName] = parentTableDef.Cols[columnNamePos[colName]].ColId
+		}
+		uniqueColumns = append(uniqueColumns, ret)
+	}
+
+	//3. collect pk column info of the parent table
+	if parentTableDef.Pkey != nil {
+		collectIndexColumn(parentTableDef.Pkey.Names)
+	}
+
+	//4. collect index column info of the parent table
 	//secondary key?
-	// now tableRef.Indices is empty, you can not test it
+	// now tableRef.Indices are empty, you can not test it
 	for _, index := range parentTableDef.Indexes {
 		if index.Unique {
-			//unique key column -> its colId in parent table
-			uniqueMap := make(map[string]uint64)
-			for _, uniqueColName := range index.Parts {
-				colId := parentTableDef.Cols[columnNamePos[uniqueColName]].ColId
-				uniqueMap[uniqueColName] = colId
-			}
-			uniqueColumns = append(uniqueColumns, uniqueMap)
+			collectIndexColumn(index.Parts)
 		}
 	}
 
-	//there is at least one unique key or primary key should have the columns in the foreign keys.
-	matchCol := make([]uint64, 0, len(fkData.Def.ParentTable.ColNames))
+	//5. check if there is at least one unique key or primary key should have
+	//the columns referenced by the foreign keys in the children tables.
+	matchCol := make([]uint64, 0, len(fkData.Refer.KeyParts))
+	//iterate on every pk or uk
 	for _, uniqueColumn := range uniqueColumns {
-		for i, colName := range fkData.Def.ParentTable.ColNames {
-			if _, exists := columnNamePos[colName]; exists { // column exists in parent table
-				if colId, ok := uniqueColumn[colName]; ok {
-					// check column type
-					if parentTableDef.Cols[columnIdPos[colId]].Typ.Id != fkData.ColTyps[i].Id {
-						return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkData.Cols.Cols[i])
-					}
-					matchCol = append(matchCol, colId)
-				} else {
-					// column in fk does not exist in unique key or primary key
-					matchCol = matchCol[:0]
-					break
+		//iterate on the referred column of fk
+		for i, keyPart := range fkData.Refer.KeyParts {
+			colName := keyPart.ColName.Parts[0]
+			//check if the referred column exists in this pk or uk
+			if colId, ok := uniqueColumn[colName]; ok {
+				// check column type
+				// left part of expr: column type in parent table
+				// right part of expr: column type in child table
+				if parentTableDef.Cols[columnIdPos[colId]].Typ.Id != fkData.ColTyps[i].Id {
+					return moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkData.Cols.Cols[i])
 				}
+				matchCol = append(matchCol, colId)
 			} else {
-				return moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkData.TableName)
+				// column in fk does not exist in this pk or uk
+				matchCol = matchCol[:0]
+				break
 			}
 		}
 

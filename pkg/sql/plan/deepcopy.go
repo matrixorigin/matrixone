@@ -467,7 +467,6 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
-		ChildrenTables: make([]*plan.ChildTable, 0),
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)

@@ -845,20 +845,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
 				OnDelete:    fkey.OnDelete,
 				OnUpdate:    fkey.OnUpdate,
-				ParentTable: &plan.ParentTable{
-					DatabaseName: fkey.ParentTable.DatabaseName,
-					TableName:    fkey.ParentTable.TableName,
-					ColNames:     make([]string, len(fkey.ParentTable.ColNames)),
-				},
-				ColNames: make([]string, len(fkey.ColNames)),
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
 			for idx, colName := range qry.GetFkCols()[i].Cols {
 				newDef.Cols[idx] = colNameToId[colName]
 			}
-			//copy
-			copy(newDef.ColNames, fkey.ColNames)
-			copy(newDef.ParentTable.ColNames, fkey.ParentTable.ColNames)
 			newFkeys[i] = newDef
 		}
 		// remove old fk settings
