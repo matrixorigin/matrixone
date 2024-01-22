@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -342,11 +343,20 @@ func TestMustGetFullCompositePK(t *testing.T) {
 	var placeHolder func(*plan.Expr) bool
 	returnTrue := func(*plan.Expr) bool { return true }
 
+	var val_1_2_3 []byte
+	packer.EncodeInt64(1)
+	packer.EncodeInt64(2)
+	packer.EncodeInt64(3)
+	val_1_2_3 = packer.Bytes()
+	packer.Reset()
+
 	tc := myCase{
 		// (d,a,c) => b
 		desc: []string{
 			"1. c=1 and (d=2 and a=3)",
 			"2. c=1 and d=2",
+			"3. d=1 and b=(1:2:3)",
+			// "4. d=1 and b in ((1:2:3),(4:5:6))",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -375,12 +385,22 @@ func TestMustGetFullCompositePK(t *testing.T) {
 					plan2.MakePlan2Int64ConstExprWithType(2),
 				}),
 			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_varchar),
+					plan2.MakePlan2StringConstExprWithType(string(util.UnsafeBytesToString(val_1_2_3))),
+				}),
+			}),
 		},
 		can: []bool{
-			true, false,
+			true, false, true,
 		},
 		expects: []func(*plan.Expr) bool{
-			placeHolder, returnTrue,
+			placeHolder, returnTrue, placeHolder,
 		},
 	}
 
@@ -393,6 +413,10 @@ func TestMustGetFullCompositePK(t *testing.T) {
 		packer.Reset()
 		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
 		return bytes.Equal(expect, []byte(svalExpr.Sval))
+	}
+	tc.expects[2] = func(expr *plan.Expr) bool {
+		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
+		return bytes.Equal(val_1_2_3, []byte(svalExpr.Sval))
 	}
 
 	pkName := "b"
