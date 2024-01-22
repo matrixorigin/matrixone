@@ -414,6 +414,14 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
 				err = runC.fuzzy.backgroundSQLCheck(runC)
 			}
+
+			//detect fk self refer
+			//get the detect sql
+			query := c.pn.GetQuery()
+			if query != nil && (query.StmtType == plan.Query_INSERT ||
+				query.StmtType == plan.Query_UPDATE) {
+				err = detectFkSelfRefer(runC, query.DetectSqls)
+			}
 		}
 
 		c.Release()
@@ -459,6 +467,30 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	return result, nil
 }
+
+func detectFkSelfRefer(c *Compile, detectSqls []string) error {
+	for _, sql := range detectSqls {
+		res, err := c.runSqlWithResult(sql)
+		if err != nil {
+			logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+			return err
+		}
+		defer res.Close()
+
+		if res.Batches != nil {
+			vs := res.Batches[0].Vecs
+			if vs != nil && vs[0].Length() > 0 {
+				yes := vector.GetFixedAt[bool](vs[0], 0)
+				if !yes {
+					return moerr.NewInternalError(c.ctx, "fk self refer invalidate the fk constrait")
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()

@@ -921,6 +921,9 @@ message Query {
 
 	// load Tag
 	bool loadTag = 6;
+
+	//detect fk self refer constraint
+	repeated string detectSqls= 7;
 }
 
 message TransationControl {

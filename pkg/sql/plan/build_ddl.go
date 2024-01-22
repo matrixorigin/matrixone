@@ -2934,7 +2934,7 @@ type fkData struct {
 	//the columns in foreign key
 	Cols *plan.FkColName
 	//fk definition
-	Def  *plan.ForeignKeyDef
+	Def *plan.ForeignKeyDef
 	//the column typs in foreign key
 	ColTyps map[int]*plan.Type
 	//the referred parent table info
@@ -3048,13 +3048,16 @@ in the parent table.
 
 For instance:
 create table f1 (a int ,b int, c int ,d int ,e int,
+
 	primary key(a,b),  unique key(c,d), unique key (e))
 
 Case 1:
+
 	single column like "a" ,"b", "c", "d", "e" can be used as the column in foreign key of the child table
 	due to they are the member of the primary key or some Unique key.
 
 Case 2:
+
 	"a, b" can be used as the columns in the foreign key of the child table
 	due to they are the member of the primary key.
 

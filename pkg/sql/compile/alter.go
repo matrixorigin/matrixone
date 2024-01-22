@@ -281,7 +281,7 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 		}
 	}
 	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
-		Tables:         refChildTbls,
+		Tables: refChildTbls,
 	})
 	return copyRel.UpdateConstraint(c.ctx, oldCt)
 }

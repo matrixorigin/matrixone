@@ -391,20 +391,20 @@ func (c *compilerContext) getTableDef(
 	}
 
 	tableDef := &plan.TableDef{
-		TblId:          tableId,
-		Name:           tableName,
-		Cols:           cols,
-		Defs:           defs,
-		TableType:      TableType,
-		Createsql:      Createsql,
-		Pkey:           primarykey,
-		ViewSql:        viewSql,
-		Partition:      partitionInfo,
-		Fkeys:          foreignKeys,
-		RefChildTbls:   refChildTbls,
-		ClusterBy:      clusterByDef,
-		Indexes:        indexes,
-		Version:        schemaVersion,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
+		ViewSql:      viewSql,
+		Partition:    partitionInfo,
+		Fkeys:        foreignKeys,
+		RefChildTbls: refChildTbls,
+		ClusterBy:    clusterByDef,
+		Indexes:      indexes,
+		Version:      schemaVersion,
 	}
 	return obj, tableDef
 }

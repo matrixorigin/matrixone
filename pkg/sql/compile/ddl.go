@@ -1923,7 +1923,7 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 
 	if len(tableDef.RefChildTbls) > 0 {
 		c.Cts = append(c.Cts, &engine.RefChildTableDef{
-			Tables:         tableDef.RefChildTbls,
+			Tables: tableDef.RefChildTbls,
 		})
 	}
 
