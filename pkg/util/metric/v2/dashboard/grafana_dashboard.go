@@ -408,7 +408,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
+			query.Request("label_values(up,matrixone_cloud_cluster)"),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -417,7 +417,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request("label_values(pod)"),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster"},pod)`),
 		))
 }
 
