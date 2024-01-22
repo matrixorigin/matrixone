@@ -42,6 +42,13 @@ type fileData struct {
 	isABlock      bool
 }
 
+type objData struct {
+	stats         objectio.ObjectStats
+	isDeleteBatch bool
+	isChange      bool
+	isABlock      bool
+}
+
 type blockData struct {
 	num       uint16
 	deleteRow []int
@@ -307,12 +314,85 @@ func formatData(data *batch.Batch) *batch.Batch {
 	return data
 }
 
+func LoadCheckpointEntriesFromKey(
+	ctx context.Context,
+	fs fileservice.FileService,
+	location objectio.Location,
+	version uint32,
+	softDeletes *map[string]bool,
+) ([]objectio.ObjectName, *CheckpointData, error) {
+	locations := make([]objectio.ObjectName, 0)
+	data, err := getCheckpointData(ctx, fs, location, version)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	locations = append(locations, location.Name())
+
+	for _, location = range data.locations {
+		locations = append(locations, location.Name())
+	}
+	for i := 0; i < data.bats[ObjectInfoIDX].Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+		if objectStats.Extent().End() > 0 {
+			panic(fmt.Sprintf("object %v Extent not empty", objectStats.ObjectName().String()))
+		}
+		locations = append(locations, objectStats.ObjectName())
+		if !deletedAt.IsEmpty() {
+			if softDeletes != nil {
+				if (*softDeletes)[objectStats.ObjectName().String()] {
+					(*softDeletes)[objectStats.ObjectName().String()] = true
+				}
+			}
+		}
+	}
+
+	for i := 0; i < data.bats[TNObjectInfoIDX].Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := data.bats[TNObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		deletedAt := data.bats[TNObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+		if objectStats.Extent().End() > 0 {
+			continue
+		}
+		locations = append(locations, objectStats.ObjectName())
+		if !deletedAt.IsEmpty() {
+			if softDeletes != nil {
+				if (*softDeletes)[objectStats.ObjectName().String()] {
+					(*softDeletes)[objectStats.ObjectName().String()] = true
+				}
+			}
+		}
+	}
+
+	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(
+			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if deltaLoc.IsEmpty() {
+			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
+		}
+		locations = append(locations, deltaLoc.Name())
+	}
+	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if deltaLoc.IsEmpty() {
+			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
+		}
+		locations = append(locations, deltaLoc.Name())
+	}
+	return locations, data, nil
+}
+
 func ReWriteCheckpointAndBlockFromKey(
 	ctx context.Context,
 	fs, dstFs fileservice.FileService,
 	loc, tnLocation objectio.Location,
 	version uint32, ts types.TS,
-	softDeletes map[string]map[uint16]bool,
+	softDeletes map[string]bool,
 ) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
 		common.OperandField(loc.String()),
@@ -752,54 +832,4 @@ func ReWriteCheckpointAndBlockFromKey(
 	files = append(files, checkpointFiles...)
 	files = append(files, cnLocation.Name().String())
 	return loc, tnLocation, files, nil
-}
-
-func LoadCheckpointEntriesFromKey(
-	ctx context.Context,
-	fs fileservice.FileService,
-	location objectio.Location,
-	version uint32,
-	softDeletes *map[string]map[uint16]bool,
-) ([]objectio.Location, *CheckpointData, error) {
-	locations := make([]objectio.Location, 0)
-	locations = append(locations, location)
-	data, err := getCheckpointData(ctx, fs, location, version)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for _, location = range data.locations {
-		locations = append(locations, location)
-	}
-	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
-		deltaLoc := objectio.Location(
-			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		metaLoc := objectio.Location(
-			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if !metaLoc.IsEmpty() {
-			locations = append(locations, metaLoc)
-		}
-		if !deltaLoc.IsEmpty() {
-			locations = append(locations, deltaLoc)
-		}
-	}
-	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
-		deltaLoc := objectio.Location(
-			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		metaLoc := objectio.Location(
-			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if !metaLoc.IsEmpty() {
-			locations = append(locations, metaLoc)
-			if softDeletes != nil {
-				if len((*softDeletes)[metaLoc.Name().String()]) == 0 {
-					(*softDeletes)[metaLoc.Name().String()] = make(map[uint16]bool)
-				}
-				(*softDeletes)[metaLoc.Name().String()][metaLoc.ID()] = true
-			}
-		}
-		if !deltaLoc.IsEmpty() {
-			locations = append(locations, deltaLoc)
-		}
-	}
-	return locations, data, nil
 }
