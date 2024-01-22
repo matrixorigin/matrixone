@@ -349,6 +349,11 @@ func TestMustGetFullCompositePK(t *testing.T) {
 	packer.EncodeInt64(3)
 	val_1_2_3 = packer.Bytes()
 	packer.Reset()
+	packer.EncodeInt64(4)
+	packer.EncodeInt64(5)
+	packer.EncodeInt64(6)
+	val_4_5_6 := packer.Bytes()
+	packer.Reset()
 
 	tc := myCase{
 		// (d,a,c) => b
@@ -356,7 +361,7 @@ func TestMustGetFullCompositePK(t *testing.T) {
 			"1. c=1 and (d=2 and a=3)",
 			"2. c=1 and d=2",
 			"3. d=1 and b=(1:2:3)",
-			// "4. d=1 and b in ((1:2:3),(4:5:6))",
+			"4. d=1 and b in ((1:2:3),(4:5:6))",
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("and", []*plan.Expr{
@@ -395,12 +400,22 @@ func TestMustGetFullCompositePK(t *testing.T) {
 					plan2.MakePlan2StringConstExprWithType(string(util.UnsafeBytesToString(val_1_2_3))),
 				}),
 			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("in", []*plan.Expr{
+					makeColExprForTest(1, types.T_varchar),
+					plan2.MakePlan2StringVecExprWithType(m, util.UnsafeBytesToString(val_1_2_3), util.UnsafeBytesToString(val_4_5_6)),
+				}),
+			}),
 		},
 		can: []bool{
-			true, false, true,
+			true, false, true, true,
 		},
 		expects: []func(*plan.Expr) bool{
-			placeHolder, returnTrue, placeHolder,
+			placeHolder, returnTrue, placeHolder, placeHolder,
 		},
 	}
 
@@ -417,6 +432,12 @@ func TestMustGetFullCompositePK(t *testing.T) {
 	tc.expects[2] = func(expr *plan.Expr) bool {
 		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
 		return bytes.Equal(val_1_2_3, []byte(svalExpr.Sval))
+	}
+	tc.expects[3] = func(expr *plan.Expr) bool {
+		data := expr.Expr.(*plan.Expr_Vec).Vec.Data
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(data)
+		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
 	}
 
 	pkName := "b"
