@@ -1101,7 +1101,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if fn.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
+	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
 	for i := range fn.Args {
@@ -1202,11 +1202,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
-			if constT.Width <= columnT.Width {
-				return true
-			} else {
-				return false
-			}
+			return constT.Width <= columnT.Width
 		case types.T_text:
 			return true
 		default:
