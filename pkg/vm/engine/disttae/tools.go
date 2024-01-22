@@ -815,6 +815,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
+		// `DELETE_TXN` and `INSERT_TXN` are only used for CN workspace consumption, not sent to DN
 		if e.typ == DELETE_TXN || e.typ == INSERT_TXN {
 			continue
 		}
