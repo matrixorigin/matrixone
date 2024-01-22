@@ -7745,6 +7745,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 	return false, nil
 }
 
+func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	var sqlForCheckDatabase string
+	var erArray []ExecResult
+	var err error
+	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	defer span.End()
+	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sqlForCheckDatabase)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) (err error) {
 	var exists bool
@@ -8523,6 +8550,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
+	var dbExists bool
 	var checkExistence string
 	var argsJson []byte
 	var argsCondition string
@@ -8539,6 +8567,15 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
