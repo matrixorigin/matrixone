@@ -190,8 +190,11 @@ func specialLogicForCTE(proc *process.Process, arg *Argument, bat *batch.Batch) 
 
 	result = bat
 	if result.Last() {
-		result.SetEnd()
-		arg.ctr.hasData = false
+		if arg.ctr.hasData {
+			arg.ctr.hasData = false
+		} else {
+			result.SetEnd()
+		}
 		return
 	}
 
