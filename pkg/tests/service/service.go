@@ -1331,7 +1331,10 @@ func (c *testCluster) buildCNConfigs(n int) {
 	for i := 0; i < batch; i++ {
 		cfg := buildCNConfig(i+offset, c.opt, c.network.addresses)
 		c.cn.cfgs = append(c.cn.cfgs, cfg)
-		opt := c.opt.cn.optionFunc(i + offset)
+		var opt cnOptions
+		if c.opt.cn.optionFunc != nil {
+			opt = c.opt.cn.optionFunc(i + offset)
+		}
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		c.cn.opts = append(c.cn.opts, opt)
 
