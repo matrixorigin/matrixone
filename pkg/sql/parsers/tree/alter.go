@@ -23,9 +23,160 @@ import (
 func init() {
 	reuse.CreatePool[AlterUser](
 		func() *AlterUser { return &AlterUser{} },
-		func(c *AlterUser) { *c = AlterUser{} },
+		func( a *AlterUser) { a.reset() },
 		reuse.DefaultOptions[AlterUser]().
 			WithEnableChecker())
+
+	reuse.CreatePool[AlterAccountAuthOption](
+		func() *AlterAccountAuthOption { return &AlterAccountAuthOption{} },
+		func( a *AlterAccountAuthOption) { a.reset() },
+		reuse.DefaultOptions[AlterAccountAuthOption]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterAccount](
+		func() *AlterAccount { return &AlterAccount{} },
+		func( a *AlterAccount) { a.reset() },
+		reuse.DefaultOptions[AlterAccount]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterView](
+		func() *AlterView { return &AlterView{} },
+		func( a *AlterView) { a.reset() },
+		reuse.DefaultOptions[AlterView]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterDataBaseConfig](
+		func() *AlterDataBaseConfig { return &AlterDataBaseConfig{} },
+		func( a *AlterDataBaseConfig) { a.reset() },
+		reuse.DefaultOptions[AlterDataBaseConfig]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTable](
+		func() *AlterTable { return &AlterTable{} },
+		func( a *AlterTable) { a.reset() },
+		reuse.DefaultOptions[AlterTable]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterOptionAlterIndex](
+		func() *AlterOptionAlterIndex { return &AlterOptionAlterIndex{} },
+		func( a *AlterOptionAlterIndex) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlterIndex]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterOptionAlterReIndex](
+		func() *AlterOptionAlterReIndex { return &AlterOptionAlterReIndex{} },
+		func( a *AlterOptionAlterReIndex) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlterReIndex]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterOptionAlterCheck](
+		func() *AlterOptionAlterCheck { return &AlterOptionAlterCheck{} },
+		func( a *AlterOptionAlterCheck) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlterCheck]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterOptionAdd](
+		func() *AlterOptionAdd { return &AlterOptionAdd{} },
+		func( a *AlterOptionAdd) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAdd]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterOptionDrop](
+		func() *AlterOptionDrop { return &AlterOptionDrop{} },
+		func( a *AlterOptionDrop) { a.reset() },
+		reuse.DefaultOptions[AlterOptionDrop]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableName](
+		func() *AlterTableName { return &AlterTableName{} },
+		func( a *AlterTableName) { a.reset() },
+		reuse.DefaultOptions[AlterTableName]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterAddCol](
+		func() *AlterAddCol { return &AlterAddCol{} },
+		func( a *AlterAddCol) { a.reset() },
+		reuse.DefaultOptions[AlterAddCol]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterPublication](
+		func() *AlterPublication { return &AlterPublication{} },
+		func( a *AlterPublication) { a.reset() },
+		reuse.DefaultOptions[AlterPublication]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableModifyColumnClause](
+		func() *AlterTableModifyColumnClause { return &AlterTableModifyColumnClause{} },
+		func( a *AlterTableModifyColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableModifyColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableChangeColumnClause](
+		func() *AlterTableChangeColumnClause { return &AlterTableChangeColumnClause{} },
+		func( a *AlterTableChangeColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableChangeColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableAddColumnClause](
+		func() *AlterTableAddColumnClause { return &AlterTableAddColumnClause{} },
+		func( a *AlterTableAddColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableAddColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableRenameColumnClause](
+		func() *AlterTableRenameColumnClause { return &AlterTableRenameColumnClause{} },
+		func( a *AlterTableRenameColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableRenameColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableAlterColumnClause](
+		func() *AlterTableAlterColumnClause { return &AlterTableAlterColumnClause{} },
+		func( a *AlterTableAlterColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableAlterColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterTableOrderByColumnClause](
+		func() *AlterTableOrderByColumnClause { return &AlterTableOrderByColumnClause{} },
+		func( a *AlterTableOrderByColumnClause) { a.reset() },
+		reuse.DefaultOptions[AlterTableOrderByColumnClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterColumnOrder](
+		func() *AlterColumnOrder { return &AlterColumnOrder{} },
+		func( a *AlterColumnOrder) { a.reset() },
+		reuse.DefaultOptions[AlterColumnOrder]().
+			WithEnableChecker())
+
+	reuse.CreatePool[ColumnPosition](
+		func() *ColumnPosition { return &ColumnPosition{} },
+		func( c *ColumnPosition) { c.reset() },
+		reuse.DefaultOptions[ColumnPosition]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterPartitionRedefinePartitionClause](
+		func() *AlterPartitionRedefinePartitionClause { return &AlterPartitionRedefinePartitionClause{} },
+		func( a *AlterPartitionRedefinePartitionClause) { a.reset() },
+		reuse.DefaultOptions[AlterPartitionRedefinePartitionClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterPartitionAddPartitionClause](
+		func() *AlterPartitionAddPartitionClause { return &AlterPartitionAddPartitionClause{} },
+		func( a *AlterPartitionAddPartitionClause) { a.reset() },
+		reuse.DefaultOptions[AlterPartitionAddPartitionClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterPartitionDropPartitionClause](
+		func() *AlterPartitionDropPartitionClause { return &AlterPartitionDropPartitionClause{} },
+		func( a *AlterPartitionDropPartitionClause) { a.reset() },
+		reuse.DefaultOptions[AlterPartitionDropPartitionClause]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterPartitionTruncatePartitionClause](
+		func() *AlterPartitionTruncatePartitionClause { return &AlterPartitionTruncatePartitionClause{} },
+		func( a *AlterPartitionTruncatePartitionClause) { a.reset() },
+		reuse.DefaultOptions[AlterPartitionTruncatePartitionClause]().
+			WithEnableChecker())
+
 }
 
 type AlterUser struct {
@@ -38,7 +189,6 @@ type AlterUser struct {
 	CommentOrAttribute AccountCommentOrAttribute
 }
 
-func (node AlterUser) TypeName() string { return "tree.AlterUser" }
 
 func (node *AlterUser) Free() {
 	reuse.Free[AlterUser](node, nil)
@@ -668,3 +818,218 @@ func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {
 		node.PartitionNames.Format(ctx)
 	}
 }
+
+func (node AlterUser) TypeName() string { return "tree.AlterUser" }
+
+func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption"}
+func (node AlterAccount) TypeName() string { return "tree.AlterAccount"}
+func (node AlterView) TypeName() string { return "tree.AlterView"}
+func (node AlterDataBaseConfig) TypeName() string { return "tree.AlterDataBaseConfig"}
+func (node AlterTable) TypeName() string { return "tree.AlterTable"}
+func (node AlterOptionAlterIndex) TypeName() string { return "tree.AlterOptionAlterIndex"}
+func (node AlterOptionAlterReIndex) TypeName() string { return "tree.AlterOptionAlterReIndex"}
+func (node AlterOptionAlterCheck) TypeName() string { return "tree.AlterOptionAlterCheck"}
+func (node AlterOptionAdd) TypeName() string { return "tree.AlterOptionAdd"}
+func (node AlterOptionDrop) TypeName() string { return "tree.AlterOptionDrop"}
+func (node AlterTableName) TypeName() string { return "tree.AlterTableName"}
+func (node AlterAddCol) TypeName() string { return "tree.AlterAddCol"}
+func (node AlterPublication) TypeName() string { return "tree.AlterPublication"}
+func (node AlterTableModifyColumnClause) TypeName() string { return "tree.AlterTableModifyColumnClause"}
+func (node AlterTableChangeColumnClause) TypeName() string { return "tree.AlterTableChangeColumnClause"}
+func (node AlterTableAddColumnClause) TypeName() string { return "tree.AlterTableAddColumnClause"}
+func (node AlterTableRenameColumnClause) TypeName() string { return "tree.AlterTableRenameColumnClause"}
+func (node AlterTableAlterColumnClause) TypeName() string { return "tree.AlterTableAlterColumnClause"}
+func (node AlterTableOrderByColumnClause) TypeName() string { return "tree.AlterTableOrderByColumnClause"}
+func (node AlterColumnOrder) TypeName() string { return "tree.AlterColumnOrder"}
+func (node ColumnPosition) TypeName() string { return "tree.ColumnPosition"}
+func (node AlterPartitionRedefinePartitionClause) TypeName() string { return "tree.AlterPartitionRedefinePartitionClause"}
+func (node AlterPartitionAddPartitionClause) TypeName() string { return "tree.AlterPartitionAddPartitionClause"}
+func (node AlterPartitionDropPartitionClause) TypeName() string { return "tree.AlterPartitionDropPartitionClause"}
+func (node AlterPartitionTruncatePartitionClause) TypeName() string { return "tree.AlterPartitionTruncatePartitionClause"}
+
+func (node *AlterUser) reset() {
+	// if node.Users != nil {
+	// 	for _, item := range node.Users {
+	// 		reuse.Free[User](item, nil)
+	// 	}
+	// }
+	// if node.Role != nil {
+	// 	reuse.Free[Role](node.Role, nil)
+	// }
+}
+
+
+func (node *AlterAccountAuthOption) reset() {
+}
+
+
+func (node *AlterAccount) reset() {
+}
+
+
+func (node *AlterView) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[TableName](node.Name, nil)
+	// }
+	// if node.AsSource != nil {
+	// 	reuse.Free[Select](node.AsSource, nil)
+	// }
+}
+
+
+func (node *AlterDataBaseConfig) reset() {
+}
+
+
+func (node *AlterTable) reset() {
+	// if node.Table != nil {
+	// 	reuse.Free[TableName](node.Table, nil)
+	// }
+}
+
+
+func (node *AlterOptionAlterIndex) reset() {
+}
+
+
+func (node *AlterOptionAlterReIndex) reset() {
+}
+
+
+func (node *AlterOptionAlterCheck) reset() {
+}
+
+
+func (node *AlterOptionAdd) reset() {
+}
+
+
+func (node *AlterOptionDrop) reset() {
+}
+
+
+func (node *AlterTableName) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[UnresolvedObjectName](node.Name, nil)
+	// }
+}
+
+
+func (node *AlterAddCol) reset() {
+	// if node.Column != nil {
+	// 	reuse.Free[ColumnTableDef](node.Column, nil)
+	// }
+	// if node.Position != nil {
+	// 	reuse.Free[ColumnPosition](node.Position, nil)
+	// }
+}
+
+
+func (node *AlterPublication) reset() {
+	// if node.AccountsSet != nil {
+	// 	reuse.Free[AccountsSetOption](node.AccountsSet, nil)
+	// }
+}
+
+
+func (node *AlterTableModifyColumnClause) reset() {
+	// if node.NewColumn != nil {
+	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
+
+func (node *AlterTableChangeColumnClause) reset() {
+	// if node.OldColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
+	// }
+	// if node.NewColumn != nil {
+	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
+
+func (node *AlterTableAddColumnClause) reset() {
+	// if node.NewColumns != nil {
+	// 	for _, item := range node.NewColumns {
+	// 		reuse.Free[ColumnTableDef](item, nil)
+	// 	}
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
+
+func (node *AlterTableRenameColumnClause) reset() {
+	// if node.OldColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
+	// }
+	// if node.NewColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.NewColumnName, nil)
+	// }
+}
+
+
+func (node *AlterTableAlterColumnClause) reset() {
+	// if node.ColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.ColumnName, nil)
+	// }
+	// if node.DefalutExpr != nil {
+	// 	reuse.Free[AttributeDefault](node.DefalutExpr, nil)
+	// }
+}
+
+
+func (node *AlterTableOrderByColumnClause) reset() {
+	if node.AlterOrderByList != nil {
+		for _, item := range node.AlterOrderByList {
+			reuse.Free[AlterColumnOrder](item, nil)
+		}
+	}
+}
+
+
+func (node *AlterColumnOrder) reset() {
+	// if node.Column != nil {
+	// 	reuse.Free[UnresolvedName](node.Column, nil)
+	// }
+}
+
+
+func (node *ColumnPosition) reset() {
+	// if node.RelativeColumn != nil {
+	// 	reuse.Free[UnresolvedName](node.RelativeColumn, nil)
+	// }
+}
+
+
+func (node *AlterPartitionRedefinePartitionClause) reset() {
+	// if node.PartitionOption != nil {
+	// 	reuse.Free[PartitionOption](node.PartitionOption, nil)
+	// }
+}
+
+
+func (node *AlterPartitionAddPartitionClause) reset() {
+	// if node.Partitions != nil {
+	// 	for _, item := range node.Partitions {
+	// 		reuse.Free[Partition](item, nil)
+	// 	}
+	// }
+}
+
+
+func (node *AlterPartitionDropPartitionClause) reset() {
+}
+
+
+func (node *AlterPartitionTruncatePartitionClause) reset() {
+}
+
