@@ -69,7 +69,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -85,6 +85,22 @@ func (arg *Argument) Release() {
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
@@ -113,7 +129,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
 	}
-
 }
 
 func (ctr *container) cleanExprExecutor() {

@@ -245,6 +245,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				IsLast:  false,
 			},
 			NeedAllocateSels: true,
+			NeedMergedBatch:  true,
 		},
 	}
 }

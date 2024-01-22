@@ -133,34 +133,97 @@ drop database if exists mysql_ddl_test_db;
 
 create database  mysql_ddl_test_db;
  use mysql_ddl_test_db;
- CREATE TABLE table_basic_for_alter_100m (
-  col1 TINYINT DEFAULT NULL,
-  col2 SMALLINT DEFAULT NULL,
-  col3 INT NOT NULL,
-  col4 BIGINT NOT NULL,
-  col5 TINYINT UNSIGNED DEFAULT NULL,
-  col6 SMALLINT UNSIGNED DEFAULT NULL,
-  col7 INT UNSIGNED DEFAULT NULL,
-  col8 BIGINT UNSIGNED DEFAULT NULL,
-  col9 FLOAT DEFAULT NULL,
-  col10 DOUBLE DEFAULT NULL,
-  col11 VARCHAR(255) DEFAULT NULL,
-  col12 DATE DEFAULT NULL,
-  col13 DATETIME DEFAULT NULL,
-  col14 TIMESTAMP DEFAULT NULL,
-  col15 BOOL DEFAULT NULL,
-  col16 DECIMAL(16,6) DEFAULT NULL,
-  col17 TEXT DEFAULT NULL,
-  col18 JSON DEFAULT NULL,
-  col19 BLOB DEFAULT NULL,
-  col20 BINARY(255) DEFAULT NULL,
-  col21 VARBINARY(255) DEFAULT NULL,
-  col22 VECF32(3) DEFAULT NULL,
-  col23 VECF32(3) DEFAULT NULL,
-  col24 VECF64(3) DEFAULT NULL,
-  col25 VECF64(3) DEFAULT NULL,
-  KEY col3_col4 (col3,col4),
-  UNIQUE KEY col4 (col4)
-  ) ;
- desc table_basic_for_alter_100m;
- drop database if exists mysql_ddl_test_db; 
+CREATE TABLE table_basic_for_alter_100m (
+                                            col1 TINYINT DEFAULT NULL,
+                                            col2 SMALLINT DEFAULT NULL,
+                                            col3 INT NOT NULL,
+                                            col4 BIGINT NOT NULL,
+                                            col5 TINYINT UNSIGNED DEFAULT NULL,
+                                            col6 SMALLINT UNSIGNED DEFAULT NULL,
+                                            col7 INT UNSIGNED DEFAULT NULL,
+                                            col8 BIGINT UNSIGNED DEFAULT NULL,
+                                            col9 FLOAT DEFAULT NULL,
+                                            col10 DOUBLE DEFAULT NULL,
+                                            col11 VARCHAR(255) DEFAULT NULL,
+                                            col12 DATE DEFAULT NULL,
+                                            col13 DATETIME DEFAULT NULL,
+                                            col14 TIMESTAMP DEFAULT NULL,
+                                            col15 BOOL DEFAULT NULL,
+                                            col16 DECIMAL(16,6) DEFAULT NULL,
+                                            col17 TEXT DEFAULT NULL,
+                                            col18 JSON DEFAULT NULL,
+                                            col19 BLOB DEFAULT NULL,
+                                            col20 BINARY(255) DEFAULT NULL,
+                                            col21 VARBINARY(255) DEFAULT NULL,
+                                            col22 VECF32(3) DEFAULT NULL,
+                                            col23 VECF32(3) DEFAULT NULL,
+                                            col24 VECF64(3) DEFAULT NULL,
+                                            col25 VECF64(3) DEFAULT NULL,
+                                            KEY col3_col4 (col3,col4),
+                                            UNIQUE KEY col4 (col4)
+) ;
+desc table_basic_for_alter_100m;
+
+CREATE TABLE user_table (
+                            id INT(11),
+                            name VARCHAR(50),
+                            UNIQUE KEY (id)
+);
+desc user_table;
+
+CREATE TABLE users (
+                       id INT(11) NOT NULL,
+                       name VARCHAR(50),
+                       UNIQUE KEY (id)
+);
+desc users;
+
+ drop database if exists mysql_ddl_test_db;
+
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t1;
+CREATE TABLE t1(
+                   a INTEGER,
+                   b CHAR(10),
+                   c date,
+                   d decimal(7,2),
+                   UNIQUE KEY(a, b)
+);
+desc t1;
+
+drop table if exists t2;
+CREATE TABLE t2(
+                   col1 TINYINT DEFAULT NULL,
+                   col2 SMALLINT DEFAULT NULL,
+                   col3 INT NOT NULL,
+                   col4 BIGINT NOT NULL,
+                   KEY (col3,col4),
+                   UNIQUE KEY (col4)
+) ;
+desc t2;
+
+drop table if exists t3;
+CREATE TABLE t3(
+                   a INTEGER,
+                   b CHAR(10),
+                   c date,
+                   d decimal(7,2),
+                   KEY (c, d),
+                   UNIQUE KEY (d)
+);
+desc t3;
+
+drop table if exists t4;
+CREATE TABLE t4(
+                   a INTEGER,
+                   b CHAR(10),
+                   c date,
+                   d decimal(7,2),
+                   KEY (a, b),
+                   UNIQUE KEY (a)
+);
+desc t4;
+
+drop database if exists db1;

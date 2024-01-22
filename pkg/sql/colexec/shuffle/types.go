@@ -23,8 +23,6 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-const shuffleBatchSize = 8192 * 3 / 4
-
 type Argument struct {
 	ctr                *container
 	ShuffleColIdx      int32
@@ -51,7 +49,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -64,8 +62,25 @@ func (arg *Argument) Release() {
 		reuse.Free[Argument](arg, nil)
 	}
 }
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
@@ -73,18 +88,19 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type container struct {
-	ending       bool
-	sels         [][]int32
-	shuffledBats []*batch.Batch
-	lastSentIdx  int
+	ending        bool
+	sels          [][]int32
+	shufflePool   []*batch.Batch
+	sendPool      []*batch.Batch
+	lastSentBatch *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
-		for i := range arg.ctr.shuffledBats {
-			if arg.ctr.shuffledBats[i] != nil {
-				arg.ctr.shuffledBats[i].Clean(proc.Mp())
-				arg.ctr.shuffledBats[i] = nil
+		for i := range arg.ctr.shufflePool {
+			if arg.ctr.shufflePool[i] != nil {
+				arg.ctr.shufflePool[i].Clean(proc.Mp())
+				arg.ctr.shufflePool[i] = nil
 			}
 		}
 		arg.ctr.sels = nil
