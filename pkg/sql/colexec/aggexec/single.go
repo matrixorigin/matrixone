@@ -14,22 +14,51 @@
 
 package aggexec
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
-// singleAggFuncExec1 and singleAggFuncExec2 are the executors of single column agg.
-// 1's return type is a fixed length type.
-// 2's return type is bytes.
-type singleAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
-	args types.Type
-	ret  aggFuncResult[T]
-
-	// the method to add values to the agg.
-	add any
+// singleAggTypeInfo is the type info of single column agg.
+type singleAggTypeInfo struct {
+	argType types.Type
+	retType types.Type
 }
-type singleAggFuncExec2 struct {
-	args types.Type
-	ret  aggFuncBytesResult
 
-	// the method to add values to the agg.
-	add any
+func (exec singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
+	return []types.Type{exec.argType}, exec.retType
+}
+
+// the executors of single column agg.
+// singleAggFuncExec1 receives a fixed size type except string and returns a fixed size type except string.
+// singleAggFuncExec2 receives a fixed size type except string and returns a byte type.
+// singleAggFuncExec3 receives a byte type and returns a fixed size type except string.
+// singleAggFuncExec4 receives a byte type and returns a byte type.
+type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
+	singleAggTypeInfo
+
+	arg aggFuncArg[from]
+	ret aggFuncResult[to]
+}
+type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
+	singleAggTypeInfo
+
+	arg aggFuncArg[from]
+	ret aggFuncBytesResult
+}
+type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
+	singleAggTypeInfo
+
+	arg aggFuncBytesArg
+	ret aggFuncResult[to]
+}
+type singleAggFuncExec4 struct {
+	singleAggTypeInfo
+
+	arg aggFuncBytesArg
+	ret aggFuncBytesResult
+}
+
+func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	return nil
 }
