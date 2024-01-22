@@ -94,7 +94,7 @@ func initFormatTestCase1() []tcTemp {
 
 // BenchmarkDateFormat1-4   	1000000000	         2.462 ns/op
 func BenchmarkDateFormat1(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase1()
 	// do the test work.
 	proc := testutil.NewProcess()
@@ -177,7 +177,7 @@ func initFormatTestCase2() []tcTemp {
 
 // BenchmarkDateFormat2-4   	1000000000	         0.3115 ns/op
 func BenchmarkDateFormat2(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase2()
 	// do the test work.
 	proc := testutil.NewProcess()
@@ -260,7 +260,7 @@ func initFormatTestCase3() []tcTemp {
 
 // BenchmarkDateFormat3-4   	1000000000	         0.1523 ns/op
 func BenchmarkDateFormat3(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase3()
 	// do the test work.
 	proc := testutil.NewProcess()
@@ -343,7 +343,7 @@ func initFormatTestCase4() []tcTemp {
 
 // BenchmarkDateFormat4-4   	1000000000	         0.1541 ns/op
 func BenchmarkDateFormat4(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase4()
 	// do the test work.
 	proc := testutil.NewProcess()
@@ -426,7 +426,7 @@ func initFormatTestCase5() []tcTemp {
 
 // BenchmarkDateFormat5-4   	1000000000	         0.2022 ns/op
 func BenchmarkDateFormat5(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase5()
 	// do the test work.
 	proc := testutil.NewProcess()
@@ -509,7 +509,7 @@ func initFormatTestCase6() []tcTemp {
 
 // BenchmarkDateFormat6-4   	1000000000	         0.1927 ns/op
 func BenchmarkDateFormat6(b *testing.B) {
-	b.N = 1000000000
+	//b.N = 1000000000
 	testCases := initFormatTestCase6()
 	// do the test work.
 	proc := testutil.NewProcess()
