@@ -20,17 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	// FillAllRows is a flag to indicate Fill() to fill all rows of vector.
-	FillAllRows int = -1
-)
-
 type AggFuncExec interface {
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
 
-	// Fill and BatchFill add the value to the aggregation.
+	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
+	BulkFill(groupIndex int, vectors []*vector.Vector) error
 	BatchFill(startIndex int, length int, groups []uint64, vectors []*vector.Vector) error
 
 	// FillPreparedResult fill the partial result to the aggregation.

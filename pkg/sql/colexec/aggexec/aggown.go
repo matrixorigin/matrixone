@@ -18,6 +18,7 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type singleAggPrivateStructure1[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
+	init()
 	fill(from)
 	fillNull()
 	fills(value from, isNull bool, count int)
@@ -26,6 +27,7 @@ type singleAggPrivateStructure1[
 
 type singleAggPrivateStructure2[
 	from types.FixedSizeTExceptStrType] interface {
+	init()
 	fill(from)
 	fillNull()
 	fills(value from, isNull bool, count int)
@@ -34,6 +36,7 @@ type singleAggPrivateStructure2[
 
 type singleAggPrivateStructure3[
 	to types.FixedSizeTExceptStrType] interface {
+	init()
 	fillBytes([]byte)
 	fillNull()
 	fills(value []byte, isNull bool, count int)
@@ -41,8 +44,26 @@ type singleAggPrivateStructure3[
 }
 
 type singleAggPrivateStructure4 interface {
+	init()
 	fillBytes([]byte)
 	fillNull()
 	fills(value []byte, isNull bool, count int)
+	flush() []byte
+}
+
+type multiAggPrivateStructure1[
+	to types.FixedSizeTExceptStrType] interface {
+	init()
+	getFillWhich(idx int) any     // return func fill(value)
+	getFillNullWhich(idx int) any // return func fillNull()
+	getFillsWhich(idx int) any    // return func fills(value, isNull, count)
+	flush() to
+}
+
+type multiAggPrivateStructure2 interface {
+	init()
+	getFillWhich(idx int) any     // return func fill(value)
+	getFillNullWhich(idx int) any // return func fillNull()
+	getFillsWhich(idx int) any    // return func fills(value, isNull, count)
 	flush() []byte
 }

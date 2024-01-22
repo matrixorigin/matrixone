@@ -29,6 +29,10 @@ func (exec singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{exec.argType}, exec.retType
 }
 
+type singleAggOptimizedInfo struct {
+	receiveNull bool
+}
+
 // the executors of single column agg.
 // singleAggFuncExec1 receives a fixed size type except string and returns a fixed size type except string.
 // singleAggFuncExec2 receives a fixed size type except string and returns a byte type.
@@ -36,29 +40,93 @@ func (exec singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 // singleAggFuncExec4 receives a byte type and returns a byte type.
 type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
+	singleAggOptimizedInfo
 
-	arg aggFuncArg[from]
-	ret aggFuncResult[to]
+	arg    aggFuncArg[from]
+	ret    aggFuncResult[to]
+	groups []singleAggPrivateStructure1[from, to]
 }
 type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
+	singleAggOptimizedInfo
 
-	arg aggFuncArg[from]
-	ret aggFuncBytesResult
+	arg    aggFuncArg[from]
+	ret    aggFuncBytesResult
+	groups []singleAggPrivateStructure2[from]
 }
 type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
+	singleAggOptimizedInfo
 
-	arg aggFuncBytesArg
-	ret aggFuncResult[to]
+	arg    aggFuncBytesArg
+	ret    aggFuncResult[to]
+	groups []singleAggPrivateStructure3[to]
 }
 type singleAggFuncExec4 struct {
 	singleAggTypeInfo
+	singleAggOptimizedInfo
 
-	arg aggFuncBytesArg
-	ret aggFuncBytesResult
+	arg    aggFuncBytesArg
+	ret    aggFuncBytesResult
+	groups []singleAggPrivateStructure4
 }
 
 func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConst() {
+		row = 0
+	}
+
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
+		if exec.receiveNull {
+			exec.groups[groupIndex].fillNull()
+		}
+		return nil
+	}
+
+	exec.groups[groupIndex].fill(vector.MustFixedCol[from](vec)[row])
+	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	length := vec.Length()
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			if exec.receiveNull {
+				exec.groups[groupIndex].fills(nil, true, length)
+			}
+		} else {
+			exec.groups[groupIndex].fills(vector.MustFixedCol[from](vec)[0], false, length)
+		}
+		return nil
+	}
+
+	vs := vector.GenerateFunctionFixedTypeParameter[from](vec)
+	if vs.WithAnyNullValue() {
+		if exec.receiveNull {
+			for i, j := uint64(0), uint64(length); i < j; i++ {
+				v, null := vs.GetValue(i)
+				if null {
+					exec.groups[groupIndex].fillNull()
+				} else {
+					exec.groups[groupIndex].fill(v)
+				}
+			}
+		} else {
+			for i, j := uint64(0), uint64(length); i < j; i++ {
+				v, null := vs.GetValue(i)
+				if !null {
+					exec.groups[groupIndex].fill(v)
+				}
+			}
+		}
+		return nil
+	}
+
+	for i, j := uint64(0), uint64(length); i < j; i++ {
+		v, _ := vs.GetValue(i)
+		exec.groups[groupIndex].fill(v)
+	}
 	return nil
 }
