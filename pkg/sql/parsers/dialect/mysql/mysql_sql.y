@@ -3156,13 +3156,8 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            Users: $4,
-            Role: $5,
-            MiscOpt: $6,
-            CommentOrAttribute: $7,
-        }
+        // ifExists Users Role MiscOpt CommentOrAttribute
+        $$ = tree.NewAlterUser($3, $4, $5, $6, $7)
     }
 
 default_role_opt:
