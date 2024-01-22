@@ -30,6 +30,9 @@ type explainImpl struct {
 	Options   []OptionElem
 }
 
+func (e *explainImpl) Free() {
+}
+
 // EXPLAIN stmt statement
 type ExplainStmt struct {
 	explainImpl
