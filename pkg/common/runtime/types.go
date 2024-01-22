@@ -46,8 +46,8 @@ const (
 	// MOProtocolVersion is the protocol version of the MO services
 	MOProtocolVersion = "protocol-version"
 
-	// MOLoggerLabel is the label of the CN handing the mo-logger requests
-	MOLoggerLabel = "mo-logger"
+	// MOLoggerLabelSelector is the label of the CN handing the mo-logger requests
+	MOLoggerLabelSelector = "mo-logger-selector"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

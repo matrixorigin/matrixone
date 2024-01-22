@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -430,7 +431,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		nodeRole = mometric.LaunchMode
 	}
 
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOLoggerLabel, SV.LoggerLabel)
+	selector := clusterservice.NewSelector().SelectByLabel(SV.LoggerLabels, clusterservice.Contain)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.MOLoggerLabelSelector, selector)
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
