@@ -1224,7 +1224,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
@@ -1636,9 +1636,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						return nil, err
 					}
 					inExprList = append(inExprList, inExpr)
-					continue
+				} else {
+					orExprList = append(orExprList, rightVal)
 				}
-				orExprList = append(orExprList, rightVal)
 			}
 
 			var newExpr *plan.Expr

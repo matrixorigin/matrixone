@@ -394,7 +394,7 @@ type overload struct {
 }
 
 func (ov *overload) CannotFold() bool {
-	return ov.volatile
+	return ov.volatile || ov.isAgg || ov.isWin
 }
 
 func (ov *overload) IsRealTimeRelated() bool {
