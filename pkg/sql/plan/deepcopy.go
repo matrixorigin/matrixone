@@ -197,7 +197,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
-		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
@@ -256,10 +255,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 	}
 
-	for i, tbl := range node.TableDefVec {
-		newNode.TableDefVec[i] = DeepCopyTableDef(tbl, true)
-	}
-
 	for idx, expr := range node.OnUpdateExprs {
 		newNode.OnUpdateExprs[idx] = DeepCopyExpr(expr)
 	}
@@ -267,6 +262,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode.Stats = DeepCopyStats(node.Stats)
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
+	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
 
 	if node.WinSpecList != nil {
 		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))

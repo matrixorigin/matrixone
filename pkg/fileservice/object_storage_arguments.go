@@ -25,9 +25,10 @@ import (
 
 type ObjectStorageArguments struct {
 	// misc
-	Name                string `toml:"name"`
-	KeyPrefix           string `toml:"key-prefix"`
-	SharedConfigProfile string `toml:"shared-config-profile"`
+	Name                 string `toml:"name"`
+	KeyPrefix            string `toml:"key-prefix"`
+	SharedConfigProfile  string `toml:"shared-config-profile"`
+	NoDefaultCredentials bool   `toml:"no-default-credentials"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -37,17 +38,15 @@ type ObjectStorageArguments struct {
 	CertFiles []string `toml:"cert-files"`
 
 	// credentials
-	RoleARN           string `json:"-" toml:"role-arn"`
-	BearerToken       string `json:"-" toml:"bearer-token"`
-	ExternalID        string `json:"-" toml:"external-id"`
-	KeyID             string `json:"-" toml:"key-id"`
-	KeySecret         string `json:"-" toml:"key-secret"`
-	OIDCProviderARN   string `json:"-" toml:"oidc-provider-arn"`
-	OIDCTokenFilePath string `json:"-" toml:"oidc-token-file-path"`
-	RAMRole           string `json:"-" toml:"ram-role"`
-	RoleSessionName   string `json:"-" toml:"role-session-name"`
-	SecurityToken     string `json:"-" toml:"security-token"`
-	SessionToken      string `json:"-" toml:"session-token"`
+	RoleARN         string `json:"-" toml:"role-arn"`
+	BearerToken     string `json:"-" toml:"bearer-token"`
+	ExternalID      string `json:"-" toml:"external-id"`
+	KeyID           string `json:"-" toml:"key-id"`
+	KeySecret       string `json:"-" toml:"key-secret"`
+	RAMRole         string `json:"-" toml:"ram-role"`
+	RoleSessionName string `json:"-" toml:"role-session-name"`
+	SecurityToken   string `json:"-" toml:"security-token"`
+	SessionToken    string `json:"-" toml:"session-token"`
 }
 
 func (o ObjectStorageArguments) String() string {
@@ -99,10 +98,6 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.SharedConfigProfile = value
 		case "token", "session-token":
 			o.SessionToken = value
-		case "oidc-provider-arn":
-			o.OIDCProviderARN = value
-		case "oidc-token-file-path":
-			o.OIDCTokenFilePath = value
 		case "cert-files":
 			o.CertFiles = strings.Split(value, ",")
 

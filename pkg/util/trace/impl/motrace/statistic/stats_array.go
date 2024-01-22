@@ -17,6 +17,7 @@ package statistic
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -219,7 +220,8 @@ type StatsInfo struct {
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
 
-	//S3AccessTimeConsumption time.Duration
+	S3AccessTimeConsumption   int64
+	DiskAccessTimeConsumption int64
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
@@ -274,6 +276,19 @@ func (stats *StatsInfo) ExecutionEnd() {
 	}
 	stats.ExecutionEndTime = time.Now()
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
+}
+
+func (stats *StatsInfo) AddS3AccessTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.S3AccessTimeConsumption, int64(d))
+}
+func (stats *StatsInfo) AddDiskAccessTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.DiskAccessTimeConsumption, int64(d))
 }
 
 // reset StatsInfo into zero state

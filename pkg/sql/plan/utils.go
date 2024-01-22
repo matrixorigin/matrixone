@@ -879,7 +879,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	if expr == nil {
 		return
 	}
@@ -899,11 +899,11 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		if len(tableDef.Cols) > 0 {
 			seqnum = int(tableDef.Cols[colIdx].Seqnum)
 		}
-		(*columnMap)[int(idx)] = seqnum
+		columnMap[int(idx)] = seqnum
 	}
 }
 
-func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	for _, expr := range exprs {
 		GetColumnMapByExpr(expr, tableDef, columnMap)
 	}
@@ -915,7 +915,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	GetColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, columnMap)
 
 	if len(columnMap) == 0 {
 		return
@@ -1074,7 +1074,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -1189,7 +1189,11 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool {
+func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
+	if constExpr == nil {
+		return false
+	}
+
 	//TODO: Check if T_array is required here?
 	if constT.Eq(columnT) {
 		return true
@@ -1224,7 +1228,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool 
 		}
 
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		val, valOk := constExpr.Lit.Value.(*plan.Literal_I64Val)
+		val, valOk := constExpr.Value.(*plan.Literal_I64Val)
 		if !valOk {
 			return false
 		}
@@ -1261,7 +1265,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_Lit) bool 
 		}
 
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		val_u, valOk := constExpr.Lit.Value.(*plan.Literal_U64Val)
+		val_u, valOk := constExpr.Value.(*plan.Literal_U64Val)
 		if !valOk {
 			return false
 		}
@@ -1410,6 +1414,27 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
 	}
 	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
+}
+
+func StatFile(param *tree.ExternParam) error {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+	param.Filepath = filePath
+	fs, readPath, err := GetForETLWithType(param, filePath)
+	if err != nil {
+		return err
+	}
+	st, err := fs.StatFile(param.Ctx, readPath)
+	if err != nil {
+		return err
+	}
+	param.Ctx = nil
+	param.FileSize = st.Size
+	return nil
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
@@ -1817,4 +1842,31 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 	}
 	return schemas, paramTypes, nil
+}
+
+// HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
+func HasMoCtrl(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "mo_ctl" {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if HasMoCtrl(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if HasMoCtrl(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
 }

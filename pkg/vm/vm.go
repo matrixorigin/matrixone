@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -66,6 +67,11 @@ func setAnalyzeInfo(ins Instructions, proc *process.Process) {
 			Idx:     ins[i].Idx,
 			IsFirst: ins[i].IsFirst,
 			IsLast:  ins[i].IsLast,
+
+			CnAddr:      ins[i].CnAddr,
+			OperatorID:  ins[i].OperatorID,
+			ParallelID:  ins[i].ParallelID,
+			MaxParallel: ins[i].MaxParallel,
 		}
 		switch ins[i].Op {
 		case HashBuild, Restrict, MergeGroup, MergeOrder:
