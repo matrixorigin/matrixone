@@ -325,6 +325,90 @@ func TestEvalZonemapFilter(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestMustGetFullCompositePK(t *testing.T) {
+	m := mpool.MustNewNoFixed(t.Name())
+	proc := testutil.NewProcessWithMPool(m)
+	packer := types.NewPacker(m)
+	type myCase struct {
+		desc    []string
+		exprs   []*plan.Expr
+		can     []bool
+		expects []func(*plan.Expr) bool
+	}
+	// a, b, c, d are columns of table t1
+	// d,a,c are composite primary keys
+	// b is the serialized primary key
+
+	var placeHolder func(*plan.Expr) bool
+	returnTrue := func(*plan.Expr) bool { return true }
+
+	tc := myCase{
+		// (d,a,c) => b
+		desc: []string{
+			"1. c=1 and (d=2 and a=3)",
+			"2. c=1 and d=2",
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(3),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+			}),
+		},
+		can: []bool{
+			true, false,
+		},
+		expects: []func(*plan.Expr) bool{
+			placeHolder, returnTrue,
+		},
+	}
+
+	tc.expects[0] = func(expr *plan.Expr) bool {
+		packer.Reset()
+		packer.EncodeInt64(2)
+		packer.EncodeInt64(3)
+		packer.EncodeInt64(1)
+		expect := packer.Bytes()
+		packer.Reset()
+		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
+		return bytes.Equal(expect, []byte(svalExpr.Sval))
+	}
+
+	pkName := "b"
+	keys := []string{"d", "a", "c"}
+	for i := 0; i < len(tc.desc); i++ {
+		expr := tc.exprs[i]
+		can, expr := MustGetFullCompositePK(
+			expr, pkName, keys, packer, proc,
+		)
+		require.Equalf(t, tc.can[i], can, tc.desc[i])
+		require.Truef(t, tc.expects[i](expr), tc.desc[i])
+	}
+	packer.FreeMem()
+	require.Zero(t, m.CurrNB())
+}
+
 func TestGetCompositePkValueByExpr(t *testing.T) {
 	type myCase struct {
 		desc    []string
