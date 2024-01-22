@@ -720,7 +720,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -822,12 +822,11 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
 					// eval filter expr on the block
-					blkMeta := meta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
 					for _, expr := range exprs {
 						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 							skipBlk = true
@@ -903,7 +902,7 @@ func (tbl *txnTable) tryFastRanges(
 		return
 	}
 
-	val := extractPKValueFromEqualExprs(
+	val, isVec := extractPKValueFromEqualExprs(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
@@ -929,6 +928,12 @@ func (tbl *txnTable) tryFastRanges(
 		}
 	}()
 
+	var vec *vector.Vector
+	if isVec {
+		vec = vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(val)
+	}
+
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -937,9 +942,16 @@ func (tbl *txnTable) tryFastRanges(
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().ContainsKey(val) {
-					zmHit++
-					return
+				if isVec {
+					if !obj.SortKeyZoneMap().AnyIn(vec) {
+						zmHit++
+						return
+					}
+				} else {
+					if !obj.SortKeyZoneMap().ContainsKey(val) {
+						zmHit++
+						return
+					}
 				}
 				zmCkecked = true
 			}
@@ -960,10 +972,16 @@ func (tbl *txnTable) tryFastRanges(
 
 			// check whether the object is skipped by zone map
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked &&
-				!meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-				return
-
+			if !zmCkecked {
+				if isVec {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+						return
+					}
+				} else {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+						return
+					}
+				}
 			}
 
 			bf = nil
@@ -973,17 +991,27 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo) bool {
+			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+					return true
+				}
+
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
 					return false
 				}
 				var exist bool
-				if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-					return false
-				} else if !exist {
-					return true
+				if isVec {
+					if exist = blkBfIdx.MayContainsAny(vec); !exist {
+						return true
+					}
+				} else {
+					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
+						return false
+					} else if !exist {
+						return true
+					}
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1596,7 +1624,7 @@ func (tbl *txnTable) makeEncodedPK(
 			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
+			ok, isNull, _, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
 			hasNull = isNull
 			if hasNull {
 				return

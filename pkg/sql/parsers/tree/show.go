@@ -22,6 +22,9 @@ type showImpl struct {
 	Show
 }
 
+func (s *showImpl) Free() {
+}
+
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
