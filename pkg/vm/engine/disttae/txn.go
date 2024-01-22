@@ -808,7 +808,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT || entry.typ != INSERT_TXN ||
+		if entry.typ != INSERT && entry.typ != INSERT_TXN ||
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
 		}
@@ -842,7 +842,7 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if (entry.typ != INSERT || entry.typ != INSERT_TXN) || len(entry.bat.Attrs) < 2 ||
+		if (entry.typ != INSERT && entry.typ != INSERT_TXN) || len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
