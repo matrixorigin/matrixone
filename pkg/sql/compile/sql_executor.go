@@ -220,6 +220,11 @@ func (exec *txnExecutor) Exec(
 	receiveAt := time.Now()
 
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return executor.Result{}, err
 	}

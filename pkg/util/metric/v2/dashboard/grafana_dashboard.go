@@ -28,6 +28,7 @@ import (
 	"github.com/K-Phoen/grabana/target/prometheus"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
+	"github.com/K-Phoen/grabana/variable/datasource"
 	"github.com/K-Phoen/grabana/variable/interval"
 	"github.com/K-Phoen/grabana/variable/query"
 )
@@ -86,6 +87,21 @@ func NewK8SDashboardCreator(
 	dc.extraFilterFunc = dc.getK8SFilters
 	dc.by = "pod"
 	dc.initK8SFilterOptions()
+	return dc
+}
+
+func NewCloudCtrlPlaneDashboardCreator(
+	host,
+	username,
+	password,
+	dataSource string) *DashboardCreator {
+	dc := &DashboardCreator{
+		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		dataSource: AutoUnitPrometheusDatasource,
+	}
+	dc.extraFilterFunc = dc.getCloudFilters
+	dc.by = "pod"
+	dc.initCloudCtrlPlaneFilterOptions(dataSource)
 	return dc
 }
 
@@ -360,6 +376,48 @@ func (c *DashboardCreator) initCloudFilterOptions() {
 			query.Multiple(),
 			query.Label("pod"),
 			query.Request("label_values(pod)"),
+		))
+}
+
+const Prometheus = "prometheus"
+const AutoUnitPrometheusDatasource = `${ds_prom}`
+
+func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string) {
+	c.filterOptions = append(c.filterOptions,
+		dashboard.VariableAsQuery(
+			"unit",
+			query.DataSource(metaDatasource),
+			query.Label("unit"),
+			query.Request("label_values(controlplane_instance_detail_info,unit)"),
+		),
+		dashboard.VariableAsDatasource(
+			"ds_prom",
+			datasource.Type(Prometheus),
+			datasource.Regex(`/$unit-prometheus/`),
+		),
+		dashboard.VariableAsQuery(
+			"physicalCluster",
+			query.DataSource(`${ds_prom}`),
+			query.Label("matrixone_cloud_main_cluster"),
+			query.Request("label_values(up,matrixone_cloud_main_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"cluster",
+			query.DataSource(`${ds_prom}`),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("matrixone_cloud_cluster"),
+			query.Request("label_values(up,matrixone_cloud_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"pod",
+			query.DataSource(`${ds_prom}`),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("pod"),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster"},pod)`),
 		))
 }
 

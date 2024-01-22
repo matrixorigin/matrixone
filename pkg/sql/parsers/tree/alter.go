@@ -16,7 +16,17 @@ package tree
 
 import (
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[AlterUser](
+		func() *AlterUser { return &AlterUser{} },
+		func(c *AlterUser) { *c = AlterUser{} },
+		reuse.DefaultOptions[AlterUser]().
+			WithEnableChecker())
+}
 
 type AlterUser struct {
 	statementImpl
@@ -26,6 +36,12 @@ type AlterUser struct {
 	MiscOpt  UserMiscOption
 	// comment or attribute
 	CommentOrAttribute AccountCommentOrAttribute
+}
+
+func (node AlterUser) TypeName() string { return "tree.AlterUser" }
+
+func (node *AlterUser) Free() {
+	reuse.Free[AlterUser](node, nil)
 }
 
 func (node *AlterUser) Format(ctx *FmtCtx) {
@@ -56,13 +72,15 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 func (node *AlterUser) GetStatementType() string { return "Alter User" }
 func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
 
-func NewAlterUser(ife bool, u []*User, r *Role, m UserMiscOption) *AlterUser {
-	return &AlterUser{
-		IfExists: ife,
-		Users:    u,
-		Role:     r,
-		MiscOpt:  m,
-	}
+func NewAlterUser(ifExists bool, users []*User, role *Role, miscOpt UserMiscOption, commentOrAttribute AccountCommentOrAttribute) *AlterUser {
+	alter := reuse.Alloc[AlterUser](nil)
+	alter.IfExists = ifExists
+	alter.Users = users
+	alter.Role = role
+	alter.MiscOpt = miscOpt
+	alter.CommentOrAttribute = commentOrAttribute
+
+	return alter
 }
 
 type AlterAccountAuthOption struct {
