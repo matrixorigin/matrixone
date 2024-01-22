@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1682,7 +1683,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_ScoreBinary:
 		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:
-		return returnDecimalExpr(astExpr.String())
+		s := astExpr.String()[2:]
+		bytes, _ := util.DecodeBinaryString(s)
+		return returnHexNumExpr(string(bytes), true)
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil

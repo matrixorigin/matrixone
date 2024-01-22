@@ -2041,7 +2041,7 @@ var (
 		},
 		{
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
-			output: "create table test (col varchar(255) default 0)",
+			output: "create table test (col varchar(255) default 0b0)",
 		},
 		{
 			input:  "select trim(a)",
