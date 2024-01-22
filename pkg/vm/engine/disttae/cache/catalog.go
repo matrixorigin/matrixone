@@ -414,6 +414,10 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 			})
 		}
 
+		if item.Name == "t5" || item.Name == "tx" {
+			fmt.Println("----------------------------------------------------")
+		}
+
 		key := TableKey{
 			AccountId:  account,
 			DatabaseId: item.DatabaseId,
