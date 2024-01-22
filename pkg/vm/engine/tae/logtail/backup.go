@@ -48,12 +48,17 @@ type objData struct {
 	stats     *objectio.ObjectStats
 	data      []*batch.Batch
 	sortKey   uint16
-	infoRow   []int
-	infoTNRow []int
+	infoRow   []objectRow
+	infoTNRow []objectRow
 	tid       uint64
 	delete    bool
 	isChange  bool
 	isABlock  bool
+}
+
+type objectRow struct {
+	row    int
+	delete bool
 }
 
 type blockData struct {
@@ -74,12 +79,28 @@ type iBlocks struct {
 	insertBlocks []*insertBlock
 }
 
+type dObjects struct {
+	rowObjects   []*rowObjects
+	rowTNObjects []*rowObjects
+}
+
+type uObjects struct {
+	rowObjects []*rowObjects
+}
+
 type insertBlock struct {
 	blockId   objectio.Blockid
 	location  objectio.Location
 	deleteRow int
 	apply     bool
 	data      *blockData
+}
+
+type rowObjects struct {
+	stats *objectio.ObjectStats
+	row   int
+	apply bool
+	obj   *objData
 }
 
 type tableOffset struct {
@@ -129,17 +150,17 @@ func addObjectToObjectData(
 		object.obj.delete = isDelete
 		(*objectsData)[name] = object
 		if !isTN {
-			(*objectsData)[name].obj.infoRow = []int{row}
+			(*objectsData)[name].obj.infoRow = []objectRow{{row, isDelete}}
 		} else {
-			(*objectsData)[name].obj.infoTNRow = []int{row}
+			(*objectsData)[name].obj.infoTNRow = []objectRow{{row, isDelete}}
 		}
 		return
 	}
 
 	if !isTN {
-		(*objectsData)[name].obj.infoRow = append((*objectsData)[name].obj.infoRow, row)
+		(*objectsData)[name].obj.infoRow = append((*objectsData)[name].obj.infoRow, objectRow{row, isDelete})
 	} else {
-		(*objectsData)[name].obj.infoTNRow = append((*objectsData)[name].obj.infoTNRow, row)
+		(*objectsData)[name].obj.infoTNRow = append((*objectsData)[name].obj.infoTNRow, objectRow{row, isDelete})
 	}
 
 }
@@ -648,6 +669,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	defer backupPool.Destory()
 
 	insertBatch := make(map[uint64]*iBlocks)
+	deleteBatch := make(map[uint64]*dObjects)
+	updateBatch := make(map[uint64]*uObjects)
 
 	phaseNumber = 4
 	// Rewrite object file
@@ -713,6 +736,51 @@ func ReWriteCheckpointAndBlockFromKey(
 				blocks, extent, err = writer.Sync(ctx)
 				if err != nil {
 					return nil, nil, nil, err
+				}
+			}
+		}
+
+		if objectData.isDeleteBatch {
+			obj := objectData.obj
+			if obj.isABlock {
+				if updateBatch[obj.tid] == nil {
+					updateBatch[obj.tid] = &uObjects{
+						rowObjects: make([]*rowObjects, 0),
+					}
+				}
+				ub := &rowObjects{
+					apply: false,
+					obj:   obj,
+					row:   obj.infoTNRow[len(obj.infoTNRow)-1].row,
+				}
+				updateBatch[obj.tid].rowObjects = append(updateBatch[obj.tid].rowObjects, ub)
+			} else {
+				if deleteBatch[obj.tid] == nil {
+					deleteBatch[obj.tid] = &dObjects{
+						rowObjects:   make([]*rowObjects, 0),
+						rowTNObjects: make([]*rowObjects, 0),
+					}
+				}
+				if len(obj.infoTNRow) > 0 {
+					if obj.infoTNRow[len(obj.infoTNRow)-1].delete {
+						do := &rowObjects{
+							apply: false,
+							obj:   obj,
+							row:   obj.infoTNRow[len(obj.infoTNRow)-1].row,
+						}
+						deleteBatch[obj.tid].rowTNObjects = append(deleteBatch[obj.tid].rowTNObjects, do)
+					}
+				}
+
+				if len(obj.infoRow) > 0 {
+					if obj.infoRow[len(obj.infoRow)-1].delete {
+						do := &rowObjects{
+							apply: false,
+							obj:   obj,
+							row:   obj.infoRow[len(obj.infoRow)-1].row,
+						}
+						deleteBatch[obj.tid].rowObjects = append(deleteBatch[obj.tid].rowObjects, do)
+					}
 				}
 			}
 		}
