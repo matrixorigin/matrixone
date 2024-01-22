@@ -106,16 +106,30 @@ func TestCTE_Dispatch(t *testing.T) {
 	result.Clean(mp)
 
 	// case 2. cte deals with the last batch (special batch by cte).
+	// if hasData was false, it will change the end flag.
 	// it will set the hasData flag to false, because the data will be sent.
-	bat := batch.NewWithSize(0)
-	bat.SetLast()
-	arg.ctr.hasData = true
-	result, free, err = specialLogicForCTE(proc, arg, bat)
-	require.NoError(t, err)
-	require.False(t, free)
-	require.False(t, arg.ctr.hasData)
-	require.True(t, result.End())
-	result.Clean(mp)
+	{
+		bat := batch.NewWithSize(0)
+		bat.SetLast()
+		arg.ctr.hasData = true
+		result, free, err = specialLogicForCTE(proc, arg, bat)
+		require.NoError(t, err)
+		require.False(t, free)
+		require.False(t, arg.ctr.hasData)
+		require.False(t, result.End())
+		result.Clean(mp)
+	}
+	{
+		bat := batch.NewWithSize(0)
+		bat.SetLast()
+		arg.ctr.hasData = false
+		result, free, err = specialLogicForCTE(proc, arg, bat)
+		require.NoError(t, err)
+		require.False(t, free)
+		require.False(t, arg.ctr.hasData)
+		require.True(t, result.End())
+		result.Clean(mp)
+	}
 
 	// case 3. the batch may change the hasData flag.
 	arg.ctr.hasData = false
@@ -126,7 +140,7 @@ func TestCTE_Dispatch(t *testing.T) {
 	result.Clean(mp)
 
 	arg.ctr.hasData = false
-	bat = batch.NewWithSize(0)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	result, free, err = specialLogicForCTE(proc, arg, bat)
 	require.NoError(t, err)
