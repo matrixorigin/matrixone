@@ -200,7 +200,7 @@ func runRPCTests(
 		}()
 		require.NoError(t, s.Start())
 
-		c, err := NewClient(morpc.Config{})
+		c, err := NewClient(morpc.Config{}, nil)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, c.Close())
