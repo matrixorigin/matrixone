@@ -1853,9 +1853,9 @@ func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
 
 // HasFkSelfReferOnly checks the foreign key referencing itself only.
 // If there is no children tables, it also returns true
-func HasFkSelfReferOnly(tableDef *TableDef, dbName, tableName string) bool {
-	for _, child := range tableDef.GetChildrenTables() {
-		if !IsFkSelfRefer(child.DatabaseName, child.TableName, dbName, tableName) {
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
 			return false
 		}
 	}

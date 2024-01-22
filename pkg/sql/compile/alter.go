@@ -171,13 +171,13 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	//TODO: handle self reference
 	if len(qry.CopyTableDef.RefChildTbls) > 0 {
 		// Restore the original table's foreign key child table ids to the copy table definition
-		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls, qry.CopyTableDef.ChildrenTables); err != nil {
+		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
 			return err
 		}
 
 		// update foreign key child table references to the current table
-		for childIdx, tblId := range qry.CopyTableDef.RefChildTbls {
-			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, qry.CopyTableDef.ChildrenTables[childIdx], tblId, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
+		for _, tblId := range qry.CopyTableDef.RefChildTbls {
+			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
 				return err
 			}
 		}
@@ -203,20 +203,11 @@ func (s *Scope) AlterTable(c *Compile) error {
 }
 
 // updateTableForeignKeyColId update foreign key colid of child table references
-func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, child *plan.ChildTable, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
-	var childDb engine.Database
+func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
 	var childRelation engine.Relation
 	var err error
 	if childTblId == 0 {
-		//fk self reference
-		childDb, err = c.e.Database(c.ctx, child.GetDatabaseName(), c.proc.TxnOperator)
-		if err != nil {
-			return err
-		}
-		childRelation, err = childDb.Relation(c.ctx, child.GetTableName(), nil)
-		if err != nil {
-			return err
-		}
+		return nil
 	} else {
 		_, _, childRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
 		if err != nil {
@@ -271,7 +262,7 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map
 }
 
 // restoreNewTableRefChildTbls Restore the original table's foreign key child table ids to the copy table definition
-func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64, childrenTables []*plan.ChildTable) error {
+func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64) error {
 	copyTableDef, err := copyRel.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -291,7 +282,6 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 	}
 	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
 		Tables:         refChildTbls,
-		ChildrenTables: childrenTables,
 	})
 	return copyRel.UpdateConstraint(c.ctx, oldCt)
 }

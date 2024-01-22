@@ -1242,13 +1242,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	//process self reference foreign keys after colDefs are processed.
-	for _, selfRefer := range selfRefFkDatas {
-		if err := checkFkColsAreValid(ctx, selfRefer, createTable.TableDef); err != nil {
-			return err
-		}
-	}
-
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
@@ -1285,6 +1278,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 	}
+
+	//process self reference foreign keys after colDefs and indexes are processed.
+	if len(selfRefFkDatas) > 0 {
+		//for fk self refer. the column id of the tableDef is not ready.
+		//setup fake column id to distinguish the columns
+		for i, def := range createTable.TableDef.Cols {
+			def.ColId = uint64(i)
+		}
+		for _, selfRefer := range selfRefFkDatas {
+			if err := checkFkColsAreValid(ctx, selfRefer, createTable.TableDef); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1887,7 +1895,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 
 		if len(tableDef.RefChildTbls) > 0 {
 			//if all children tables are self reference, we can drop the table
-			if !HasFkSelfReferOnly(tableDef, truncateTable.Database, truncateTable.Table) {
+			if !HasFkSelfReferOnly(tableDef) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
 			}
 		}
@@ -1977,7 +1985,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	} else {
 		if len(tableDef.RefChildTbls) > 0 {
 			//if all children tables are self reference, we can drop the table
-			if !HasFkSelfReferOnly(tableDef, dropTable.Database, dropTable.Table) {
+			if !HasFkSelfReferOnly(tableDef) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
 			}
 		}
@@ -3003,6 +3011,8 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key %s can not reference to itself", name)
 			}
 		}
+		//for fk self refer. column id is not ready also.
+
 		fkData.IsSelfRefer = true
 		fkData.parentDbName = parentDbName
 		fkData.parentTableName = parentTableName
@@ -3069,6 +3079,9 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 		columnNamePos[col.Name] = i
 	}
 
+	fmt.Fprintf(os.Stderr, "columnIdPos: %v \n", columnIdPos)
+	fmt.Fprintf(os.Stderr, "columnNamePos: %v \n", columnNamePos)
+
 	//2. check if the referred column does not exist in the parent table
 	for _, keyPart := range fkData.Refer.KeyParts {
 		colName := keyPart.ColName.Parts[0]
@@ -3089,6 +3102,7 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 
 	//3. collect pk column info of the parent table
 	if parentTableDef.Pkey != nil {
+		fmt.Fprintf(os.Stderr, "primary key : %v\n", parentTableDef.Pkey.Names)
 		collectIndexColumn(parentTableDef.Pkey.Names)
 	}
 
@@ -3097,6 +3111,7 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 	// now tableRef.Indices are empty, you can not test it
 	for _, index := range parentTableDef.Indexes {
 		if index.Unique {
+			fmt.Fprintf(os.Stderr, "unique key : %v\n", index.Parts)
 			collectIndexColumn(index.Parts)
 		}
 	}
@@ -3131,8 +3146,8 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 	}
 
 	if len(matchCol) == 0 {
-		fmt.Fprintf(os.Stderr, "fk %v", fkData.Cols.Cols)
-		fmt.Fprintf(os.Stderr, "%v", uniqueColumns)
+		fmt.Fprintf(os.Stderr, "fk %v\n", fkData.Cols.Cols)
+		fmt.Fprintf(os.Stderr, "%v\n", uniqueColumns)
 		debug.PrintStack()
 		return moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
 	} else {

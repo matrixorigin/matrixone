@@ -277,7 +277,6 @@ func (c *compilerContext) getTableDef(
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
 	var subscriptionName string
-	var childrenTables []*plan.ChildTable
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -341,7 +340,6 @@ func (c *compilerContext) getTableDef(
 					foreignKeys = k.Fkeys
 				case *engine.RefChildTableDef:
 					refChildTbls = k.Tables
-					childrenTables = k.ChildrenTables
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				}
@@ -407,7 +405,6 @@ func (c *compilerContext) getTableDef(
 		ClusterBy:      clusterByDef,
 		Indexes:        indexes,
 		Version:        schemaVersion,
-		ChildrenTables: childrenTables,
 	}
 	return obj, tableDef
 }

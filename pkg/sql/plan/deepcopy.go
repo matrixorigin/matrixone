@@ -551,13 +551,6 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		}
 	}
 
-	for _, childTable := range table.ChildrenTables {
-		newTable.ChildrenTables = append(newTable.ChildrenTables, &plan.ChildTable{
-			DatabaseName: childTable.GetDatabaseName(),
-			TableName:    childTable.GetTableName(),
-		})
-	}
-
 	return newTable
 }
 
