@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"math"
 	"sort"
 )
@@ -37,16 +38,22 @@ import (
 type fileData struct {
 	data          map[uint16]*blockData
 	name          objectio.ObjectName
+	obj           *objData
 	isDeleteBatch bool
 	isChange      bool
 	isABlock      bool
 }
 
 type objData struct {
-	stats         objectio.ObjectStats
-	isDeleteBatch bool
-	isChange      bool
-	isABlock      bool
+	stats     *objectio.ObjectStats
+	data      []*batch.Batch
+	sortKey   uint16
+	infoRow   []int
+	infoTNRow []int
+	tid       uint64
+	delete    bool
+	isChange  bool
+	isABlock  bool
 }
 
 type blockData struct {
@@ -102,6 +109,41 @@ func getCheckpointData(
 	return data, nil
 }
 
+func addObjectToObjectData(
+	stats *objectio.ObjectStats,
+	isABlk, isDelete bool, isTN bool,
+	row int, tid uint64,
+	objectsData *map[string]*fileData,
+) {
+	name := stats.ObjectName().String()
+	if (*objectsData)[name] == nil {
+		object := &fileData{
+			name:          stats.ObjectName(),
+			obj:           &objData{},
+			isDeleteBatch: isDelete,
+			isChange:      false,
+			isABlock:      isABlk,
+		}
+		object.obj.stats = stats
+		object.obj.tid = tid
+		object.obj.delete = isDelete
+		(*objectsData)[name] = object
+		if !isTN {
+			(*objectsData)[name].obj.infoRow = []int{row}
+		} else {
+			(*objectsData)[name].obj.infoTNRow = []int{row}
+		}
+		return
+	}
+
+	if !isTN {
+		(*objectsData)[name].obj.infoRow = append((*objectsData)[name].obj.infoRow, row)
+	} else {
+		(*objectsData)[name].obj.infoTNRow = append((*objectsData)[name].obj.infoTNRow, row)
+	}
+
+}
+
 func addBlockToObjectData(
 	location objectio.Location,
 	isABlk, isCnBatch bool,
@@ -154,6 +196,50 @@ func trimObjectsData(
 	isCkpChange := false
 	for name := range *objectsData {
 		isChange := false
+		if (*objectsData)[name].obj != nil && (*objectsData)[name].obj.isABlock {
+			if !(*objectsData)[name].obj.delete {
+				panic(fmt.Sprintf("object %s is not a delete batch", name))
+			}
+			if len((*objectsData)[name].data) == 0 {
+				var bat *batch.Batch
+				var err error
+				commitTs := types.TS{}
+				// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
+				isCkpChange = true
+				obj := (*objectsData)[name].obj
+				location := obj.stats.ObjectLocation()
+				meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					return isCkpChange, err
+				}
+				sortKey := uint16(math.MaxUint16)
+				if meta.MustDataMeta().BlockHeader().Appendable() {
+					sortKey = meta.MustDataMeta().BlockHeader().SortKey()
+				}
+				bat, err = blockio.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
+				if err != nil {
+					return isCkpChange, err
+				}
+				for v := 0; v < bat.Vecs[0].Length(); v++ {
+					err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
+					if err != nil {
+						return isCkpChange, err
+					}
+					if commitTs.Greater(ts) {
+						windowCNBatch(bat, 0, uint64(v))
+						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
+							commitTs.ToString(), ts.ToString(), location.String())
+						isChange = true
+						break
+					}
+				}
+				(*objectsData)[name].obj.sortKey = sortKey
+				(*objectsData)[name].obj.data = make([]*batch.Batch, 0)
+				(*objectsData)[name].obj.data = append((*objectsData)[name].obj.data, bat)
+				(*objectsData)[name].isChange = isChange
+				continue
+			}
+		}
 		for id, block := range (*objectsData)[name].data {
 			if !block.isABlock && block.blockType == objectio.SchemaData {
 				continue
@@ -453,6 +539,57 @@ func ReWriteCheckpointAndBlockFromKey(
 	blkMetaInsertBlkID := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_ID)
 	blkCNMetaInsertCommitTs := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs)
 
+	objInfoData := data.bats[ObjectInfoIDX]
+	objInfoStats := objInfoData.GetVectorByName(ObjectAttr_ObjectStats)
+	objInfoState := objInfoData.GetVectorByName(ObjectAttr_State)
+	//objInfoSorted := objInfoData.GetVectorByName(ObjectAttr_Sorted)
+	objInfoTid := objInfoData.GetVectorByName(SnapshotAttr_TID)
+	//objInfoCreate := objInfoData.GetVectorByName(EntryNode_CreateAt)
+	objInfoDelete := objInfoData.GetVectorByName(EntryNode_DeleteAt)
+	objInfoCommit := objInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
+
+	for i := 0; i < objInfoData.Length(); i++ {
+		var stats *objectio.ObjectStats
+		stats.UnMarshal(objInfoStats.Get(i).([]byte))
+		isABlk := objInfoState.Get(i).(bool)
+		//createAt := objInfoCreate.Get(i).(types.TS)
+		deleteAt := objInfoDelete.Get(i).(types.TS)
+		commitTS := objInfoCommit.Get(i).(types.TS)
+		tid := objInfoTid.Get(i).(uint64)
+		if commitTS.Less(ts) {
+			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
+		}
+		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), true, i, tid, &objectsData)
+	}
+
+	tnObjInfoData := data.bats[TNObjectInfoIDX]
+	tnObjInfoStats := tnObjInfoData.GetVectorByName(ObjectAttr_ObjectStats)
+	tnObjInfoState := tnObjInfoData.GetVectorByName(ObjectAttr_State)
+	//objInfoSorted := objInfoData.GetVectorByName(ObjectAttr_Sorted)
+	tnObjInfoTid := tnObjInfoData.GetVectorByName(SnapshotAttr_TID)
+	//tnObjInfoCreate := tnObjInfoData.GetVectorByName(EntryNode_CreateAt)
+	tnObjInfoDelete := tnObjInfoData.GetVectorByName(EntryNode_DeleteAt)
+	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
+
+	for i := 0; i < tnObjInfoData.Length(); i++ {
+		var stats *objectio.ObjectStats
+		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
+		isABlk := tnObjInfoState.Get(i).(bool)
+		//createAt := tnObjInfoCreate.Get(i).(types.TS)
+		deleteAt := tnObjInfoDelete.Get(i).(types.TS)
+		tid := tnObjInfoTid.Get(i).(uint64)
+		commitTS := tnObjInfoCommit.Get(i).(types.TS)
+
+		if commitTS.Less(ts) {
+			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
+		}
+
+		if stats.Extent().End() == 0 {
+			continue
+		}
+		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), false, i, tid, &objectsData)
+	}
+
 	for i := 0; i < blkCNMetaInsert.Length(); i++ {
 		metaLoc := objectio.Location(blkCNMetaInsertMetaLoc.Get(i).([]byte))
 		deltaLoc := objectio.Location(blkCNMetaInsertDeltaLoc.Get(i).([]byte))
@@ -462,26 +599,21 @@ func ReWriteCheckpointAndBlockFromKey(
 		if commits.Less(ts) {
 			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commits.ToString(), ts.ToString())))
 		}
-
-		if !metaLoc.IsEmpty() && softDeletes[metaLoc.Name().String()] != nil &&
-			softDeletes[metaLoc.Name().String()][metaLoc.ID()] {
+		if deltaLoc.IsEmpty() || metaLoc.IsEmpty() {
+			panic(any(fmt.Sprintf("deltaLoc or metaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
+		}
+		if !metaLoc.IsEmpty() && softDeletes[metaLoc.Name().String()] {
 			// It has been soft deleted by the previous checkpoint, so it will be skipped and not collected.
 			continue
 		}
 
-		if !deltaLoc.IsEmpty() {
-			addBlockToObjectData(deltaLoc, isABlk, true, i,
-				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
-		}
-
-		if !metaLoc.IsEmpty() {
-			addBlockToObjectData(metaLoc, isABlk, true, i,
-				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
-			name := metaLoc.Name().String()
-
-			if isABlk && !deltaLoc.IsEmpty() {
-				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
-			}
+		addBlockToObjectData(deltaLoc, isABlk, true, i,
+			blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+		addBlockToObjectData(metaLoc, isABlk, true, i,
+			blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
+		name := metaLoc.Name().String()
+		if isABlk && !deltaLoc.IsEmpty() {
+			objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
 		}
 	}
 
@@ -493,15 +625,13 @@ func ReWriteCheckpointAndBlockFromKey(
 		if isABlk {
 			panic(any(fmt.Sprintf("The inserted block is an ablock: %v-%d", metaLoc.String(), i)))
 		}
-		if !metaLoc.IsEmpty() {
-			addBlockToObjectData(metaLoc, isABlk, false, i,
-				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
+		if deltaLoc.IsEmpty() || metaLoc.IsEmpty() {
+			panic(any(fmt.Sprintf("deltaLoc or metaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
 		}
-
-		if !deltaLoc.IsEmpty() {
-			addBlockToObjectData(deltaLoc, isABlk, false, i,
-				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
-		}
+		addBlockToObjectData(metaLoc, isABlk, false, i,
+			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
+		addBlockToObjectData(deltaLoc, isABlk, false, i,
+			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 	}
 
 	phaseNumber = 3
