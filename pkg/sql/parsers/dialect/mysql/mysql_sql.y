@@ -417,7 +417,7 @@ import (
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
@@ -3156,13 +3156,8 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            Users: $4,
-            Role: $5,
-            MiscOpt: $6,
-            CommentOrAttribute: $7,
-        }
+        // ifExists Users Role MiscOpt CommentOrAttribute
+        $$ = tree.NewAlterUser($3, $4, $5, $6, $7)
     }
 
 default_role_opt:
@@ -8103,6 +8098,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
+    {
+	$$ = tree.NewSerialExtractExpr($3, $5, $7)
+    }
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
@@ -10860,7 +10859,6 @@ non_reserved_keyword:
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS
-|	UNDERSCORE_BINARY
 |	BOOLEAN
 |   BTREE
 |	IVFFLAT
@@ -11032,6 +11030,7 @@ not_keyword:
 |   CURRVAL
 |   LASTVAL
 |   HEADERS
+|   SERIAL_EXTRACT
 |   BIT_CAST
 
 //mo_keywords:

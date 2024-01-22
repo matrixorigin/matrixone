@@ -105,17 +105,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
 		}
-		ctr.bat = bat
+		if bat == nil {
+			break
+		}
+		ctr.bat, _, err = proc.AppendBatchFromOffset(ctr.bat, bat, 0)
+		if err != nil {
+			return err
+		}
+		proc.PutBatch(bat)
 	}
 	return nil
 }
@@ -137,7 +139,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 	rowCountIncrease := 0
 	for i := ap.lastrow; i < count; i++ {
-		if rowCountIncrease >= 8192 {
+		if rowCountIncrease >= colexec.DefaultBatchSize {
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat

@@ -6011,6 +6011,14 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							isClusterTable:        clusterTable,
 							clusterTableOperation: clusterTableOperation,
 						})
+					} else if node.ParentObjRef != nil {
+						appendPt(privilegeTips{
+							typ:                   scanTyp,
+							databaseName:          node.ParentObjRef.GetSchemaName(),
+							tableName:             node.ParentObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableOperation,
+						})
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {

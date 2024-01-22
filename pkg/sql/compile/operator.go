@@ -1614,11 +1614,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 
@@ -1640,7 +1641,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
-		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		// to find if hashmap need to keep build batches for probe
 		var needMergedBatch bool
 		if arg.Cond != nil {
 			needMergedBatch = true
@@ -1716,11 +1717,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 

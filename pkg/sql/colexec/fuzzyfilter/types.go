@@ -75,7 +75,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -128,6 +128,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.rbat != nil {
 		arg.rbat.Clean(proc.GetMPool())
 		arg.rbat = nil
+	}
+	if arg.pass2RuntimeFilter != nil {
+		proc.PutVector(arg.pass2RuntimeFilter)
 	}
 
 	arg.FreeAllReg()

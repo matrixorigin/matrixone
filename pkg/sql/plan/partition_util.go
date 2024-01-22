@@ -675,7 +675,7 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
