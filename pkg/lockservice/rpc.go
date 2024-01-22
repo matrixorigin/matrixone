@@ -50,12 +50,14 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
+	service *service
 }
 
-func NewClient(cfg morpc.Config) (Client, error) {
+func NewClient(cfg morpc.Config, s *service) (Client, error) {
 	c := &client{
 		cfg:     &cfg,
 		cluster: clusterservice.GetMOCluster(),
+		service: s,
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -107,7 +109,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -118,7 +120,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
 			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -126,7 +128,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -150,6 +152,25 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	if address == "" {
 		getLogger().Error("cannot find lockservice address",
 			zap.String("request", request.DebugString()))
+
+		if c.service != nil {
+			switch request.Method {
+			case pb.Method_GetBind,
+				pb.Method_KeepLockTableBind:
+			default:
+				newBind, err := getLockTableBind(
+					c.service.remote.client,
+					request.GetLockTable().Table,
+					c.service.serviceID)
+				if err != nil {
+					getLogger().Error("failed to update lock table bind",
+						zap.String("request", request.DebugString()))
+				}
+
+				c.service.handleBindChanged(newBind)
+			}
+		}
+
 	}
 	return c.client.Send(ctx, address, request)
 }
