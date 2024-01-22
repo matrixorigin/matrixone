@@ -337,6 +337,9 @@ var (
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
 	}, {
+		input:  "select serial_extract(col, 1 as varchar(3)) from t1",
+		output: "select serial_extract(col, 1 as varchar(3)) from t1",
+	}, {
 		input:  "select binary('Geeksforgeeks')",
 		output: "select binary(Geeksforgeeks)",
 	}, {
@@ -2089,7 +2092,7 @@ var (
 		},
 		{
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
-			output: "create table test (col varchar(255) default 0)",
+			output: "create table test (col varchar(255) default 0b0)",
 		},
 		{
 			input:  "select trim(a)",

@@ -450,9 +450,13 @@ func (r *blockMergeReader) Close() error {
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
+	r.table.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch[info.BlockID]
+			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+
 			if !ok {
 				return nil
 			}
@@ -467,8 +471,8 @@ func (r *blockMergeReader) prefetchDeletes() error {
 						append(r.deletaLocs[location.Name().String()], location)
 				}
 			}
-
 		}
+
 		// Get Single Col pk index
 		for idx, colDef := range r.tableDef.Cols {
 			if colDef.Name == r.tableDef.Pkey.PkeyColName {

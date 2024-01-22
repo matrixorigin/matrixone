@@ -125,6 +125,20 @@ func NewAddPartitionReq(did, tid uint64, partitionDef *plan.PartitionByDef) *Alt
 	}
 }
 
+func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_RenameColumn,
+		Operation: &AlterTableReq_RenameCol{
+			&AlterTableRenameCol{
+				OldName:     oldname,
+				NewName:     newname,
+				SequenceNum: seqnum,
+			},
+		},
+	}
+}
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
