@@ -13,4 +13,5 @@ create database db1;
 use db1;
 create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 drop function db1.helloworld5();
+drop function db2.helloworld5();
 drop database db1;
