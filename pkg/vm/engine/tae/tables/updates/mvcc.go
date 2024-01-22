@@ -182,6 +182,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	if !n.ExistDeleteInRange(start, end) {
 		return
 	}
+	minTS = n.persistedTS
 
 	for {
 		needWaitFound := false
@@ -235,13 +236,6 @@ func (n *MVCCHandle) CollectDeleteLocked(
 							deletes = append(deletes, row)
 						} else {
 							pkVec.Append(node.rowid2PK[row].Get(0), false)
-						}
-						if minTS.IsEmpty() {
-							minTS = node.GetEnd()
-						} else {
-							if minTS.Greater(node.GetEnd()) {
-								minTS = node.GetEnd()
-							}
 						}
 					}
 				}
