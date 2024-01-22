@@ -674,19 +674,29 @@ func ReWriteCheckpointAndBlockFromKey(
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			for _, block := range dataBlocks {
-				if block.sortKey != math.MaxUint16 {
-					writer.SetPrimaryKey(block.sortKey)
+			if len(dataBlocks) == 0 {
+				if objectData.obj.sortKey != math.MaxUint16 {
+					writer.SetPrimaryKey(objectData.obj.sortKey)
 				}
-				if block.blockType == objectio.SchemaData {
-					_, err = writer.WriteBatch(block.data)
-					if err != nil {
-						return nil, nil, nil, err
+				_, err = writer.WriteBatch(objectData.obj.data[0])
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			} else {
+				for _, block := range dataBlocks {
+					if block.sortKey != math.MaxUint16 {
+						writer.SetPrimaryKey(block.sortKey)
 					}
-				} else if block.blockType == objectio.SchemaTombstone {
-					_, err = writer.WriteTombstoneBatch(block.data)
-					if err != nil {
-						return nil, nil, nil, err
+					if block.blockType == objectio.SchemaData {
+						_, err = writer.WriteBatch(block.data)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+					} else if block.blockType == objectio.SchemaTombstone {
+						_, err = writer.WriteTombstoneBatch(block.data)
+						if err != nil {
+							return nil, nil, nil, err
+						}
 					}
 				}
 			}
