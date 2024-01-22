@@ -334,14 +334,14 @@ func TestMustGetFullCompositePK(t *testing.T) {
 		desc    []string
 		exprs   []*plan.Expr
 		can     []bool
-		expects []func(*plan.Expr) bool
+		expects []func(bool, []byte) bool
 	}
 	// a, b, c, d are columns of table t1
 	// d,a,c are composite primary keys
 	// b is the serialized primary key
 
-	var placeHolder func(*plan.Expr) bool
-	returnTrue := func(*plan.Expr) bool { return true }
+	var placeHolder func(bool, []byte) bool
+	returnTrue := func(bool, []byte) bool { return true }
 
 	var val_1_2_3 []byte
 	packer.EncodeInt64(1)
@@ -498,38 +498,36 @@ func TestMustGetFullCompositePK(t *testing.T) {
 		can: []bool{
 			true, false, true, true, false, false, true,
 		},
-		expects: []func(*plan.Expr) bool{
+		expects: []func(bool, []byte) bool{
 			placeHolder, returnTrue, placeHolder, placeHolder, returnTrue,
 			returnTrue, placeHolder,
 		},
 	}
 
-	tc.expects[0] = func(expr *plan.Expr) bool {
+	tc.expects[0] = func(isVec bool, actual []byte) bool {
+		require.False(t, isVec)
 		packer.Reset()
 		packer.EncodeInt64(2)
 		packer.EncodeInt64(3)
 		packer.EncodeInt64(1)
 		expect := packer.Bytes()
 		packer.Reset()
-		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
-		return bytes.Equal(expect, []byte(svalExpr.Sval))
+		return bytes.Equal(expect, actual)
 	}
-	tc.expects[2] = func(expr *plan.Expr) bool {
-		svalExpr := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval)
-		return bytes.Equal(val_1_2_3, []byte(svalExpr.Sval))
+	tc.expects[2] = func(isVec bool, actual []byte) bool {
+		require.False(t, isVec)
+		return bytes.Equal(val_1_2_3, actual)
 	}
-	tc.expects[3] = func(expr *plan.Expr) bool {
-		data := expr.Expr.(*plan.Expr_Vec).Vec.Data
+	tc.expects[3] = func(isVec bool, actual []byte) bool {
+		require.True(t, isVec)
 		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(data)
+		vec.UnmarshalBinary(actual)
 		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
 	}
-	tc.expects[6] = func(expr *plan.Expr) bool {
-		canEval, vec, put := evalExprListToVec(
-			types.T_char, expr.Expr.(*plan.Expr_List), proc,
-		)
-		require.True(t, canEval)
-		defer put()
+	tc.expects[6] = func(isVec bool, actual []byte) bool {
+		require.True(t, isVec)
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(actual)
 		return bytes.Equal(val_1_2_3, vec.GetBytesAt(0)) && bytes.Equal(val_4_5_6, vec.GetBytesAt(1))
 	}
 
@@ -537,11 +535,11 @@ func TestMustGetFullCompositePK(t *testing.T) {
 	keys := []string{"d", "a", "c"}
 	for i := 0; i < len(tc.desc); i++ {
 		expr := tc.exprs[i]
-		can, expr := MustGetFullCompositePK(
+		can, isVec, data := MustGetFullCompositePKValue(
 			expr, pkName, keys, packer, proc,
 		)
 		require.Equalf(t, tc.can[i], can, tc.desc[i])
-		require.Truef(t, tc.expects[i](expr), tc.desc[i])
+		require.Truef(t, tc.expects[i](isVec, data), tc.desc[i])
 	}
 	packer.FreeMem()
 	proc.FreeVectors()

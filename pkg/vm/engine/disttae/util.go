@@ -72,6 +72,35 @@ func getValidCompositePKCnt(vals []*plan.Literal) int {
 	return cnt
 }
 
+func MustGetFullCompositePKValue(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	packer *types.Packer,
+	proc *process.Process,
+) (canEval, isVec bool, val []byte) {
+	ok, rExpr := MustGetFullCompositePK(expr, pkName, keys, packer, proc)
+	if !ok || rExpr == nil {
+		return false, false, nil
+	}
+
+	switch rExprImpl := rExpr.Expr.(type) {
+	case *plan.Expr_Lit:
+		return true, false, []byte(rExprImpl.Lit.Value.(*plan.Literal_Sval).Sval)
+	case *plan.Expr_Vec:
+		return true, true, rExprImpl.Vec.Data
+	case *plan.Expr_List:
+		ok, vec, put := evalExprListToVec(types.T_char, rExprImpl, proc)
+		if !ok || vec == nil || vec.Length() == 0 {
+			return false, false, nil
+		}
+		data, _ := vec.MarshalBinary()
+		put()
+		return true, true, data
+	}
+	return false, false, nil
+}
+
 func MustGetFullCompositePK(
 	expr *plan.Expr,
 	pkName string,
