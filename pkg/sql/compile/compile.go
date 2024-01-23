@@ -298,11 +298,6 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	}
 
-	if strings.Contains(c.sql, "merged_chunk_0") && strings.Contains(c.uid, "dump") {
-		a := 1
-		a++
-	}
-
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
