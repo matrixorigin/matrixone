@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -531,7 +532,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
-	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())

@@ -3015,7 +3015,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].Instructions = append(

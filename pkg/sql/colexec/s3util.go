@@ -570,7 +570,7 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	obj := Srv.GenerateObject()
+	obj := Get().GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
