@@ -55,6 +55,7 @@ type objData struct {
 	delete    bool
 	isChange  bool
 	isABlock  bool
+	isInset   bool
 }
 
 type objectRow struct {
@@ -273,6 +274,7 @@ func trimObjectsData(
 				continue
 			}
 		}
+
 		for id, block := range (*objectsData)[name].data {
 			if !block.isABlock && block.blockType == objectio.SchemaData {
 				continue
@@ -332,6 +334,28 @@ func trimObjectsData(
 					}
 				}
 				(*objectsData)[name].data[id].sortKey = sortKey
+
+				/*if (*objectsData)[name].obj == nil {
+					stats := objectio.NewObjectStats()
+					objectio.SetObjectStatsObjectName(stats, block.location.Name())
+					objectio.SetObjectStatsExtent(stats, block.location.Extent())
+					dm := meta.MustDataMeta()
+					blkCnt := dm.BlockCount()
+					tm, ok := meta.TombstoneMeta()
+					if ok {
+						blkCnt += tm.BlockCount()
+					}
+					objectio.SetObjectStatsBlkCnt(stats, blkCnt)
+					objectio.SetObjectStatsRowCnt(stats, dm.BlockHeader().Rows())
+					objectio.SetObjectStatsSize(stats, block.location.Extent().End()+objectio.FooterSize)
+					objectio.SetObjectStatsLocation(stats, block.location)
+					(*objectsData)[name].obj = &objData{
+						stats:    stats,
+						data:     make([]*batch.Batch, 0),
+						isABlock: true,
+						isInset:  true,
+					}
+				}*/
 			}
 			bat = formatData(bat)
 			(*objectsData)[name].data[id].data = bat
@@ -456,13 +480,19 @@ func LoadCheckpointEntriesFromKey(
 		buf := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		deletedAt := data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
+		isAblk := data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Get(i).(bool)
 		if objectStats.Extent().End() == 0 {
 			panic(fmt.Sprintf("object %v Extent not empty", objectStats.ObjectName().String()))
 		}
+
+		if deletedAt.IsEmpty() && isAblk {
+			panic(fmt.Sprintf("object %v is not deleted", objectStats.ObjectName().String()))
+		}
+
 		locations = append(locations, objectStats.ObjectName())
 		if !deletedAt.IsEmpty() {
 			if softDeletes != nil {
-				if (*softDeletes)[objectStats.ObjectName().String()] {
+				if !(*softDeletes)[objectStats.ObjectName().String()] {
 					(*softDeletes)[objectStats.ObjectName().String()] = true
 				}
 			}
@@ -474,17 +504,13 @@ func LoadCheckpointEntriesFromKey(
 		buf := data.bats[TNObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		deletedAt := data.bats[TNObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Get(i).(types.TS)
-		if objectStats.Extent().End() == 0 {
-			continue
+		if objectStats.Extent().End() > 0 {
+			panic(any(fmt.Sprintf("extent end is not 0: %v, name is %v", objectStats.Extent().End(), objectStats.ObjectName().String())))
 		}
-		locations = append(locations, objectStats.ObjectName())
 		if !deletedAt.IsEmpty() {
-			if softDeletes != nil {
-				if (*softDeletes)[objectStats.ObjectName().String()] {
-					(*softDeletes)[objectStats.ObjectName().String()] = true
-				}
-			}
+			panic(any(fmt.Sprintf("deleteAt is not empty: %v, name is %v", deletedAt.ToString(), objectStats.ObjectName().String())))
 		}
+		//locations = append(locations, objectStats.ObjectName())
 	}
 
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
@@ -496,6 +522,15 @@ func LoadCheckpointEntriesFromKey(
 		locations = append(locations, deltaLoc.Name())
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		metaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if !metaLoc.IsEmpty() {
+			if softDeletes != nil {
+				if !(*softDeletes)[metaLoc.Name().String()] {
+					panic(fmt.Sprintf("block111 %v metaLoc is not deleted", metaLoc.String()))
+				}
+			}
+		}
 		deltaLoc := objectio.Location(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if deltaLoc.IsEmpty() {
@@ -823,6 +858,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					deleteRow: dataBlocks[0].deleteRow[0],
 				}
 				insertBatch[dataBlocks[0].tid].insertBlocks = append(insertBatch[dataBlocks[0].tid].insertBlocks, ib)
+
+				if objectData.obj == nil {
+
+				}
 			}
 			if objectData.obj != nil {
 				obj := objectData.obj
@@ -962,6 +1001,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
+					if insertBatch[tid].insertBlocks[b].data.isABlock {
+					}
 					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
 					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
@@ -990,20 +1031,24 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
-					i := blkMeta.Vecs[0].Length() - 1
-					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
-						sort := true
-						if insertBatch[tid].insertBlocks[b].data != nil &&
-							insertBatch[tid].insertBlocks[b].data.isABlock &&
-							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-							sort = false
+					if insertBatch[tid].insertBlocks[b].data.isABlock {
+
+					} else {
+						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+						i := blkMeta.Vecs[0].Length() - 1
+						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
+							sort := true
+							if insertBatch[tid].insertBlocks[b].data != nil &&
+								insertBatch[tid].insertBlocks[b].data.isABlock &&
+								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+								sort = false
+							}
+							updateBlockMeta(blkMeta, blkMetaTxn, i,
+								insertBatch[tid].insertBlocks[b].blockId,
+								insertBatch[tid].insertBlocks[b].location,
+								sort)
 						}
-						updateBlockMeta(blkMeta, blkMetaTxn, i,
-							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location,
-							sort)
 					}
 				}
 			}
