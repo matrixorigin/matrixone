@@ -650,13 +650,11 @@ drop table prepare01;
 deallocate prepare stmt1;
 deallocate prepare stmt2;
 
--- @bvt:issue#10354
 drop table if exists t;
 create table t (c varbinary(3));
 insert into t set c = 'a';
 select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
--- @bvt:issue
 
 -- select binary
 select binary(372817432918321);
