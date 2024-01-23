@@ -690,7 +690,17 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
-	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	in := &pipeline.Instruction{
+		Op:      int32(opr.Op),
+		Idx:     int32(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorId:  opr.OperatorID,
+		ParallelId:  opr.ParallelID,
+		MaxParallel: opr.MaxParallel,
+	}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
@@ -1086,7 +1096,17 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
-	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	v := vm.Instruction{
+		Op:      vm.OpType(opr.Op),
+		Idx:     int(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorID:  opr.OperatorId,
+		ParallelID:  opr.ParallelId,
+		MaxParallel: opr.MaxParallel,
+	}
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
