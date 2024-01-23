@@ -120,9 +120,9 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 	}
 	ep.Symbol = make([][]byte, n)
 	for i := 0; i < n-1; i++ {
-		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated)
+		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated.Value)
 	}
-	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy)
+	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy.Value)
 	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
 	for i := 0; i < len(ep.userConfig.ForceQuote); i++ {
 		col, ok := mrs.Name2Index[ep.userConfig.ForceQuote[i]]
@@ -188,9 +188,9 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 			return nil
 		}
 		for i := 0; i < n-1; i++ {
-			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated
+			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated.Value
 		}
-		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy
+		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy.Value
 		if ep.userConfig.MaxFileSize != 0 && uint64(len(header)) >= ep.userConfig.MaxFileSize {
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
@@ -416,7 +416,7 @@ func formatJsonString(str string, flag bool) string {
 func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
 	flag := oq.ep.ColumnFlag
 	writeByte := make([]byte, 0)
 	for i := 0; i < bat.RowCount(); i++ {
@@ -571,7 +571,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
 	flag := oq.ep.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 		column, err := oq.mrs.GetColumn(oq.ctx, i)

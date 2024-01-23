@@ -84,8 +84,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	terminated := ","
 	enclosedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
-		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
-		terminated = stmt.Param.Tail.Fields.Terminated
+		if stmt.Param.Tail.Fields.EnclosedBy != nil {
+			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+		}
+		if stmt.Param.Tail.Fields.Terminated != nil {
+			terminated = stmt.Param.Tail.Fields.Terminated.Value
+		}
 	}
 
 	externalScanNode := &plan.Node{

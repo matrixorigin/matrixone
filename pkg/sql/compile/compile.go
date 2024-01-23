@@ -298,6 +298,11 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	}
 
+	if strings.Contains(c.sql, "merged_chunk_0") && strings.Contains(c.uid, "dump") {
+		a := 1
+		a++
+	}
+
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1801,8 +1806,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.Tail = new(tree.TailParameter)
 		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
 		param.Tail.Fields = &tree.Fields{
-			Terminated: n.ExternScan.Terminated,
-			EnclosedBy: n.ExternScan.EnclosedBy[0],
+			Terminated: &tree.Terminated{
+				Value: n.ExternScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: n.ExternScan.EnclosedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}

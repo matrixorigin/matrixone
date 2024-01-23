@@ -184,18 +184,24 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 	linesStartingBy := ""
 
 	if param.Extern.Tail.Fields != nil {
-		fieldsTerminatedBy = param.Extern.Tail.Fields.Terminated
-		if param.Extern.Tail.Fields.EnclosedBy != 0 {
-			fieldsEnclosedBy = string(param.Extern.Tail.Fields.EnclosedBy)
+		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
 		}
-		if param.Extern.Tail.Fields.EscapedBy != 0 {
-			fieldsEscapedBy = string(param.Extern.Tail.Fields.EscapedBy)
+		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
 		}
 	}
 
 	if param.Extern.Tail.Lines != nil {
-		if param.Extern.Tail.Lines.TerminatedBy != "" {
-			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy
+		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
 		}
 		if param.Extern.Tail.Lines.StartingBy != "" {
 			linesStartingBy = param.Extern.Tail.Lines.StartingBy

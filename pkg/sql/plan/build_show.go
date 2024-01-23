@@ -352,29 +352,38 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
-		escapedby := ""
-		if param.Tail.Fields.EscapedBy != byte(0) {
-			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		fields := ""
+		if param.Tail.Fields.EscapedBy != nil && param.Tail.Fields.EscapedBy.Value != byte(0) {
+			fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+		}
+		if param.Tail.Fields.Terminated != nil && param.Tail.Fields.Terminated.Value != "" {
+			fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+		}
+		if param.Tail.Fields.EnclosedBy != nil && param.Tail.Fields.EnclosedBy.Value != byte(0) {
+			fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
 		}
 
 		line := ""
 		if param.Tail.Lines.StartingBy != "" {
-			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
 		}
-		lineEnd := ""
-		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
-			lineEnd = " TERMINATED BY '\\\\n'"
-		} else {
-			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-		}
-		if len(line) > 0 {
-			line += lineEnd
-		} else {
-			line = " LINES" + lineEnd
+		if param.Tail.Lines.TerminatedBy != nil {
+			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+				line += " TERMINATED BY '\\\\n'"
+			} else {
+				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+			}
 		}
 
-		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
-		createStr += line
+		if len(fields) > 0 {
+			fields = " FIELDS" + fields
+			createStr += fields
+		}
+		if len(line) > 0 {
+			line = " LINES" + line
+			createStr += line
+		}
+
 		if param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
