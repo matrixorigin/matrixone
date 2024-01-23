@@ -1226,6 +1226,7 @@ func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.Wait
 // ss[currentIdx] means it's local scope the dispatch rule should be like below:
 // dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
 // local deletion
+/*
 func constructDeleteDispatchAndLocal(
 	currentIdx int,
 	rs []*Scope,
@@ -1300,6 +1301,7 @@ func constructDeleteDispatchAndLocal(
 		Arg: &merge.Argument{},
 	})
 }
+*/
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
