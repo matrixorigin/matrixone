@@ -1327,7 +1327,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		rowid = table.rowid
 		rowids = table.rowids
 		if tbl != table {
-			panic("-------------1---------------")
+			panic("The table object in createMap should be the current table object")
 		}
 	} else if value, ok := db.txn.tableCache.tableMap.Load(key); ok {
 		table := value.(*txnTable)
@@ -1335,7 +1335,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		rowid = table.rowid
 		rowids = table.rowids
 		if tbl != table {
-			panic("--------------2--------------")
+			panic("The table object in tableCache should be the current table object")
 		}
 		db.txn.tableCache.tableMap.Delete(key)
 	} else {
@@ -1416,7 +1416,6 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		return err
 	}
 	newtbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{newRowId}))
-
 	newtbl.comment = tbl.comment
 	newtbl.relKind = tbl.relKind
 	newtbl.createSql = tbl.createSql
