@@ -31,10 +31,9 @@ var _ vm.Operator = new(Argument)
 type Argument struct {
 	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
-	buf          *batch.Batch
 
-	ps []*types.Packer
-	buf      *batch.Batch
+	ps  []*types.Packer
+	buf *batch.Batch
 
 	vm.OperatorBase
 }
