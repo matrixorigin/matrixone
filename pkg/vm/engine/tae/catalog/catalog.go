@@ -572,6 +572,7 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, dataFa
 		if !state {
 			entryState = ES_NotAppendable
 		}
+		logutil.Infof("replay object %d-%d-%v", dbid, tid, sid.String())
 		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
 	}
 }
@@ -629,6 +630,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		leftRows := stats.Rows()
 		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
 		for i := 0; i < int(blkCount); i++ {
+			logutil.Infof("replay block %d-%d-%v-%d", dbid, tbid, objid.String(), i)
 			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
 			rows := blkMaxRow
 			if leftRows < blkMaxRow {
@@ -647,6 +649,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		leftRows := stats.Rows()
 		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
 		for i := 0; i < int(blkCount); i++ {
+			logutil.Infof("replay block111 %d-%d-%v-%d", dbid, tbid, objid.String(), i)
 			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
 			rows := blkMaxRow
 			if leftRows < blkMaxRow {
@@ -792,6 +795,7 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		metaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
 		deltaLoc := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 		txnNode := txnbase.ReadTuple(insTxn, i)
+		logutil.Infof("OnReplayBlockBatch object %d-%d-%v", dbid, tid, blkID.String())
 		catalog.onReplayCreateBlock(dbid, tid, sid, &blkID, state, metaLoc, deltaLoc, txnNode, dataFactory)
 	}
 	for i := 0; i < del.Length(); i++ {

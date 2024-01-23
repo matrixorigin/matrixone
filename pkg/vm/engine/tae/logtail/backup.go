@@ -144,6 +144,7 @@ func addObjectToObjectData(
 		object.obj.stats = stats
 		object.obj.tid = tid
 		object.obj.delete = isDelete
+		object.obj.isABlock = isABlk
 		(*objectsData)[name] = object
 		if !isTN {
 			if isDelete {
@@ -224,10 +225,12 @@ func trimObjectsData(
 	isCkpChange := false
 	for name := range *objectsData {
 		isChange := false
+		logutil.Infof("trimObjectsData: %s, (*objectsData)[name].obj is %v", name, (*objectsData)[name].obj)
 		if (*objectsData)[name].obj != nil && (*objectsData)[name].obj.isABlock {
 			if !(*objectsData)[name].obj.delete {
 				panic(fmt.Sprintf("object %s is not a delete batch", name))
 			}
+			logutil.Infof("data is %d, %v", len((*objectsData)[name].data), (*objectsData)[name].data)
 			if len((*objectsData)[name].data) == 0 {
 				var bat *batch.Batch
 				var err error
@@ -255,7 +258,7 @@ func trimObjectsData(
 					}
 					if commitTs.Greater(ts) {
 						windowCNBatch(bat, 0, uint64(v))
-						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
+						logutil.Infof("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), location.String())
 						isChange = true
 						break
@@ -263,7 +266,9 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].obj.sortKey = sortKey
 				(*objectsData)[name].obj.data = make([]*batch.Batch, 0)
+				bat = formatData(bat)
 				(*objectsData)[name].obj.data = append((*objectsData)[name].obj.data, bat)
+				logutil.Infof("trimObjectsData: %s, isChange is %v, (*objectsData)[name].obj.data is %d", name, isChange, len((*objectsData)[name].obj.data))
 				(*objectsData)[name].isChange = isChange
 				continue
 			}
@@ -287,7 +292,7 @@ func trimObjectsData(
 						return isCkpChange, err
 					}
 					if commitTs.Greater(ts) {
-						logutil.Debugf("delete row %v, commitTs %v, location %v",
+						logutil.Infof("delete row %v, commitTs %v, location %v",
 							v, commitTs.ToString(), block.location.String())
 						isChange = true
 						isCkpChange = true
@@ -320,7 +325,7 @@ func trimObjectsData(
 					}
 					if commitTs.Greater(ts) {
 						windowCNBatch(bat, 0, uint64(v))
-						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
+						logutil.Infof("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), block.location.String())
 						isChange = true
 						break
@@ -358,49 +363,6 @@ func applyDelete(dataBatch *batch.Batch, deleteBatch *batch.Batch, id string) er
 	}
 	dataBatch.AntiShrink(deleteRow)
 	return nil
-}
-
-func updateObjMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID types.Blockid, location objectio.Location, sort bool) {
-	blkMeta.GetVectorByName(catalog2.AttrRowID).Update(
-		row,
-		objectio.HackBlockid2Rowid(&blockID),
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_ID).Update(
-		row,
-		blockID,
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_EntryState).Update(
-		row,
-		false,
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_Sorted).Update(
-		row,
-		sort,
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_SegmentID).Update(
-		row,
-		*blockID.Segment(),
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
-		row,
-		[]byte(location),
-		false)
-	blkMeta.GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
-		row,
-		nil,
-		true)
-	blkMetaTxn.GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
-		row,
-		[]byte(location),
-		false)
-	blkMetaTxn.GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
-		row,
-		nil,
-		true)
-
-	if !sort {
-		logutil.Infof("block %v is not sorted", blockID.String())
-	}
 }
 
 func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID types.Blockid, location objectio.Location, sort bool) {
@@ -787,6 +749,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		}
 
+		logutil.Infof("isDeleteBatch1111 %v, isDeleteBatch is %v", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch)
 		if objectData.isDeleteBatch &&
 			objectData.data[0] != nil &&
 			objectData.data[0].blockType != objectio.SchemaTombstone {
@@ -876,6 +839,58 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 		} else {
+			if objectData.isDeleteBatch && objectData.data[0] == nil {
+				logutil.Infof("isDeleteBatch2222 %v, isDeleteBatch is %v, objectData.obj is %d", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch, len(objectData.obj.data))
+				sortData := containers.ToTNBatch(objectData.obj.data[0], common.CheckpointAllocator)
+				if objectData.obj.sortKey != math.MaxUint16 {
+					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(objectData.obj.sortKey), backupPool)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+				}
+				objectData.obj.data[0] = containers.ToCNBatch(sortData)
+				result := batch.NewWithSize(len(objectData.obj.data[0].Vecs) - 3)
+				for i := range result.Vecs {
+					result.Vecs[i] = objectData.obj.data[0].Vecs[i]
+				}
+				objectData.obj.data[0] = result
+				fileNum := uint16(1000) + objectData.obj.stats.ObjectName().Num()
+				segment := objectData.obj.stats.ObjectName().SegmentId()
+				name := objectio.BuildObjectName(&segment, fileNum)
+
+				writer, err := blockio.NewBlockWriter(dstFs, name.String())
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if objectData.obj.sortKey != math.MaxUint16 {
+					writer.SetPrimaryKey(objectData.obj.sortKey)
+				}
+				_, err = writer.WriteBatch(objectData.obj.data[0])
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				blocks, extent, err = writer.Sync(ctx)
+				if err != nil {
+					panic("sync error")
+				}
+				files = append(files, name.String())
+				blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
+				obj := objectData.obj
+				if insertObjBatch[obj.tid] == nil {
+					insertObjBatch[obj.tid] = &iObjects{
+						rowObjects: make([]*insertObjects, 0),
+					}
+				}
+				objectio.SetObjectStatsObjectName(obj.stats, name)
+				logutil.Infof("object name11 %s", obj.stats.ObjectName().String())
+				io := &insertObjects{
+					location: blockLocation,
+					apply:    false,
+					obj:      obj,
+				}
+				insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
+			}
+
 			for i := range dataBlocks {
 				blockLocation := dataBlocks[i].location
 				if objectData.isChange {
@@ -1051,15 +1066,17 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertObjBatch[tid].rowObjects[i].apply {
 					continue
 				}
-				if insertObjBatch[tid].rowObjects[i].location.IsEmpty() {
+				if !insertObjBatch[tid].rowObjects[i].location.IsEmpty() {
 					obj := insertObjBatch[tid].rowObjects[i].obj
 					objectio.SetObjectStatsExtent(obj.stats, insertObjBatch[tid].rowObjects[i].location.Extent())
-					data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
+					if len(obj.infoRow) > 0 {
+						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
+					}
 					if len(obj.infoRow) > 0 {
 						panic("should not have info row")
 					}
 
-					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats, false)
+					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats[:], false)
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Update(obj.infoDel[0], false, false)
 					data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Update(obj.infoDel[0], types.TS{}, false)
 				} else {
