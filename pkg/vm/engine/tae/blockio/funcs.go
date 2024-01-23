@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -61,17 +62,17 @@ func LoadColumnsData(
 	return
 }
 
-func LoadColumnsDataWithVPool(
+func LoadColumnsData2(
 	ctx context.Context,
 	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
 	policy fileservice.Policy,
+	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
+) (vectors []containers.Vector, release func(), err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -79,10 +80,18 @@ func LoadColumnsDataWithVPool(
 		return
 	}
 	dataMeta := meta.MustGetMeta(metaType)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
-	defer objectio.ReleaseIOVector(ioVectors)
+	defer func() {
+		if needCopy {
+			objectio.ReleaseIOVector(ioVectors)
+			return
+		}
+		release = func() {
+			objectio.ReleaseIOVector(ioVectors)
+		}
+	}()
 	var obj any
 	vectors = make([]containers.Vector, len(cols))
 	for i := range cols {
@@ -91,9 +100,19 @@ func LoadColumnsDataWithVPool(
 			return
 		}
 
-		srcVec := containers.ToTNVector(obj.(*vector.Vector), vPool.GetAllocator())
-		defer srcVec.Close()
-		vectors[i] = srcVec.CloneWindowWithPool(0, srcVec.Length(), vPool)
+		var vec containers.Vector
+		if needCopy {
+			if vec, err = containers.CloneVector(
+				obj.(*vector.Vector),
+				vPool.GetAllocator(),
+				vPool,
+			); err != nil {
+				return
+			}
+		} else {
+			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
+		}
+		vectors[i] = vec
 	}
 	if err != nil {
 		for _, col := range vectors {
@@ -101,7 +120,7 @@ func LoadColumnsDataWithVPool(
 				col.Close()
 			}
 		}
-		return nil, err
+		return nil, release, err
 	}
 	return
 }
@@ -129,29 +148,33 @@ func LoadTombstoneColumns(
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0))
 }
 
-func LoadColumnsBytTN(
+// LoadColumns2 load columns data from file service for TN
+// need to copy data from vPool to avoid releasing cache
+func LoadColumns2(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
 	policy fileservice.Policy,
+	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaData, cols, typs, fs, location, m, policy, vPool)
+) (vectors []containers.Vector, release func(), err error) {
+	return LoadColumnsData2(ctx, objectio.SchemaData, cols, typs, fs, location, policy, needCopy, vPool)
 }
 
-func LoadTombstoneColumnsByTN(
+// LoadTombstoneColumns2 load tombstone data from file service for TN
+// need to copy data from vPool to avoid releasing cache
+func LoadTombstoneColumns2(
 	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool,
+	needCopy bool,
 	vPool *containers.VectorPool,
-) (vectors []containers.Vector, err error) {
-	return LoadColumnsDataWithVPool(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m, fileservice.Policy(0), vPool)
+) (vectors []containers.Vector, release func(), err error) {
+	return LoadColumnsData2(ctx, objectio.SchemaTombstone, cols, typs, fs, location, fileservice.Policy(0), needCopy, vPool)
 }
 
 func LoadOneBlock(

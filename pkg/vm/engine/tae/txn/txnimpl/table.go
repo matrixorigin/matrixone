@@ -665,9 +665,13 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Ve
 }
 func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.ObjectStats) (err error) {
 	var pkVecs []containers.Vector
+	var closeFuncs []func()
 	defer func() {
 		for _, v := range pkVecs {
 			v.Close()
+		}
+		for _, f := range closeFuncs {
+			f()
 		}
 	}()
 	if tbl.tableSpace != nil && tbl.tableSpace.isStatsExisted(stats) {
@@ -694,20 +698,25 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				vectors, err := blockio.LoadColumnsBytTN(
+				var vectors []containers.Vector
+				var closeFunc func()
+				//Extend lifetime of vectors is within the function.
+				//No NeedCopy. closeFunc is required after use.
+				//VectorPool is nil.
+				vectors, closeFunc, err = blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
-					nil,
 					fileservice.Policy(0),
-					tbl.store.rt.VectorPool.Transient,
+					false,
+					nil,
 				)
 				if err != nil {
 					return err
 				}
-				//defer vec.Close()
+				closeFuncs = append(closeFuncs, closeFunc)
 				pkVecs = append(pkVecs, vectors[0])
 			}
 			for _, v := range pkVecs {
@@ -1232,19 +1241,23 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				vectors, err := blockio.LoadColumnsBytTN(
+				//Extend lifetime of vectors is within the function.
+				//No NeedCopy. closeFunc is required after use.
+				//VectorPool is nil.
+				vectors, closeFunc, err := blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
-					nil,
 					fileservice.Policy(0),
-					tbl.store.rt.VectorPool.Transient,
+					false,
+					nil,
 				)
 				if err != nil {
 					return err
 				}
+				defer closeFunc()
 				loaded[i] = vectors[0]
 			}
 			if err = blkData.BatchDedup(

@@ -1005,18 +1005,23 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var vectors []containers.Vector
-			vectors, err = blockio.LoadTombstoneColumnsByTN(
+			var closeFunc func()
+			//Extend lifetime of vectors is within the function.
+			//No NeedCopy. closeFunc is required after use.
+			//closeFunc is not nil.
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				false,
 				nil,
-				h.db.Runtime.VectorPool.Small,
 			)
 			if err != nil {
 				return
 			}
+			defer closeFunc()
 			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {

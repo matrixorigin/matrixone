@@ -537,7 +537,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
+			result, _, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, true, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}
@@ -596,7 +596,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -604,7 +604,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -612,7 +612,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
+	ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -625,7 +625,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo) bool {
+	ForeachBlkInObjStatsList(false, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -857,6 +857,119 @@ func TestGetPKExpr(t *testing.T) {
 		require.Equalf(t, tc.valExprs[i], rExpr, tc.desc[i])
 	}
 	require.Zero(t, m.CurrNB())
+}
+
+func TestGetPkExprValue(t *testing.T) {
+	m := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcessWithMPool(m)
+	type testCase struct {
+		desc       []string
+		exprs      []*plan.Expr
+		expectVals [][]int64
+		canEvals   []bool
+	}
+	equalToVecFn := func(expect []int64, actual any) bool {
+		vec := vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(actual.([]byte))
+		actualVals := vector.MustFixedCol[int64](vec)
+		if len(expect) != len(actualVals) {
+			return false
+		}
+		for i := range expect {
+			if expect[i] != actualVals[i] {
+				return false
+			}
+		}
+		return true
+	}
+	equalToValFn := func(expect []int64, actual any) bool {
+		if len(expect) != 1 {
+			return false
+		}
+		actualVal := actual.(int64)
+		return expect[0] == actualVal
+	}
+
+	tc := testCase{
+		desc: []string{
+			"a=2 and a=1",
+			"a in vec(1,2)",
+			"a=2 or a=1 or a=3",
+			"a in vec(1,10) or a=5 or (a=6 and a=7)",
+		},
+		canEvals: []bool{
+			true, true, true, true,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(2),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(1),
+				}),
+			}),
+			makeFunctionExprForTest("in", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(2)),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(2),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(1),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_int64),
+					plan2.MakePlan2Int64ConstExprWithType(3),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("in", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64VecExprWithType(m, int64(1), int64(10)),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(5),
+					}),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(6),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(0, types.T_int64),
+						plan2.MakePlan2Int64ConstExprWithType(7),
+					}),
+				}),
+			}),
+		},
+		expectVals: [][]int64{
+			{2}, {1, 2}, {1, 2, 3}, {1, 5, 6, 10},
+		},
+	}
+	for i, expr := range tc.exprs {
+		canEval, _, isVec, val := getPkValueByExpr(expr, "a", types.T_int64, false, proc)
+		require.Equalf(t, tc.canEvals[i], canEval, tc.desc[i])
+		if !canEval {
+			continue
+		}
+		if isVec {
+			require.Truef(t, equalToVecFn(tc.expectVals[i], val), tc.desc[i])
+		} else {
+			require.Truef(t, equalToValFn(tc.expectVals[i], val), tc.desc[i])
+		}
+	}
 }
 
 func TestEvalExprListToVec(t *testing.T) {
