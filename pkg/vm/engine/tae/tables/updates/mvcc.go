@@ -489,6 +489,13 @@ func (n *ObjectMVCCHandle) GetLatestDeltaloc(blkOffset uint16) objectio.Location
 	}
 	return mvcc.deltaloc.GetLatestNodeLocked().BaseNode.DeltaLoc
 }
+func (n *ObjectMVCCHandle) GetLatestMVCCNode(blkOffset uint16) *catalog.MVCCNode[*catalog.MetadataMVCCNode] {
+	mvcc := n.TryGetDeleteChain(blkOffset)
+	if mvcc == nil {
+		return nil
+	}
+	return mvcc.deltaloc.GetLatestNodeLocked()
+}
 func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch, tnInsertBat *containers.Batch) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	n.RLock()
 	defer n.RUnlock()

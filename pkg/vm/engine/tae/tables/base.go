@@ -298,20 +298,26 @@ func (blk *baseBlock) loadPersistedDeletes(
 	)
 	return
 }
-func (blk *baseBlock) loadPersistedDeletesByTxn(
+func (blk *baseBlock) loadLatestPersistedDeletes(
 	ctx context.Context,
 	blkID uint16,
 	txn txnif.TxnReader,
 	mp *mpool.MPool,
-) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
+) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, visible bool, err error) {
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
 	}
-	location, deltalocCommitTS := mvcc.GetDeltaLocAndCommitTSByTxn(blkID, txn)
+	node := mvcc.GetLatestMVCCNode(blkID)
+	if node == nil{
+		return
+	}
+	location := node.BaseNode.DeltaLoc
 	if location.IsEmpty() {
 		return
 	}
+	deltalocCommitTS = node.End
+	visible = node.IsVisible(txn)
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	bat, persistedByCN, err = LoadPersistedDeletes(
 		ctx,
@@ -410,7 +416,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
-	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, err error) {
+	loadFn := func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, _ bool, err error) {
 		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
 		deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx, blkID, mp)
 		if deletes == nil || err != nil {
@@ -424,7 +430,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 				return
 			}
 		}
-		return deletes, persistedByCN, deltalocCommitTS, err
+		return deletes, persistedByCN, deltalocCommitTS, true, err
 	}
 	return blk.foreachPersistedDeletes(ctx, start, end, blkID, skipAbort, loadFn, loopOp, postOp, mp)
 }
@@ -439,9 +445,9 @@ func (blk *baseBlock) foreachPersistedDeletesVisibleByTxn(
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
-	loadFn := func() (deletes *containers.Batch, persistedByCN bool, commitTS types.TS, err error) {
+	loadFn := func() (deletes *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, err error) {
 		// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-		deletes, persistedByCN, commitTS, err = blk.loadPersistedDeletesByTxn(ctx, blkID, txn, mp)
+		deletes, persistedByCN, commitTS, visible, err = blk.loadLatestPersistedDeletes(ctx, blkID, txn, mp)
 		return
 	}
 	return blk.foreachPersistedDeletes(ctx, types.TS{}, txn.GetStartTS(), blkID, skipAbort, loadFn, loopOp, postOp, mp)
@@ -451,17 +457,20 @@ func (blk *baseBlock) foreachPersistedDeletes(
 	start, end types.TS,
 	blkID uint16,
 	skipAbort bool,
-	loadFn func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, err error),
+	loadFn func() (bat *containers.Batch, persistedByCN bool, commitTS types.TS, visible bool, err error),
 	loopOp func(int, *vector.Vector),
 	postOp func(*containers.Batch),
 	mp *mpool.MPool,
 ) (err error) {
 	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-	deletes, persistedByCN, deltalocCommitTS, err := loadFn()
+	deletes, persistedByCN, deltalocCommitTS, visible, err := loadFn()
 	if deletes == nil || err != nil {
 		return
 	}
 	if persistedByCN {
+		if !visible {
+			return
+		}
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
