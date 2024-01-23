@@ -54,6 +54,7 @@ type AggFuncExec interface {
 // indicate who implements the AggFuncExec interface.
 var (
 	_ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
+	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 )
 
 // AggFuncPrivate1 and AggFuncPrivate2 are the private struct for aggregation.

@@ -24,6 +24,10 @@ type multiAggTypeInfo struct {
 	retType  types.Type
 }
 
+func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
+	return info.argTypes, info.retType
+}
+
 type multiAggOptimizedInfo struct {
 	// receiveNull indicates whether the agg function receives null value.
 	// if it was false, the rows with any null value will be ignored.
@@ -51,7 +55,43 @@ type multiAggFuncExec2 struct {
 }
 
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	for i := range vectors {
+		exec.args[i].Prepare(vectors[i])
+		if err := exec.fill(groupIndex, i, row, 1); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	for i := range vectors {
+		exec.args[i].Prepare(vectors[i])
+		if err := exec.fill(groupIndex, i, 0, vectors[i].Length()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	// todo: need a quick deal to avoid many switches.
+	return nil
+}
+
+func (exec *multiAggFuncExec1[T]) SetPreparedResult(partialResult any, groupIndex int) {
+	panic("unimplemented SetPreparedResult for multiAggFuncExec1")
+}
+
+func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
+	for i, group := range exec.groups {
+		exec.ret.set(i, group.flush())
+	}
+	return exec.ret.flush(), nil
+}
+
+func (exec *multiAggFuncExec1[T]) Free() {
+	exec.ret.free()
 }
 
 // should prepare the aggArg before calling this function.
