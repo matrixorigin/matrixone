@@ -1001,8 +1001,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					if insertBatch[tid].insertBlocks[b].data.isABlock {
-					}
 					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
 					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
