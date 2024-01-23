@@ -2041,21 +2041,21 @@ func LoadBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
-	var ioVectors []*fileservice.IOVector
+	var releases []func()
 	defer func() {
-		for i := range ioVectors {
-			if ioVectors[i] != nil {
-				objectio.ReleaseIOVector(ioVectors[i])
+		for i := range releases {
+			if releases[i] != nil {
+				releases[i]()
 			}
 		}
 	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioVectors = make([]*fileservice.IOVector, 1)
-		ioResults[0], ioVectors[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		releases = make([]func(), 1)
+		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, ioVectors, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -2098,21 +2098,21 @@ func LoadCNSubBlkColumnsByMeta(
 	var err error
 	var ioResults []*batch.Batch
 	var bats []*batch.Batch
-	var ioVectors []*fileservice.IOVector
+	var releases []func()
 	defer func() {
-		for i := range ioVectors {
-			if ioVectors[i] != nil {
-				objectio.ReleaseIOVector(ioVectors[i])
+		for i := range releases {
+			if releases[i] != nil {
+				releases[i]()
 			}
 		}
 	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioVectors = make([]*fileservice.IOVector, 1)
-		ioResults[0], ioVectors[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		releases = make([]func(), 1)
+		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, ioVectors, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
+		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	}
 	if err != nil {
 		return nil, err
@@ -2146,17 +2146,17 @@ func LoadCNSubBlkColumnsByMetaWithId(
 		idxs[i] = uint16(i)
 	}
 	var ioResult *batch.Batch
-	var ioVectors *fileservice.IOVector
+	var release func()
 	defer func() {
-		if ioVectors != nil {
-			objectio.ReleaseIOVector(ioVectors)
+		if release != nil {
+			release()
 		}
 	}()
 	if version <= CheckpointVersion3 {
-		ioResult, ioVectors, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioResult, release, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResult, ioVectors, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
+		ioResult, release, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
 	}
 	if err != nil {
 		return nil, err

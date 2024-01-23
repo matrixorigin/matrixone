@@ -262,13 +262,13 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 			return err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
-		bats, ioVector, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
+		bats, closeCB, err := reader.LoadAllColumns(requestCtx, idxs, ses.GetMemPool())
 		if err != nil {
 			return err
 		}
 		defer func() {
-			if ioVector != nil {
-				objectio.ReleaseIOVector(ioVector)
+			if closeCB != nil {
+				closeCB()
 			}
 		}()
 		bat := bats[0]
@@ -533,11 +533,11 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bat, iovec, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
+			bat, release, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}
-			defer objectio.ReleaseIOVector(iovec)
+			defer release()
 			tmpBatch = bat
 
 			//step2.1: converts it into the csv string
@@ -590,7 +590,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	idxs := make([]uint16, 1)
 	idxs[0] = catalog.COLUMNS_IDX
 	// read meta's data
-	bats, ioVector, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
+	bats, closeCB, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, moerr.NewResultFileNotFound(ctx, makeResultMetaPath(account.GetTenant(), queryId))
@@ -598,8 +598,8 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 		return nil, err
 	}
 	defer func() {
-		if ioVector != nil {
-			objectio.ReleaseIOVector(ioVector)
+		if closeCB != nil {
+			closeCB()
 		}
 	}()
 	vec := bats[0].Vecs[0]

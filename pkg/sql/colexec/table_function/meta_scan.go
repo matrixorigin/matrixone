@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -69,13 +68,13 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		}
 	}
 	// read meta's data
-	bats, ioVector, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
+	bats, closeCB, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
 		return false, err
 	}
 	defer func() {
-		if ioVector != nil {
-			objectio.ReleaseIOVector(ioVector)
+		if closeCB != nil {
+			closeCB()
 		}
 	}()
 	rbat = batch.NewWithSize(len(bats[0].Vecs))
