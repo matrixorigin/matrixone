@@ -602,7 +602,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				continue
 			}
 
-			childObjRef, childTableDef := builder.compCtx.ResolveById(tableId)
+			var childObjRef *ObjectRef
+			var childTableDef *TableDef
+			if tableId == 0 {
+				childObjRef = delCtx.objRef
+				childTableDef = delCtx.tableDef
+			} else {
+				childObjRef, childTableDef = builder.compCtx.ResolveById(tableId)
+			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
 			childId2name := make(map[uint64]string)
@@ -638,7 +645,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
-				if fk.ForeignTbl == delCtx.tableDef.TblId {
+				if fk.ForeignTbl == 0 || fk.ForeignTbl == delCtx.tableDef.TblId {
 					// update stmt: update the columns do not contain ref key, skip
 					updateRefColumn := make(map[string]int32)
 					if isUpdate {
