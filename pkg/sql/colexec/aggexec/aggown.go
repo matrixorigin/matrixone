@@ -16,6 +16,8 @@ package aggexec
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
+// todo: the flush function should be changed to deliver a set function is suitable maybe.
+
 type singleAggPrivateStructure1[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	init()

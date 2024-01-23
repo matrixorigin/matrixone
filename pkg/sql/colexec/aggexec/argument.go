@@ -19,6 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+type aggArg interface {
+	Prepare(*vector.Vector)
+	Reset()
+}
+
 // aggFuncArg and aggFuncBytesArg were used to get value from input vector.
 type aggFuncArg[T types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[T]

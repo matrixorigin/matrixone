@@ -102,11 +102,11 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 		return nil
 	}
 
-	vs := vector.GenerateFunctionFixedTypeParameter[from](vec)
-	if vs.WithAnyNullValue() {
+	exec.arg.Prepare(vec)
+	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
-				v, null := vs.GetValue(i)
+				v, null := exec.arg.w.GetValue(i)
 				if null {
 					exec.groups[groupIndex].fillNull()
 				} else {
@@ -115,7 +115,7 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 			}
 		} else {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
-				v, null := vs.GetValue(i)
+				v, null := exec.arg.w.GetValue(i)
 				if !null {
 					exec.groups[groupIndex].fill(v)
 				}
@@ -125,7 +125,7 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 	}
 
 	for i, j := uint64(0), uint64(length); i < j; i++ {
-		v, _ := vs.GetValue(i)
+		v, _ := exec.arg.w.GetValue(i)
 		exec.groups[groupIndex].fill(v)
 	}
 	return nil
