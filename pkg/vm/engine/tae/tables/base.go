@@ -652,7 +652,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 		return
 	}
 	if !minTS.IsEmpty() && end.Greater(minTS) {
-		end = minTS.Prev()
+		end = minTS
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -662,6 +662,35 @@ func (blk *baseBlock) CollectDeleteInRange(
 		withAborted,
 		mp,
 	)
+	return
+}
+
+func (blk *baseBlock) TryCollectDeleteInRangeInMemory(
+	ctx context.Context,
+	start, end types.TS,
+	withAborted bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, err error) {
+	bat, persisted, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		return
+	}
+	if persisted.Greater(start) {
+		bat, err = blk.persistedCollectDeleteInRange(
+			ctx,
+			bat,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+	}
 	return
 }
 
