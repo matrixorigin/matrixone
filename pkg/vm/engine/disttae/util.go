@@ -1145,7 +1145,8 @@ func extractPKValueFromEqualExprs(
 	column := def.Cols[pkIdx]
 	name := column.Name
 	if pk.CompPkeyCol != nil {
-		for _, expr := range exprs {
+		if len(exprs) == 1 {
+			expr := exprs[0]
 			var packer *types.Packer
 			put := pool.Get(&packer)
 			defer put.Put()
@@ -1154,11 +1155,16 @@ func extractPKValueFromEqualExprs(
 			); canEval {
 				return v, isVec
 			}
+			return nil, false
+		} else {
+			// PXU TODO:
+			// we need to change the pushdown fiter exprs in
+			// the composite pk scenario.
+			val = extractCompositePKValueFromEqualExprs(
+				exprs, pk, proc, pool,
+			)
+			return
 		}
-		// val = extractCompositePKValueFromEqualExprs(
-		// 	exprs, pk, proc, pool,
-		// )
-		return nil, false
 	}
 
 	colType := types.T(column.Typ.Id)
