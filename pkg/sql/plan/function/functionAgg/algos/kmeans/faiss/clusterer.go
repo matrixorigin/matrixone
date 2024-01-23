@@ -42,11 +42,11 @@ type Faiss struct {
 
 var _ kmeans.Clusterer = (*Faiss)(nil)
 
-func NewFaiss(vectors [][]float64, clusterCnt int) kmeans.Clusterer {
+func NewFaiss(vectors [][]float64, clusterCnt int) (kmeans.Clusterer, error) {
 	return &Faiss{
 		data:       vecf64ToVecf32(vectors),
 		clusterCnt: clusterCnt,
-	}
+	}, nil
 }
 
 func (f *Faiss) InitCentroids() error {
