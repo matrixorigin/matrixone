@@ -194,8 +194,14 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 						zap.String("target", sid),
 						zap.Any("cns", cns),
 						zap.String("request", request.DebugString()))
+					return nil, err
 				}
 
+				getLogger().Info("update lock table bind",
+					zap.String("target", sid),
+					zap.Any("cns", cns),
+					zap.String("newBind", newBind.DebugString()),
+					zap.String("request", request.DebugString()))
 				c.service.handleBindChanged(newBind)
 			}
 		}
