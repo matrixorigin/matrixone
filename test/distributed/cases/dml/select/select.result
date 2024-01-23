@@ -469,7 +469,7 @@ SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TAB
 internal error: Invalid GROUP BY NULL
 use db1;
 drop table if exists t11;
-create table t11 (a int, b int, primary key a);
+create table t11 (a int, b int, primary key (a));
 insert into t11 (select *,* from generate_series(1, 50000, 1)g);
 select count(*) from t11 where a=20000;
 count(*)
