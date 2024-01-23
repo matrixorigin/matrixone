@@ -645,7 +645,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
-				if fk.ForeignTbl == 0 || fk.ForeignTbl == delCtx.tableDef.TblId {
+				case2 := fk.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
+				if fk.ForeignTbl == delCtx.tableDef.TblId || case2 {
 					// update stmt: update the columns do not contain ref key, skip
 					updateRefColumn := make(map[string]int32)
 					if isUpdate {
@@ -907,68 +908,70 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childProjectList,
 						}, bindCtx)
 
-						if isUpdate {
-							// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
-							joinProjection := childForJoinProject
-							joinProjection = append(joinProjection, updateChildColExpr...)
-							lastNodeId = builder.appendNode(&plan.Node{
-								NodeType:    plan.Node_JOIN,
-								Children:    []int32{lastNodeId, rightId},
-								JoinType:    plan.Node_INNER,
-								OnList:      joinConds,
-								ProjectList: joinProjection,
-							}, bindCtx)
-							lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
-							newSourceStep := builder.appendStep(lastNodeId)
+						if !case2 {
+							if isUpdate {
+								// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
+								joinProjection := childForJoinProject
+								joinProjection = append(joinProjection, updateChildColExpr...)
+								lastNodeId = builder.appendNode(&plan.Node{
+									NodeType:    plan.Node_JOIN,
+									Children:    []int32{lastNodeId, rightId},
+									JoinType:    plan.Node_INNER,
+									OnList:      joinConds,
+									ProjectList: joinProjection,
+								}, bindCtx)
+								lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
+								newSourceStep := builder.appendStep(lastNodeId)
 
-							upPlanCtx := getDmlPlanCtx()
-							upPlanCtx.objRef = childObjRef
-							upPlanCtx.tableDef = DeepCopyTableDef(childTableDef, true)
-							upPlanCtx.updateColLength = len(rightConds)
-							upPlanCtx.isMulti = false
-							upPlanCtx.rowIdPos = childRowIdPos
-							upPlanCtx.sourceStep = newSourceStep
-							upPlanCtx.beginIdx = 0
-							upPlanCtx.updateColPosMap = updateChildColPosMap
-							upPlanCtx.insertColPos = insertColPos
-							upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
-							upPlanCtx.isFkRecursionCall = true
-							upPlanCtx.updatePkCol = updatePk
+								upPlanCtx := getDmlPlanCtx()
+								upPlanCtx.objRef = childObjRef
+								upPlanCtx.tableDef = DeepCopyTableDef(childTableDef, true)
+								upPlanCtx.updateColLength = len(rightConds)
+								upPlanCtx.isMulti = false
+								upPlanCtx.rowIdPos = childRowIdPos
+								upPlanCtx.sourceStep = newSourceStep
+								upPlanCtx.beginIdx = 0
+								upPlanCtx.updateColPosMap = updateChildColPosMap
+								upPlanCtx.insertColPos = insertColPos
+								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+								upPlanCtx.isFkRecursionCall = true
+								upPlanCtx.updatePkCol = updatePk
 
-							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
-							putDmlPlanCtx(upPlanCtx)
-							if err != nil {
-								return err
-							}
-						} else {
-							// delete stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.*] -> sink   then + deletePlans
-							lastNodeId = builder.appendNode(&plan.Node{
-								NodeType:    plan.Node_JOIN,
-								Children:    []int32{lastNodeId, rightId},
-								JoinType:    plan.Node_INNER,
-								OnList:      joinConds,
-								ProjectList: childForJoinProject,
-							}, bindCtx)
-							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-							newSourceStep := builder.appendStep(lastNodeId)
+								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+								putDmlPlanCtx(upPlanCtx)
+								if err != nil {
+									return err
+								}
+							} else {
+								// delete stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.*] -> sink   then + deletePlans
+								lastNodeId = builder.appendNode(&plan.Node{
+									NodeType:    plan.Node_JOIN,
+									Children:    []int32{lastNodeId, rightId},
+									JoinType:    plan.Node_INNER,
+									OnList:      joinConds,
+									ProjectList: childForJoinProject,
+								}, bindCtx)
+								lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+								newSourceStep := builder.appendStep(lastNodeId)
 
-							//make deletePlans
-							allDelTableIDs := make(map[uint64]struct{})
-							allDelTableIDs[childTableDef.TblId] = struct{}{}
-							upPlanCtx := getDmlPlanCtx()
-							upPlanCtx.objRef = childObjRef
-							upPlanCtx.tableDef = childTableDef
-							upPlanCtx.updateColLength = 0
-							upPlanCtx.isMulti = false
-							upPlanCtx.rowIdPos = childRowIdPos
-							upPlanCtx.sourceStep = newSourceStep
-							upPlanCtx.beginIdx = 0
-							upPlanCtx.allDelTableIDs = allDelTableIDs
+								//make deletePlans
+								allDelTableIDs := make(map[uint64]struct{})
+								allDelTableIDs[childTableDef.TblId] = struct{}{}
+								upPlanCtx := getDmlPlanCtx()
+								upPlanCtx.objRef = childObjRef
+								upPlanCtx.tableDef = childTableDef
+								upPlanCtx.updateColLength = 0
+								upPlanCtx.isMulti = false
+								upPlanCtx.rowIdPos = childRowIdPos
+								upPlanCtx.sourceStep = newSourceStep
+								upPlanCtx.beginIdx = 0
+								upPlanCtx.allDelTableIDs = allDelTableIDs
 
-							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
-							putDmlPlanCtx(upPlanCtx)
-							if err != nil {
-								return err
+								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
+								putDmlPlanCtx(upPlanCtx)
+								if err != nil {
+									return err
+								}
 							}
 						}
 					}
