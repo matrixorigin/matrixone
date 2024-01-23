@@ -31,10 +31,12 @@ type Argument struct {
 	PreInsertCtx *plan.PreInsertUkCtx
 
 	ps []*types.Packer
-	buf      *batch.Batch
+
+	buf *batch.Batch
 
 	vm.OperatorBase
 }
+
 func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
 	return &arg.OperatorBase
 }
@@ -65,7 +67,6 @@ func (arg *Argument) Release() {
 		reuse.Free[Argument](arg, nil)
 	}
 }
-
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.buf != nil {

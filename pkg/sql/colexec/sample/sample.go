@@ -133,13 +133,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if bat == nil {
-<<<<<<< HEAD
 		result.Batch, lastErr = ctr.samplePool.Result(true)
-		anal.Output(result.Batch, arg.info.IsLast)
-=======
-		result.Batch, lastErr = ctr.samplePool.Output(true)
 		anal.Output(result.Batch, arg.GetIsLast())
->>>>>>> 2f3a4e55f (Save a few lines with OperatorBase.)
 		arg.buf = result.Batch
 		result.Status = vm.ExecStop
 		ctr.workDone = true
