@@ -243,7 +243,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 				upgrade.ReadyTenant += int32(len(tenants))
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
-					panic("BUG: invalid upgrade tenant")
+					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s", upgrade.String()))
 				}
 
 				getUpgradeLogger().Info("upgrade tenant ready count changed",
