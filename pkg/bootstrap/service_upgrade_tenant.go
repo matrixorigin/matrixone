@@ -183,6 +183,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 
 				hasUpgradeTenants = true
 				h := s.getVersionHandle(upgrade.ToVersion)
+				updated := int32(0)
 				for i, id := range tenants {
 					createVersion := createVersions[i]
 
@@ -222,6 +223,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.Int32("tenant", id),
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
+					updated++
 				}
 
 				if err := versions.UpdateUpgradeTenantTaskState(taskID, versions.Yes, txn); err != nil {
@@ -241,13 +243,18 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("upgrade", upgrade.String()))
 					return err
 				}
-				upgrade.ReadyTenant += int32(len(tenants))
+
+				upgrade.ReadyTenant += updated
 				if upgrade.TotalTenant < upgrade.ReadyTenant {
-					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s", upgrade.String()))
+					panic(fmt.Sprintf("BUG: invalid upgrade tenant, upgrade %s, updated %d", upgrade.String(), updated))
 				}
 
 				getUpgradeLogger().Info("upgrade tenant ready count changed",
 					zap.String("upgrade", upgrade.String()))
+
+				if upgrade.State == versions.StateReady {
+					return nil
+				}
 				return versions.UpdateVersionUpgradeTasks(upgrade, txn)
 			},
 			opts)
