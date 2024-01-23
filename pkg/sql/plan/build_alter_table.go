@@ -430,14 +430,30 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
 		fields := " FIELDS"
-		if param.Tail.Fields.EscapedBy != nil && param.Tail.Fields.EscapedBy.Value != byte(0) {
-			fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+		if param.Tail.Fields.Terminated != nil {
+			if param.Tail.Fields.Terminated.Value == "" {
+				fields += " TERMINATED BY \"\""
+			} else {
+				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+			}
 		}
-		if param.Tail.Fields.Terminated != nil && param.Tail.Fields.Terminated.Value != "" {
-			fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+		if param.Tail.Fields.EnclosedBy != nil {
+			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
+				fields += " ENCLOSED BY ''"
+			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
+				fields += " ENCLOSED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+			}
 		}
-		if param.Tail.Fields.EnclosedBy != nil && param.Tail.Fields.EnclosedBy.Value != byte(0) {
-			fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+		if param.Tail.Fields.EscapedBy != nil {
+			if param.Tail.Fields.EscapedBy.Value == byte(0) {
+				fields += " ESCAPED BY ''"
+			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
+				fields += " ESCAPED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+			}
 		}
 
 		line := " LINES"

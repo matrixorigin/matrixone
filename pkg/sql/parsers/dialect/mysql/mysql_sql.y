@@ -1411,9 +1411,6 @@ load_fields:
             Terminated: &tree.Terminated{
                 Value: "\t",
             },
-            EscapedBy:  &tree.EscapedBy{
-                Value: '\\',
-            },
             EnclosedBy: &tree.EnclosedBy{
                 Value: byte(0),
             },
