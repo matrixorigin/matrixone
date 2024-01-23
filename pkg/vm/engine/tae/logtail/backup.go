@@ -749,7 +749,6 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		}
 
-		logutil.Infof("isDeleteBatch1111 %v, isDeleteBatch is %v", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch)
 		if objectData.isDeleteBatch &&
 			objectData.data[0] != nil &&
 			objectData.data[0].blockType != objectio.SchemaTombstone {
@@ -825,19 +824,20 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				insertBatch[dataBlocks[0].tid].insertBlocks = append(insertBatch[dataBlocks[0].tid].insertBlocks, ib)
 			}
-
-			obj := objectData.obj
-			if insertObjBatch[obj.tid] == nil {
-				insertObjBatch[obj.tid] = &iObjects{
-					rowObjects: make([]*insertObjects, 0),
+			if objectData.obj != nil {
+				obj := objectData.obj
+				if insertObjBatch[obj.tid] == nil {
+					insertObjBatch[obj.tid] = &iObjects{
+						rowObjects: make([]*insertObjects, 0),
+					}
 				}
+				io := &insertObjects{
+					location: blockLocation,
+					apply:    false,
+					obj:      obj,
+				}
+				insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 			}
-			io := &insertObjects{
-				location: blockLocation,
-				apply:    false,
-				obj:      obj,
-			}
-			insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 		} else {
 			if objectData.isDeleteBatch && objectData.data[0] == nil {
 				logutil.Infof("isDeleteBatch2222 %v, isDeleteBatch is %v, objectData.obj is %d", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch, len(objectData.obj.data))
