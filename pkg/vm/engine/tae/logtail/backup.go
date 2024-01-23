@@ -188,6 +188,9 @@ func addBlockToObjectData(
 		}
 		(*objectsData)[name] = object
 	}
+	if (*objectsData)[name].data == nil {
+		(*objectsData)[name].data = make(map[uint16]*blockData)
+	}
 	if (*objectsData)[name].data[location.ID()] == nil {
 		(*objectsData)[name].data[location.ID()] = &blockData{
 			num:       location.ID(),
@@ -617,7 +620,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	objInfoCommit := objInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
 
 	for i := 0; i < objInfoData.Length(); i++ {
-		var stats *objectio.ObjectStats
+		stats := objectio.NewObjectStats()
 		stats.UnMarshal(objInfoStats.Get(i).([]byte))
 		isABlk := objInfoState.Get(i).(bool)
 		//createAt := objInfoCreate.Get(i).(types.TS)
@@ -644,7 +647,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
 
 	for i := 0; i < tnObjInfoData.Length(); i++ {
-		var stats *objectio.ObjectStats
+		stats := objectio.NewObjectStats()
 		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
 		isABlk := tnObjInfoState.Get(i).(bool)
 		//createAt := tnObjInfoCreate.Get(i).(types.TS)
@@ -656,8 +659,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 		}
 
-		if stats.Extent().End() == 0 {
-			continue
+		if stats.Extent().End() > 0 {
+			panic(any(fmt.Sprintf("extent end is not 0: %v, name is %v", stats.Extent().End(), stats.ObjectName().String())))
 		}
 		if !deleteAt.IsEmpty() {
 			panic(any(fmt.Sprintf("deleteAt is not empty: %v, name is %v", deleteAt.ToString(), stats.ObjectName().String())))
