@@ -3095,6 +3095,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if v.IsConstNull() {
 		w.class = CONSTANT
 		w.length = end - start
+		w.data = nil
 		return nil
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
