@@ -90,7 +90,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.batchRowCount == 0 {
+			if ctr.mp == nil {
 				if err := ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop

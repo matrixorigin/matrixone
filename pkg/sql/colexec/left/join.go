@@ -87,7 +87,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.bat = bat
 				ap.lastrow = 0
 			}
-			if ctr.batchRowCount == 0 {
+			if ctr.mp == nil {
 				if err := ctr.emptyProbe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
 					return result, err
 				}

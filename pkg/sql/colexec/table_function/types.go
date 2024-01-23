@@ -61,7 +61,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -120,7 +120,7 @@ type generateSeriesArg struct {
 	end          any
 	last         any
 	step         any
-	scale        int32 //used by handleDateTime
+	scale        int32 // used by handleDateTime
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

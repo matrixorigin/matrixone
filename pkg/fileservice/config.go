@@ -117,11 +117,13 @@ func newMinioFileService(
 	ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet,
 ) (FileService, error) {
 	cfg.S3.Name = cfg.Name
-	fs, err := NewS3FSOnMinio(
+	cfg.S3.IsMinio = true
+	fs, err := NewS3FS(
 		ctx,
 		cfg.S3,
 		cfg.Cache,
 		perfCounters,
+		false,
 		false,
 	)
 	if err != nil {
@@ -140,6 +142,7 @@ func newS3FileService(
 		cfg.S3,
 		cfg.Cache,
 		perfCounters,
+		false,
 		false,
 	)
 	if err != nil {
