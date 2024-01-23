@@ -15,9 +15,14 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
+const (
+	// GroupNotMatched is a constant for the BatchFill method.
+	// if the group is GroupNotMatched, the BatchFill method will ignore the row.
+	GroupNotMatched = 0
 )
 
 type AggFuncExec interface {
@@ -27,24 +32,29 @@ type AggFuncExec interface {
 	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
-	BatchFill(startIndex int, length int, groups []uint64, vectors []*vector.Vector) error
+	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
-	// FillPreparedResult fill the partial result to the aggregation.
-	// this can speed up the aggregation.
-	// todo: I add the groupIndex here but it seems useless.
-	FillPreparedResult(partialResult, groupIndex int) error
+	// SetPreparedResult add a partial result to speed up.
+	SetPreparedResult(partialResult any, groupIndex int)
 
 	// Flush return the aggregation result.
 	Flush() (*vector.Vector, error)
 
 	// Copy returns a copy of the aggregation.
 	// This copy will be allocated in the inputting memory pool.
-	Copy(mp *mpool.MPool) AggFuncExec
+	// todo: there is no place use this method now.
+	//  please refer to the old codes' Dup(pool) method.
+	//Copy(mp *mpool.MPool) AggFuncExec
 
 	// Free free the aggregation.
 	// This method will do the reset and reuse the aggregation if possible.
 	Free()
 }
+
+// indicate who implements the AggFuncExec interface.
+var (
+	_ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
+)
 
 // AggFuncPrivate1 and AggFuncPrivate2 are the private struct for aggregation.
 //

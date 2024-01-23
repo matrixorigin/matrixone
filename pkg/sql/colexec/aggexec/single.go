@@ -25,12 +25,22 @@ type singleAggTypeInfo struct {
 	retType types.Type
 }
 
-func (exec singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
-	return []types.Type{exec.argType}, exec.retType
+func (info singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
+	return []types.Type{info.argType}, info.retType
 }
 
 type singleAggOptimizedInfo struct {
 	receiveNull bool
+}
+
+type singleAggExecOptimized struct {
+	partialGroup  int
+	partialResult any
+}
+
+func (optimized *singleAggExecOptimized) SetPreparedResult(partialResult any, groupIndex int) {
+	optimized.partialGroup = groupIndex
+	optimized.partialResult = partialResult
 }
 
 // the executors of single column agg.
@@ -41,6 +51,7 @@ type singleAggOptimizedInfo struct {
 type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
 	singleAggOptimizedInfo
+	singleAggExecOptimized
 
 	arg    aggFuncArg[from]
 	ret    aggFuncResult[to]
@@ -49,6 +60,7 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
 	singleAggOptimizedInfo
+	singleAggExecOptimized
 
 	arg    aggFuncArg[from]
 	ret    aggFuncBytesResult
@@ -57,6 +69,7 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggTypeInfo
 	singleAggOptimizedInfo
+	singleAggExecOptimized
 
 	arg    aggFuncBytesArg
 	ret    aggFuncResult[to]
@@ -65,6 +78,7 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec4 struct {
 	singleAggTypeInfo
 	singleAggOptimizedInfo
+	singleAggExecOptimized
 
 	arg    aggFuncBytesArg
 	ret    aggFuncBytesResult
@@ -129,4 +143,87 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 		exec.groups[groupIndex].fill(v)
 	}
 	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			if exec.receiveNull {
+				for i := 0; i < len(groups); i++ {
+					if groups[i] != GroupNotMatched {
+						exec.groups[groups[i]-1].fillNull()
+					}
+				}
+			}
+			return nil
+		}
+
+		value := vector.MustFixedCol[from](vec)[0]
+		for i := 0; i < len(groups); i++ {
+			if groups[i] != GroupNotMatched {
+				exec.groups[groups[i]-1].fill(value)
+			}
+		}
+		return nil
+	}
+
+	exec.arg.Prepare(vec)
+	if exec.arg.w.WithAnyNullValue() {
+		if exec.receiveNull {
+			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+				if groups[idx] != GroupNotMatched {
+					v, null := exec.arg.w.GetValue(i)
+					if null {
+						exec.groups[groups[idx]-1].fillNull()
+					} else {
+						exec.groups[groups[idx]-1].fill(v)
+					}
+				}
+				idx++
+			}
+			return nil
+		}
+
+		for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+			if groups[idx] != GroupNotMatched {
+				v, null := exec.arg.w.GetValue(i)
+				if !null {
+					exec.groups[groups[idx]-1].fill(v)
+				}
+			}
+			idx++
+		}
+		return nil
+	}
+
+	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+		if groups[idx] != GroupNotMatched {
+			v, _ := exec.arg.w.GetValue(i)
+			exec.groups[groups[idx]-1].fill(v)
+		}
+		idx++
+	}
+	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
+	if exec.partialResult != nil {
+		exec.groups[exec.partialGroup].fill(exec.partialResult.(from))
+	}
+
+	for i, group := range exec.groups {
+		exec.ret.set(i, group.flush())
+	}
+
+	// if it was ordered window, should clean the nulls.
+
+	// if it was count, should clean the nulls.
+	// todo: this can be a method of the agg like 'nullsIfEmpty' or something.
+
+	return exec.ret.flush(), nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) Free() {
+	exec.ret.free()
 }
