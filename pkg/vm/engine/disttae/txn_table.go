@@ -1682,6 +1682,22 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	return nil
 }
 
+func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
+	if tbl.seqnums != nil && tbl.typs != nil {
+		return
+	}
+	n := len(tbl.tableDef.Cols) - 1
+	idxs := make([]uint16, 0, n)
+	typs := make([]types.Type, 0, n)
+	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+		col := tbl.tableDef.Cols[i]
+		idxs = append(idxs, uint16(col.Seqnum))
+		typs = append(typs, vector.ProtoTypeToType(col.Typ))
+	}
+	tbl.seqnums = idxs
+	tbl.typs = typs
+}
+
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
@@ -1692,18 +1708,7 @@ func (tbl *txnTable) compaction(
 	if err != nil {
 		return nil, nil, err
 	}
-	if tbl.seqnums == nil {
-		n := len(tbl.tableDef.Cols) - 1
-		idxs := make([]uint16, 0, n)
-		typs := make([]types.Type, 0, n)
-		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
-			col := tbl.tableDef.Cols[i]
-			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
-		}
-		tbl.seqnums = idxs
-		tbl.typs = typs
-	}
+	tbl.ensureSeqnumsAndTypesExpectRowid()
 	s3writer.SetSeqnums(tbl.seqnums)
 
 	for blkmetaloc, deletes := range compactedBlks {
@@ -2552,3 +2557,29 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
+
+// func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) error {
+// 	snapshot := tbl.db.txn.op.SnapshotTS()
+// 	proc := tbl.proc.Load()
+// 	state, err := tbl.getPartitionState()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	var sortkeyPos int
+// 	var sortkeyIsPK bool
+// 	if tbl.primaryIdx > 0 {
+// 		if tbl.clusterByIdx < 0 {
+// 			sortkeyPos = tbl.primaryIdx
+// 			sortkeyIsPK = true
+// 		} else {
+// 			panic("nuts")
+// 		}
+// 	} else if tbl.clusterByIdx > 0 {
+// 		sortkeyPos = tbl.clusterByIdx
+// 		sortkeyIsPK = false
+// 	}
+
+// 	tbl.ensureSeqnumsAndTypesExpectRowid()
+
+// 	return nil
+// }
