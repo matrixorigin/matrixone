@@ -897,7 +897,7 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
-	if tbl.primaryIdx == -1 {
+	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
 	}
