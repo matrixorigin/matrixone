@@ -117,7 +117,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -169,9 +169,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 type ParseLineHandler struct {
 	csvReader *csvparser.CSVParser
-	//batch
+	// batch
 	batchSize int
-	//mo csv
+	// mo csv
 	moCsvLineArray [][]csvparser.Field
 }
 

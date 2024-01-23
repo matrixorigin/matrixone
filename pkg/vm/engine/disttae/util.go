@@ -361,45 +361,53 @@ func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
 	return
 }
 
+// return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
 	mustOne bool,
 	proc *process.Process,
-) (bool, bool, any) {
+) (bool, bool, bool, any) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
-		return false, false, nil
+		return false, false, false, nil
 	}
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
-			return false, true, nil
+			return false, true, false, nil
 		}
 		canEval, val := evalLiteralExpr(exprImpl, oid)
 		if canEval {
-			return true, false, val
+			return true, false, false, val
 		} else {
-			return false, false, nil
+			return false, false, false, nil
 		}
 
-		// case *plan.Expr_Vec:
-		// if mustOne {
-		// 	return false, false, nil
-		// }
-		// vec := vector.NewVec(types.T_any.ToType())
-		// _ = vec.UnmarshalBinary(exprImpl.Vec.Data)
-		// return true, false, vec
+	case *plan.Expr_Vec:
+		// TODO: extract one from vector later
+		if mustOne {
+			return false, false, false, nil
+		}
+		return true, false, true, exprImpl.Vec.Data
 
-		// case *plan.Expr_List:
-		// 	if mustOne {
-		// 		return false, false, nil
-		// 	}
+	case *plan.Expr_List:
+		// TODO: extract one from vector later
+		if mustOne {
+			return false, false, false, nil
+		}
+		canEval, vec, put := evalExprListToVec(oid, exprImpl, proc)
+		if !canEval || vec == nil || vec.Length() == 0 {
+			return false, false, false, nil
+		}
+		defer put()
+		data, _ := vec.MarshalBinary()
+		return true, false, true, data
 	}
 
-	return false, false, nil
+	return false, false, false, nil
 }
 
 func evalExprListToVec(
@@ -409,7 +417,10 @@ func evalExprListToVec(
 		return false, nil, nil
 	}
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
-	if !canEval || vec == nil {
+	if !canEval {
+		if vec != nil {
+			proc.PutVector(vec)
+		}
 		return false, nil, nil
 	}
 	put = func() {
@@ -871,19 +882,26 @@ func extractPKValueFromEqualExprs(
 	pkIdx int,
 	proc *process.Process,
 	pool *fileservice.Pool[*types.Packer],
-) (val []byte) {
+) (val []byte, isVec bool) {
 	pk := def.Pkey
 	if pk.CompPkeyCol != nil {
-		return extractCompositePKValueFromEqualExprs(
+		val = extractCompositePKValueFromEqualExprs(
 			exprs, pk, proc, pool,
 		)
+		return
 	}
+	var canEval bool
 	column := def.Cols[pkIdx]
 	name := column.Name
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		if ok, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
-			val = types.EncodeValue(v, colType)
+		var v any
+		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, false, proc); canEval {
+			if isVec {
+				val = v.([]byte)
+			} else {
+				val = types.EncodeValue(v, colType)
+			}
 			break
 		}
 	}
@@ -941,7 +959,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.Blo
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *objectio.BlockInfo) bool,
+	onBlock func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -949,9 +967,15 @@ func ForeachBlkInObjStatsList(
 
 	for idx := 0; idx < objCnt && !stop; idx++ {
 		iter := NewStatsBlkIter(&objects[idx], dataMeta)
+		pos := uint32(0)
 		for iter.Next() {
 			blk := iter.Entry()
-			if !onBlock(blk) {
+			var meta objectio.BlockObject
+			if !dataMeta.IsEmpty() {
+				meta = dataMeta.GetBlockMeta(pos)
+			}
+			pos++
+			if !onBlock(blk, meta) {
 				stop = true
 				break
 			}

@@ -202,7 +202,6 @@ drop database db2;
 internal error: CREATE/DROP of database is not supported in transactions
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 execute s1 using @a;
 col1    col2
 2    b
