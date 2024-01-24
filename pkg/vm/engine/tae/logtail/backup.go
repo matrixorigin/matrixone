@@ -155,6 +155,7 @@ func addObjectToObjectData(
 				(*objectsData)[name].obj.infoRow = []int{row}
 			}
 		} else {
+			logutil.Infof("addObjectToObjectData1 isDelete: %s, %d ,%v", name, row, isDelete)
 			(*objectsData)[name].obj.infoTNRow = []int{row}
 		}
 		return
@@ -168,6 +169,7 @@ func addObjectToObjectData(
 			(*objectsData)[name].obj.infoRow = append((*objectsData)[name].obj.infoRow, row)
 		}
 	} else {
+		logutil.Infof("addObjectToObjectData3 isDelete: %s, %d ,%v", name, row, isDelete)
 		(*objectsData)[name].obj.infoTNRow = append((*objectsData)[name].obj.infoTNRow, row)
 	}
 
@@ -916,8 +918,9 @@ func ReWriteCheckpointAndBlockFromKey(
 							rowObjects: make([]*insertObjects, 0),
 						}
 					}
-					logutil.Infof("GetObjectStats bf is %v", obj.stats.String())
+					logutil.Infof("GetObjectStats bf is %v, infoTNRow obj is %v", obj.stats.String(), obj.infoTNRow)
 					obj.stats = &writer.GetObjectStats()[objectio.SchemaData]
+					objectio.SetObjectStatsObjectName(obj.stats, blockLocation.Name())
 					logutil.Infof("GetObjectStats is %v", obj.stats.String())
 					io := &insertObjects{
 						location: blockLocation,
