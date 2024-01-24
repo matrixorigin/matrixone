@@ -859,9 +859,6 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				insertBatch[dataBlocks[0].tid].insertBlocks = append(insertBatch[dataBlocks[0].tid].insertBlocks, ib)
 
-				if objectData.obj == nil {
-
-				}
 			}
 			if objectData.obj != nil {
 				obj := objectData.obj
@@ -1009,22 +1006,26 @@ func ReWriteCheckpointAndBlockFromKey(
 						continue
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
-					insertBatch[tid].insertBlocks[b].apply = true
-					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
 
-					row := blkMeta.Vecs[0].Length() - 1
-					if !blk.location.IsEmpty() {
-						sort := true
-						if insertBatch[tid].insertBlocks[b].data != nil &&
-							insertBatch[tid].insertBlocks[b].data.isABlock &&
-							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-							sort = false
+					} else {
+						insertBatch[tid].insertBlocks[b].apply = true
+						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+
+						row := blkMeta.Vecs[0].Length() - 1
+						if !blk.location.IsEmpty() {
+							sort := true
+							if insertBatch[tid].insertBlocks[b].data != nil &&
+								insertBatch[tid].insertBlocks[b].data.isABlock &&
+								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+								sort = false
+							}
+							updateBlockMeta(blkMeta, blkMetaTxn, row,
+								insertBatch[tid].insertBlocks[b].blockId,
+								insertBatch[tid].insertBlocks[b].location,
+								sort)
 						}
-						updateBlockMeta(blkMeta, blkMetaTxn, row,
-							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location,
-							sort)
 					}
 				}
 			}
@@ -1038,20 +1039,24 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
-					i := blkMeta.Vecs[0].Length() - 1
-					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
-						sort := true
-						if insertBatch[tid].insertBlocks[b].data != nil &&
-							insertBatch[tid].insertBlocks[b].data.isABlock &&
-							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-							sort = false
+					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
+
+					} else {
+						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+						i := blkMeta.Vecs[0].Length() - 1
+						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
+							sort := true
+							if insertBatch[tid].insertBlocks[b].data != nil &&
+								insertBatch[tid].insertBlocks[b].data.isABlock &&
+								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+								sort = false
+							}
+							updateBlockMeta(blkMeta, blkMetaTxn, i,
+								insertBatch[tid].insertBlocks[b].blockId,
+								insertBatch[tid].insertBlocks[b].location,
+								sort)
 						}
-						updateBlockMeta(blkMeta, blkMetaTxn, i,
-							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location,
-							sort)
 					}
 				}
 			}
