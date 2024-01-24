@@ -373,24 +373,36 @@ type Fields struct {
 func (node *Fields) Format(ctx *FmtCtx) {
 	ctx.WriteString("fields")
 	prefix := ""
-	if node.Terminated != nil && node.Terminated.Value != "" {
+	if node.Terminated != nil {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteStringQuote(node.Terminated.Value)
+		if node.Terminated.Value == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(node.Terminated.Value)
+		}
 		prefix = " "
 	}
 	if node.Optionally {
 		ctx.WriteString(prefix)
 		ctx.WriteString("optionally enclosed by ")
-		ctx.WriteStringQuote(string(node.EnclosedBy.Value))
+		if node.EnclosedBy.Value == 0 {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(string(node.EnclosedBy.Value))
+		}
 	} else if node.EnclosedBy != nil && node.EnclosedBy.Value != 0 {
 		ctx.WriteString(prefix)
 		ctx.WriteString("enclosed by ")
 		ctx.WriteStringQuote(string(node.EnclosedBy.Value))
 	}
-	if node.EscapedBy != nil && node.EscapedBy.Value != 0 {
+	if node.EscapedBy != nil {
 		ctx.WriteString(prefix)
 		ctx.WriteString("escaped by ")
-		ctx.WriteStringQuote(string(node.EscapedBy.Value))
+		if node.EscapedBy.Value == 0 {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(string(node.EscapedBy.Value))
+		}
 	}
 }
 
@@ -420,9 +432,13 @@ func (node *Lines) Format(ctx *FmtCtx) {
 		ctx.WriteString(" starting by ")
 		ctx.WriteStringQuote(node.StartingBy)
 	}
-	if node.TerminatedBy != nil && node.TerminatedBy.Value != "" {
+	if node.TerminatedBy != nil {
 		ctx.WriteString(" terminated by ")
-		ctx.WriteStringQuote(node.TerminatedBy.Value)
+		if node.TerminatedBy.Value == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteStringQuote(node.TerminatedBy.Value)
+		}
 	}
 }
 
