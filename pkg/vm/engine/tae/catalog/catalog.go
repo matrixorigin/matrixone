@@ -572,7 +572,7 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, dataFa
 		if !state {
 			entryState = ES_NotAppendable
 		}
-		logutil.Infof("replay object %d-%d-%v", dbid, tid, sid.String())
+		logutil.Infof("replay object %d-%d-%v, row is %d", dbid, tid, sid.String(), i)
 		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
 	}
 }
