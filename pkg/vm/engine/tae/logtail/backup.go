@@ -465,6 +465,7 @@ func LoadCheckpointEntriesFromKey(
 		}
 
 		locations = append(locations, objectStats.ObjectName())
+		logutil.Infof("ObjectInfoIDX is %v", objectStats.ObjectName().String())
 		if !deletedAt.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[objectStats.ObjectName().String()] {
@@ -497,6 +498,7 @@ func LoadCheckpointEntriesFromKey(
 			panic(fmt.Sprintf("block %v deltaLoc is empty", metaLoc.String()))
 		}
 		locations = append(locations, deltaLoc.Name())
+		logutil.Infof("BLKMetaInsertIDX is %v", deltaLoc.Name().String())
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		metaLoc := objectio.Location(
@@ -518,6 +520,7 @@ func LoadCheckpointEntriesFromKey(
 			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
 		}
 		locations = append(locations, deltaLoc.Name())
+		logutil.Infof("BLKCNMetaInsertIDX is %v", deltaLoc.Name().String())
 	}
 	return locations, data, nil
 }
@@ -820,6 +823,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if err != nil {
 					panic("sync error")
 				}
+				logutil.Infof("files is %v", name.String())
 				files = append(files, name.String())
 				blockLocation = objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 				if insertBatch[dataBlocks[0].tid] == nil {
@@ -898,6 +902,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						panic("sync error")
 					}
 					files = append(files, name.String())
+					logutil.Infof("files11 is %v", name.String())
 					blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 					obj := objectData.obj
 					if insertObjBatch[obj.tid] == nil {
