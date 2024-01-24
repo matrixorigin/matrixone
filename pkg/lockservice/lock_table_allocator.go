@@ -113,11 +113,9 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 		current, ok := l.mu.lockTables[b.Table]
 		if !ok ||
 			current.Changed(b) {
-			if l.logger.Enabled(zap.DebugLevel) {
-				l.logger.Debug("table and service bind changed",
-					zap.String("current", current.DebugString()),
-					zap.String("received", b.DebugString()))
-			}
+			l.logger.Info("table and service bind changed",
+				zap.String("current", current.DebugString()),
+				zap.String("received", b.DebugString()))
 			invalid = append(invalid, b.Table)
 		}
 	}
@@ -146,7 +144,7 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	}
 	// service need deleted, because this service may never restart
 	delete(l.mu.services, b.serviceID)
-	l.logger.Debug("lock service disabled",
+	l.logger.Info("service removed",
 		zap.String("service", b.serviceID))
 }
 
@@ -181,11 +179,6 @@ func (l *lockTableAllocator) registerService(
 	}
 	b = newServiceBinds(serviceID, l.logger.With(zap.String("lockservice", serviceID)))
 	l.mu.services[serviceID] = b
-
-	if l.logger.Enabled(zap.DebugLevel) {
-		l.logger.Debug("lock service registered",
-			zap.String("service", serviceID))
-	}
 	return b
 }
 
@@ -222,6 +215,11 @@ func (l *lockTableAllocator) tryRebindLocked(
 	old.Version++
 	old.Valid = true
 	l.mu.lockTables[tableID] = old
+
+	l.logger.Info("bind changed",
+		zap.Uint64("table", tableID),
+		zap.Uint64("version", old.Version),
+		zap.String("service", binds.serviceID))
 	return old
 }
 
@@ -241,6 +239,9 @@ func (l *lockTableAllocator) createBindLocked(
 		Valid:     true,
 	}
 	l.mu.lockTables[tableID] = b
+	l.logger.Info("bind created",
+		zap.Uint64("table", tableID),
+		zap.String("service", binds.serviceID))
 	return b
 }
 
@@ -254,8 +255,11 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 			return
 		case <-timer.C:
 			timeoutBinds := l.getTimeoutBinds(time.Now())
-			l.logger.Debug("get timeout services",
-				zap.Int("count", len(timeoutBinds)))
+			if len(timeoutBinds) > 0 {
+				l.logger.Info("get timeout services",
+					zap.Duration("timeout", l.keepBindTimeout),
+					zap.Int("count", len(timeoutBinds)))
+			}
 			for _, b := range timeoutBinds {
 				b.disable()
 				l.disableTableBinds(b)
@@ -305,8 +309,6 @@ func (b *serviceBinds) bind(tableID uint64) bool {
 		return false
 	}
 	b.tables[tableID] = struct{}{}
-	b.logger.Debug("table binded",
-		zap.Uint64("table", tableID))
 	return true
 }
 
@@ -323,7 +325,9 @@ func (b *serviceBinds) disable() {
 	b.Lock()
 	defer b.Unlock()
 	b.disabled = true
-	b.logger.Debug("lock service binds disabled")
+	b.logger.Info("bind disabled",
+		zap.Int("tables", len(b.tables)),
+		zap.String("service", b.serviceID))
 }
 
 func (l *lockTableAllocator) initServer(cfg morpc.Config) {
