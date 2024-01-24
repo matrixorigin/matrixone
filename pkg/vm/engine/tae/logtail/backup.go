@@ -1010,26 +1010,26 @@ func ReWriteCheckpointAndBlockFromKey(
 						continue
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
-					/*if insertBatch[tid].insertBlocks[b].data == nil {
+					if insertBatch[tid].insertBlocks[b].data == nil {
 
-					} else {*/
-					insertBatch[tid].insertBlocks[b].apply = true
-					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+					} else {
+						insertBatch[tid].insertBlocks[b].apply = true
+						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
-					row := blkMeta.Vecs[0].Length() - 1
-					if !blk.location.IsEmpty() {
-						sort := true
-						if insertBatch[tid].insertBlocks[b].data != nil &&
-							insertBatch[tid].insertBlocks[b].data.isABlock &&
-							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-							sort = false
+						row := blkMeta.Vecs[0].Length() - 1
+						if !blk.location.IsEmpty() {
+							sort := true
+							if insertBatch[tid].insertBlocks[b].data != nil &&
+								insertBatch[tid].insertBlocks[b].data.isABlock &&
+								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+								sort = false
+							}
+							updateBlockMeta(blkMeta, blkMetaTxn, row,
+								insertBatch[tid].insertBlocks[b].blockId,
+								insertBatch[tid].insertBlocks[b].location,
+								sort)
 						}
-						updateBlockMeta(blkMeta, blkMetaTxn, row,
-							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location,
-							sort)
-						//}
 					}
 				}
 			}
@@ -1043,7 +1043,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
+					if insertBatch[tid].insertBlocks[b].data == nil {
 
 					} else {
 						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
@@ -1126,6 +1126,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if !insertObjBatch[tid].rowObjects[i].location.IsEmpty() {
 					obj := insertObjBatch[tid].rowObjects[i].obj
 					objectio.SetObjectStatsExtent(obj.stats, insertObjBatch[tid].rowObjects[i].location.Extent())
+					objectio.SetObjectStatsObjectName(obj.stats, insertObjBatch[tid].rowObjects[i].location.Name())
 					if len(obj.infoRow) > 0 {
 						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
 					}
