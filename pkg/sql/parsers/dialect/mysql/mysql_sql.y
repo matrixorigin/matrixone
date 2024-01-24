@@ -3172,8 +3172,15 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        // ifExists Users Role MiscOpt CommentOrAttribute
-        $$ = tree.NewAlterUser($3, $4, $5, $6, $7)
+        // Create temporary variables with meaningful names
+        ifExists := $3
+        users := $4
+        role := $5
+        miscOpt := $6
+        commentOrAttribute := $7
+
+        // Use the temporary variables to call the function
+        $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
 
 default_role_opt:

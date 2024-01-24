@@ -23,157 +23,157 @@ import (
 func init() {
 	reuse.CreatePool[AlterUser](
 		func() *AlterUser { return &AlterUser{} },
-		func( a *AlterUser) { a.reset() },
+		func(a *AlterUser) { a.reset() },
 		reuse.DefaultOptions[AlterUser]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterAccountAuthOption](
 		func() *AlterAccountAuthOption { return &AlterAccountAuthOption{} },
-		func( a *AlterAccountAuthOption) { a.reset() },
+		func(a *AlterAccountAuthOption) { a.reset() },
 		reuse.DefaultOptions[AlterAccountAuthOption]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterAccount](
 		func() *AlterAccount { return &AlterAccount{} },
-		func( a *AlterAccount) { a.reset() },
+		func(a *AlterAccount) { a.reset() },
 		reuse.DefaultOptions[AlterAccount]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterView](
 		func() *AlterView { return &AlterView{} },
-		func( a *AlterView) { a.reset() },
+		func(a *AlterView) { a.reset() },
 		reuse.DefaultOptions[AlterView]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterDataBaseConfig](
 		func() *AlterDataBaseConfig { return &AlterDataBaseConfig{} },
-		func( a *AlterDataBaseConfig) { a.reset() },
+		func(a *AlterDataBaseConfig) { a.reset() },
 		reuse.DefaultOptions[AlterDataBaseConfig]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTable](
 		func() *AlterTable { return &AlterTable{} },
-		func( a *AlterTable) { a.reset() },
+		func(a *AlterTable) { a.reset() },
 		reuse.DefaultOptions[AlterTable]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterOptionAlterIndex](
 		func() *AlterOptionAlterIndex { return &AlterOptionAlterIndex{} },
-		func( a *AlterOptionAlterIndex) { a.reset() },
+		func(a *AlterOptionAlterIndex) { a.reset() },
 		reuse.DefaultOptions[AlterOptionAlterIndex]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterOptionAlterReIndex](
 		func() *AlterOptionAlterReIndex { return &AlterOptionAlterReIndex{} },
-		func( a *AlterOptionAlterReIndex) { a.reset() },
+		func(a *AlterOptionAlterReIndex) { a.reset() },
 		reuse.DefaultOptions[AlterOptionAlterReIndex]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterOptionAlterCheck](
 		func() *AlterOptionAlterCheck { return &AlterOptionAlterCheck{} },
-		func( a *AlterOptionAlterCheck) { a.reset() },
+		func(a *AlterOptionAlterCheck) { a.reset() },
 		reuse.DefaultOptions[AlterOptionAlterCheck]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterOptionAdd](
 		func() *AlterOptionAdd { return &AlterOptionAdd{} },
-		func( a *AlterOptionAdd) { a.reset() },
+		func(a *AlterOptionAdd) { a.reset() },
 		reuse.DefaultOptions[AlterOptionAdd]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterOptionDrop](
 		func() *AlterOptionDrop { return &AlterOptionDrop{} },
-		func( a *AlterOptionDrop) { a.reset() },
+		func(a *AlterOptionDrop) { a.reset() },
 		reuse.DefaultOptions[AlterOptionDrop]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableName](
 		func() *AlterTableName { return &AlterTableName{} },
-		func( a *AlterTableName) { a.reset() },
+		func(a *AlterTableName) { a.reset() },
 		reuse.DefaultOptions[AlterTableName]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterAddCol](
 		func() *AlterAddCol { return &AlterAddCol{} },
-		func( a *AlterAddCol) { a.reset() },
+		func(a *AlterAddCol) { a.reset() },
 		reuse.DefaultOptions[AlterAddCol]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterPublication](
 		func() *AlterPublication { return &AlterPublication{} },
-		func( a *AlterPublication) { a.reset() },
+		func(a *AlterPublication) { a.reset() },
 		reuse.DefaultOptions[AlterPublication]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableModifyColumnClause](
 		func() *AlterTableModifyColumnClause { return &AlterTableModifyColumnClause{} },
-		func( a *AlterTableModifyColumnClause) { a.reset() },
+		func(a *AlterTableModifyColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableModifyColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableChangeColumnClause](
 		func() *AlterTableChangeColumnClause { return &AlterTableChangeColumnClause{} },
-		func( a *AlterTableChangeColumnClause) { a.reset() },
+		func(a *AlterTableChangeColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableChangeColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableAddColumnClause](
 		func() *AlterTableAddColumnClause { return &AlterTableAddColumnClause{} },
-		func( a *AlterTableAddColumnClause) { a.reset() },
+		func(a *AlterTableAddColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableAddColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableRenameColumnClause](
 		func() *AlterTableRenameColumnClause { return &AlterTableRenameColumnClause{} },
-		func( a *AlterTableRenameColumnClause) { a.reset() },
+		func(a *AlterTableRenameColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableRenameColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableAlterColumnClause](
 		func() *AlterTableAlterColumnClause { return &AlterTableAlterColumnClause{} },
-		func( a *AlterTableAlterColumnClause) { a.reset() },
+		func(a *AlterTableAlterColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableAlterColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterTableOrderByColumnClause](
 		func() *AlterTableOrderByColumnClause { return &AlterTableOrderByColumnClause{} },
-		func( a *AlterTableOrderByColumnClause) { a.reset() },
+		func(a *AlterTableOrderByColumnClause) { a.reset() },
 		reuse.DefaultOptions[AlterTableOrderByColumnClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterColumnOrder](
 		func() *AlterColumnOrder { return &AlterColumnOrder{} },
-		func( a *AlterColumnOrder) { a.reset() },
+		func(a *AlterColumnOrder) { a.reset() },
 		reuse.DefaultOptions[AlterColumnOrder]().
 			WithEnableChecker())
 
 	reuse.CreatePool[ColumnPosition](
 		func() *ColumnPosition { return &ColumnPosition{} },
-		func( c *ColumnPosition) { c.reset() },
+		func(c *ColumnPosition) { c.reset() },
 		reuse.DefaultOptions[ColumnPosition]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterPartitionRedefinePartitionClause](
 		func() *AlterPartitionRedefinePartitionClause { return &AlterPartitionRedefinePartitionClause{} },
-		func( a *AlterPartitionRedefinePartitionClause) { a.reset() },
+		func(a *AlterPartitionRedefinePartitionClause) { a.reset() },
 		reuse.DefaultOptions[AlterPartitionRedefinePartitionClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterPartitionAddPartitionClause](
 		func() *AlterPartitionAddPartitionClause { return &AlterPartitionAddPartitionClause{} },
-		func( a *AlterPartitionAddPartitionClause) { a.reset() },
+		func(a *AlterPartitionAddPartitionClause) { a.reset() },
 		reuse.DefaultOptions[AlterPartitionAddPartitionClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterPartitionDropPartitionClause](
 		func() *AlterPartitionDropPartitionClause { return &AlterPartitionDropPartitionClause{} },
-		func( a *AlterPartitionDropPartitionClause) { a.reset() },
+		func(a *AlterPartitionDropPartitionClause) { a.reset() },
 		reuse.DefaultOptions[AlterPartitionDropPartitionClause]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterPartitionTruncatePartitionClause](
 		func() *AlterPartitionTruncatePartitionClause { return &AlterPartitionTruncatePartitionClause{} },
-		func( a *AlterPartitionTruncatePartitionClause) { a.reset() },
+		func(a *AlterPartitionTruncatePartitionClause) { a.reset() },
 		reuse.DefaultOptions[AlterPartitionTruncatePartitionClause]().
 			WithEnableChecker())
 
@@ -188,7 +188,6 @@ type AlterUser struct {
 	// comment or attribute
 	CommentOrAttribute AccountCommentOrAttribute
 }
-
 
 func (node *AlterUser) Free() {
 	reuse.Free[AlterUser](node, nil)
@@ -219,6 +218,19 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 	node.CommentOrAttribute.Format(ctx)
 }
 
+func (node AlterUser) TypeName() string { return "tree.AlterUser" }
+
+func (node *AlterUser) reset() {
+	// if node.Users != nil {
+	// 	for _, item := range node.Users {
+	// 		reuse.Free[User](item, nil)
+	// 	}
+	// }
+	// if node.Role != nil {
+	// 	reuse.Free[Role](node.Role, nil)
+	// }
+}
+
 func (node *AlterUser) GetStatementType() string { return "Alter User" }
 func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
 
@@ -229,7 +241,6 @@ func NewAlterUser(ifExists bool, users []*User, role *Role, miscOpt UserMiscOpti
 	alter.Role = role
 	alter.MiscOpt = miscOpt
 	alter.CommentOrAttribute = commentOrAttribute
-
 	return alter
 }
 
@@ -238,6 +249,14 @@ type AlterAccountAuthOption struct {
 	Equal          string
 	AdminName      string
 	IdentifiedType AccountIdentified
+}
+
+func NewAlterAccountAuthOption(exist bool, equal, name string) *AlterAccountAuthOption {
+	a := reuse.Alloc[AlterAccountAuthOption](nil)
+	a.Exist = exist
+	a.Equal = equal
+	a.AdminName = name
+	return a
 }
 
 func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
@@ -253,6 +272,11 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption" }
+
+func (node *AlterAccountAuthOption) reset() {
+}
+
 type AlterAccount struct {
 	statementImpl
 	IfExists   bool
@@ -262,6 +286,16 @@ type AlterAccount struct {
 	StatusOption AccountStatus
 	//comment or not
 	Comment AccountComment
+}
+
+func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt AccountStatus, c AccountComment) *AlterAccount {
+	a := reuse.Alloc[AlterAccount](nil)
+	a.IfExists = exist
+	a.Name = name
+	a.AuthOption = aopt
+	a.StatusOption = sopt
+	a.Comment = c
+	return a
 }
 
 func (ca *AlterAccount) Format(ctx *FmtCtx) {
@@ -278,12 +312,26 @@ func (ca *AlterAccount) Format(ctx *FmtCtx) {
 func (ca *AlterAccount) GetStatementType() string { return "Alter Account" }
 func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 
+func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
+
+func (node *AlterAccount) reset() {
+}
+
 type AlterView struct {
 	statementImpl
 	IfExists bool
 	Name     *TableName
 	ColNames IdentifierList
 	AsSource *Select
+}
+
+func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select) *AlterView {
+	a := reuse.Alloc[AlterView](nil)
+	a.IfExists = exist
+	a.Name = name
+	a.ColNames = colNames
+	a.AsSource = asSource
+	return a
 }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
@@ -308,13 +356,32 @@ func (node *AlterView) Format(ctx *FmtCtx) {
 func (node *AlterView) GetStatementType() string { return "Alter View" }
 func (node *AlterView) GetQueryType() string     { return QueryTypeDDL }
 
-// alter configuration for mo_mysql_compatibility_mode
+func (node AlterView) TypeName() string { return "tree.AlterView" }
+
+func (node *AlterView) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[TableName](node.Name, nil)
+	// }
+	// if node.AsSource != nil {
+	// 	reuse.Free[Select](node.AsSource, nil)
+	// }
+}
+
 type AlterDataBaseConfig struct {
 	statementImpl
 	AccountName    string
 	DbName         string
 	IsAccountLevel bool
 	UpdateConfig   string
+}
+
+func NewAlterDataBaseConfig(accountName, dbName string, isAccountLevel bool, updateConfig string) *AlterDataBaseConfig {
+	a := reuse.Alloc[AlterDataBaseConfig](nil)
+	a.AccountName = accountName
+	a.DbName = dbName
+	a.IsAccountLevel = isAccountLevel
+	a.UpdateConfig = updateConfig
+	return a
 }
 
 func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
@@ -340,6 +407,11 @@ func (node *AlterDataBaseConfig) Format(ctx *FmtCtx) {
 func (node *AlterDataBaseConfig) GetStatementType() string { return "Alter DataBase config" }
 func (node *AlterDataBaseConfig) GetQueryType() string     { return QueryTypeDDL }
 
+func (node AlterDataBaseConfig) TypeName() string { return "tree.AlterDataBaseConfig" }
+
+func (node *AlterDataBaseConfig) reset() {
+}
+
 // AlterTable
 // see https://dev.mysql.com/doc/refman/8.0/en/alter-table.html
 type AlterTable struct {
@@ -347,6 +419,13 @@ type AlterTable struct {
 	Table            *TableName
 	Options          AlterTableOptions
 	PartitionOptions AlterPartitionOption
+}
+
+func NewAlterTable(table *TableName, options AlterTableOptions) *AlterTable {
+	a := reuse.Alloc[AlterTable](nil)
+	a.Table = table
+	a.Options = options
+	return a
 }
 
 func (node *AlterTable) Format(ctx *FmtCtx) {
@@ -369,6 +448,14 @@ func (node *AlterTable) Format(ctx *FmtCtx) {
 func (node *AlterTable) GetStatementType() string { return "Alter Table" }
 func (node *AlterTable) GetQueryType() string     { return QueryTypeDDL }
 
+func (node AlterTable) TypeName() string { return "tree.AlterTable" }
+
+func (node *AlterTable) reset() {
+	// if node.Table != nil {
+	// 	reuse.Free[TableName](node.Table, nil)
+	// }
+}
+
 type AlterTableOptions = []AlterTableOption
 
 type AlterTableOption interface {
@@ -385,6 +472,13 @@ type AlterOptionAlterIndex struct {
 	Visibility VisibleType
 }
 
+func NewAlterOptionAlterIndex(name Identifier, visibility VisibleType) *AlterOptionAlterIndex {
+	a := reuse.Alloc[AlterOptionAlterIndex](nil)
+	a.Name = name
+	a.Visibility = visibility
+	return a
+}
+
 func (node *AlterOptionAlterIndex) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter index ")
 	node.Name.Format(ctx)
@@ -394,6 +488,11 @@ func (node *AlterOptionAlterIndex) Format(ctx *FmtCtx) {
 	case VISIBLE_TYPE_INVISIBLE:
 		ctx.WriteString(" invisible")
 	}
+}
+
+func (node AlterOptionAlterIndex) TypeName() string { return "tree.AlterOptionAlterIndex" }
+
+func (node *AlterOptionAlterIndex) reset() {
 }
 
 type AlterOptionAlterReIndex struct {
@@ -415,10 +514,22 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterOptionAlterReIndex) TypeName() string { return "tree.AlterOptionAlterReIndex" }
+
+func (node *AlterOptionAlterReIndex) reset() {
+}
+
 type AlterOptionAlterCheck struct {
 	alterOptionImpl
 	Type    string
 	Enforce bool
+}
+
+func NewAlterOptionAlterCheck(t string, enforce bool) *AlterOptionAlterCheck {
+	a := reuse.Alloc[AlterOptionAlterCheck](nil)
+	a.Type = t
+	a.Enforce = enforce
+	return a
 }
 
 func (node *AlterOptionAlterCheck) Format(ctx *FmtCtx) {
@@ -431,14 +542,30 @@ func (node *AlterOptionAlterCheck) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterOptionAlterCheck) TypeName() string { return "tree.AlterOptionAlterCheck" }
+
+func (node *AlterOptionAlterCheck) reset() {
+}
+
 type AlterOptionAdd struct {
 	alterOptionImpl
 	Def TableDef
 }
 
+func NewAlterOptionAdd(def TableDef) *AlterOptionAdd {
+	a := reuse.Alloc[AlterOptionAdd](nil)
+	a.Def = def
+	return a
+}
+
 func (node *AlterOptionAdd) Format(ctx *FmtCtx) {
 	ctx.WriteString("add ")
 	node.Def.Format(ctx)
+}
+
+func (node AlterOptionAdd) TypeName() string { return "tree.AlterOptionAdd" }
+
+func (node *AlterOptionAdd) reset() {
 }
 
 type AlterTableDropType int
@@ -455,6 +582,13 @@ type AlterOptionDrop struct {
 	alterOptionImpl
 	Typ  AlterTableDropType
 	Name Identifier
+}
+
+func NewAlterOptionDrop(typ AlterTableDropType, name Identifier) *AlterOptionDrop {
+	a := reuse.Alloc[AlterOptionDrop](nil)
+	a.Typ = typ
+	a.Name = name
+	return a
 }
 
 func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
@@ -477,13 +611,32 @@ func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterOptionDrop) TypeName() string { return "tree.AlterOptionDrop" }
+
+func (node *AlterOptionDrop) reset() {
+}
+
 type AlterTableName struct {
 	Name *UnresolvedObjectName
+}
+
+func NewAlterTableName(name *UnresolvedObjectName) *AlterTableName {
+	a := reuse.Alloc[AlterTableName](nil)
+	a.Name = name
+	return a
 }
 
 func (node *AlterTableName) Format(ctx *FmtCtx) {
 	ctx.WriteString("rename to ")
 	node.Name.ToTableName().Format(ctx)
+}
+
+func (node AlterTableName) TypeName() string { return "tree.AlterTableName" }
+
+func (node *AlterTableName) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[UnresolvedObjectName](node.Name, nil)
+	// }
 }
 
 type AlterColPos struct {
@@ -497,10 +650,28 @@ type AlterAddCol struct {
 	Position *ColumnPosition
 }
 
+func NewAlterAddCol(column *ColumnTableDef, position *ColumnPosition) *AlterAddCol {
+	a := reuse.Alloc[AlterAddCol](nil)
+	a.Column = column
+	a.Position = position
+	return a
+}
+
 func (node *AlterAddCol) Format(ctx *FmtCtx) {
 	ctx.WriteString("add column ")
 	node.Column.Format(ctx)
 	node.Position.Format(ctx)
+}
+
+func (node AlterAddCol) TypeName() string { return "tree.AlterAddCol" }
+
+func (node *AlterAddCol) reset() {
+	// if node.Column != nil {
+	// 	reuse.Free[ColumnTableDef](node.Column, nil)
+	// }
+	// if node.Position != nil {
+	// 	reuse.Free[ColumnPosition](node.Position, nil)
+	// }
 }
 
 type AccountsSetOption struct {
@@ -510,12 +681,38 @@ type AccountsSetOption struct {
 	DropAccounts IdentifierList
 }
 
+func NewAccountsSetOption(al bool, se, ad, dr IdentifierList) *AccountsSetOption {
+	a := reuse.Alloc[AccountsSetOption](nil)
+	a.All = al
+	a.SetAccounts = se
+	a.AddAccounts = ad
+	a.DropAccounts = dr
+	return a
+}
+
+func (node AccountsSetOption) TypeName() string { return "tree.AccountsSetOption" }
+
+func (node *AccountsSetOption) reset() {
+	// if node.AccountsSet != nil {
+	// 	reuse.Free[AccountsSetOption](node.AccountsSet, nil)
+	// }
+}
+
 type AlterPublication struct {
 	statementImpl
 	IfExists    bool
 	Name        Identifier
 	AccountsSet *AccountsSetOption
 	Comment     string
+}
+
+func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, comment string) *AlterPublication {
+	a := reuse.Alloc[AlterPublication](nil)
+	a.IfExists = exist
+	a.Name = name
+	a.AccountsSet = accountsSet
+	a.Comment = comment
+	return a
 }
 
 func (node *AlterPublication) Format(ctx *FmtCtx) {
@@ -551,11 +748,27 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
 func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }
 
+func (node AlterPublication) TypeName() string { return "tree.AlterPublication" }
+
+func (node *AlterPublication) reset() {
+	// if node.AccountsSet != nil {
+	// 	reuse.Free[AccountsSetOption](node.AccountsSet, nil)
+	// }
+}
+
 type AlterTableModifyColumnClause struct {
 	alterOptionImpl
 	Typ       AlterTableOptionType
 	NewColumn *ColumnTableDef
 	Position  *ColumnPosition
+}
+
+func NewAlterTableModifyColumnClause(typ AlterTableOptionType, newColumn *ColumnTableDef, position *ColumnPosition) *AlterTableModifyColumnClause {
+	a := reuse.Alloc[AlterTableModifyColumnClause](nil)
+	a.Typ = typ
+	a.NewColumn = newColumn
+	a.Position = position
+	return a
 }
 
 func (node *AlterTableModifyColumnClause) Format(ctx *FmtCtx) {
@@ -564,12 +777,34 @@ func (node *AlterTableModifyColumnClause) Format(ctx *FmtCtx) {
 	node.Position.Format(ctx)
 }
 
+func (node AlterTableModifyColumnClause) TypeName() string {
+	return "tree.AlterTableModifyColumnClause"
+}
+
+func (node *AlterTableModifyColumnClause) reset() {
+	// if node.NewColumn != nil {
+	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
 type AlterTableChangeColumnClause struct {
 	alterOptionImpl
 	Typ           AlterTableOptionType
 	OldColumnName *UnresolvedName
 	NewColumn     *ColumnTableDef
 	Position      *ColumnPosition
+}
+
+func NewAlterTableChangeColumnClause(typ AlterTableOptionType, oldColumnName *UnresolvedName, newColumn *ColumnTableDef, position *ColumnPosition) *AlterTableChangeColumnClause {
+	a := reuse.Alloc[AlterTableChangeColumnClause](nil)
+	a.Typ = typ
+	a.OldColumnName = oldColumnName
+	a.NewColumn = newColumn
+	a.Position = position
+	return a
 }
 
 func (node *AlterTableChangeColumnClause) Format(ctx *FmtCtx) {
@@ -581,12 +816,36 @@ func (node *AlterTableChangeColumnClause) Format(ctx *FmtCtx) {
 	node.Position.Format(ctx)
 }
 
+func (node AlterTableChangeColumnClause) TypeName() string {
+	return "tree.AlterTableChangeColumnClause"
+}
+
+func (node *AlterTableChangeColumnClause) reset() {
+	// if node.OldColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
+	// }
+	// if node.NewColumn != nil {
+	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
 type AlterTableAddColumnClause struct {
 	alterOptionImpl
 	Typ        AlterTableOptionType
 	NewColumns []*ColumnTableDef
 	Position   *ColumnPosition
 	// when Position is not none, the len(NewColumns) must be one
+}
+
+func NewAlterTableAddColumnClause(typ AlterTableOptionType, newColumns []*ColumnTableDef, position *ColumnPosition) *AlterTableAddColumnClause {
+	a := reuse.Alloc[AlterTableAddColumnClause](nil)
+	a.Typ = typ
+	a.NewColumns = newColumns
+	a.Position = position
+	return a
 }
 
 func (node *AlterTableAddColumnClause) Format(ctx *FmtCtx) {
@@ -603,11 +862,32 @@ func (node *AlterTableAddColumnClause) Format(ctx *FmtCtx) {
 	node.Position.Format(ctx)
 }
 
+func (node AlterTableAddColumnClause) TypeName() string { return "tree.AlterTableAddColumnClause" }
+
+func (node *AlterTableAddColumnClause) reset() {
+	// if node.NewColumns != nil {
+	// 	for _, item := range node.NewColumns {
+	// 		reuse.Free[ColumnTableDef](item, nil)
+	// 	}
+	// }
+	if node.Position != nil {
+		reuse.Free[ColumnPosition](node.Position, nil)
+	}
+}
+
 type AlterTableRenameColumnClause struct {
 	alterOptionImpl
 	Typ           AlterTableOptionType
 	OldColumnName *UnresolvedName
 	NewColumnName *UnresolvedName
+}
+
+func NewAlterTableRenameColumnClause(typ AlterTableOptionType, oldColumnName *UnresolvedName, newColumnName *UnresolvedName) *AlterTableRenameColumnClause {
+	a := reuse.Alloc[AlterTableRenameColumnClause](nil)
+	a.Typ = typ
+	a.OldColumnName = oldColumnName
+	a.NewColumnName = newColumnName
+	return a
 }
 
 func (node *AlterTableRenameColumnClause) Format(ctx *FmtCtx) {
@@ -617,7 +897,19 @@ func (node *AlterTableRenameColumnClause) Format(ctx *FmtCtx) {
 	node.NewColumnName.Format(ctx)
 }
 
-// AlterColumnOptionType is the type for AlterTableAlterColumn
+func (node AlterTableRenameColumnClause) TypeName() string {
+	return "tree.AlterTableRenameColumnClause"
+}
+
+func (node *AlterTableRenameColumnClause) reset() {
+	// if node.OldColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
+	// }
+	// if node.NewColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.NewColumnName, nil)
+	// }
+}
+
 type AlterColumnOptionType int
 
 // AlterColumnOptionType types.
@@ -634,6 +926,16 @@ type AlterTableAlterColumnClause struct {
 	DefalutExpr *AttributeDefault
 	Visibility  VisibleType
 	OptionType  AlterColumnOptionType
+}
+
+func NewAlterTableAlterColumnClause(typ AlterTableOptionType, columnName *UnresolvedName, defalutExpr *AttributeDefault, visibility VisibleType, optionType AlterColumnOptionType) *AlterTableAlterColumnClause {
+	a := reuse.Alloc[AlterTableAlterColumnClause](nil)
+	a.Typ = typ
+	a.ColumnName = columnName
+	a.DefalutExpr = defalutExpr
+	a.Visibility = visibility
+	a.OptionType = optionType
+	return a
 }
 
 func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
@@ -655,10 +957,28 @@ func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterTableAlterColumnClause) TypeName() string { return "tree.AlterTableAlterColumnClause" }
+
+func (node *AlterTableAlterColumnClause) reset() {
+	// if node.ColumnName != nil {
+	// 	reuse.Free[UnresolvedName](node.ColumnName, nil)
+	// }
+	// if node.DefalutExpr != nil {
+	// 	reuse.Free[AttributeDefault](node.DefalutExpr, nil)
+	// }
+}
+
 type AlterTableOrderByColumnClause struct {
 	alterOptionImpl
 	Typ              AlterTableOptionType
 	AlterOrderByList []*AlterColumnOrder
+}
+
+func NewAlterTableOrderByColumnClause(typ AlterTableOptionType, alterOrderByList []*AlterColumnOrder) *AlterTableOrderByColumnClause {
+	a := reuse.Alloc[AlterTableOrderByColumnClause](nil)
+	a.Typ = typ
+	a.AlterOrderByList = alterOrderByList
+	return a
 }
 
 func (node *AlterTableOrderByColumnClause) Format(ctx *FmtCtx) {
@@ -670,9 +990,28 @@ func (node *AlterTableOrderByColumnClause) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterTableOrderByColumnClause) TypeName() string {
+	return "tree.AlterTableOrderByColumnClause"
+}
+
+func (node *AlterTableOrderByColumnClause) reset() {
+	if node.AlterOrderByList != nil {
+		for _, item := range node.AlterOrderByList {
+			reuse.Free[AlterColumnOrder](item, nil)
+		}
+	}
+}
+
 type AlterColumnOrder struct {
 	Column    *UnresolvedName
 	Direction Direction
+}
+
+func NewAlterColumnOrder(column *UnresolvedName, direction Direction) *AlterColumnOrder {
+	a := reuse.Alloc[AlterColumnOrder](nil)
+	a.Column = column
+	a.Direction = direction
+	return a
 }
 
 func (node *AlterColumnOrder) Format(ctx *FmtCtx) {
@@ -683,7 +1022,14 @@ func (node *AlterColumnOrder) Format(ctx *FmtCtx) {
 	}
 }
 
-// AlterTableType is the type for AlterTableOptionType.
+func (node AlterColumnOrder) TypeName() string { return "tree.AlterColumnOrder" }
+
+func (node *AlterColumnOrder) reset() {
+	// if node.Column != nil {
+	// 	reuse.Free[UnresolvedName](node.Column, nil)
+	// }
+}
+
 type AlterTableOptionType int
 
 // AlterTable types.
@@ -717,16 +1063,31 @@ type ColumnPosition struct {
 	RelativeColumn *UnresolvedName
 }
 
+func NewColumnPosition(typ ColumnPositionType, relativeColumn *UnresolvedName) *ColumnPosition {
+	a := reuse.Alloc[ColumnPosition](nil)
+	a.Typ = typ
+	a.RelativeColumn = relativeColumn
+	return a
+}
+
 func (node *ColumnPosition) Format(ctx *FmtCtx) {
 	switch node.Typ {
 	case ColumnPositionNone:
-		// do nothing
+
 	case ColumnPositionFirst:
 		ctx.WriteString(" first")
 	case ColumnPositionAfter:
 		ctx.WriteString(" after ")
 		node.RelativeColumn.Format(ctx)
 	}
+}
+
+func (node ColumnPosition) TypeName() string { return "tree.ColumnPosition" }
+
+func (node *ColumnPosition) reset() {
+	// if node.RelativeColumn != nil {
+	// 	reuse.Free[UnresolvedName](node.RelativeColumn, nil)
+	// }
 }
 
 // AlterPartitionOptionType is the type for Alter Table Partition Option Type.
@@ -770,6 +1131,16 @@ func (node *AlterPartitionRedefinePartitionClause) Format(ctx *FmtCtx) {
 	node.PartitionOption.Format(ctx)
 }
 
+func (node AlterPartitionRedefinePartitionClause) TypeName() string {
+	return "tree.AlterPartitionRedefinePartitionClause"
+}
+
+func (node *AlterPartitionRedefinePartitionClause) reset() {
+	// if node.PartitionOption != nil {
+	// 	reuse.Free[PartitionOption](node.PartitionOption, nil)
+	// }
+}
+
 type AlterPartitionAddPartitionClause struct {
 	AlterPartitionOptionImpl
 	Typ        AlterPartitionOptionType
@@ -791,6 +1162,18 @@ func (node *AlterPartitionAddPartitionClause) Format(ctx *FmtCtx) {
 	ctx.WriteString(")")
 }
 
+func (node AlterPartitionAddPartitionClause) TypeName() string {
+	return "tree.AlterPartitionAddPartitionClause"
+}
+
+func (node *AlterPartitionAddPartitionClause) reset() {
+	// if node.Partitions != nil {
+	// 	for _, item := range node.Partitions {
+	// 		reuse.Free[Partition](item, nil)
+	// 	}
+	// }
+}
+
 type AlterPartitionDropPartitionClause struct {
 	AlterPartitionOptionImpl
 	Typ             AlterPartitionOptionType
@@ -801,6 +1184,13 @@ type AlterPartitionDropPartitionClause struct {
 func (node *AlterPartitionDropPartitionClause) Format(ctx *FmtCtx) {
 	ctx.WriteString(" drop partition ")
 	node.PartitionNames.Format(ctx)
+}
+
+func (node AlterPartitionDropPartitionClause) TypeName() string {
+	return "tree.AlterPartitionDropPartitionClause"
+}
+
+func (node *AlterPartitionDropPartitionClause) reset() {
 }
 
 type AlterPartitionTruncatePartitionClause struct {
@@ -819,217 +1209,9 @@ func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node AlterUser) TypeName() string { return "tree.AlterUser" }
-
-func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption"}
-func (node AlterAccount) TypeName() string { return "tree.AlterAccount"}
-func (node AlterView) TypeName() string { return "tree.AlterView"}
-func (node AlterDataBaseConfig) TypeName() string { return "tree.AlterDataBaseConfig"}
-func (node AlterTable) TypeName() string { return "tree.AlterTable"}
-func (node AlterOptionAlterIndex) TypeName() string { return "tree.AlterOptionAlterIndex"}
-func (node AlterOptionAlterReIndex) TypeName() string { return "tree.AlterOptionAlterReIndex"}
-func (node AlterOptionAlterCheck) TypeName() string { return "tree.AlterOptionAlterCheck"}
-func (node AlterOptionAdd) TypeName() string { return "tree.AlterOptionAdd"}
-func (node AlterOptionDrop) TypeName() string { return "tree.AlterOptionDrop"}
-func (node AlterTableName) TypeName() string { return "tree.AlterTableName"}
-func (node AlterAddCol) TypeName() string { return "tree.AlterAddCol"}
-func (node AlterPublication) TypeName() string { return "tree.AlterPublication"}
-func (node AlterTableModifyColumnClause) TypeName() string { return "tree.AlterTableModifyColumnClause"}
-func (node AlterTableChangeColumnClause) TypeName() string { return "tree.AlterTableChangeColumnClause"}
-func (node AlterTableAddColumnClause) TypeName() string { return "tree.AlterTableAddColumnClause"}
-func (node AlterTableRenameColumnClause) TypeName() string { return "tree.AlterTableRenameColumnClause"}
-func (node AlterTableAlterColumnClause) TypeName() string { return "tree.AlterTableAlterColumnClause"}
-func (node AlterTableOrderByColumnClause) TypeName() string { return "tree.AlterTableOrderByColumnClause"}
-func (node AlterColumnOrder) TypeName() string { return "tree.AlterColumnOrder"}
-func (node ColumnPosition) TypeName() string { return "tree.ColumnPosition"}
-func (node AlterPartitionRedefinePartitionClause) TypeName() string { return "tree.AlterPartitionRedefinePartitionClause"}
-func (node AlterPartitionAddPartitionClause) TypeName() string { return "tree.AlterPartitionAddPartitionClause"}
-func (node AlterPartitionDropPartitionClause) TypeName() string { return "tree.AlterPartitionDropPartitionClause"}
-func (node AlterPartitionTruncatePartitionClause) TypeName() string { return "tree.AlterPartitionTruncatePartitionClause"}
-
-func (node *AlterUser) reset() {
-	// if node.Users != nil {
-	// 	for _, item := range node.Users {
-	// 		reuse.Free[User](item, nil)
-	// 	}
-	// }
-	// if node.Role != nil {
-	// 	reuse.Free[Role](node.Role, nil)
-	// }
+func (node AlterPartitionTruncatePartitionClause) TypeName() string {
+	return "tree.AlterPartitionTruncatePartitionClause"
 }
-
-
-func (node *AlterAccountAuthOption) reset() {
-}
-
-
-func (node *AlterAccount) reset() {
-}
-
-
-func (node *AlterView) reset() {
-	// if node.Name != nil {
-	// 	reuse.Free[TableName](node.Name, nil)
-	// }
-	// if node.AsSource != nil {
-	// 	reuse.Free[Select](node.AsSource, nil)
-	// }
-}
-
-
-func (node *AlterDataBaseConfig) reset() {
-}
-
-
-func (node *AlterTable) reset() {
-	// if node.Table != nil {
-	// 	reuse.Free[TableName](node.Table, nil)
-	// }
-}
-
-
-func (node *AlterOptionAlterIndex) reset() {
-}
-
-
-func (node *AlterOptionAlterReIndex) reset() {
-}
-
-
-func (node *AlterOptionAlterCheck) reset() {
-}
-
-
-func (node *AlterOptionAdd) reset() {
-}
-
-
-func (node *AlterOptionDrop) reset() {
-}
-
-
-func (node *AlterTableName) reset() {
-	// if node.Name != nil {
-	// 	reuse.Free[UnresolvedObjectName](node.Name, nil)
-	// }
-}
-
-
-func (node *AlterAddCol) reset() {
-	// if node.Column != nil {
-	// 	reuse.Free[ColumnTableDef](node.Column, nil)
-	// }
-	// if node.Position != nil {
-	// 	reuse.Free[ColumnPosition](node.Position, nil)
-	// }
-}
-
-
-func (node *AlterPublication) reset() {
-	// if node.AccountsSet != nil {
-	// 	reuse.Free[AccountsSetOption](node.AccountsSet, nil)
-	// }
-}
-
-
-func (node *AlterTableModifyColumnClause) reset() {
-	// if node.NewColumn != nil {
-	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
-	// }
-	if node.Position != nil {
-		reuse.Free[ColumnPosition](node.Position, nil)
-	}
-}
-
-
-func (node *AlterTableChangeColumnClause) reset() {
-	// if node.OldColumnName != nil {
-	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
-	// }
-	// if node.NewColumn != nil {
-	// 	reuse.Free[ColumnTableDef](node.NewColumn, nil)
-	// }
-	if node.Position != nil {
-		reuse.Free[ColumnPosition](node.Position, nil)
-	}
-}
-
-
-func (node *AlterTableAddColumnClause) reset() {
-	// if node.NewColumns != nil {
-	// 	for _, item := range node.NewColumns {
-	// 		reuse.Free[ColumnTableDef](item, nil)
-	// 	}
-	// }
-	if node.Position != nil {
-		reuse.Free[ColumnPosition](node.Position, nil)
-	}
-}
-
-
-func (node *AlterTableRenameColumnClause) reset() {
-	// if node.OldColumnName != nil {
-	// 	reuse.Free[UnresolvedName](node.OldColumnName, nil)
-	// }
-	// if node.NewColumnName != nil {
-	// 	reuse.Free[UnresolvedName](node.NewColumnName, nil)
-	// }
-}
-
-
-func (node *AlterTableAlterColumnClause) reset() {
-	// if node.ColumnName != nil {
-	// 	reuse.Free[UnresolvedName](node.ColumnName, nil)
-	// }
-	// if node.DefalutExpr != nil {
-	// 	reuse.Free[AttributeDefault](node.DefalutExpr, nil)
-	// }
-}
-
-
-func (node *AlterTableOrderByColumnClause) reset() {
-	if node.AlterOrderByList != nil {
-		for _, item := range node.AlterOrderByList {
-			reuse.Free[AlterColumnOrder](item, nil)
-		}
-	}
-}
-
-
-func (node *AlterColumnOrder) reset() {
-	// if node.Column != nil {
-	// 	reuse.Free[UnresolvedName](node.Column, nil)
-	// }
-}
-
-
-func (node *ColumnPosition) reset() {
-	// if node.RelativeColumn != nil {
-	// 	reuse.Free[UnresolvedName](node.RelativeColumn, nil)
-	// }
-}
-
-
-func (node *AlterPartitionRedefinePartitionClause) reset() {
-	// if node.PartitionOption != nil {
-	// 	reuse.Free[PartitionOption](node.PartitionOption, nil)
-	// }
-}
-
-
-func (node *AlterPartitionAddPartitionClause) reset() {
-	// if node.Partitions != nil {
-	// 	for _, item := range node.Partitions {
-	// 		reuse.Free[Partition](item, nil)
-	// 	}
-	// }
-}
-
-
-func (node *AlterPartitionDropPartitionClause) reset() {
-}
-
 
 func (node *AlterPartitionTruncatePartitionClause) reset() {
 }
-
