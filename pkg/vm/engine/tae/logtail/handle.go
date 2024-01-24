@@ -653,8 +653,8 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, ts types.TS,
 		}
 	}
 	var delBatch *containers.Batch
-	if ts != types.MaxTs() {
-		delBatch, err = block.TryCollectDeleteInRangeInMemory(ctx, ts, b.end, false, common.LogtailAllocator)
+	if !ts.Equal(types.MaxTs()) {
+		delBatch, err = block.CollectDeleteInRangeAfterDeltalocation(ctx, ts, b.end, false, common.LogtailAllocator)
 	} else {
 		delBatch, err = block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)
 	}
