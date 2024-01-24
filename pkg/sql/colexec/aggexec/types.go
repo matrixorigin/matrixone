@@ -25,6 +25,9 @@ const (
 	GroupNotMatched = 0
 )
 
+func init() {
+}
+
 type AggFuncExec interface {
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)

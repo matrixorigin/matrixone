@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -29,9 +30,13 @@ func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 }
 
 type multiAggOptimizedInfo struct {
-	// receiveNull indicates whether the agg function receives null value.
-	// if it was false, the rows with any null value will be ignored.
-	receiveNull bool
+}
+
+type multiAggExecCache struct {
+	cached         []bool
+	columnFill     []any
+	columnFillNull []any
+	columnFills    []any
 }
 
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
@@ -40,6 +45,7 @@ type multiAggOptimizedInfo struct {
 type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	multiAggTypeInfo
 	multiAggOptimizedInfo
+	cache multiAggExecCache
 
 	args   []aggArg
 	ret    aggFuncResult[T]
@@ -75,7 +81,26 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 }
 
 func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	// todo: need a quick deal to avoid many switches.
+	for i := range vectors {
+		exec.args[i].Prepare(vectors[i])
+	}
+
+	var groupIdx int
+	var err error
+	var i = 0
+	for rowIdx, end := offset, offset+len(groups); rowIdx < end; rowIdx++ {
+		if groups[i] != GroupNotMatched {
+			groupIdx = int(groups[i] - 1)
+
+			for colIdx := range vectors {
+				if err = exec.fill(groupIdx, colIdx, rowIdx, 1); err != nil {
+					return err
+				}
+			}
+		}
+		i++
+	}
+
 	return nil
 }
 
@@ -97,19 +122,19 @@ func (exec *multiAggFuncExec1[T]) Free() {
 // should prepare the aggArg before calling this function.
 // we will get values from the aggArg directly.
 func (exec *multiAggFuncExec1[T]) fill(groupIndex int, columnIdx int, offset int, length int) error {
-	switch exec.argTypes[columnIdx].Oid {
-	case types.T_int8:
-		// todo: maybe we can cache the fill function. but for some agg functions like 'group_concat',
-		//  the number of fill function was unlimited. It will be a bad idea ?
-		//  but for the whole query, the cache was still a small number.
-		//
-		arg := exec.args[columnIdx].(*aggFuncArg[int8])
-		fill := exec.groups[groupIndex].getFillWhich(columnIdx).(func(int8))
-		fillNull := exec.groups[groupIndex].getFillNullWhich(columnIdx).(func())
-		fills := exec.groups[groupIndex].getFillsWhich(columnIdx).(func(int8, bool, int))
-		return ff1[int8](arg, offset, length, fill, fillNull, fills)
+	if !exec.cache.cached[columnIdx] {
+		exec.cache.cached[columnIdx] = true
+		exec.cache.columnFill[columnIdx] = exec.groups[groupIndex].getFillWhich(columnIdx)
+		exec.cache.columnFillNull[columnIdx] = exec.groups[groupIndex].getFillNullWhich(columnIdx)
+		exec.cache.columnFills[columnIdx] = exec.groups[groupIndex].getFillsWhich(columnIdx)
 	}
-	return nil
+
+	f, ok := multiFill[exec.argTypes[columnIdx].Oid]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("unsupported argument type %s for multi agg", exec.argTypes[columnIdx].String())
+	}
+	return f(exec.args[columnIdx], offset, length,
+		exec.cache.columnFill[columnIdx], exec.cache.columnFillNull[columnIdx], exec.cache.columnFills[columnIdx])
 }
 
 func (exec *multiAggFuncExec2) fill(groupIndex int, columnIdx int, offset int, length int) error {
@@ -118,52 +143,104 @@ func (exec *multiAggFuncExec2) fill(groupIndex int, columnIdx int, offset int, l
 }
 
 func ff1[T types.FixedSizeTExceptStrType](
-	source *aggFuncArg[T], offset int, length int,
-	fill func(T), fillNull func(), fills func(T, bool, int)) error {
+	source aggArg, offset int, length int,
+	fill any, fillNull any, fills any) error {
+
+	// todo: if we set the _fill, _fillNull as the field of the aggArg, we can avoid the type assertion.
+	_arg := source.(*aggFuncArg[T])
+	_fill := fill.(func(T))
+	_fillNull := fillNull.(func())
+	//_fills := fills.(func(T, bool, int))
 
 	// todo: check the const here and we can call the fills.
 	// if source.w.IsConst() {
 
-	if source.w.WithAnyNullValue() {
+	if _arg.w.WithAnyNullValue() {
 		for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-			v, null := source.w.GetValue(i)
+			v, null := _arg.w.GetValue(i)
 			if null {
-				fillNull()
+				_fillNull()
 			} else {
-				fill(v)
+				_fill(v)
 			}
 		}
 		return nil
 	}
 
 	for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-		v, _ := source.w.GetValue(i)
-		fill(v)
+		v, _ := _arg.w.GetValue(i)
+		_fill(v)
 	}
 
 	return nil
 }
 
 func ff2(
-	source aggFuncBytesArg, offset int, length int,
-	fill func([]byte), fillNull func(), fills func([]byte, bool, int)) error {
+	source aggArg, offset int, length int,
+	fill any, fillNull any, fills any) error {
 
-	if source.w.WithAnyNullValue() {
+	_arg := source.(*aggFuncBytesArg)
+	_fill := fill.(func([]byte))
+	_fillNull := fillNull.(func())
+	//_fills := fills.(func([]byte, bool, int))
+
+	if _arg.w.WithAnyNullValue() {
 		for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-			v, null := source.w.GetStrValue(i)
+			v, null := _arg.w.GetStrValue(i)
 			if null {
-				fillNull()
+				_fillNull()
 			} else {
-				fill(v)
+				_fill(v)
 			}
 		}
 		return nil
 	}
 
 	for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-		v, _ := source.w.GetStrValue(i)
-		fill(v)
+		v, _ := _arg.w.GetStrValue(i)
+		_fill(v)
 	}
 
 	return nil
+}
+
+var multiFill = map[types.T]func(arg aggArg, offset int, length int, fill, fillNull, fills any) error{
+	types.T_bool: ff1[bool],
+
+	types.T_int8:    ff1[int8],
+	types.T_int16:   ff1[int16],
+	types.T_int32:   ff1[int32],
+	types.T_int64:   ff1[int64],
+	types.T_uint8:   ff1[uint8],
+	types.T_uint16:  ff1[uint16],
+	types.T_uint32:  ff1[uint32],
+	types.T_uint64:  ff1[uint64],
+	types.T_float32: ff1[float32],
+	types.T_float64: ff1[float64],
+	types.T_uuid:    ff1[types.Uuid],
+
+	types.T_date:      ff1[int32],
+	types.T_datetime:  ff1[int64],
+	types.T_time:      ff1[types.Time],
+	types.T_timestamp: ff1[types.Timestamp],
+	types.T_interval:  ff1[types.IntervalType],
+
+	types.T_decimal64:  ff1[types.Decimal64],
+	types.T_decimal128: ff1[types.Decimal128],
+	types.T_decimal256: ff1[types.Decimal256],
+
+	types.T_char:      ff2,
+	types.T_varchar:   ff2,
+	types.T_text:      ff2,
+	types.T_json:      ff2,
+	types.T_blob:      ff2,
+	types.T_binary:    ff2,
+	types.T_varbinary: ff2,
+
+	types.T_enum:    ff1[types.Enum],
+	types.T_Rowid:   ff1[types.Rowid],
+	types.T_Blockid: ff1[types.Blockid],
+
+	types.T_array_float32: ff2,
+	types.T_array_float64: ff2,
 }
