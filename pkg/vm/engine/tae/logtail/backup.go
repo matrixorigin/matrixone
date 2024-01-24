@@ -1142,18 +1142,20 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 
 		}
+		logutil.Infof("objInfoData len is %d infoInsert size %d, infoDelete size %d", objInfoData.Length(), len(infoInsert), len(infoDelete))
 		for i := 0; i < objInfoData.Length(); i++ {
 			appendValToBatch(objInfoData, objectInfoMeta, i)
 			if infoInsert[i] != nil && infoDelete[i] {
 				panic("info should not have info delete")
 			}
+			tid := objInfoData.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			if infoInsert[i] != nil {
 				appendValToBatch(objInfoData, objectInfoMeta, i)
 				row := objectInfoMeta.Length() - 1
 				objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
 				objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
 				objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
-				logutil.Infof("insertinfoInsert object row %d, name is %v", row, infoInsert[i].stats.String())
+				logutil.Infof("insertinfoInsert object row %d, name is %v, tid %d-%d", row, infoInsert[i].stats.String(), tid, infoInsert[i].tid)
 			}
 
 			if infoDelete[i] {
@@ -1162,12 +1164,27 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 		logutil.Infof("delete deleteRow %d", len(deleteRow))
 		for i := range deleteRow {
-			data.bats[ObjectInfoIDX].Delete(deleteRow[i])
+			objectInfoMeta.Delete(deleteRow[i])
 		}
 		data.bats[TNObjectInfoIDX].Compact()
 		objectInfoMeta.Compact()
 		data.bats[ObjectInfoIDX].Close()
 		data.bats[ObjectInfoIDX] = objectInfoMeta
+		tableInsertOff := make(map[uint64]*tableOffset)
+		for i := 0; i < objectInfoMeta.Vecs[0].Length(); i++ {
+			tid := objectInfoMeta.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			if tableInsertOff[tid] == nil {
+				tableInsertOff[tid] = &tableOffset{
+					offset: i,
+					end:    i,
+				}
+			}
+			tableInsertOff[tid].end += 1
+		}
+
+		for tid, table := range tableInsertOff {
+			data.UpdateSegMeta(tid, int32(table.offset), int32(table.end))
+		}
 	}
 	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 	if err != nil {
