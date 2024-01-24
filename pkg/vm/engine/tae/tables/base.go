@@ -668,6 +668,11 @@ func (blk *baseBlock) CollectDeleteInRange(
 
 // CollectDeleteInRangeAfterDeltalocation collects deletes after 
 // a certain delta location and committed in [start,end]
+// When subscribe a table, it collects delta location, then it collects deletes.
+// To avoid collecting duplicate deletes, 
+// it collects after start ts of the delta location.
+// If the delta location is from CN, deletes is committed after startTS.
+// CollectDeleteInRange still collect duplicate deletes.
 func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
 	ctx context.Context,
 	start, end types.TS,// start is startTS of deltalocation
