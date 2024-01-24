@@ -3,3 +3,14 @@ select sql_sum(1, 1) as ret;
 ret
 2
 drop function sql_sum(int, int);
+create database db1;
+use db1;
+select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+name    db
+create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
+select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+name    db
+helloworld    db1
+drop database db1;
+select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+name    db
