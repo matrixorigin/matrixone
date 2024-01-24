@@ -483,6 +483,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 			vs := res.Batches[0].Vecs
 			if vs != nil && vs[0].Length() > 0 {
 				yes := vector.GetFixedAt[bool](vs[0], 0)
+				fmt.Fprintf(os.Stderr, "yes: %v sql: %v", yes, sql)
 				if !yes {
 					return moerr.NewErrViolateFKConstraint(c.ctx)
 				}
