@@ -119,6 +119,17 @@ func (l *lockTableAllocator) Close() error {
 	return err
 }
 
+func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	m := l.getLockTablesLocked(groupID)
+	if old, ok := m[tableID]; ok {
+		return old
+	}
+	return pb.LockTable{}
+}
+
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
