@@ -616,6 +616,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		if isABlk && deleteAt.IsEmpty() {
 			panic(any(fmt.Sprintf("block %v deleteAt is empty", stats.ObjectName().String())))
 		}
+		logutil.Infof("tnObjInfoData add object %v to objectsData tid", stats.ObjectName().String())
 		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), false, i, tid, &objectsData)
 	}
 
@@ -625,7 +626,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnObjInfoTid := tnObjInfoData.GetVectorByName(SnapshotAttr_TID)
 	tnObjInfoDelete := tnObjInfoData.GetVectorByName(EntryNode_DeleteAt)
 	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
-
+	logutil.Infof("tnObjInfoData length is %v", tnObjInfoData.Length())
 	for i := 0; i < tnObjInfoData.Length(); i++ {
 		stats := objectio.NewObjectStats()
 		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
@@ -644,6 +645,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		if !deleteAt.IsEmpty() {
 			panic(any(fmt.Sprintf("deleteAt is not empty: %v, name is %v", deleteAt.ToString(), stats.ObjectName().String())))
 		}
+		logutil.Infof("tnObjInfoData add object %v to objectsData tid", stats.ObjectName().String())
 		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), true, i, tid, &objectsData)
 	}
 
