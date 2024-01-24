@@ -1130,6 +1130,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						logutil.Infof("delete object row %d, name is %v", obj.infoTNRow[0], insertObjBatch[tid].rowObjects[i].location.Name())
 						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
 					}
+					logutil.Infof("Update object %d, name is %v", obj.infoDel[0], insertObjBatch[tid].rowObjects[i].location.Name())
 				} else {
 					if infoDelete[insertObjBatch[tid].rowObjects[i].obj.infoDel[0]] {
 						panic("should not have info delete")
@@ -1138,22 +1139,22 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 			}
 
-			for i := 0; i < objInfoData.Length(); i++ {
+		}
+		for i := 0; i < objInfoData.Length(); i++ {
+			appendValToBatch(objInfoData, objectInfoMeta, i)
+			if infoInsert[i] != nil && infoDelete[i] {
+				panic("info should not have info delete")
+			}
+			if infoInsert[i] != nil {
 				appendValToBatch(objInfoData, objectInfoMeta, i)
-				if infoInsert[i] != nil && infoDelete[i] {
-					panic("info should not have info delete")
-				}
-				if infoInsert[i] != nil {
-					appendValToBatch(objInfoData, objectInfoMeta, i)
-					row := objectInfoMeta.Length() - 1
-					objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
-					objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
-					objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
-				}
+				row := objectInfoMeta.Length() - 1
+				objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
+				objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
+				objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+			}
 
-				if infoDelete[i] {
-					deleteRow = append(deleteRow, objectInfoMeta.Length()-1)
-				}
+			if infoDelete[i] {
+				deleteRow = append(deleteRow, objectInfoMeta.Length()-1)
 			}
 		}
 		logutil.Infof("delete deleteRow %d", len(deleteRow))
