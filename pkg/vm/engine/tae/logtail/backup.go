@@ -149,6 +149,7 @@ func addObjectToObjectData(
 		(*objectsData)[name] = object
 		if !isTN {
 			if isDelete {
+				logutil.Infof("addObjectToObjectData isDelete: %s, %d ,%v", name, row, isDelete)
 				(*objectsData)[name].obj.infoDel = []int{row}
 			} else {
 				(*objectsData)[name].obj.infoRow = []int{row}
@@ -160,6 +161,7 @@ func addObjectToObjectData(
 	}
 
 	if !isTN {
+		logutil.Infof("addObjectToObjectData2 isDelete: %s, %d ,%v", name, row, isDelete)
 		if isDelete {
 			(*objectsData)[name].obj.infoDel = append((*objectsData)[name].obj.infoDel, row)
 		} else {
@@ -1098,6 +1100,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	phaseNumber = 6
 	if len(insertObjBatch) > 0 {
+		deleteRow := make([]int, 0)
 		for tid := range insertObjBatch {
 			for i := range insertObjBatch[tid].rowObjects {
 				if insertObjBatch[tid].rowObjects[i].apply {
@@ -1113,13 +1116,18 @@ func ReWriteCheckpointAndBlockFromKey(
 					if len(obj.infoRow) > 0 {
 						panic("should not have info row")
 					}
+					logutil.Infof("Update object %d, name is %v", obj.infoDel[0], insertObjBatch[tid].rowObjects[i].location.Name())
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats[:], false)
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Update(obj.infoDel[0], false, false)
 					data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Update(obj.infoDel[0], types.TS{}, false)
 				} else {
-					data.bats[ObjectInfoIDX].Delete(insertObjBatch[tid].rowObjects[i].obj.infoDel[0])
+					deleteRow = append(deleteRow, insertObjBatch[tid].rowObjects[i].obj.infoDel[0])
 				}
 			}
+		}
+
+		for i := range deleteRow {
+			data.bats[ObjectInfoIDX].Delete(deleteRow[i])
 		}
 		data.bats[TNObjectInfoIDX].Compact()
 		data.bats[ObjectInfoIDX].Compact()
