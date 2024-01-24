@@ -879,55 +879,64 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		} else {
 			if objectData.isDeleteBatch && objectData.data[0] == nil {
-				logutil.Infof("isDeleteBatch2222 %v, isDeleteBatch is %v, objectData.obj is %d", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch, len(objectData.obj.data))
-				sortData := containers.ToTNBatch(objectData.obj.data[0], common.CheckpointAllocator)
-				if objectData.obj.sortKey != math.MaxUint16 {
-					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(objectData.obj.sortKey), backupPool)
+				if !objectData.isABlock {
+					// Case of merge nBlock
+					io := &insertObjects{
+						apply: false,
+						obj:   objectData.obj,
+					}
+					insertObjBatch[objectData.obj.tid].rowObjects = append(insertObjBatch[objectData.obj.tid].rowObjects, io)
+				} else {
+					logutil.Infof("isDeleteBatch2222 %v, isDeleteBatch is %v, objectData.obj is %d", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch, len(objectData.obj.data))
+					sortData := containers.ToTNBatch(objectData.obj.data[0], common.CheckpointAllocator)
+					if objectData.obj.sortKey != math.MaxUint16 {
+						_, err = mergesort.SortBlockColumns(sortData.Vecs, int(objectData.obj.sortKey), backupPool)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+					}
+					objectData.obj.data[0] = containers.ToCNBatch(sortData)
+					result := batch.NewWithSize(len(objectData.obj.data[0].Vecs) - 3)
+					for i := range result.Vecs {
+						result.Vecs[i] = objectData.obj.data[0].Vecs[i]
+					}
+					objectData.obj.data[0] = result
+					fileNum := uint16(1000) + objectData.obj.stats.ObjectName().Num()
+					segment := objectData.obj.stats.ObjectName().SegmentId()
+					name := objectio.BuildObjectName(&segment, fileNum)
+
+					writer, err := blockio.NewBlockWriter(dstFs, name.String())
 					if err != nil {
 						return nil, nil, nil, err
 					}
-				}
-				objectData.obj.data[0] = containers.ToCNBatch(sortData)
-				result := batch.NewWithSize(len(objectData.obj.data[0].Vecs) - 3)
-				for i := range result.Vecs {
-					result.Vecs[i] = objectData.obj.data[0].Vecs[i]
-				}
-				objectData.obj.data[0] = result
-				fileNum := uint16(1000) + objectData.obj.stats.ObjectName().Num()
-				segment := objectData.obj.stats.ObjectName().SegmentId()
-				name := objectio.BuildObjectName(&segment, fileNum)
-
-				writer, err := blockio.NewBlockWriter(dstFs, name.String())
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				if objectData.obj.sortKey != math.MaxUint16 {
-					writer.SetPrimaryKey(objectData.obj.sortKey)
-				}
-				_, err = writer.WriteBatch(objectData.obj.data[0])
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				blocks, extent, err = writer.Sync(ctx)
-				if err != nil {
-					panic("sync error")
-				}
-				files = append(files, name.String())
-				blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-				obj := objectData.obj
-				if insertObjBatch[obj.tid] == nil {
-					insertObjBatch[obj.tid] = &iObjects{
-						rowObjects: make([]*insertObjects, 0),
+					if objectData.obj.sortKey != math.MaxUint16 {
+						writer.SetPrimaryKey(objectData.obj.sortKey)
 					}
+					_, err = writer.WriteBatch(objectData.obj.data[0])
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					blocks, extent, err = writer.Sync(ctx)
+					if err != nil {
+						panic("sync error")
+					}
+					files = append(files, name.String())
+					blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
+					obj := objectData.obj
+					if insertObjBatch[obj.tid] == nil {
+						insertObjBatch[obj.tid] = &iObjects{
+							rowObjects: make([]*insertObjects, 0),
+						}
+					}
+					objectio.SetObjectStatsObjectName(obj.stats, name)
+					logutil.Infof("object name11 %s", obj.stats.ObjectName().String())
+					io := &insertObjects{
+						location: blockLocation,
+						apply:    false,
+						obj:      obj,
+					}
+					insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 				}
-				objectio.SetObjectStatsObjectName(obj.stats, name)
-				logutil.Infof("object name11 %s", obj.stats.ObjectName().String())
-				io := &insertObjects{
-					location: blockLocation,
-					apply:    false,
-					obj:      obj,
-				}
-				insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 			}
 
 			for i := range dataBlocks {
@@ -1029,24 +1038,20 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					if insertBatch[tid].insertBlocks[b].data.isABlock {
-
-					} else {
-						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
-						i := blkMeta.Vecs[0].Length() - 1
-						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
-							sort := true
-							if insertBatch[tid].insertBlocks[b].data != nil &&
-								insertBatch[tid].insertBlocks[b].data.isABlock &&
-								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-								sort = false
-							}
-							updateBlockMeta(blkMeta, blkMetaTxn, i,
-								insertBatch[tid].insertBlocks[b].blockId,
-								insertBatch[tid].insertBlocks[b].location,
-								sort)
+					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+					i := blkMeta.Vecs[0].Length() - 1
+					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
+						sort := true
+						if insertBatch[tid].insertBlocks[b].data != nil &&
+							insertBatch[tid].insertBlocks[b].data.isABlock &&
+							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+							sort = false
 						}
+						updateBlockMeta(blkMeta, blkMetaTxn, i,
+							insertBatch[tid].insertBlocks[b].blockId,
+							insertBatch[tid].insertBlocks[b].location,
+							sort)
 					}
 				}
 			}
