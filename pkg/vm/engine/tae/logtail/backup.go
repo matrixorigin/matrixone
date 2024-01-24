@@ -226,12 +226,10 @@ func trimObjectsData(
 	isCkpChange := false
 	for name := range *objectsData {
 		isChange := false
-		logutil.Infof("trimObjectsData: %s, (*objectsData)[name].obj is %v", name, (*objectsData)[name].obj)
 		if (*objectsData)[name].obj != nil && (*objectsData)[name].obj.isABlock {
 			if !(*objectsData)[name].obj.delete {
 				panic(fmt.Sprintf("object %s is not a delete batch", name))
 			}
-			logutil.Infof("data is %d, %v", len((*objectsData)[name].data), (*objectsData)[name].data)
 			if len((*objectsData)[name].data) == 0 {
 				var bat *batch.Batch
 				var err error
@@ -259,7 +257,7 @@ func trimObjectsData(
 					}
 					if commitTs.Greater(ts) {
 						windowCNBatch(bat, 0, uint64(v))
-						logutil.Infof("blkCommitTs %v ts %v , block is %v",
+						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), location.String())
 						isChange = true
 						break
@@ -269,7 +267,6 @@ func trimObjectsData(
 				(*objectsData)[name].obj.data = make([]*batch.Batch, 0)
 				bat = formatData(bat)
 				(*objectsData)[name].obj.data = append((*objectsData)[name].obj.data, bat)
-				logutil.Infof("trimObjectsData: %s, isChange is %v, (*objectsData)[name].obj.data is %d", name, isChange, len((*objectsData)[name].obj.data))
 				(*objectsData)[name].isChange = isChange
 				continue
 			}
@@ -294,7 +291,7 @@ func trimObjectsData(
 						return isCkpChange, err
 					}
 					if commitTs.Greater(ts) {
-						logutil.Infof("delete row %v, commitTs %v, location %v",
+						logutil.Debugf("delete row %v, commitTs %v, location %v",
 							v, commitTs.ToString(), block.location.String())
 						isChange = true
 						isCkpChange = true
@@ -327,35 +324,13 @@ func trimObjectsData(
 					}
 					if commitTs.Greater(ts) {
 						windowCNBatch(bat, 0, uint64(v))
-						logutil.Infof("blkCommitTs %v ts %v , block is %v",
+						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), block.location.String())
 						isChange = true
 						break
 					}
 				}
 				(*objectsData)[name].data[id].sortKey = sortKey
-
-				/*if (*objectsData)[name].obj == nil {
-					stats := objectio.NewObjectStats()
-					objectio.SetObjectStatsObjectName(stats, block.location.Name())
-					objectio.SetObjectStatsExtent(stats, block.location.Extent())
-					dm := meta.MustDataMeta()
-					blkCnt := dm.BlockCount()
-					tm, ok := meta.TombstoneMeta()
-					if ok {
-						blkCnt += tm.BlockCount()
-					}
-					objectio.SetObjectStatsBlkCnt(stats, blkCnt)
-					objectio.SetObjectStatsRowCnt(stats, dm.BlockHeader().Rows())
-					objectio.SetObjectStatsSize(stats, block.location.Extent().End()+objectio.FooterSize)
-					objectio.SetObjectStatsLocation(stats, block.location)
-					(*objectsData)[name].obj = &objData{
-						stats:    stats,
-						data:     make([]*batch.Batch, 0),
-						isABlock: true,
-						isInset:  true,
-					}
-				}*/
 			}
 			bat = formatData(bat)
 			(*objectsData)[name].data[id].data = bat
@@ -616,9 +591,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	objInfoData := data.bats[ObjectInfoIDX]
 	objInfoStats := objInfoData.GetVectorByName(ObjectAttr_ObjectStats)
 	objInfoState := objInfoData.GetVectorByName(ObjectAttr_State)
-	//objInfoSorted := objInfoData.GetVectorByName(ObjectAttr_Sorted)
 	objInfoTid := objInfoData.GetVectorByName(SnapshotAttr_TID)
-	//objInfoCreate := objInfoData.GetVectorByName(EntryNode_CreateAt)
 	objInfoDelete := objInfoData.GetVectorByName(EntryNode_DeleteAt)
 	objInfoCommit := objInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
 
@@ -626,7 +599,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		stats := objectio.NewObjectStats()
 		stats.UnMarshal(objInfoStats.Get(i).([]byte))
 		isABlk := objInfoState.Get(i).(bool)
-		//createAt := objInfoCreate.Get(i).(types.TS)
 		deleteAt := objInfoDelete.Get(i).(types.TS)
 		commitTS := objInfoCommit.Get(i).(types.TS)
 		tid := objInfoTid.Get(i).(uint64)
@@ -643,9 +615,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnObjInfoData := data.bats[TNObjectInfoIDX]
 	tnObjInfoStats := tnObjInfoData.GetVectorByName(ObjectAttr_ObjectStats)
 	tnObjInfoState := tnObjInfoData.GetVectorByName(ObjectAttr_State)
-	//objInfoSorted := objInfoData.GetVectorByName(ObjectAttr_Sorted)
 	tnObjInfoTid := tnObjInfoData.GetVectorByName(SnapshotAttr_TID)
-	//tnObjInfoCreate := tnObjInfoData.GetVectorByName(EntryNode_CreateAt)
 	tnObjInfoDelete := tnObjInfoData.GetVectorByName(EntryNode_DeleteAt)
 	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
 
@@ -653,7 +623,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		stats := objectio.NewObjectStats()
 		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
 		isABlk := tnObjInfoState.Get(i).(bool)
-		//createAt := tnObjInfoCreate.Get(i).(types.TS)
 		deleteAt := tnObjInfoDelete.Get(i).(types.TS)
 		tid := tnObjInfoTid.Get(i).(uint64)
 		commitTS := tnObjInfoCommit.Get(i).(types.TS)
@@ -858,7 +827,6 @@ func ReWriteCheckpointAndBlockFromKey(
 						insertBlocks: make([]*insertBlock, 0),
 					}
 				}
-				logutil.Infof("insert11 block: %v", blockLocation.String())
 				ib := &insertBlock{
 					location:  blockLocation,
 					blockId:   *objectio.BuildObjectBlockid(name, blocks[0].GetID()),
@@ -897,7 +865,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 					insertObjBatch[objectData.obj.tid].rowObjects = append(insertObjBatch[objectData.obj.tid].rowObjects, io)
 				} else {
-					logutil.Infof("isDeleteBatch2222 %v, isDeleteBatch is %v, objectData.obj is %d", objectData.obj.stats.ObjectName().String(), objectData.isDeleteBatch, len(objectData.obj.data))
 					sortData := containers.ToTNBatch(objectData.obj.data[0], common.CheckpointAllocator)
 					if objectData.obj.sortKey != math.MaxUint16 {
 						_, err = mergesort.SortBlockColumns(sortData.Vecs, int(objectData.obj.sortKey), backupPool)
@@ -939,7 +906,6 @@ func ReWriteCheckpointAndBlockFromKey(
 						}
 					}
 					objectio.SetObjectStatsObjectName(obj.stats, name)
-					logutil.Infof("object name11 %s", obj.stats.ObjectName().String())
 					io := &insertObjects{
 						location: blockLocation,
 						apply:    false,
@@ -1142,7 +1108,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					if len(obj.infoRow) > 0 {
 						panic("should not have info row")
 					}
-					logutil.Infof("inserting11 object %v", obj.stats.ObjectName().String())
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats[:], false)
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Update(obj.infoDel[0], false, false)
 					data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Update(obj.infoDel[0], types.TS{}, false)
