@@ -17,9 +17,10 @@ package tables
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -641,7 +642,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -652,7 +653,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 		return
 	}
 	if !minTS.IsEmpty() && end.Greater(minTS) {
-		end = minTS
+		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -665,13 +666,17 @@ func (blk *baseBlock) CollectDeleteInRange(
 	return
 }
 
-func (blk *baseBlock) TryCollectDeleteInRangeInMemory(
+// CollectDeleteInRangeAfterDeltalocation collects deletes after 
+// a certain delta location and committed in [start,end]
+func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
 	ctx context.Context,
-	start, end types.TS,
+	start, end types.TS,// start is startTS of deltalocation
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	bat, persisted, err := blk.inMemoryCollectDeleteInRange(
+	// persisted is persistedTS of deletes of the blk
+	// it equals startTS of the last delta location
+	bat, _, persisted, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -681,6 +686,9 @@ func (blk *baseBlock) TryCollectDeleteInRangeInMemory(
 	if err != nil {
 		return
 	}
+	// if persisted > start,
+	// there's another delta location committed.
+	// It includes more deletes than former delta location.
 	if persisted.Greater(start) {
 		bat, err = blk.persistedCollectDeleteInRange(
 			ctx,
@@ -699,11 +707,11 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
-) (bat *containers.Batch, minTS types.TS, err error) {
+) (bat *containers.Batch, minTS, persistedTS types.TS, err error) {
 	blk.RLock()
 	schema := blk.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS, persistedTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
 	blk.RUnlock()
 	if rowID == nil {
 		return
