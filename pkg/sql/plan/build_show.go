@@ -543,6 +543,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	// Do not show sequences.
 	sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemSequenceRel)
 
+	// Order by relname
+	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemRelAttr_Name)
+
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}
