@@ -1725,6 +1725,13 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	data.updateTableMeta(tid, ObjectInfo, delStart, delEnd)
 }
 
+func (data *CheckpointData) UpdateObjectInsertMeta(tid uint64, delStart, delEnd int32) {
+	if delEnd <= delStart {
+		return
+	}
+	data.resetTableMeta(tid, ObjectInfo, delStart, delEnd)
+}
+
 func (data *CheckpointData) resetTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
