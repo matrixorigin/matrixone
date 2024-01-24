@@ -399,7 +399,7 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 		var uuidErr error
 		var nodeUUID uuid.UUID
 		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
-			nodeUUID = uuid.New()
+			nodeUUID, _ = uuid.NewV7()
 		}
 		if err := util.SetUUIDNodeID(ctx, nodeUUID[:]); err != nil {
 			return "", moerr.ConvertPanicError(ctx, err)

@@ -34,7 +34,7 @@ require (
 	github.com/google/gops v0.3.25
 	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/jhump/protoreflect v1.15.2
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef

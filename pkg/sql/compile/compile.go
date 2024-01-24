@@ -1121,7 +1121,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileTimeWin(n, c.compileSort(n, ss))
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -2891,45 +2891,23 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 // the same block to one and the same CN to perform
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
-	//Todo: implemet delete merge
-	ss2 := make([]*Scope, 0, len(ss))
-	// ends := make([]*Scope, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			// ends = append(ends, s)
-			continue
-		}
-		ss2 = append(ss2, s)
-	}
-
-	rs := make([]*Scope, 0, len(ss2))
-	uuids := make([]uuid.UUID, 0, len(ss2))
-	for i := 0; i < len(ss2); i++ {
-		rs = append(rs, new(Scope))
-		uuids = append(uuids, uuid.New())
-	}
-
-	// for every scope, it should dispatch its
-	// batch to other cn
-	for i := 0; i < len(ss2); i++ {
-		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
-	}
 	delete := &vm.Instruction{
 		Op:  vm.Deletion,
 		Arg: arg,
 	}
-	for i := range rs {
-		// use distributed delete
+	for i, s := range ss {
+		if s.IsEnd {
+			continue
+		}
 		arg.RemoteDelete = true
-		// maybe just copy only once?
 		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
-		arg.IBucket = uint32(i)
-		arg.Nbucket = uint32(len(rs))
-		rs[i].Instructions = append(
-			rs[i].Instructions,
+		arg.IBucket = 0
+		arg.Nbucket = 1
+		ss[i].Instructions = append(
+			ss[i].Instructions,
 			dupInstruction(delete, nil, 0))
 	}
-	return c.newMergeScope(rs)
+	return c.newMergeScope(ss)
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {

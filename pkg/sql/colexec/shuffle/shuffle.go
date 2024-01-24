@@ -607,6 +607,7 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]in
 			}
 			for vecIndex := range b.Vecs {
 				v := b.Vecs[vecIndex]
+				v.SetSorted(false)
 				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
 				if err != nil {
 					return err

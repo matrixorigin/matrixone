@@ -210,14 +210,14 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		tbl = aliasTbl.Expr
 	}
 
-	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
 		tblInfo.needAggFilter = true
-		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
+		err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
 		}
-		if jionTbl.Right != nil {
-			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap, withMap)
+		if joinTbl.Right != nil {
+			return setTableExprToDmlTableInfo(ctx, joinTbl.Right, tblInfo, aliasMap, withMap)
 		}
 		return nil
 	}
@@ -1076,7 +1076,7 @@ func buildValueScan(
 	}
 
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
 		RowsetData:  rowsetData,
