@@ -94,7 +94,7 @@ func TestCTE_Dispatch(t *testing.T) {
 		RecSink: true,
 	}
 	// case 1. cte change the nil batch to CteEndBatch.
-	result, free, err := specialLogicForCTE(proc, arg, nil)
+	result, free, err := cteBatchRewrite(proc, arg, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	{
@@ -112,7 +112,7 @@ func TestCTE_Dispatch(t *testing.T) {
 		bat := batch.NewWithSize(0)
 		bat.SetLast()
 		arg.ctr.hasData = true
-		result, free, err = specialLogicForCTE(proc, arg, bat)
+		result, free, err = cteBatchRewrite(proc, arg, bat)
 		require.NoError(t, err)
 		require.False(t, free)
 		require.False(t, arg.ctr.hasData)
@@ -123,7 +123,7 @@ func TestCTE_Dispatch(t *testing.T) {
 		bat := batch.NewWithSize(0)
 		bat.SetLast()
 		arg.ctr.hasData = false
-		result, free, err = specialLogicForCTE(proc, arg, bat)
+		result, free, err = cteBatchRewrite(proc, arg, bat)
 		require.NoError(t, err)
 		require.False(t, free)
 		require.False(t, arg.ctr.hasData)
@@ -133,7 +133,7 @@ func TestCTE_Dispatch(t *testing.T) {
 
 	// case 3. the batch may change the hasData flag.
 	arg.ctr.hasData = false
-	result, free, err = specialLogicForCTE(proc, arg, batch.EmptyBatch)
+	result, free, err = cteBatchRewrite(proc, arg, batch.EmptyBatch)
 	require.NoError(t, err)
 	require.False(t, free)
 	require.False(t, arg.ctr.hasData)
@@ -142,7 +142,7 @@ func TestCTE_Dispatch(t *testing.T) {
 	arg.ctr.hasData = false
 	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
-	result, free, err = specialLogicForCTE(proc, arg, bat)
+	result, free, err = cteBatchRewrite(proc, arg, bat)
 	require.NoError(t, err)
 	require.False(t, free)
 	require.True(t, arg.ctr.hasData)

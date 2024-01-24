@@ -109,8 +109,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze.Start()
 	defer analyze.Stop()
 
-	// cte do some special logic. it may change the input batch.
-	sendBatch, needFree, errCTE := specialLogicForCTE(proc, arg, result.Batch)
+	// cte do some special logic. it may rewrite the input batch.
+	sendBatch, needFree, errCTE := cteBatchRewrite(proc, arg, result.Batch)
 	if errCTE != nil {
 		return result, errCTE
 	}
@@ -179,7 +179,7 @@ func (arg *Argument) waitRemoteReceiversReady(proc *process.Process, waitTime ti
 	return err
 }
 
-func specialLogicForCTE(proc *process.Process, arg *Argument, bat *batch.Batch) (result *batch.Batch, needFree bool, err error) {
+func cteBatchRewrite(proc *process.Process, arg *Argument, bat *batch.Batch) (result *batch.Batch, needFree bool, err error) {
 	if bat == nil {
 		if arg.RecSink {
 			result, err = makeCteEndBatch(proc)
