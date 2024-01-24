@@ -64,6 +64,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
+	var detectSqls []string
 	for i, tableDef := range tblInfo.tableDefs {
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
@@ -76,11 +77,12 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 			return nil, err
 		}
 		putDmlPlanCtx(upPlanCtx)
+		detectSqls = genSqlsForFkRefer(tblInfo.objRef[i].SchemaName, tableDef)
 	}
 	if err != nil {
 		return nil, err
 	}
-
+	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
 	query.StmtType = plan.Query_UPDATE

@@ -492,3 +492,90 @@ func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	}
 	return false
 }
+
+func genSqlsForFkRefer(dbName string, tableDef *TableDef) (detectSqls []string) {
+	tblName := tableDef.Name
+
+	wrap := func(table string, strs []string) string {
+		bb := strings.Builder{}
+		for i, str := range strs {
+			if i > 0 {
+				bb.WriteByte(',')
+			}
+			//table
+			bb.WriteByte('`')
+			bb.WriteString(table)
+			bb.WriteByte('`')
+			bb.WriteByte('.')
+			//column
+			bb.WriteByte('`')
+			bb.WriteString(str)
+			bb.WriteByte('`')
+		}
+		return bb.String()
+	}
+
+	isNotNulls := func(table string, strs []string) string {
+		bb := strings.Builder{}
+		for i, str := range strs {
+			if i > 0 {
+				bb.WriteString(" and ")
+			}
+			//table
+			bb.WriteByte('`')
+			bb.WriteString(table)
+			bb.WriteByte('`')
+			bb.WriteByte('.')
+			//column
+			bb.WriteByte('`')
+			bb.WriteString(str)
+			bb.WriteByte('`')
+			//is not null
+			bb.WriteString(" is not null")
+		}
+		bb.WriteByte(' ')
+		return bb.String()
+	}
+
+	if len(tableDef.Fkeys) > 0 {
+		colIdToName := make(map[uint64]string)
+		for _, col := range tableDef.Cols {
+			colIdToName[col.ColId] = col.Name
+		}
+		//check fk self refer
+		//for fk self refer,generate detect
+		for _, fkey := range tableDef.Fkeys {
+			if fkey.ForeignTbl == 0 {
+				//fk cols
+				fkCols := make([]string, 0)
+				//refer cols
+				referCols := make([]string, 0)
+				for _, fkColId := range fkey.Cols {
+					fkCols = append(fkCols, colIdToName[fkColId])
+				}
+				for _, referColId := range fkey.ForeignCols {
+					referCols = append(referCols, colIdToName[referColId])
+				}
+
+				xtable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+				where := fmt.Sprintf("where %s", isNotNulls(tblName, fkCols))
+				sql0 := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
+					wrap(tblName, fkCols),
+					xtable,
+					where,
+					wrap(tblName, referCols),
+					xtable,
+				)
+
+				//make detect sql
+				sql := strings.Join([]string{
+					"select count(*) = 0 from (",
+					sql0,
+					")",
+				}, " ")
+				detectSqls = append(detectSqls, sql)
+			}
+		}
+	}
+	return
+}

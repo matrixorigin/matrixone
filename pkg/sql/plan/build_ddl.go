@@ -2029,6 +2029,9 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		dropTable.TableId = tableDef.TblId
 		if tableDef.Fkeys != nil {
 			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					continue
+				}
 				dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
 			}
 		}

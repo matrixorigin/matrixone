@@ -484,7 +484,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 			if vs != nil && vs[0].Length() > 0 {
 				yes := vector.GetFixedAt[bool](vs[0], 0)
 				if !yes {
-					return moerr.NewInternalError(c.ctx, "fk self refer invalidate the fk constraint")
+					return moerr.NewErrViolateFKConstraint(c.ctx)
 				}
 			}
 		}

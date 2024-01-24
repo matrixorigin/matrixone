@@ -1318,6 +1318,10 @@ func NewErrTooManyParameter(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyParameter)
 }
 
+func NewErrViolateFKConstraint(ctx context.Context) *Error {
+	return newError(ctx, ER_ROW_IS_REFERENCED)
+}
+
 var contextFunc atomic.Value
 
 func SetContextFunc(f func() context.Context) {

@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,59 +71,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
 	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	// }
-
-	detectSqls := make([]string, 0)
-	if len(tableDef.Fkeys) > 0 {
-		colIdToName := make(map[uint64]string)
-		for _, col := range tableDef.Cols {
-			colIdToName[col.ColId] = col.Name
-		}
-		//check fk self refer
-		//for fk self refer,generate detect
-		for _, fkey := range tableDef.Fkeys {
-			if fkey.ForeignTbl == 0 {
-				//fk cols
-				fkCols := make([]string, 0)
-				//refer cols
-				referCols := make([]string, 0)
-				for _, fkColId := range fkey.Cols {
-					fkCols = append(fkCols, colIdToName[fkColId])
-				}
-				for _, referColId := range fkey.ForeignCols {
-					referCols = append(referCols, colIdToName[referColId])
-				}
-
-				wrap := func(strs []string) string {
-					bb := strings.Builder{}
-					for i, str := range strs {
-						if i > 0 {
-							bb.WriteByte(',')
-						}
-						bb.WriteByte('`')
-						bb.WriteString(str)
-						bb.WriteByte('`')
-					}
-					return bb.String()
-				}
-
-				xtable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
-				sql0 := fmt.Sprintf("select distinct %s from %s except select distinct %s from %s",
-					wrap(fkCols),
-					xtable,
-					wrap(referCols),
-					xtable,
-				)
-
-				//make detect sql
-				sql := strings.Join([]string{
-					"select count(*) = 0 from (",
-					sql0,
-					")",
-				}, " ")
-				detectSqls = append(detectSqls, sql)
-			}
-		}
-	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
@@ -317,7 +262,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	}
-	query.DetectSqls = detectSqls
+	query.DetectSqls = genSqlsForFkRefer(dbName, tableDef)
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
 	return &Plan{

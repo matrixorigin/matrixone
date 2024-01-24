@@ -1777,6 +1777,9 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	// update tableDef of foreign key's table
 	for _, fkTblId := range qry.ForeignTbl {
+		if fkTblId == 0 {
+			continue
+		}
 		err := s.removeRefChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
