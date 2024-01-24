@@ -158,7 +158,6 @@ type methodType interface {
 
 func CheckMethodVersion[Req interface{ GetMethod() T }, T methodType](ctx context.Context, versionMap map[T]int64, req Req) error {
 	if version, ok := versionMap[req.GetMethod()]; !ok {
-		panic(1)
 		return moerr.NewNotSupported(ctx, "%s not support in current version", req.GetMethod().String())
 	} else {
 		v, ok := ProcessLevelRuntime().GetGlobalVariables(MOProtocolVersion)

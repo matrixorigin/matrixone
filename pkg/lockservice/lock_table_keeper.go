@@ -145,6 +145,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			continue
 		}
 		logKeepRemoteLocksFailed(bind, err)
+		if !isRetryError(err) {
+			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
+				return !v.getBind().Changed(bind)
+			})
+		}
 	}
 
 	for idx, f := range futures {
