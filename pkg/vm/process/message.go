@@ -168,3 +168,48 @@ func MatchAddress(m Message, raddr *MessageAddress) bool {
 	}
 	return true
 }
+
+func AddrBroadCastOnCurrentCN() MessageAddress {
+	return MessageAddress{
+		cnAddr:     CURRENTCN,
+		operatorID: -1,
+		parallelID: -1,
+	}
+}
+
+func AddrBroadCastOnALLCN() MessageAddress {
+	return MessageAddress{
+		cnAddr:     ALLCN,
+		operatorID: -1,
+		parallelID: -1,
+	}
+}
+
+var _ Message = new(TopValueMessage)
+
+type TopValueMessage struct {
+	topvalue int64
+	tag      int32
+	signed   bool
+	min      bool
+}
+
+func (t TopValueMessage) Serialize() []byte {
+	panic("top value message only broadcasts on current CN, don't need to serialize")
+}
+
+func (t TopValueMessage) Deserialize([]byte) Message {
+	panic("top value message only broadcasts on current CN, don't need to deserialize")
+}
+
+func (t TopValueMessage) NeedBlock() bool {
+	return false
+}
+
+func (t TopValueMessage) GetMsgTag() int32 {
+	return t.tag
+}
+
+func (t TopValueMessage) GetReceiverAddr() MessageAddress {
+	return AddrBroadCastOnCurrentCN()
+}
