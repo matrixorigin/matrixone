@@ -1125,6 +1125,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					if infoInsert[obj.infoDel[0]] != nil {
 						panic("should not have info insert")
 					}
+					objectio.SetObjectStatsExtent(insertObjBatch[tid].rowObjects[i].obj.stats, insertObjBatch[tid].rowObjects[i].location.Extent())
+					objectio.SetObjectStatsObjectName(insertObjBatch[tid].rowObjects[i].obj.stats, insertObjBatch[tid].rowObjects[i].location.Name())
 					infoInsert[obj.infoDel[0]] = insertObjBatch[tid].rowObjects[i].obj
 					if len(obj.infoTNRow) > 0 {
 						logutil.Infof("delete object row %d, name is %v", obj.infoTNRow[0], insertObjBatch[tid].rowObjects[i].location.Name())
@@ -1151,6 +1153,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
 				objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
 				objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+				logutil.Infof("insertinfoInsert object row %d, name is %v", row, infoInsert[i].stats.String())
 			}
 
 			if infoDelete[i] {
