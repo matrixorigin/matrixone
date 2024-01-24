@@ -517,7 +517,9 @@ func LoadCheckpointEntriesFromKey(
 		deltaLoc := objectio.Location(
 			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if deltaLoc.IsEmpty() {
-			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
+			metaLoc := objectio.Location(
+				data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
+			panic(fmt.Sprintf("block %v deltaLoc is empty", metaLoc.String()))
 		}
 		locations = append(locations, deltaLoc.Name())
 	}
@@ -851,6 +853,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						insertBlocks: make([]*insertBlock, 0),
 					}
 				}
+				logutil.Infof("insert11 block: %v", blockLocation.String())
 				ib := &insertBlock{
 					location:  blockLocation,
 					blockId:   *objectio.BuildObjectBlockid(name, blocks[0].GetID()),
