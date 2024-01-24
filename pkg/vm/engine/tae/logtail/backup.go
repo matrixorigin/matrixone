@@ -825,7 +825,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if err != nil {
 					panic("sync error")
 				}
-				logutil.Infof("files is %v", name.String())
+				logutil.Infof("files11111 is %v", name.String())
 				files = append(files, name.String())
 				blockLocation = objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 				if insertBatch[dataBlocks[0].tid] == nil {
@@ -841,6 +841,9 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				insertBatch[dataBlocks[0].tid].insertBlocks = append(insertBatch[dataBlocks[0].tid].insertBlocks, ib)
 
+				if objectData.obj != nil {
+					objectData.obj.stats = &writer.GetObjectStats()[objectio.SchemaData]
+				}
 			}
 			if objectData.obj != nil {
 				obj := objectData.obj
@@ -854,6 +857,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					apply:    false,
 					obj:      obj,
 				}
+				logutil.Infof("insertObjBatch11111 is %v", obj.stats.String())
 				insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 			}
 		} else {
@@ -903,8 +907,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					if err != nil {
 						panic("sync error")
 					}
+					logutil.Infof("files is %v", name.String())
 					files = append(files, name.String())
-					logutil.Infof("files11 is %v", name.String())
 					blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 					obj := objectData.obj
 					if insertObjBatch[obj.tid] == nil {
@@ -912,7 +916,9 @@ func ReWriteCheckpointAndBlockFromKey(
 							rowObjects: make([]*insertObjects, 0),
 						}
 					}
-					objectio.SetObjectStatsObjectName(obj.stats, name)
+					logutil.Infof("GetObjectStats bf is %v", obj.stats.String())
+					obj.stats = &writer.GetObjectStats()[objectio.SchemaData]
+					logutil.Infof("GetObjectStats is %v", obj.stats.String())
 					io := &insertObjects{
 						location: blockLocation,
 						apply:    false,
