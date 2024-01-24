@@ -626,8 +626,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnObjInfoTid := tnObjInfoData.GetVectorByName(SnapshotAttr_TID)
 	tnObjInfoDelete := tnObjInfoData.GetVectorByName(EntryNode_DeleteAt)
 	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
-	logutil.Infof("tnObjInfoData length is %v", tnObjInfoData.Length())
-	for i := 0; i < tnObjInfoData.Length(); i++ {
+	logutil.Infof("tnObjInfoData length is %v, tnObjInfoData.Vecs[4] is %d ", tnObjInfoData.Length(), tnObjInfoData.Vecs[2].Length())
+	for i := 0; i < tnObjInfoData.Vecs[2].Length(); i++ {
 		stats := objectio.NewObjectStats()
 		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
 		isABlk := tnObjInfoState.Get(i).(bool)
