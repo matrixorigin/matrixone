@@ -529,7 +529,11 @@ func LoadCheckpointEntriesFromKey(
 		if !metaLoc.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[metaLoc.Name().String()] {
-					panic(fmt.Sprintf("block111 %v metaLoc is not deleted", metaLoc.String()))
+					(*softDeletes)[metaLoc.Name().String()] = true
+					//Fixme:The objectlist has updated this object to the cropped object,
+					// and the expired object in the soft-deleted blocklist has not been processed.
+					logutil.Warnf("block %v metaLoc is not deleted", metaLoc.String())
+					//panic(fmt.Sprintf("block111 %v metaLoc is not deleted", metaLoc.String()))
 				}
 			}
 		}
