@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1223,7 +1224,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in", "prefix_in", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
@@ -1591,9 +1592,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		switch leftExpr := args[0].Expr.(type) {
 		case *plan.Expr_Lit:
 			if _, ok := args[1].Expr.(*plan.Expr_Col); ok {
-				if checkNoNeedCast(argsType[0], argsType[1], leftExpr) {
-					tmpType := argsType[1] // cast const_expr as column_expr's type
-					argsCastType = []types.Type{tmpType, tmpType}
+				if checkNoNeedCast(argsType[0], argsType[1], leftExpr.Lit) {
+					argsCastType = []types.Type{argsType[1], argsType[1]}
 					// need to update function id
 					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 					if err != nil {
@@ -1603,17 +1603,24 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
-			if rightExpr, ok := args[1].Expr.(*plan.Expr_Lit); ok {
-				if checkNoNeedCast(argsType[1], argsType[0], rightExpr) {
-					tmpType := argsType[0] // cast const_expr as column_expr's type
-					argsCastType = []types.Type{tmpType, tmpType}
-					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
-					if err != nil {
-						return nil, err
-					}
-					funcID = fGet.GetEncodedOverloadID()
+			if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) {
+				argsCastType = []types.Type{argsType[0], argsType[0]}
+				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+				if err != nil {
+					return nil, err
 				}
+				funcID = fGet.GetEncodedOverloadID()
 			}
+		}
+
+	case "between":
+		if checkNoNeedCast(argsType[1], argsType[0], args[1].GetLit()) && checkNoNeedCast(argsType[2], argsType[0], args[2].GetLit()) {
+			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
+			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+			if err != nil {
+				return nil, err
+			}
+			funcID = fGet.GetEncodedOverloadID()
 		}
 
 	case "in", "not_in":
@@ -1623,17 +1630,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List.List {
-				if constExpr, ok := rightVal.Expr.(*plan.Expr_Lit); ok {
-					if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, constExpr) {
-						inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-						if err != nil {
-							return nil, err
-						}
-						inExprList = append(inExprList, inExpr)
-						continue
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
+					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if err != nil {
+						return nil, err
 					}
+					inExprList = append(inExprList, inExpr)
+				} else {
+					orExprList = append(orExprList, rightVal)
 				}
-				orExprList = append(orExprList, rightVal)
 			}
 
 			var newExpr *plan.Expr
@@ -1870,7 +1875,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_ScoreBinary:
 		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:
-		return returnDecimalExpr(astExpr.String())
+		s := astExpr.String()[2:]
+		bytes, _ := util.DecodeBinaryString(s)
+		return returnHexNumExpr(string(bytes), true)
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil

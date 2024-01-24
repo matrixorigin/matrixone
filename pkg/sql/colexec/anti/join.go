@@ -16,7 +16,6 @@ package anti
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -92,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastrow = 0
 			}
 
-			if ctr.bat == nil || ctr.bat.IsEmpty() {
+			if ctr.mp == nil {
 				err := ctr.emptyProbe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 				return result, err
 			} else {
@@ -126,16 +125,22 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 }
 
 func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
 		}
-		ctr.bat = bat
+		if bat != nil {
+			ctr.batchRowCount += bat.RowCount()
+			ctr.batches = append(ctr.batches, bat)
+		} else {
+			break
+		}
+	}
+	for i := 0; i < len(ctr.batches)-1; i++ {
+		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
+			panic("wrong batch received for hash build!")
+		}
 	}
 	return nil
 }
@@ -162,7 +167,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	}
 	count := ap.bat.RowCount()
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if ctr.rbat.RowCount() >= 8192 {
+		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.lastrow = i
@@ -202,7 +207,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		// for anti join, if left batch is sorted , then output batch is sorted
 		ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[pos].GetSorted())
 	}
-	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
+	if ctr.batchRowCount == 1 && ctr.hasNull {
 		result.Batch = ctr.rbat
 		anal.Output(ctr.rbat, isLast)
 		return nil
@@ -215,8 +220,8 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	if ctr.joinBat1 == nil {
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(ap.bat, proc.Mp())
 	}
-	if ctr.joinBat2 == nil && ctr.bat != nil {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 
 	count := ap.bat.RowCount()
@@ -224,7 +229,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if ctr.rbat.RowCount() >= 8192 {
+		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ap.lastrow = i
@@ -249,11 +254,12 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			}
 			if ap.Cond != nil {
 				if ap.HashOnPK {
+					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, ap.bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], idx2,
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -272,11 +278,12 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					matched := false // mark if any tuple satisfies the condition
 					sels := mSels[vals[k]-1]
 					for _, sel := range sels {
+						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, ap.bat, int64(i+k),
 							1, ctr.cfs1); err != nil {
 							return err
 						}
-						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2),
 							1, ctr.cfs2); err != nil {
 							return err
 						}
