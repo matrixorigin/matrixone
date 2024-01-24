@@ -1009,7 +1009,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						continue
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
-					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
+					if insertBatch[tid].insertBlocks[b].data == nil {
 
 					} else {
 						insertBatch[tid].insertBlocks[b].apply = true
@@ -1042,7 +1042,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
+					if insertBatch[tid].insertBlocks[b].data == nil {
 
 					} else {
 						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
