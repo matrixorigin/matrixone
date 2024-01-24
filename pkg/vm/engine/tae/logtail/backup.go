@@ -798,6 +798,7 @@ func ReWriteCheckpointAndBlockFromKey(
 							insertBlocks: make([]*insertBlock, 0),
 						}
 					}
+					logutil.Infof("merge nBlock: %v", dt.blockId.String())
 					ib := &insertBlock{
 						apply:     false,
 						deleteRow: dt.deleteRow[len(dt.deleteRow)-1],
@@ -1009,26 +1010,26 @@ func ReWriteCheckpointAndBlockFromKey(
 						continue
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
-					if insertBatch[tid].insertBlocks[b].data == nil {
+					/*if insertBatch[tid].insertBlocks[b].data == nil {
 
-					} else {
-						insertBatch[tid].insertBlocks[b].apply = true
-						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
+					} else {*/
+					insertBatch[tid].insertBlocks[b].apply = true
+					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
+					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
-						row := blkMeta.Vecs[0].Length() - 1
-						if !blk.location.IsEmpty() {
-							sort := true
-							if insertBatch[tid].insertBlocks[b].data != nil &&
-								insertBatch[tid].insertBlocks[b].data.isABlock &&
-								insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
-								sort = false
-							}
-							updateBlockMeta(blkMeta, blkMetaTxn, row,
-								insertBatch[tid].insertBlocks[b].blockId,
-								insertBatch[tid].insertBlocks[b].location,
-								sort)
+					row := blkMeta.Vecs[0].Length() - 1
+					if !blk.location.IsEmpty() {
+						sort := true
+						if insertBatch[tid].insertBlocks[b].data != nil &&
+							insertBatch[tid].insertBlocks[b].data.isABlock &&
+							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+							sort = false
 						}
+						updateBlockMeta(blkMeta, blkMetaTxn, row,
+							insertBatch[tid].insertBlocks[b].blockId,
+							insertBatch[tid].insertBlocks[b].location,
+							sort)
+						//}
 					}
 				}
 			}
@@ -1042,7 +1043,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
-					if insertBatch[tid].insertBlocks[b].data == nil {
+					if insertBatch[tid].insertBlocks[b].data != nil && insertBatch[tid].insertBlocks[b].data.isABlock {
 
 					} else {
 						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
@@ -1131,7 +1132,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					if len(obj.infoRow) > 0 {
 						panic("should not have info row")
 					}
-
+					logutil.Infof("inserting11 object %v", obj.stats.ObjectName().String())
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats[:], false)
 					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Update(obj.infoDel[0], false, false)
 					data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Update(obj.infoDel[0], types.TS{}, false)
