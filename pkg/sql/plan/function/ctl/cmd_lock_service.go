@@ -22,6 +22,7 @@ import (
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -34,22 +35,22 @@ func handleRemoveRemoteLockTable(
 	sender requestSender) (Result, error) {
 	infos := strings.Split(parameter, "-")
 	if len(infos) != 3 {
-		return Result{}, fmt.Errorf("invalid parameter %s, use 'account_id + '-' table_id' + '-' + bind_version'", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	accountID, err := format.ParseStringUint32(infos[0])
 	if err != nil {
-		return Result{}, fmt.Errorf("invalid parameter %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	tableID, err := format.ParseStringUint64(infos[1])
 	if err != nil {
-		return Result{}, fmt.Errorf("invalid parameter %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	version, err := format.ParseStringUint64(infos[2])
 	if err != nil {
-		return Result{}, fmt.Errorf("invalid parameter %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
 	qs := proc.QueryService
@@ -94,17 +95,17 @@ func handleGetLatestBind(
 	sender requestSender) (Result, error) {
 	infos := strings.Split(parameter, "-")
 	if len(infos) != 2 {
-		return Result{}, fmt.Errorf("invalid parameter %s, use 'account_id + '-' table_id'", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
 	accountID, err := format.ParseStringUint32(infos[0])
 	if err != nil {
-		return Result{}, fmt.Errorf("invalid account_id and table id: %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
 	tableID, err := format.ParseStringUint64(infos[1])
 	if err != nil {
-		return Result{}, fmt.Errorf("invalid account_id and table id: %s", parameter)
+		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
 	qs := proc.QueryService
