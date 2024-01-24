@@ -1117,6 +1117,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					objectio.SetObjectStatsExtent(obj.stats, insertObjBatch[tid].rowObjects[i].location.Extent())
 					objectio.SetObjectStatsObjectName(obj.stats, insertObjBatch[tid].rowObjects[i].location.Name())
 					if len(obj.infoTNRow) > 0 {
+						logutil.Infof("delete object row %d, name is %v", obj.infoTNRow[0], insertObjBatch[tid].rowObjects[i].location.Name())
 						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
 					}
 					if len(obj.infoRow) > 0 {
