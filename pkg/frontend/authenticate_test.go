@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -5456,6 +5457,34 @@ func Test_doRevokePrivilege(t *testing.T) {
 			err = doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 		}
+	})
+}
+
+func Test_doDropFunctionWithDB(t *testing.T) {
+	convey.Convey("drop function with db", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		ses := &Session{}
+		sql := getSqlForCheckUdfWithDb(string(stmt.Name))
+
+		bh.sql2result[sql] = nil
+		err := doDropFunctionWithDB(ctx, ses, stmt, nil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
