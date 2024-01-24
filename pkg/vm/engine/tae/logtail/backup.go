@@ -886,6 +886,11 @@ func ReWriteCheckpointAndBlockFromKey(
 			if objectData.isDeleteBatch && objectData.data[0] == nil {
 				if !objectData.isABlock {
 					// Case of merge nBlock
+					if insertObjBatch[objectData.obj.tid] == nil {
+						insertObjBatch[objectData.obj.tid] = &iObjects{
+							rowObjects: make([]*insertObjects, 0),
+						}
+					}
 					io := &insertObjects{
 						apply: false,
 						obj:   objectData.obj,
