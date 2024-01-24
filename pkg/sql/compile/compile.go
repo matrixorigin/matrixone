@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -418,8 +419,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			//detect fk self refer
 			//get the detect sql
 			query := c.pn.GetQuery()
-			if query != nil && (query.StmtType == plan.Query_INSERT ||
+			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
 				query.StmtType == plan.Query_UPDATE) {
+				fmt.Fprintf(os.Stderr, "detect fk self refer. %v -> %v\n", query.StmtType, query.DetectSqls)
 				err = detectFkSelfRefer(runC, query.DetectSqls)
 			}
 		}
@@ -482,7 +484,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 			if vs != nil && vs[0].Length() > 0 {
 				yes := vector.GetFixedAt[bool](vs[0], 0)
 				if !yes {
-					return moerr.NewInternalError(c.ctx, "fk self refer invalidate the fk constrait")
+					return moerr.NewInternalError(c.ctx, "fk self refer invalidate the fk constraint")
 				}
 			}
 		}
