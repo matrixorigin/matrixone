@@ -1112,6 +1112,9 @@ func ReWriteCheckpointAndBlockFromKey(
 	phaseNumber = 6
 	if len(insertObjBatch) > 0 {
 		deleteRow := make([]int, 0)
+		objectInfoMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[ObjectInfoIDX], common.CheckpointAllocator)
+		infoInsert := make(map[int]*objData, 0)
+		infoDelete := make(map[int]bool, 0)
 		for tid := range insertObjBatch {
 			for i := range insertObjBatch[tid].rowObjects {
 				if insertObjBatch[tid].rowObjects[i].apply {
@@ -1119,21 +1122,37 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				if !insertObjBatch[tid].rowObjects[i].location.IsEmpty() {
 					obj := insertObjBatch[tid].rowObjects[i].obj
-					objectio.SetObjectStatsExtent(obj.stats, insertObjBatch[tid].rowObjects[i].location.Extent())
-					objectio.SetObjectStatsObjectName(obj.stats, insertObjBatch[tid].rowObjects[i].location.Name())
+					if infoInsert[obj.infoDel[0]] != nil {
+						panic("should not have info insert")
+					}
+					infoInsert[obj.infoDel[0]] = insertObjBatch[tid].rowObjects[i].obj
 					if len(obj.infoTNRow) > 0 {
 						logutil.Infof("delete object row %d, name is %v", obj.infoTNRow[0], insertObjBatch[tid].rowObjects[i].location.Name())
 						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
 					}
-					if len(obj.infoRow) > 0 {
-						panic("should not have info row")
-					}
-					logutil.Infof("Update object %d, name is %v", obj.infoDel[0], insertObjBatch[tid].rowObjects[i].location.Name())
-					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_ObjectStats).Update(obj.infoDel[0], obj.stats[:], false)
-					data.bats[ObjectInfoIDX].GetVectorByName(ObjectAttr_State).Update(obj.infoDel[0], false, false)
-					data.bats[ObjectInfoIDX].GetVectorByName(EntryNode_DeleteAt).Update(obj.infoDel[0], types.TS{}, false)
 				} else {
-					deleteRow = append(deleteRow, insertObjBatch[tid].rowObjects[i].obj.infoDel[0])
+					if infoDelete[insertObjBatch[tid].rowObjects[i].obj.infoDel[0]] {
+						panic("should not have info delete")
+					}
+					infoDelete[insertObjBatch[tid].rowObjects[i].obj.infoDel[0]] = true
+				}
+			}
+
+			for i := 0; i < objInfoData.Length(); i++ {
+				appendValToBatch(objInfoData, objectInfoMeta, i)
+				if infoInsert[i] != nil && infoDelete[i] {
+					panic("info should not have info delete")
+				}
+				if infoInsert[i] != nil {
+					appendValToBatch(objInfoData, objectInfoMeta, i)
+					row := objectInfoMeta.Length() - 1
+					objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
+					objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
+					objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
+				}
+
+				if infoDelete[i] {
+					deleteRow = append(deleteRow, objectInfoMeta.Length()-1)
 				}
 			}
 		}
@@ -1142,7 +1161,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			data.bats[ObjectInfoIDX].Delete(deleteRow[i])
 		}
 		data.bats[TNObjectInfoIDX].Compact()
-		data.bats[ObjectInfoIDX].Compact()
+		objectInfoMeta.Compact()
+		data.bats[ObjectInfoIDX].Close()
+		data.bats[ObjectInfoIDX] = objectInfoMeta
 	}
 	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 	if err != nil {
