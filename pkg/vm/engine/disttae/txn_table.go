@@ -902,7 +902,7 @@ func (tbl *txnTable) tryFastRanges(
 		return
 	}
 
-	val, isVec := extractPKValueFromEqualExprs(
+	val := extractPKValueFromEqualExprs(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
@@ -928,12 +928,6 @@ func (tbl *txnTable) tryFastRanges(
 		}
 	}()
 
-	var vec *vector.Vector
-	if isVec {
-		vec = vector.NewVec(types.T_any.ToType())
-		_ = vec.UnmarshalBinary(val)
-	}
-
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -942,16 +936,9 @@ func (tbl *txnTable) tryFastRanges(
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
-				if isVec {
-					if !obj.SortKeyZoneMap().AnyIn(vec) {
-						zmHit++
-						return
-					}
-				} else {
-					if !obj.SortKeyZoneMap().ContainsKey(val) {
-						zmHit++
-						return
-					}
+				if !obj.SortKeyZoneMap().ContainsKey(val) {
+					zmHit++
+					return
 				}
 				zmCkecked = true
 			}
@@ -972,16 +959,10 @@ func (tbl *txnTable) tryFastRanges(
 
 			// check whether the object is skipped by zone map
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if isVec {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
-						return
-					}
-				} else {
-					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-						return
-					}
-				}
+			if !zmCkecked &&
+				!meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+				return
+
 			}
 
 			bf = nil
@@ -1002,16 +983,10 @@ func (tbl *txnTable) tryFastRanges(
 					return false
 				}
 				var exist bool
-				if isVec {
-					if exist = blkBfIdx.MayContainsAny(vec); !exist {
-						return true
-					}
-				} else {
-					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-						return false
-					} else if !exist {
-						return true
-					}
+				if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
+					return false
+				} else if !exist {
+					return true
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1624,7 +1599,7 @@ func (tbl *txnTable) makeEncodedPK(
 			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, _, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
+			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
 			hasNull = isNull
 			if hasNull {
 				return

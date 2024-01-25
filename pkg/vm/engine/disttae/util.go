@@ -361,53 +361,45 @@ func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
 	return
 }
 
-// return canEval, isNull, isVec, evaledVal
 func getPkValueByExpr(
 	expr *plan.Expr,
 	pkName string,
 	oid types.T,
 	mustOne bool,
 	proc *process.Process,
-) (bool, bool, bool, any) {
+) (bool, bool, any) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
-		return false, false, false, nil
+		return false, false, nil
 	}
 
 	switch exprImpl := valExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		if exprImpl.Lit.Isnull {
-			return false, true, false, nil
+			return false, true, nil
 		}
 		canEval, val := evalLiteralExpr(exprImpl, oid)
 		if canEval {
-			return true, false, false, val
+			return true, false, val
 		} else {
-			return false, false, false, nil
+			return false, false, nil
 		}
 
-	case *plan.Expr_Vec:
-		// TODO: extract one from vector later
-		if mustOne {
-			return false, false, false, nil
-		}
-		return true, false, true, exprImpl.Vec.Data
+		// case *plan.Expr_Vec:
+		// if mustOne {
+		// 	return false, false, nil
+		// }
+		// vec := vector.NewVec(types.T_any.ToType())
+		// _ = vec.UnmarshalBinary(exprImpl.Vec.Data)
+		// return true, false, vec
 
-	case *plan.Expr_List:
-		// TODO: extract one from vector later
-		if mustOne {
-			return false, false, false, nil
-		}
-		canEval, vec, put := evalExprListToVec(oid, exprImpl, proc)
-		if !canEval || vec == nil || vec.Length() == 0 {
-			return false, false, false, nil
-		}
-		defer put()
-		data, _ := vec.MarshalBinary()
-		return true, false, true, data
+		// case *plan.Expr_List:
+		// 	if mustOne {
+		// 		return false, false, nil
+		// 	}
 	}
 
-	return false, false, false, nil
+	return false, false, nil
 }
 
 func evalExprListToVec(
@@ -417,10 +409,7 @@ func evalExprListToVec(
 		return false, nil, nil
 	}
 	canEval, vec = recurEvalExprList(oid, expr, nil, proc)
-	if !canEval {
-		if vec != nil {
-			proc.PutVector(vec)
-		}
+	if !canEval || vec == nil {
 		return false, nil, nil
 	}
 	put = func() {
@@ -882,26 +871,19 @@ func extractPKValueFromEqualExprs(
 	pkIdx int,
 	proc *process.Process,
 	pool *fileservice.Pool[*types.Packer],
-) (val []byte, isVec bool) {
+) (val []byte) {
 	pk := def.Pkey
 	if pk.CompPkeyCol != nil {
-		val = extractCompositePKValueFromEqualExprs(
+		return extractCompositePKValueFromEqualExprs(
 			exprs, pk, proc, pool,
 		)
-		return
 	}
-	var canEval bool
 	column := def.Cols[pkIdx]
 	name := column.Name
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
-		var v any
-		if canEval, _, isVec, v = getPkValueByExpr(expr, name, colType, false, proc); canEval {
-			if isVec {
-				val = v.([]byte)
-			} else {
-				val = types.EncodeValue(v, colType)
-			}
+		if ok, _, v := getPkValueByExpr(expr, name, colType, true, proc); ok {
+			val = types.EncodeValue(v, colType)
 			break
 		}
 	}
