@@ -15,7 +15,7 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math/rand"
 	"strconv"
@@ -34,17 +34,18 @@ Benchmark_kmeans/Spherical_Elkan_Random-10         	       1	10842563917 ns/op
 Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       1	13850015875 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
-	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
-		Format: "console",
-	})
+	//logutil.SetupMOLogger(&logutil.LogConfig{
+	//	Level:  "debug",
+	//	Format: "console",
+	//})
 
-	rowCnt := 15_000
-	dims := 1024
-	k := 15
+	rowCnt := 1000_000
+	k := 1000
+	sampleCnt := catalog.CalcSampleCount(int64(k), int64(rowCnt))
+	dims := 128
 
-	data := make([][]float64, rowCnt)
-	populateRandData(rowCnt, dims, data)
+	data := make([][]float64, sampleCnt)
+	populateRandData(int(sampleCnt), dims, data)
 
 	b.Run("Spherical_Elkan_Random", func(b *testing.B) {
 		b.ResetTimer()
