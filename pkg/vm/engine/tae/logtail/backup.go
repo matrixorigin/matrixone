@@ -53,9 +53,7 @@ type objData struct {
 	infoTNRow []int
 	tid       uint64
 	delete    bool
-	isChange  bool
 	isABlock  bool
-	isInset   bool
 }
 
 type blockData struct {
@@ -89,7 +87,6 @@ type insertBlock struct {
 }
 
 type insertObjects struct {
-	stats    *objectio.ObjectStats
 	location objectio.Location
 	apply    bool
 	obj      *objData
