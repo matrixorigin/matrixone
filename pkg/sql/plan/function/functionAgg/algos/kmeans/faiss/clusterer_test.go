@@ -1,7 +1,6 @@
 package faiss
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
@@ -14,7 +13,7 @@ func TestFaissClustering_ComputeCenters(t *testing.T) {
 	loadData(rowCnt, dims, data)
 
 	clusterCnt := 10
-	var cluster kmeans.Clusterer = NewFaiss(data, clusterCnt)
+	cluster, _ := NewFaiss(data, clusterCnt)
 	centers, err := cluster.Cluster()
 	require.Nil(t, err)
 
