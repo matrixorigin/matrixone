@@ -331,7 +331,7 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 // may be the order of insert+delete that needs to be adjusted.
 func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	if txn.statementID > 0 {
-		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
+		writes := make([]Entry, 0, len(txn.writes))
 		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
 			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
 				writes = append(writes, txn.writes[i])
