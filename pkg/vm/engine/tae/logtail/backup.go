@@ -58,11 +58,6 @@ type objData struct {
 	isInset   bool
 }
 
-type objectRow struct {
-	row    int
-	delete bool
-}
-
 type blockData struct {
 	num       uint16
 	deleteRow []int
