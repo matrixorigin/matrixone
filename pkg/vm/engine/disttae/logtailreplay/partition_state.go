@@ -422,7 +422,6 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch, fs fileservice.FileS
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
-		logutil.Infof("object111 insert: %v", objEntry.ObjectStats.ObjectName())
 		if old, exist := p.dataObjects.Get(objEntry); exist {
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
 			if !old.DeleteTime.IsEmpty() {

@@ -149,27 +149,23 @@ func addObjectToObjectData(
 		(*objectsData)[name] = object
 		if !isTN {
 			if isDelete {
-				logutil.Infof("addObjectToObjectData isDelete: %s, %d ,%v", name, row, isDelete)
 				(*objectsData)[name].obj.infoDel = []int{row}
 			} else {
 				(*objectsData)[name].obj.infoRow = []int{row}
 			}
 		} else {
-			logutil.Infof("addObjectToObjectData1 isDelete: %s, %d ,%v", name, row, isDelete)
 			(*objectsData)[name].obj.infoTNRow = []int{row}
 		}
 		return
 	}
 
 	if !isTN {
-		logutil.Infof("addObjectToObjectData2 isDelete: %s, %d ,%v", name, row, isDelete)
 		if isDelete {
 			(*objectsData)[name].obj.infoDel = append((*objectsData)[name].obj.infoDel, row)
 		} else {
 			(*objectsData)[name].obj.infoRow = append((*objectsData)[name].obj.infoRow, row)
 		}
 	} else {
-		logutil.Infof("addObjectToObjectData3 isDelete: %s, %d ,%v", name, row, isDelete)
 		(*objectsData)[name].obj.infoTNRow = append((*objectsData)[name].obj.infoTNRow, row)
 	}
 
@@ -469,7 +465,6 @@ func LoadCheckpointEntriesFromKey(
 		}
 
 		locations = append(locations, objectStats.ObjectName())
-		logutil.Infof("ObjectInfoIDX is %v", objectStats.ObjectName().String())
 		if !deletedAt.IsEmpty() {
 			if softDeletes != nil {
 				if !(*softDeletes)[objectStats.ObjectName().String()] {
@@ -502,7 +497,6 @@ func LoadCheckpointEntriesFromKey(
 			panic(fmt.Sprintf("block %v deltaLoc is empty", metaLoc.String()))
 		}
 		locations = append(locations, deltaLoc.Name())
-		logutil.Infof("BLKMetaInsertIDX is %v", deltaLoc.Name().String())
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		metaLoc := objectio.Location(
@@ -524,7 +518,6 @@ func LoadCheckpointEntriesFromKey(
 			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
 		}
 		locations = append(locations, deltaLoc.Name())
-		logutil.Infof("BLKCNMetaInsertIDX is %v", deltaLoc.Name().String())
 	}
 	return locations, data, nil
 }
@@ -616,7 +609,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		if isABlk && deleteAt.IsEmpty() {
 			panic(any(fmt.Sprintf("block %v deleteAt is empty", stats.ObjectName().String())))
 		}
-		logutil.Infof("tnObjInfoData add object %v to objectsData tid", stats.ObjectName().String())
 		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), false, i, tid, &objectsData)
 	}
 
@@ -626,8 +618,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnObjInfoTid := tnObjInfoData.GetVectorByName(SnapshotAttr_TID)
 	tnObjInfoDelete := tnObjInfoData.GetVectorByName(EntryNode_DeleteAt)
 	tnObjInfoCommit := tnObjInfoData.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
-	logutil.Infof("tnObjInfoData length is %v, tnObjInfoData.Vecs[4] is %d ", tnObjInfoData.Length(), tnObjInfoData.Vecs[2].Length())
-	for i := 0; i < tnObjInfoData.Vecs[2].Length(); i++ {
+	for i := 0; i < tnObjInfoData.Length(); i++ {
 		stats := objectio.NewObjectStats()
 		stats.UnMarshal(tnObjInfoStats.Get(i).([]byte))
 		isABlk := tnObjInfoState.Get(i).(bool)
@@ -645,7 +636,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		if !deleteAt.IsEmpty() {
 			panic(any(fmt.Sprintf("deleteAt is not empty: %v, name is %v", deleteAt.ToString(), stats.ObjectName().String())))
 		}
-		logutil.Infof("tnObjInfoData add object %v to objectsData tid", stats.ObjectName().String())
 		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), true, i, tid, &objectsData)
 	}
 
@@ -780,7 +770,6 @@ func ReWriteCheckpointAndBlockFromKey(
 							insertBlocks: make([]*insertBlock, 0),
 						}
 					}
-					logutil.Infof("merge nBlock: %v", dt.blockId.String())
 					ib := &insertBlock{
 						apply:     false,
 						deleteRow: dt.deleteRow[len(dt.deleteRow)-1],
@@ -829,7 +818,6 @@ func ReWriteCheckpointAndBlockFromKey(
 				if err != nil {
 					panic("sync error")
 				}
-				logutil.Infof("files11111 is %v", name.String())
 				files = append(files, name.String())
 				blockLocation = objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 				if insertBatch[dataBlocks[0].tid] == nil {
@@ -861,7 +849,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					apply:    false,
 					obj:      obj,
 				}
-				logutil.Infof("insertObjBatch11111 is %v", obj.stats.String())
 				insertObjBatch[obj.tid].rowObjects = append(insertObjBatch[obj.tid].rowObjects, io)
 			}
 		} else {
@@ -911,7 +898,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					if err != nil {
 						panic("sync error")
 					}
-					logutil.Infof("files is %v", name.String())
 					files = append(files, name.String())
 					blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 					obj := objectData.obj
@@ -920,10 +906,8 @@ func ReWriteCheckpointAndBlockFromKey(
 							rowObjects: make([]*insertObjects, 0),
 						}
 					}
-					logutil.Infof("GetObjectStats bf is %v, infoTNRow obj is %v", obj.stats.String(), obj.infoTNRow)
 					obj.stats = &writer.GetObjectStats()[objectio.SchemaData]
 					objectio.SetObjectStatsObjectName(obj.stats, blockLocation.Name())
-					logutil.Infof("GetObjectStats is %v", obj.stats.String())
 					io := &insertObjects{
 						location: blockLocation,
 						apply:    false,
@@ -1129,10 +1113,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					objectio.SetObjectStatsObjectName(insertObjBatch[tid].rowObjects[i].obj.stats, insertObjBatch[tid].rowObjects[i].location.Name())
 					infoInsert[obj.infoDel[0]] = insertObjBatch[tid].rowObjects[i].obj
 					if len(obj.infoTNRow) > 0 {
-						logutil.Infof("delete object row %d, name is %v", obj.infoTNRow[0], insertObjBatch[tid].rowObjects[i].location.Name())
 						data.bats[TNObjectInfoIDX].Delete(obj.infoTNRow[0])
 					}
-					logutil.Infof("Update object %d, name is %v", obj.infoDel[0], insertObjBatch[tid].rowObjects[i].location.Name())
 				} else {
 					if infoDelete[insertObjBatch[tid].rowObjects[i].obj.infoDel[0]] {
 						panic("should not have info delete")
@@ -1142,27 +1124,23 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 
 		}
-		logutil.Infof("objInfoData len is %d infoInsert size %d, infoDelete size %d", objInfoData.Length(), len(infoInsert), len(infoDelete))
 		for i := 0; i < objInfoData.Length(); i++ {
 			appendValToBatch(objInfoData, objectInfoMeta, i)
 			if infoInsert[i] != nil && infoDelete[i] {
 				panic("info should not have info delete")
 			}
-			tid := objInfoData.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			if infoInsert[i] != nil {
 				appendValToBatch(objInfoData, objectInfoMeta, i)
 				row := objectInfoMeta.Length() - 1
 				objectInfoMeta.GetVectorByName(ObjectAttr_ObjectStats).Update(row, infoInsert[i].stats[:], false)
 				objectInfoMeta.GetVectorByName(ObjectAttr_State).Update(row, false, false)
 				objectInfoMeta.GetVectorByName(EntryNode_DeleteAt).Update(row, types.TS{}, false)
-				logutil.Infof("insertinfoInsert object row %d, name is %v, tid %d-%d", row, infoInsert[i].stats.String(), tid, infoInsert[i].tid)
 			}
 
 			if infoDelete[i] {
 				deleteRow = append(deleteRow, objectInfoMeta.Length()-1)
 			}
 		}
-		logutil.Infof("delete deleteRow %d", len(deleteRow))
 		for i := range deleteRow {
 			objectInfoMeta.Delete(deleteRow[i])
 		}

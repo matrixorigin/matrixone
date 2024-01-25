@@ -860,9 +860,7 @@ func (data *CheckpointData) ApplyReplayTo(
 	ins, colins, tnins, del, tndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, tnins, del, tndel, dataFactory)
 	objectInfo := data.GetTNObjectBatchs()
-	logutil.Infof("GetTNObjectBatchs objectInfo")
 	c.OnReplayObjectBatch(objectInfo, dataFactory)
-	logutil.Infof("GetTNObjectBatchs1 objectInfo")
 	objectInfo = data.GetObjectBatchs()
 	c.OnReplayObjectBatch(objectInfo, dataFactory)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
@@ -3027,7 +3025,6 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if entry.IsAppendable() && node.BaseNode.IsEmpty() {
 			visitObject(collector.data.bats[TNObjectInfoIDX], entry, node, false, types.TS{})
 		} else {
-			logutil.Infof("entry.String() is %v", entry.String())
 			visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
 		}
 		objNode := node
@@ -3058,7 +3055,6 @@ func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (e
 		return nil
 	}
 	entry.RUnlock()
-	logutil.Infof("checkpoint start to collect object %v", collector.start.ToString())
 	return collector.visitObjectEntry(entry)
 }
 

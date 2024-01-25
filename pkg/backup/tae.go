@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -161,11 +160,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				isGC(gcFileMap, dentry.Name) {
 				continue
 			} else {
-				// FIXME: if file not found, it may be gc file, but we can't sure
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					logutil.Warnf("backup file not found, it may have been gc: %v, ", dentry.Name)
-					continue
-				}
 				return err
 			}
 
