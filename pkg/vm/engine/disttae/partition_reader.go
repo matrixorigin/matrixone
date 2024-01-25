@@ -45,6 +45,13 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
+func (r *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (r *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
 	p.inserts = nil

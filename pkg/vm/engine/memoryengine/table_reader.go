@@ -175,6 +175,13 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 
 }
 
+func (r *TableReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (r *TableReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (t *TableReader) Close() error {
 	if t == nil {
 		return nil

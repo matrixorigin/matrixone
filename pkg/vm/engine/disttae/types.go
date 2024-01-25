@@ -613,6 +613,9 @@ type blockReader struct {
 	blks []*objectio.BlockInfo
 	//buffer for block's deletes
 	buffer []int64
+
+	OrderBy []*plan.OrderBySpec // for ordered scan
+	sorted  bool                //for ordered scan
 }
 
 type blockMergeReader struct {

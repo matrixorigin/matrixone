@@ -253,6 +253,13 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
 
+func (r *emptyReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (r *emptyReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (r *emptyReader) Close() error {
 	return nil
 }
@@ -294,6 +301,14 @@ func (r *blockReader) Close() error {
 	r.blks = nil
 	r.buffer = nil
 	return nil
+}
+
+func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {
+	return r.OrderBy
+}
+
+func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+	r.OrderBy = orderby
 }
 
 func (r *blockReader) Read(
@@ -602,6 +617,13 @@ func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
 	}
+}
+
+func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (r *mergeReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (r *mergeReader) Close() error {

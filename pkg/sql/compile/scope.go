@@ -539,6 +539,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if mcpu == 1 {
 		s.Magic = Normal
 		s.DataSource.R = rds[0] // rds's length is equal to mcpu so it is safe to do it
+		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s.Run(c)
 	}
 
@@ -552,7 +553,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			RelationName: s.DataSource.RelationName,
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
+			OrderBy:      s.DataSource.OrderBy,
 		}
+		ss[i].DataSource.R.SetOrderBy(ss[i].DataSource.OrderBy)
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope, err := newParallelScope(c, s, ss)
