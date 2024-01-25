@@ -337,7 +337,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	ioStart := time.Now()
-	defer stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if l.diskCache != nil {
 		if err := readCache(ctx, l.diskCache, vector); err != nil {
