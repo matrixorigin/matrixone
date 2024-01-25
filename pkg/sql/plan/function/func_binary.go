@@ -725,21 +725,15 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		} else {
 			if !ivecs[1].IsConst() {
 				fromLoc = convertTimezone(string(fromTz))
-				if fromLoc == nil {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					return nil
-				}
 			}
 			if !ivecs[2].IsConst() {
 				toLoc = convertTimezone(string(toTz))
-				if toLoc == nil {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					return nil
+			}
+			if fromLoc == nil || toLoc == nil {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
 				}
+				return nil
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
