@@ -23,5 +23,5 @@ SELECT hex(0x62);
 hex(0x62)
 62
 SELECT hex(b'1101100');
-hex(1101100)
-6C
+hex(0b1101100)
+6c

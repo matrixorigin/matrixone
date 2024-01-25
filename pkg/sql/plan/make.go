@@ -20,7 +20,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -172,8 +174,13 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 
 var MakePlan2Int64VecExprWithType = makePlan2Int64VecExprWithType
 
-func makePlan2Int64VecExprWithType(vals ...int64) *plan.Expr {
-	data := types.EncodeSlice[int64](vals)
+func makePlan2Int64VecExprWithType(mp *mpool.MPool, vals ...int64) *plan.Expr {
+	vec := vector.NewVec(types.T_int64.ToType())
+	for _, val := range vals {
+		vector.AppendFixed(vec, val, false, mp)
+	}
+	data, _ := vec.MarshalBinary()
+	vec.Free(mp)
 	return &plan.Expr{
 		Typ: &plan.Type{
 			Id: int32(types.T_tuple),

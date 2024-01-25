@@ -97,6 +97,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
@@ -268,6 +269,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				IsLast:  false,
 			},
 			NeedAllocateSels: true,
+			NeedMergedBatch:  true,
 		},
 	}
 }
