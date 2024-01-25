@@ -534,8 +534,8 @@ type ObservabilityParameters struct {
 	// Disable merge statements
 	EnableStmtMerge bool `toml:"enableStmtMerge"`
 
-	// LoggerLabels
-	LoggerLabels map[string]string `toml:"loggerLabels"`
+	// LabelSelector
+	LabelSelector map[string]string `toml:"labelSelector"`
 
 	OBCollectorConfig
 }
@@ -565,7 +565,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		AggregationWindow:                  toml.Duration{},
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
-		LoggerLabels:                       map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal},
+		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
