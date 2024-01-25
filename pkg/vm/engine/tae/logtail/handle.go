@@ -574,7 +574,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS,
 			}
 		} else {
 			if !newest.BaseNode.DeltaLoc.IsEmpty() {
-				if newest.GetEnd().GreaterEq(b.end) {
+				if newest.GetStart().GreaterEq(b.end) {
 					// non-appendable block has newer delta data on s3, no need to collect data
 					return types.MaxTs(), true
 				} else {
