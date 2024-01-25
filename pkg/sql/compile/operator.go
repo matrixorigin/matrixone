@@ -1226,6 +1226,7 @@ func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.Wait
 // ss[currentIdx] means it's local scope the dispatch rule should be like below:
 // dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
 // local deletion
+/*
 func constructDeleteDispatchAndLocal(
 	currentIdx int,
 	rs []*Scope,
@@ -1300,6 +1301,7 @@ func constructDeleteDispatchAndLocal(
 		Arg: &merge.Argument{},
 	})
 }
+*/
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
@@ -1325,7 +1327,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
 			hasRemote = true
-			newUuid := uuid.New()
+			newUuid, _ := uuid.NewV7()
 
 			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
 				Uuid:     newUuid,

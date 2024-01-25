@@ -691,7 +691,7 @@ message Node {
 		PRE_INSERT_SK = 63;
 		//
 		TIME_WINDOW = 64;
-		Fill = 65;
+		FILL = 65;
 		PARTITION = 66;
 		FUZZY_FILTER = 67;
 	}
@@ -754,10 +754,10 @@ message Node {
 	Expr limit = 15;
 	Expr offset = 16;
 
-	TableDef table_def = 18;
-	repeated TableDef table_def_vec = 19;
-	ObjectRef obj_ref = 20;
-	RowsetData rowset_data = 21;
+	TableDef table_def = 17;
+	ObjectRef obj_ref = 18;
+	ObjectRef parent_obj_ref = 19;
+	RowsetData rowset_data = 20;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
