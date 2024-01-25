@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -50,6 +51,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -295,5 +297,21 @@ func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, re
 		}
 	})
 
+	return nil
+}
+
+func (s *service) handleRemoveRemoteLockTable(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response) error {
+	removed, err := s.lockService.CloseRemoteLockTable(req.RemoveRemoteLockTable.TableID, req.RemoveRemoteLockTable.Version)
+	if err != nil {
+		return err
+	}
+
+	resp.RemoveRemoteLockTable = &query.RemoveRemoteLockTableResponse{}
+	if removed {
+		resp.RemoveRemoteLockTable.Count = 1
+	}
 	return nil
 }
