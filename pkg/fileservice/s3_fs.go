@@ -445,7 +445,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	ioStart := time.Now()
-	defer stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if s.diskCache != nil {
 		if err := s.diskCache.Read(ctx, vector); err != nil {
