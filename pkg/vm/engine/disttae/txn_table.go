@@ -720,7 +720,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo) bool {
 			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -822,11 +822,12 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
 					// eval filter expr on the block
+					blkMeta := meta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
 					for _, expr := range exprs {
 						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 							skipBlk = true
@@ -972,11 +973,7 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-					return true
-				}
-
+			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo) bool {
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {

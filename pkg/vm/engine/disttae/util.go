@@ -941,7 +941,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.Blo
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
+	onBlock func(blk *objectio.BlockInfo) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -949,15 +949,9 @@ func ForeachBlkInObjStatsList(
 
 	for idx := 0; idx < objCnt && !stop; idx++ {
 		iter := NewStatsBlkIter(&objects[idx], dataMeta)
-		pos := uint32(0)
 		for iter.Next() {
 			blk := iter.Entry()
-			var meta objectio.BlockObject
-			if !dataMeta.IsEmpty() {
-				meta = dataMeta.GetBlockMeta(pos)
-			}
-			pos++
-			if !onBlock(blk, meta) {
+			if !onBlock(blk) {
 				stop = true
 				break
 			}
