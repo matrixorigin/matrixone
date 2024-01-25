@@ -598,7 +598,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.uuid, _ = uuid.NewUUID()
+	ses.uuid, _ = uuid.NewV7()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
@@ -871,8 +871,12 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, er
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
 	tnStore := metadata.TNService{
-		ServiceID:         uuid.NewString(),
+		ServiceID:         uid.String(),
 		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}

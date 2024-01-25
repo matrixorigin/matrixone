@@ -101,7 +101,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Window"
 	case plan.Node_TIME_WINDOW:
 		pname = "Time window"
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		pname = "Fill"
 	case plan.Node_BROADCAST:
 		pname = "Broadcast"
@@ -290,7 +290,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, groupByInfo)
 	}
 
-	if ndesc.Node.NodeType == plan.Node_Fill {
+	if ndesc.Node.NodeType == plan.Node_FILL {
 		fillCoslInfo, err := ndesc.GetFillColsInfo(ctx, options)
 		if err != nil {
 			return nil, err
@@ -304,7 +304,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	}
 
 	// Get Aggregate function info
-	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
+	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_FILL {
 		var listInfo string
 		var err error
 		if ndesc.Node.NodeType == plan.Node_SAMPLE {

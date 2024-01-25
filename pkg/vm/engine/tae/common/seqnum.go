@@ -66,6 +66,6 @@ func NewTxnIDAllocator() *TxnIDAllocator {
 }
 
 func (alloc *TxnIDAllocator) Alloc() []byte {
-	v := uuid.Must(uuid.NewUUID())
+	v := uuid.Must(uuid.NewV7())
 	return v[:]
 }

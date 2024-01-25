@@ -629,7 +629,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 {
+		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 && child.Limit == nil && child.Offset == nil {
 			child.AggList = make([]*Expr, 0, len(node.AggList))
 			for _, agg := range node.AggList {
 				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
@@ -907,7 +907,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 
 		//for _, expr := range node.AggList {
 		//	increaseRefCnt(expr, 1, colRefCnt)
@@ -1443,11 +1443,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
+
+		builder.pushdownLimit(rootID)
+
+		colRefCnt := make(map[[2]int32]int)
+		builder.countColRefs(rootID, colRefCnt)
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true, true)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
@@ -1463,13 +1468,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.applyAssociativeLaw(rootID)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
-		builder.applySwapRuleByStats(rootID, true)
+		builder.determineBuildAndProbeSide(rootID, true)
 
 		builder.qry.Steps[i] = rootID
 
@@ -1479,7 +1484,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		rootID = builder.applyIndices(rootID)
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
@@ -2162,7 +2167,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		bat.SetRowCount(rowCount)
-		nodeUUID, _ := uuid.NewUUID()
+		nodeUUID, _ := uuid.NewV7()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_VALUE_SCAN,
 			RowsetData:   rowSetData,
@@ -2702,7 +2707,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if astTimeWindow.Fill != nil {
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_Fill,
+				NodeType:    plan.Node_FILL,
 				Children:    []int32{nodeID},
 				AggList:     fillCols,
 				BindingTags: []int32{ctx.timeTag},

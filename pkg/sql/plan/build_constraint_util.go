@@ -1076,7 +1076,7 @@ func buildValueScan(
 	}
 
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
 		RowsetData:  rowsetData,
