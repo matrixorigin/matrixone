@@ -102,7 +102,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -362,7 +362,6 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 }
 
 func getNonNullValue(col *vector.Vector, row uint32) any {
-
 	switch col.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAt[bool](col, int(row))
@@ -412,7 +411,7 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
-		//return vector.ErrVecTypeNotSupport
+		// return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))
 	}
 }
