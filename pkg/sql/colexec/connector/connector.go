@@ -42,7 +42,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-
 	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
