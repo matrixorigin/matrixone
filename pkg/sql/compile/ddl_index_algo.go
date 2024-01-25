@@ -142,7 +142,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	kmeansInitType := "kmeansplusplus"
+	kmeansInitType := "random"
 	kmeansNormalize := "true"
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
@@ -163,15 +163,50 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 
 	// 2. Sampling SQL Logic
-	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	samplePercent := catalog.CalcSamplePercent(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %f percent) as `%s` from `%s`.`%s`)",
 		indexColumnName,
-		sampleCnt,
+		samplePercent,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
 	)
+	/*
+		### attempt 1
+		sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+		indexColumnName := indexDef.Parts[0]
+		sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+			indexColumnName,
+			sampleCnt,
+			indexColumnName,
+			qryDatabase,
+			originalTableDef.Name,
+		)
+
+		### attempt 2
+		samplePercent := catalog.CalcSamplePercent(int64(centroidParamsLists), totalCnt)
+		indexColumnName := indexDef.Parts[0]
+		sampleSQL := fmt.Sprintf("(select sample(`%s`, %f percent) as `%s` from `%s`.`%s`)",
+			indexColumnName,
+			samplePercent,
+			indexColumnName,
+			qryDatabase,
+			originalTableDef.Name,
+		)
+
+		### attempt 3
+		sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+		indexColumnName := indexDef.Parts[0]
+		//SELECT b FROM t3 ORDER BY RAND() LIMIT 10_000;
+		sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` ORDER BY RAND() limit %d)",
+			indexColumnName,
+			qryDatabase,
+			originalTableDef.Name,
+			sampleCnt,
+		)
+
+	*/
 
 	// 3. Insert into centroids table
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
