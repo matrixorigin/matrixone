@@ -258,15 +258,17 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: filePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -404,14 +406,18 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -437,6 +443,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
+
+	ioStart := time.Now()
+	defer stats.AddIOAccessTimeConsumption(time.Since(ioStart))
 
 	if s.diskCache != nil {
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
@@ -470,15 +479,17 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -564,7 +575,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			},
 			closeFunc: func() error {
 				s3ReadIODuration := time.Since(t0)
-				statistic.StatsInfoFromContext(ctx).AddS3AccessTimeConsumption(s3ReadIODuration)
 
 				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
