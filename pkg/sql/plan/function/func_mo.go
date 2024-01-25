@@ -15,7 +15,6 @@
 package function
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -68,13 +67,23 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableRows", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -140,6 +149,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
+// TODO(ghs)
+// is debug for #13151, will remove later
+var DebugGetDatabaseExpectedEOB func(caller string, proc *process.Process)
+
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
@@ -167,13 +180,23 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableSize", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -287,8 +310,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx

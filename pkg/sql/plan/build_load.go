@@ -26,6 +26,10 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const (
+	LoadParallelMinSize = 1 << 20
+)
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -75,6 +79,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
 	if stmt.Param.ScanType != tree.INLINE {
@@ -124,6 +131,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	isInsertWithoutAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
 	if err != nil {
 		return nil, err
+	}
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
@@ -192,16 +202,14 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	if len(param.Filepath) == 0 {
 		return "", nil
 	}
-
-	fileList, _, err := ReadDir(param)
-	if err != nil {
+	if err := StatFile(param); err != nil {
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrFileNotFound {
+			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
 		return "", err
 	}
-	if len(fileList) == 0 {
-		return "", moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
-	}
-	param.Ctx = nil
-	return fileList[0], nil
+	param.Init = true
+	return param.Filepath, nil
 }
 
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {

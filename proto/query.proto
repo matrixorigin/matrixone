@@ -49,6 +49,12 @@ enum CmdMethod {
   SyncCommit = 8;
   // GetCommit get latest commit timestamp of cn.
   GetCommit = 9;
+
+  RunTask = 13;
+
+  // RemoveRemoteLockTable remove remote lock table on all cn
+  RemoveRemoteLockTable = 14;
+  GetLatestBind         = 15;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -88,6 +94,14 @@ message GetCommitResponse {
   timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
 }
 
+message RunTaskRequest {
+  int32 TaskCode = 1;
+}
+
+message RunTaskResponse {
+  string Result = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -113,6 +127,11 @@ message Request {
 
   SyncCommitRequest        SycnCommit          = 11;
   GetCommitRequest        GetCommit           = 12;
+
+  RunTaskRequest RunTask = 16;
+
+  RemoveRemoteLockTableRequest  RemoveRemoteLockTable = 17;
+  GetLatestBindRequest GetLatestBind = 18;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -145,6 +164,11 @@ message Response {
 
   SyncCommitResponse        SyncCommit        = 11;
   GetCommitResponse         GetCommit         = 12;
+
+  RunTaskResponse RunTask = 16;
+
+  RemoveRemoteLockTableResponse  RemoveRemoteLockTable = 17;
+  GetLatestBindResponse          GetLatestBind         = 18;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -249,4 +273,22 @@ message CacheInfo{
 
 message GetCacheInfoResponse{
   repeated CacheInfo CacheInfoList = 1;
+}
+
+
+message RemoveRemoteLockTableRequest {
+  uint64 TableID = 1;
+  uint64 Version = 2;
+}
+
+message RemoveRemoteLockTableResponse {
+  int32 Count = 1;
+}
+
+message GetLatestBindRequest {
+  uint64 TableID = 1;
+}
+
+message GetLatestBindResponse {
+  string Bind = 1;
 }

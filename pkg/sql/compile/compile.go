@@ -63,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -390,6 +391,8 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	var writeOffset uint64
+
 	start := time.Now()
 	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 
@@ -401,6 +404,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if c.proc.TxnOperator != nil {
+		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+	}
 	result = &util2.RunResult{}
 	var span trace.Span
 	var runC *Compile // compile structure for rerun.
@@ -463,7 +469,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 	result.AffectRows = runC.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
 }
@@ -1115,7 +1121,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileTimeWin(n, c.compileSort(n, ss))
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1708,7 +1714,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			return nil, err
 		}
 	}
-
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1735,8 +1740,10 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.JsonData = n.ExternScan.JsonType
 	}
 	if param.ScanType == tree.S3 {
-		if err := plan2.InitS3Param(param); err != nil {
-			return nil, err
+		if !param.Init {
+			if err := plan2.InitS3Param(param); err != nil {
+				return nil, err
+			}
 		}
 		if param.Parallel {
 			mcpu = 0
@@ -1764,7 +1771,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	var err error
 	var fileList []string
 	var fileSize []int64
-	if !param.Local {
+	if !param.Local && !param.Init {
 		if param.QueryResult {
 			fileList = strings.Split(param.Filepath, ",")
 			for i := range fileList {
@@ -1788,6 +1795,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	} else {
 		fileList = []string{param.Filepath}
+		fileSize = []int64{param.FileSize}
 	}
 
 	if len(fileList) == 0 {
@@ -1965,10 +1973,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	{
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -2883,45 +2891,23 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 // the same block to one and the same CN to perform
 // the deletion operators.
 func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scope {
-	//Todo: implemet delete merge
-	ss2 := make([]*Scope, 0, len(ss))
-	// ends := make([]*Scope, 0, len(ss))
-	for _, s := range ss {
-		if s.IsEnd {
-			// ends = append(ends, s)
-			continue
-		}
-		ss2 = append(ss2, s)
-	}
-
-	rs := make([]*Scope, 0, len(ss2))
-	uuids := make([]uuid.UUID, 0, len(ss2))
-	for i := 0; i < len(ss2); i++ {
-		rs = append(rs, new(Scope))
-		uuids = append(uuids, uuid.New())
-	}
-
-	// for every scope, it should dispatch its
-	// batch to other cn
-	for i := 0; i < len(ss2); i++ {
-		constructDeleteDispatchAndLocal(i, rs, ss2, uuids, c)
-	}
 	delete := &vm.Instruction{
 		Op:  vm.Deletion,
 		Arg: arg,
 	}
-	for i := range rs {
-		// use distributed delete
+	for i, s := range ss {
+		if s.IsEnd {
+			continue
+		}
 		arg.RemoteDelete = true
-		// maybe just copy only once?
 		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
-		arg.IBucket = uint32(i)
-		arg.Nbucket = uint32(len(rs))
-		rs[i].Instructions = append(
-			rs[i].Instructions,
+		arg.IBucket = 0
+		arg.Nbucket = 1
+		ss[i].Instructions = append(
+			ss[i].Instructions,
 			dupInstruction(delete, nil, 0))
 	}
-	return c.newMergeScope(rs)
+	return c.newMergeScope(ss)
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
@@ -3392,13 +3378,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
@@ -3485,9 +3471,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
 			switch name {
-			case "starcount", "count":
+			case "starcount":
 				partialResults = append(partialResults, int64(0))
 				partialResultTypes[i] = types.T_int64
+			case "count":
+				if (uint64(agg.F.Func.Obj) & function.Distinct) != 0 {
+					partialResults = nil
+				} else {
+					partialResults = append(partialResults, int64(0))
+					partialResultTypes[i] = types.T_int64
+				}
 			case "min", "max":
 				partialResults = append(partialResults, nil)
 			default:

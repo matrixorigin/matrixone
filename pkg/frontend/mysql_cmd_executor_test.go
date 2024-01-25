@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"io"
 	"testing"
 	"time"
@@ -62,14 +63,14 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &motrace.StatementInfo{}
 	ctx = motrace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) context.Context {
-		return ctx
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) (context.Context, error) {
+		return ctx, nil
 	})
 	return ctx, stubs
 }
 
 func Test_mce(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -291,7 +292,7 @@ func Test_mce(t *testing.T) {
 }
 
 func Test_mce_selfhandle(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("handleChangeDB", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -871,32 +872,32 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 }
 
 func Test_HandlePrepareStmt(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
 	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		_, err := mce.handlePrepareStmt(context.TODO(), stmt, "")
+		_, err := mce.handlePrepareStmt(ctx, stmt, "")
 		return err
 	})
 }
 
 func Test_HandleDeallocate(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
 	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.Deallocate)
-		return mce.handleDeallocate(context.TODO(), stmt)
+		return mce.handleDeallocate(ctx, stmt)
 	})
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {
 		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 		queryData := []byte("A")
@@ -1043,7 +1044,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		uid, _ := uuid.NewV7()
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext())
@@ -1328,11 +1330,13 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)
-	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	ctx, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	ctx, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 

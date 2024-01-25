@@ -159,8 +159,9 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	if err != nil {
 		panic(err)
 	}
+	uid, _ := uuid.NewV7()
 	cfg := &cnservice.Config{
-		UUID:          uuid.New().String(),
+		UUID:          uid.String(),
 		ListenAddress: address.getCNListenAddress(index),
 		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
 		Frontend: config.FrontendParameters{

@@ -93,7 +93,7 @@ type CompilerContext interface {
 	GetRootSql() string
 	// get username of current session
 	GetUserName() string
-	GetAccountId() uint32
+	GetAccountId() (uint32, error)
 	// GetContext get raw context.Context
 	GetContext() context.Context
 	// GetDatabaseId Get database id

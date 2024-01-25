@@ -59,32 +59,42 @@ const (
 	CmdMethod_SyncCommit CmdMethod = 8
 	// GetCommit get latest commit timestamp of cn.
 	CmdMethod_GetCommit CmdMethod = 9
+	CmdMethod_RunTask   CmdMethod = 13
+	// RemoveRemoteLockTable remove remote lock table on all cn
+	CmdMethod_RemoveRemoteLockTable CmdMethod = 14
+	CmdMethod_GetLatestBind         CmdMethod = 15
 )
 
 var CmdMethod_name = map[int32]string{
-	0: "Query",
-	1: "ShowProcessList",
-	2: "AlterAccount",
-	3: "KillConn",
-	4: "TraceSpan",
-	5: "GetLockInfo",
-	6: "GetTxnInfo",
-	7: "GetCacheInfo",
-	8: "SyncCommit",
-	9: "GetCommit",
+	0:  "Query",
+	1:  "ShowProcessList",
+	2:  "AlterAccount",
+	3:  "KillConn",
+	4:  "TraceSpan",
+	5:  "GetLockInfo",
+	6:  "GetTxnInfo",
+	7:  "GetCacheInfo",
+	8:  "SyncCommit",
+	9:  "GetCommit",
+	13: "RunTask",
+	14: "RemoveRemoteLockTable",
+	15: "GetLatestBind",
 }
 
 var CmdMethod_value = map[string]int32{
-	"Query":           0,
-	"ShowProcessList": 1,
-	"AlterAccount":    2,
-	"KillConn":        3,
-	"TraceSpan":       4,
-	"GetLockInfo":     5,
-	"GetTxnInfo":      6,
-	"GetCacheInfo":    7,
-	"SyncCommit":      8,
-	"GetCommit":       9,
+	"Query":                 0,
+	"ShowProcessList":       1,
+	"AlterAccount":          2,
+	"KillConn":              3,
+	"TraceSpan":             4,
+	"GetLockInfo":           5,
+	"GetTxnInfo":            6,
+	"GetCacheInfo":          7,
+	"SyncCommit":            8,
+	"GetCommit":             9,
+	"RunTask":               13,
+	"RemoveRemoteLockTable": 14,
+	"GetLatestBind":         15,
 }
 
 func (x CmdMethod) String() string {
@@ -390,6 +400,100 @@ func (m *GetCommitResponse) GetCurrentCommitTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
+type RunTaskRequest struct {
+	TaskCode             int32    `protobuf:"varint,1,opt,name=TaskCode,proto3" json:"TaskCode,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *RunTaskRequest) Reset()         { *m = RunTaskRequest{} }
+func (m *RunTaskRequest) String() string { return proto.CompactTextString(m) }
+func (*RunTaskRequest) ProtoMessage()    {}
+func (*RunTaskRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{6}
+}
+func (m *RunTaskRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RunTaskRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RunTaskRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RunTaskRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RunTaskRequest.Merge(m, src)
+}
+func (m *RunTaskRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *RunTaskRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_RunTaskRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RunTaskRequest proto.InternalMessageInfo
+
+func (m *RunTaskRequest) GetTaskCode() int32 {
+	if m != nil {
+		return m.TaskCode
+	}
+	return 0
+}
+
+type RunTaskResponse struct {
+	Result               string   `protobuf:"bytes,1,opt,name=Result,proto3" json:"Result,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *RunTaskResponse) Reset()         { *m = RunTaskResponse{} }
+func (m *RunTaskResponse) String() string { return proto.CompactTextString(m) }
+func (*RunTaskResponse) ProtoMessage()    {}
+func (*RunTaskResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{7}
+}
+func (m *RunTaskResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RunTaskResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RunTaskResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RunTaskResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RunTaskResponse.Merge(m, src)
+}
+func (m *RunTaskResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *RunTaskResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_RunTaskResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RunTaskResponse proto.InternalMessageInfo
+
+func (m *RunTaskResponse) GetResult() string {
+	if m != nil {
+		return m.Result
+	}
+	return ""
+}
+
 // Request is the query request.
 type Request struct {
 	// RequestID is the request ID.
@@ -411,19 +515,22 @@ type Request struct {
 	// GetTxnInfoRequest is the request for getting the txn info from the cn
 	GetTxnInfoRequest *GetTxnInfoRequest `protobuf:"bytes,9,opt,name=GetTxnInfoRequest,proto3" json:"GetTxnInfoRequest,omitempty"`
 	// GetCacheInfoRequest is the request for getting the cache info from the cn,tn
-	GetCacheInfoRequest  *GetCacheInfoRequest `protobuf:"bytes,10,opt,name=GetCacheInfoRequest,proto3" json:"GetCacheInfoRequest,omitempty"`
-	SycnCommit           *SyncCommitRequest   `protobuf:"bytes,11,opt,name=SycnCommit,proto3" json:"SycnCommit,omitempty"`
-	GetCommit            *GetCommitRequest    `protobuf:"bytes,12,opt,name=GetCommit,proto3" json:"GetCommit,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
-	XXX_unrecognized     []byte               `json:"-"`
-	XXX_sizecache        int32                `json:"-"`
+	GetCacheInfoRequest   *GetCacheInfoRequest          `protobuf:"bytes,10,opt,name=GetCacheInfoRequest,proto3" json:"GetCacheInfoRequest,omitempty"`
+	SycnCommit            *SyncCommitRequest            `protobuf:"bytes,11,opt,name=SycnCommit,proto3" json:"SycnCommit,omitempty"`
+	GetCommit             *GetCommitRequest             `protobuf:"bytes,12,opt,name=GetCommit,proto3" json:"GetCommit,omitempty"`
+	RunTask               *RunTaskRequest               `protobuf:"bytes,16,opt,name=RunTask,proto3" json:"RunTask,omitempty"`
+	RemoveRemoteLockTable *RemoveRemoteLockTableRequest `protobuf:"bytes,17,opt,name=RemoveRemoteLockTable,proto3" json:"RemoveRemoteLockTable,omitempty"`
+	GetLatestBind         *GetLatestBindRequest         `protobuf:"bytes,18,opt,name=GetLatestBind,proto3" json:"GetLatestBind,omitempty"`
+	XXX_NoUnkeyedLiteral  struct{}                      `json:"-"`
+	XXX_unrecognized      []byte                        `json:"-"`
+	XXX_sizecache         int32                         `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
 func (m *Request) String() string { return proto.CompactTextString(m) }
 func (*Request) ProtoMessage()    {}
 func (*Request) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{6}
+	return fileDescriptor_5c6ac9b241082464, []int{8}
 }
 func (m *Request) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -536,6 +643,27 @@ func (m *Request) GetGetCommit() *GetCommitRequest {
 	return nil
 }
 
+func (m *Request) GetRunTask() *RunTaskRequest {
+	if m != nil {
+		return m.RunTask
+	}
+	return nil
+}
+
+func (m *Request) GetRemoveRemoteLockTable() *RemoveRemoteLockTableRequest {
+	if m != nil {
+		return m.RemoveRemoteLockTable
+	}
+	return nil
+}
+
+func (m *Request) GetGetLatestBind() *GetLatestBindRequest {
+	if m != nil {
+		return m.GetLatestBind
+	}
+	return nil
+}
+
 // ShowProcessListResponse is the response of command ShowProcessList.
 type ShowProcessListResponse struct {
 	Sessions             []*status.Session `protobuf:"bytes,1,rep,name=Sessions,proto3" json:"Sessions,omitempty"`
@@ -548,7 +676,7 @@ func (m *ShowProcessListResponse) Reset()         { *m = ShowProcessListResponse
 func (m *ShowProcessListResponse) String() string { return proto.CompactTextString(m) }
 func (*ShowProcessListResponse) ProtoMessage()    {}
 func (*ShowProcessListResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{7}
+	return fileDescriptor_5c6ac9b241082464, []int{9}
 }
 func (m *ShowProcessListResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -605,19 +733,22 @@ type Response struct {
 	// GetTxnInfoResponse is the response to GetTxnInfo
 	GetTxnInfoResponse *GetTxnInfoResponse `protobuf:"bytes,9,opt,name=GetTxnInfoResponse,proto3" json:"GetTxnInfoResponse,omitempty"`
 	// GetCacheInfoResponse is the response to GetCacheInfo
-	GetCacheInfoResponse *GetCacheInfoResponse `protobuf:"bytes,10,opt,name=GetCacheInfoResponse,proto3" json:"GetCacheInfoResponse,omitempty"`
-	SyncCommit           *SyncCommitResponse   `protobuf:"bytes,11,opt,name=SyncCommit,proto3" json:"SyncCommit,omitempty"`
-	GetCommit            *GetCommitResponse    `protobuf:"bytes,12,opt,name=GetCommit,proto3" json:"GetCommit,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}              `json:"-"`
-	XXX_unrecognized     []byte                `json:"-"`
-	XXX_sizecache        int32                 `json:"-"`
+	GetCacheInfoResponse  *GetCacheInfoResponse          `protobuf:"bytes,10,opt,name=GetCacheInfoResponse,proto3" json:"GetCacheInfoResponse,omitempty"`
+	SyncCommit            *SyncCommitResponse            `protobuf:"bytes,11,opt,name=SyncCommit,proto3" json:"SyncCommit,omitempty"`
+	GetCommit             *GetCommitResponse             `protobuf:"bytes,12,opt,name=GetCommit,proto3" json:"GetCommit,omitempty"`
+	RunTask               *RunTaskResponse               `protobuf:"bytes,16,opt,name=RunTask,proto3" json:"RunTask,omitempty"`
+	RemoveRemoteLockTable *RemoveRemoteLockTableResponse `protobuf:"bytes,17,opt,name=RemoveRemoteLockTable,proto3" json:"RemoveRemoteLockTable,omitempty"`
+	GetLatestBind         *GetLatestBindResponse         `protobuf:"bytes,18,opt,name=GetLatestBind,proto3" json:"GetLatestBind,omitempty"`
+	XXX_NoUnkeyedLiteral  struct{}                       `json:"-"`
+	XXX_unrecognized      []byte                         `json:"-"`
+	XXX_sizecache         int32                          `json:"-"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
 func (m *Response) String() string { return proto.CompactTextString(m) }
 func (*Response) ProtoMessage()    {}
 func (*Response) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{8}
+	return fileDescriptor_5c6ac9b241082464, []int{10}
 }
 func (m *Response) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -730,6 +861,27 @@ func (m *Response) GetGetCommit() *GetCommitResponse {
 	return nil
 }
 
+func (m *Response) GetRunTask() *RunTaskResponse {
+	if m != nil {
+		return m.RunTask
+	}
+	return nil
+}
+
+func (m *Response) GetRemoveRemoteLockTable() *RemoveRemoteLockTableResponse {
+	if m != nil {
+		return m.RemoveRemoteLockTable
+	}
+	return nil
+}
+
+func (m *Response) GetGetLatestBind() *GetLatestBindResponse {
+	if m != nil {
+		return m.GetLatestBind
+	}
+	return nil
+}
+
 // AlterAccountRequest is the "alter account restricted" query request.
 type AlterAccountRequest struct {
 	// Tenant is the tenant which to alter.
@@ -745,7 +897,7 @@ func (m *AlterAccountRequest) Reset()         { *m = AlterAccountRequest{} }
 func (m *AlterAccountRequest) String() string { return proto.CompactTextString(m) }
 func (*AlterAccountRequest) ProtoMessage()    {}
 func (*AlterAccountRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{9}
+	return fileDescriptor_5c6ac9b241082464, []int{11}
 }
 func (m *AlterAccountRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -800,7 +952,7 @@ func (m *AlterAccountResponse) Reset()         { *m = AlterAccountResponse{} }
 func (m *AlterAccountResponse) String() string { return proto.CompactTextString(m) }
 func (*AlterAccountResponse) ProtoMessage()    {}
 func (*AlterAccountResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{10}
+	return fileDescriptor_5c6ac9b241082464, []int{12}
 }
 func (m *AlterAccountResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -850,7 +1002,7 @@ func (m *KillConnRequest) Reset()         { *m = KillConnRequest{} }
 func (m *KillConnRequest) String() string { return proto.CompactTextString(m) }
 func (*KillConnRequest) ProtoMessage()    {}
 func (*KillConnRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{11}
+	return fileDescriptor_5c6ac9b241082464, []int{13}
 }
 func (m *KillConnRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -905,7 +1057,7 @@ func (m *KillConnResponse) Reset()         { *m = KillConnResponse{} }
 func (m *KillConnResponse) String() string { return proto.CompactTextString(m) }
 func (*KillConnResponse) ProtoMessage()    {}
 func (*KillConnResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{12}
+	return fileDescriptor_5c6ac9b241082464, []int{14}
 }
 func (m *KillConnResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -954,7 +1106,7 @@ func (m *TraceSpanRequest) Reset()         { *m = TraceSpanRequest{} }
 func (m *TraceSpanRequest) String() string { return proto.CompactTextString(m) }
 func (*TraceSpanRequest) ProtoMessage()    {}
 func (*TraceSpanRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{13}
+	return fileDescriptor_5c6ac9b241082464, []int{15}
 }
 func (m *TraceSpanRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1015,7 +1167,7 @@ func (m *TraceSpanResponse) Reset()         { *m = TraceSpanResponse{} }
 func (m *TraceSpanResponse) String() string { return proto.CompactTextString(m) }
 func (*TraceSpanResponse) ProtoMessage()    {}
 func (*TraceSpanResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{14}
+	return fileDescriptor_5c6ac9b241082464, []int{16}
 }
 func (m *TraceSpanResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1061,7 +1213,7 @@ func (m *GetLockInfoRequest) Reset()         { *m = GetLockInfoRequest{} }
 func (m *GetLockInfoRequest) String() string { return proto.CompactTextString(m) }
 func (*GetLockInfoRequest) ProtoMessage()    {}
 func (*GetLockInfoRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{15}
+	return fileDescriptor_5c6ac9b241082464, []int{17}
 }
 func (m *GetLockInfoRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1106,7 +1258,7 @@ func (m *LockInfo) Reset()         { *m = LockInfo{} }
 func (m *LockInfo) String() string { return proto.CompactTextString(m) }
 func (*LockInfo) ProtoMessage()    {}
 func (*LockInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{16}
+	return fileDescriptor_5c6ac9b241082464, []int{18}
 }
 func (m *LockInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1189,7 +1341,7 @@ func (m *GetLockInfoResponse) Reset()         { *m = GetLockInfoResponse{} }
 func (m *GetLockInfoResponse) String() string { return proto.CompactTextString(m) }
 func (*GetLockInfoResponse) ProtoMessage()    {}
 func (*GetLockInfoResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{17}
+	return fileDescriptor_5c6ac9b241082464, []int{19}
 }
 func (m *GetLockInfoResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1242,7 +1394,7 @@ func (m *GetTxnInfoRequest) Reset()         { *m = GetTxnInfoRequest{} }
 func (m *GetTxnInfoRequest) String() string { return proto.CompactTextString(m) }
 func (*GetTxnInfoRequest) ProtoMessage()    {}
 func (*GetTxnInfoRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{18}
+	return fileDescriptor_5c6ac9b241082464, []int{20}
 }
 func (m *GetTxnInfoRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1291,7 +1443,7 @@ func (m *TxnLockInfo) Reset()         { *m = TxnLockInfo{} }
 func (m *TxnLockInfo) String() string { return proto.CompactTextString(m) }
 func (*TxnLockInfo) ProtoMessage()    {}
 func (*TxnLockInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{19}
+	return fileDescriptor_5c6ac9b241082464, []int{21}
 }
 func (m *TxnLockInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1358,7 +1510,7 @@ func (m *TxnInfo) Reset()         { *m = TxnInfo{} }
 func (m *TxnInfo) String() string { return proto.CompactTextString(m) }
 func (*TxnInfo) ProtoMessage()    {}
 func (*TxnInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{20}
+	return fileDescriptor_5c6ac9b241082464, []int{22}
 }
 func (m *TxnInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1427,7 +1579,7 @@ func (m *GetTxnInfoResponse) Reset()         { *m = GetTxnInfoResponse{} }
 func (m *GetTxnInfoResponse) String() string { return proto.CompactTextString(m) }
 func (*GetTxnInfoResponse) ProtoMessage()    {}
 func (*GetTxnInfoResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{21}
+	return fileDescriptor_5c6ac9b241082464, []int{23}
 }
 func (m *GetTxnInfoResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1480,7 +1632,7 @@ func (m *GetCacheInfoRequest) Reset()         { *m = GetCacheInfoRequest{} }
 func (m *GetCacheInfoRequest) String() string { return proto.CompactTextString(m) }
 func (*GetCacheInfoRequest) ProtoMessage()    {}
 func (*GetCacheInfoRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{22}
+	return fileDescriptor_5c6ac9b241082464, []int{24}
 }
 func (m *GetCacheInfoRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1531,7 +1683,7 @@ func (m *CacheInfo) Reset()         { *m = CacheInfo{} }
 func (m *CacheInfo) String() string { return proto.CompactTextString(m) }
 func (*CacheInfo) ProtoMessage()    {}
 func (*CacheInfo) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{23}
+	return fileDescriptor_5c6ac9b241082464, []int{25}
 }
 func (m *CacheInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1613,7 +1765,7 @@ func (m *GetCacheInfoResponse) Reset()         { *m = GetCacheInfoResponse{} }
 func (m *GetCacheInfoResponse) String() string { return proto.CompactTextString(m) }
 func (*GetCacheInfoResponse) ProtoMessage()    {}
 func (*GetCacheInfoResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_5c6ac9b241082464, []int{24}
+	return fileDescriptor_5c6ac9b241082464, []int{26}
 }
 func (m *GetCacheInfoResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1649,6 +1801,202 @@ func (m *GetCacheInfoResponse) GetCacheInfoList() []*CacheInfo {
 	return nil
 }
 
+type RemoveRemoteLockTableRequest struct {
+	TableID              uint64   `protobuf:"varint,1,opt,name=TableID,proto3" json:"TableID,omitempty"`
+	Version              uint64   `protobuf:"varint,2,opt,name=Version,proto3" json:"Version,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *RemoveRemoteLockTableRequest) Reset()         { *m = RemoveRemoteLockTableRequest{} }
+func (m *RemoveRemoteLockTableRequest) String() string { return proto.CompactTextString(m) }
+func (*RemoveRemoteLockTableRequest) ProtoMessage()    {}
+func (*RemoveRemoteLockTableRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{27}
+}
+func (m *RemoveRemoteLockTableRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RemoveRemoteLockTableRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RemoveRemoteLockTableRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RemoveRemoteLockTableRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RemoveRemoteLockTableRequest.Merge(m, src)
+}
+func (m *RemoveRemoteLockTableRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *RemoveRemoteLockTableRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_RemoveRemoteLockTableRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RemoveRemoteLockTableRequest proto.InternalMessageInfo
+
+func (m *RemoveRemoteLockTableRequest) GetTableID() uint64 {
+	if m != nil {
+		return m.TableID
+	}
+	return 0
+}
+
+func (m *RemoveRemoteLockTableRequest) GetVersion() uint64 {
+	if m != nil {
+		return m.Version
+	}
+	return 0
+}
+
+type RemoveRemoteLockTableResponse struct {
+	Count                int32    `protobuf:"varint,1,opt,name=Count,proto3" json:"Count,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *RemoveRemoteLockTableResponse) Reset()         { *m = RemoveRemoteLockTableResponse{} }
+func (m *RemoveRemoteLockTableResponse) String() string { return proto.CompactTextString(m) }
+func (*RemoveRemoteLockTableResponse) ProtoMessage()    {}
+func (*RemoveRemoteLockTableResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{28}
+}
+func (m *RemoveRemoteLockTableResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RemoveRemoteLockTableResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RemoveRemoteLockTableResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RemoveRemoteLockTableResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RemoveRemoteLockTableResponse.Merge(m, src)
+}
+func (m *RemoveRemoteLockTableResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *RemoveRemoteLockTableResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_RemoveRemoteLockTableResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RemoveRemoteLockTableResponse proto.InternalMessageInfo
+
+func (m *RemoveRemoteLockTableResponse) GetCount() int32 {
+	if m != nil {
+		return m.Count
+	}
+	return 0
+}
+
+type GetLatestBindRequest struct {
+	TableID              uint64   `protobuf:"varint,1,opt,name=TableID,proto3" json:"TableID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetLatestBindRequest) Reset()         { *m = GetLatestBindRequest{} }
+func (m *GetLatestBindRequest) String() string { return proto.CompactTextString(m) }
+func (*GetLatestBindRequest) ProtoMessage()    {}
+func (*GetLatestBindRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{29}
+}
+func (m *GetLatestBindRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetLatestBindRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetLatestBindRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetLatestBindRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetLatestBindRequest.Merge(m, src)
+}
+func (m *GetLatestBindRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetLatestBindRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetLatestBindRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetLatestBindRequest proto.InternalMessageInfo
+
+func (m *GetLatestBindRequest) GetTableID() uint64 {
+	if m != nil {
+		return m.TableID
+	}
+	return 0
+}
+
+type GetLatestBindResponse struct {
+	Bind                 string   `protobuf:"bytes,1,opt,name=Bind,proto3" json:"Bind,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *GetLatestBindResponse) Reset()         { *m = GetLatestBindResponse{} }
+func (m *GetLatestBindResponse) String() string { return proto.CompactTextString(m) }
+func (*GetLatestBindResponse) ProtoMessage()    {}
+func (*GetLatestBindResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{30}
+}
+func (m *GetLatestBindResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GetLatestBindResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GetLatestBindResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GetLatestBindResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GetLatestBindResponse.Merge(m, src)
+}
+func (m *GetLatestBindResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *GetLatestBindResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_GetLatestBindResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GetLatestBindResponse proto.InternalMessageInfo
+
+func (m *GetLatestBindResponse) GetBind() string {
+	if m != nil {
+		return m.Bind
+	}
+	return ""
+}
+
 func init() {
 	proto.RegisterEnum("query.CmdMethod", CmdMethod_name, CmdMethod_value)
 	proto.RegisterType((*QueryRequest)(nil), "query.QueryRequest")
@@ -1657,6 +2005,8 @@ func init() {
 	proto.RegisterType((*SyncCommitResponse)(nil), "query.SyncCommitResponse")
 	proto.RegisterType((*GetCommitRequest)(nil), "query.GetCommitRequest")
 	proto.RegisterType((*GetCommitResponse)(nil), "query.GetCommitResponse")
+	proto.RegisterType((*RunTaskRequest)(nil), "query.RunTaskRequest")
+	proto.RegisterType((*RunTaskResponse)(nil), "query.RunTaskResponse")
 	proto.RegisterType((*Request)(nil), "query.Request")
 	proto.RegisterType((*ShowProcessListResponse)(nil), "query.ShowProcessListResponse")
 	proto.RegisterType((*Response)(nil), "query.Response")
@@ -1676,95 +2026,113 @@ func init() {
 	proto.RegisterType((*GetCacheInfoRequest)(nil), "query.GetCacheInfoRequest")
 	proto.RegisterType((*CacheInfo)(nil), "query.CacheInfo")
 	proto.RegisterType((*GetCacheInfoResponse)(nil), "query.GetCacheInfoResponse")
+	proto.RegisterType((*RemoveRemoteLockTableRequest)(nil), "query.RemoveRemoteLockTableRequest")
+	proto.RegisterType((*RemoveRemoteLockTableResponse)(nil), "query.RemoveRemoteLockTableResponse")
+	proto.RegisterType((*GetLatestBindRequest)(nil), "query.GetLatestBindRequest")
+	proto.RegisterType((*GetLatestBindResponse)(nil), "query.GetLatestBindResponse")
 }
 
 func init() { proto.RegisterFile("query.proto", fileDescriptor_5c6ac9b241082464) }
 
 var fileDescriptor_5c6ac9b241082464 = []byte{
-	// 1328 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x57, 0xcd, 0x6e, 0xdb, 0x46,
-	0x10, 0x0e, 0xa3, 0x3f, 0x72, 0xa4, 0x48, 0xcc, 0xda, 0x4d, 0x14, 0x37, 0xb5, 0x0d, 0xa2, 0x40,
-	0x8c, 0xa4, 0x95, 0x03, 0x07, 0x4d, 0x7f, 0xd0, 0x43, 0x6c, 0xa5, 0x4e, 0x84, 0xd8, 0x4e, 0xbb,
-	0x92, 0x9b, 0x34, 0x87, 0x02, 0xb4, 0xb4, 0x91, 0x08, 0x4b, 0x5c, 0x85, 0xa4, 0x10, 0xe9, 0xdc,
-	0x7b, 0xd1, 0x57, 0xe8, 0xbd, 0x2f, 0xd0, 0x37, 0xc8, 0xb1, 0xc7, 0x9e, 0xda, 0xc2, 0x4f, 0x52,
-	0xec, 0x70, 0xf9, 0xbf, 0x06, 0x5a, 0x20, 0xb7, 0x99, 0xd9, 0x6f, 0x3e, 0x2e, 0x87, 0xf3, 0xcd,
-	0x2e, 0xa1, 0xfe, 0x66, 0xc1, 0xbc, 0x55, 0x67, 0xee, 0xf1, 0x80, 0x93, 0x0a, 0x3a, 0x1b, 0x0d,
-	0x3f, 0xb0, 0x83, 0x85, 0x1f, 0x06, 0x37, 0x60, 0xca, 0x87, 0xe7, 0xd2, 0x36, 0x82, 0xa5, 0x2b,
-	0xcd, 0x56, 0xe0, 0xcc, 0x98, 0x1f, 0xd8, 0xb3, 0xb9, 0x0c, 0x7c, 0x3a, 0x76, 0x82, 0xc9, 0xe2,
-	0xac, 0x33, 0xe4, 0xb3, 0xdd, 0x31, 0x1f, 0xf3, 0x5d, 0x0c, 0x9f, 0x2d, 0x5e, 0xa3, 0x87, 0x0e,
-	0x5a, 0x12, 0xbe, 0x35, 0xe6, 0x7c, 0x3c, 0x65, 0x09, 0x2a, 0xc7, 0x67, 0x7d, 0x0c, 0x8d, 0xef,
-	0xc4, 0x76, 0x28, 0x7b, 0xb3, 0x60, 0x7e, 0x40, 0xd6, 0xa1, 0x82, 0x7e, 0x5b, 0xdb, 0xd6, 0x76,
-	0x0c, 0x1a, 0x3a, 0xd6, 0x09, 0xdc, 0xe8, 0x4f, 0xf8, 0xdb, 0x6f, 0x3d, 0x3e, 0x64, 0xbe, 0x7f,
-	0xe4, 0xf8, 0x41, 0x84, 0xbf, 0x01, 0xd5, 0x01, 0x73, 0x6d, 0x37, 0x90, 0x09, 0xd2, 0x23, 0xb7,
-	0xc1, 0xe8, 0xaf, 0x7c, 0xb9, 0x74, 0x75, 0x5b, 0xdb, 0xd1, 0x69, 0x12, 0xb0, 0x5e, 0xc0, 0xf5,
-	0xfe, 0xca, 0x1d, 0x76, 0xf9, 0x6c, 0xe6, 0xc4, 0x54, 0x07, 0xd0, 0x3c, 0xb2, 0x03, 0xe6, 0x07,
-	0x61, 0x78, 0xd0, 0x47, 0xca, 0xfa, 0xde, 0x7a, 0x27, 0xd9, 0xf4, 0x20, 0xb2, 0x0e, 0xca, 0xef,
-	0xfe, 0xda, 0xba, 0x42, 0x73, 0x19, 0xd6, 0x2b, 0x20, 0x69, 0x62, 0x7f, 0xce, 0x5d, 0x9f, 0x91,
-	0xc7, 0xd0, 0xea, 0x2e, 0x3c, 0x8f, 0xb9, 0xff, 0x87, 0x3a, 0x9f, 0x62, 0x11, 0x30, 0x9f, 0xb0,
-	0x20, 0xb3, 0x67, 0xeb, 0x07, 0xb8, 0x9e, 0x8a, 0xbd, 0xd7, 0xc7, 0xfd, 0x5c, 0x85, 0x5a, 0x54,
-	0x9a, 0xdb, 0x60, 0x48, 0xb3, 0xf7, 0x18, 0xb9, 0xca, 0x34, 0x09, 0x90, 0x0e, 0x18, 0xdd, 0xd9,
-	0xe8, 0x98, 0x05, 0x13, 0x3e, 0xc2, 0x5a, 0x37, 0xf7, 0xcc, 0x4e, 0xd8, 0x71, 0x71, 0x9c, 0x26,
-	0x10, 0xf2, 0x79, 0xf6, 0x9b, 0xb7, 0x4b, 0xb8, 0xb9, 0x35, 0x99, 0x92, 0x5e, 0xa2, 0xd9, 0xe6,
-	0x38, 0xbd, 0xac, 0x0d, 0xda, 0x65, 0xa4, 0xf8, 0x48, 0x52, 0xa8, 0x41, 0xf4, 0xb2, 0x1e, 0x3a,
-	0x82, 0xb5, 0xfd, 0x69, 0xc0, 0xbc, 0xfd, 0xe1, 0x90, 0x2f, 0xdc, 0x98, 0xb3, 0x82, 0x9c, 0x1b,
-	0x92, 0x53, 0x81, 0xa0, 0xaa, 0x34, 0xf2, 0x08, 0x5a, 0xcf, 0x9c, 0xe9, 0xb4, 0xcb, 0x5d, 0x37,
-	0x62, 0xaa, 0x22, 0xd3, 0x0d, 0xc9, 0x94, 0x5b, 0xa5, 0x79, 0x38, 0xe9, 0x82, 0x39, 0xf0, 0xec,
-	0x21, 0xeb, 0xcf, 0xed, 0x98, 0xa2, 0x86, 0x14, 0x37, 0x25, 0x45, 0x7e, 0x99, 0x16, 0x12, 0x48,
-	0x0f, 0xc8, 0x13, 0x16, 0x1c, 0xf1, 0xe1, 0x79, 0xcf, 0x7d, 0xcd, 0x23, 0x1a, 0x1d, 0x69, 0x6e,
-	0x49, 0x9a, 0x22, 0x80, 0x2a, 0x92, 0xc8, 0x21, 0x36, 0xd9, 0x60, 0xe9, 0xa6, 0x99, 0x0c, 0x64,
-	0x6a, 0x27, 0x4c, 0xd9, 0x75, 0x5a, 0x4c, 0x11, 0x75, 0x16, 0xcd, 0x6a, 0x0f, 0x27, 0x2c, 0xcd,
-	0x04, 0x99, 0x3a, 0x2b, 0x10, 0x54, 0x95, 0x46, 0xbe, 0x00, 0xe8, 0xaf, 0x86, 0x6e, 0xd8, 0xaf,
-	0xed, 0x7a, 0x66, 0x3b, 0x05, 0x71, 0xd3, 0x14, 0x96, 0x7c, 0x06, 0x46, 0x2c, 0x9a, 0x76, 0x23,
-	0x53, 0xd8, 0xbc, 0xc0, 0x68, 0x82, 0xb4, 0x0e, 0xe1, 0x66, 0xa1, 0x81, 0xa4, 0xe2, 0xee, 0x81,
-	0xde, 0x67, 0xbe, 0xef, 0x70, 0xd7, 0x6f, 0x6b, 0xdb, 0xa5, 0x9d, 0xfa, 0x5e, 0xab, 0x23, 0xc7,
-	0xab, 0x8c, 0xd3, 0x18, 0x60, 0xfd, 0x54, 0x05, 0x3d, 0xce, 0x7c, 0xbf, 0xca, 0x5a, 0x87, 0xca,
-	0x37, 0x9e, 0xc7, 0x3d, 0x94, 0x54, 0x83, 0x86, 0x0e, 0x79, 0x79, 0xe9, 0xc6, 0xa5, 0x6e, 0x36,
-	0x2f, 0xd3, 0x4d, 0x88, 0xa2, 0x97, 0xbe, 0xf7, 0x73, 0x58, 0xcf, 0x4a, 0x40, 0xd2, 0x86, 0xd2,
-	0xf9, 0x50, 0x29, 0x1d, 0xc9, 0xa9, 0x4c, 0x14, 0xad, 0x9f, 0xa8, 0x41, 0x92, 0x55, 0x33, 0x5f,
-	0x28, 0xbf, 0x4c, 0x0b, 0x09, 0xa2, 0x5f, 0x53, 0x72, 0x90, 0x2c, 0xb5, 0x4c, 0x83, 0x14, 0xd6,
-	0x69, 0x31, 0x45, 0xf6, 0x6b, 0xa2, 0x06, 0xc9, 0xa4, 0xe7, 0xfb, 0x35, 0x8f, 0xa0, 0xaa, 0x34,
-	0x29, 0xc8, 0x58, 0x12, 0x92, 0xcc, 0xc8, 0x0b, 0x32, 0x07, 0xa0, 0x8a, 0x24, 0x51, 0xf6, 0xac,
-	0x22, 0x24, 0x19, 0x64, 0xca, 0xae, 0x82, 0x50, 0x65, 0x22, 0xf9, 0x52, 0x68, 0x29, 0x92, 0x8c,
-	0xd4, 0xd2, 0x2d, 0x85, 0x96, 0x24, 0x49, 0x0a, 0x4c, 0x1e, 0x16, 0xc5, 0xd4, 0x2e, 0x8a, 0x49,
-	0x26, 0xa6, 0xd4, 0xd4, 0x53, 0x0e, 0x5d, 0xb2, 0x01, 0x7a, 0x78, 0x46, 0xf7, 0x46, 0x28, 0x87,
-	0x12, 0x8d, 0x7d, 0x71, 0xd6, 0xf7, 0x51, 0x54, 0xd8, 0xde, 0x06, 0x95, 0x9e, 0xf5, 0x95, 0xba,
-	0x0b, 0x89, 0x05, 0x0d, 0x5b, 0xc4, 0xfb, 0x8b, 0xa1, 0xe8, 0x5c, 0xe4, 0xd3, 0x69, 0x26, 0x66,
-	0xf5, 0x0a, 0xd3, 0x5a, 0x48, 0x52, 0x32, 0x49, 0x49, 0x96, 0x68, 0x12, 0x20, 0x6d, 0xa8, 0x7d,
-	0xcf, 0x3c, 0xa1, 0x64, 0x14, 0x64, 0x99, 0x46, 0xae, 0xf5, 0x49, 0xb1, 0x77, 0x05, 0x3a, 0xfb,
-	0xf4, 0xc8, 0xb5, 0x5e, 0x16, 0x87, 0x3c, 0x31, 0xa1, 0xd4, 0x9d, 0x8d, 0xe4, 0x4d, 0x46, 0x98,
-	0x42, 0xd0, 0x02, 0xe0, 0xe3, 0xb3, 0x0c, 0x1a, 0x3a, 0x62, 0x87, 0x83, 0x89, 0xc7, 0xfc, 0x09,
-	0x9f, 0x8e, 0xb0, 0x16, 0x25, 0x9a, 0x04, 0xac, 0x3b, 0x8a, 0xf6, 0x27, 0x04, 0xca, 0xc2, 0x96,
-	0xdc, 0x68, 0x5b, 0xeb, 0xaa, 0x23, 0xc2, 0xfa, 0x53, 0x03, 0x3d, 0x8a, 0x89, 0xfd, 0x0f, 0xec,
-	0xb3, 0x29, 0x93, 0x5f, 0xa3, 0x4c, 0x23, 0x57, 0x10, 0x3e, 0x63, 0x2b, 0xb1, 0xb1, 0xd2, 0x4e,
-	0x83, 0xa2, 0x4d, 0xee, 0x86, 0x99, 0xc7, 0x7c, 0xc4, 0x70, 0x5b, 0xcd, 0xbd, 0x66, 0x07, 0xef,
-	0x95, 0x51, 0x94, 0xc6, 0xeb, 0x64, 0x1b, 0xea, 0x8e, 0x4f, 0x6d, 0x77, 0xcc, 0x44, 0x08, 0x07,
-	0x91, 0x4e, 0xd3, 0x21, 0x72, 0x07, 0x6a, 0x4f, 0xf9, 0x74, 0xc4, 0x3c, 0xbf, 0x5d, 0xc1, 0x99,
-	0x7a, 0x2d, 0x24, 0x7b, 0x61, 0x3b, 0x42, 0x11, 0x34, 0x5a, 0x15, 0x40, 0x11, 0x13, 0xc0, 0xaa,
-	0x12, 0x28, 0x57, 0xad, 0x1f, 0x95, 0x82, 0x16, 0xaf, 0xd2, 0x75, 0x7b, 0x51, 0xdd, 0xd1, 0x26,
-	0x0f, 0xa0, 0x11, 0xe1, 0xc4, 0xc4, 0xc3, 0xd7, 0x14, 0x53, 0x3d, 0xec, 0xec, 0x98, 0x22, 0x03,
-	0xb2, 0xd6, 0x14, 0x07, 0xa5, 0x35, 0x81, 0xfa, 0x60, 0xe9, 0xfe, 0xb7, 0x8a, 0x52, 0xfe, 0x36,
-	0xae, 0xa8, 0xb0, 0xc9, 0x3d, 0xa8, 0x3d, 0x9f, 0x07, 0x78, 0xae, 0x84, 0xb7, 0xa4, 0xeb, 0x49,
-	0x41, 0xe5, 0x02, 0x8d, 0x10, 0xd6, 0xef, 0x1a, 0xd4, 0xe4, 0xc3, 0xc9, 0x23, 0xd0, 0xbb, 0x1e,
-	0xb3, 0x03, 0xb6, 0x1f, 0xc8, 0xcb, 0xdf, 0x46, 0x27, 0xbc, 0x8b, 0x77, 0xa2, 0xbb, 0x78, 0xea,
-	0x0a, 0xa8, 0x8b, 0x2b, 0xe0, 0x2f, 0x7f, 0x6f, 0x69, 0x34, 0xce, 0x22, 0xdb, 0x50, 0x3e, 0x66,
-	0x81, 0x8d, 0x9d, 0x57, 0xdf, 0x6b, 0x74, 0xc4, 0x4f, 0xc1, 0x60, 0xe9, 0x8a, 0x18, 0xc5, 0x15,
-	0xf1, 0x2a, 0xa7, 0x3e, 0xf3, 0x06, 0x4b, 0x17, 0x37, 0xa7, 0xd3, 0xc8, 0x25, 0xf7, 0xc1, 0x10,
-	0x35, 0x17, 0xbb, 0xf4, 0xdb, 0x65, 0x2c, 0x1d, 0x89, 0x26, 0x6f, 0x52, 0x0b, 0x9a, 0x80, 0xc4,
-	0xc5, 0x59, 0x31, 0xe8, 0x54, 0x5f, 0xe6, 0x3e, 0xd6, 0x33, 0xf7, 0x61, 0x9a, 0x09, 0x3b, 0x12,
-	0xa4, 0x21, 0xd6, 0x07, 0xca, 0x7b, 0x87, 0xf5, 0xab, 0x06, 0x46, 0x1c, 0x14, 0x83, 0xe7, 0x84,
-	0x8f, 0xd8, 0x60, 0x35, 0x67, 0xf2, 0x71, 0xb1, 0x2f, 0x06, 0x8f, 0xb0, 0x7b, 0x23, 0x29, 0x43,
-	0xe9, 0x09, 0x1d, 0x22, 0x01, 0x26, 0x85, 0x33, 0x29, 0x09, 0x88, 0xcd, 0x9f, 0xfa, 0x6c, 0x84,
-	0xad, 0x5d, 0xa6, 0x68, 0x8b, 0xd8, 0xa1, 0xc7, 0xc2, 0x03, 0xb2, 0x4c, 0xd1, 0x16, 0x4f, 0x7e,
-	0xea, 0x04, 0xd4, 0x0e, 0x1c, 0x8e, 0x67, 0xdd, 0x55, 0x1a, 0xfb, 0xd6, 0x89, 0x7a, 0xd2, 0x93,
-	0x87, 0x70, 0x2d, 0x0e, 0x62, 0x19, 0xc2, 0x5b, 0x47, 0x7c, 0x39, 0x88, 0x13, 0xb2, 0xb0, 0xbb,
-	0xbf, 0x69, 0xa9, 0x1b, 0x05, 0x31, 0xe4, 0xcf, 0x96, 0x79, 0x85, 0xac, 0x41, 0x2b, 0x77, 0xc8,
-	0x9b, 0x1a, 0x31, 0xa1, 0x91, 0x1e, 0xac, 0xe6, 0x55, 0xd2, 0x00, 0x3d, 0x9a, 0x71, 0x66, 0x89,
-	0x5c, 0x03, 0x23, 0x9e, 0x34, 0x66, 0x99, 0xb4, 0xa0, 0x9e, 0x92, 0x97, 0x59, 0x21, 0x4d, 0x80,
-	0xe4, 0xa3, 0x9a, 0x55, 0xc1, 0x97, 0x7e, 0x1b, 0xb3, 0x26, 0x10, 0xc9, 0x59, 0x62, 0xea, 0x82,
-	0x31, 0x3e, 0x22, 0x4c, 0xe3, 0xe0, 0xeb, 0x77, 0x17, 0x9b, 0xda, 0x1f, 0x17, 0x9b, 0xda, 0x3f,
-	0x17, 0x9b, 0xda, 0xab, 0x4e, 0xea, 0xdf, 0x73, 0x66, 0x07, 0x9e, 0xb3, 0xe4, 0x9e, 0x33, 0x76,
-	0xdc, 0xc8, 0x71, 0xd9, 0xee, 0xfc, 0x7c, 0xbc, 0x3b, 0x3f, 0xdb, 0xc5, 0x2a, 0x9c, 0x55, 0xb1,
-	0xd3, 0x1f, 0xfc, 0x1b, 0x00, 0x00, 0xff, 0xff, 0xef, 0xbd, 0x39, 0x0e, 0xfe, 0x0e, 0x00, 0x00,
+	// 1544 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x58, 0xdb, 0x6e, 0xdb, 0x46,
+	0x13, 0x8e, 0x22, 0xc9, 0x22, 0x47, 0xb2, 0x45, 0xaf, 0x0f, 0x61, 0xfc, 0x3b, 0x8e, 0xb1, 0x7f,
+	0x80, 0xb8, 0x49, 0x2a, 0x1b, 0x0e, 0x92, 0x1e, 0xd0, 0x8b, 0xd8, 0x4a, 0x93, 0x08, 0x71, 0x92,
+	0x76, 0xa5, 0x34, 0x87, 0x8b, 0x02, 0xb4, 0xb4, 0x91, 0x08, 0x4b, 0xa4, 0x42, 0x52, 0x8d, 0xfd,
+	0x16, 0x7d, 0x85, 0x3e, 0x46, 0xdf, 0x20, 0x97, 0xbd, 0x29, 0xd0, 0x9b, 0x1e, 0x90, 0x9b, 0xbe,
+	0x46, 0xb1, 0xc3, 0xe5, 0x79, 0x65, 0xb4, 0x40, 0x6e, 0x84, 0x9d, 0xd9, 0x99, 0x8f, 0xcb, 0xd9,
+	0x99, 0x6f, 0x86, 0x82, 0xfa, 0xdb, 0x19, 0xf7, 0xce, 0x5a, 0x53, 0xcf, 0x0d, 0x5c, 0x52, 0x45,
+	0x61, 0xa3, 0xe1, 0x07, 0x56, 0x30, 0xf3, 0x43, 0xe5, 0x06, 0x8c, 0xdd, 0xfe, 0x89, 0x5c, 0xeb,
+	0xc1, 0xa9, 0x23, 0x97, 0xcd, 0xc0, 0x9e, 0x70, 0x3f, 0xb0, 0x26, 0x53, 0xa9, 0xf8, 0x74, 0x68,
+	0x07, 0xa3, 0xd9, 0x71, 0xab, 0xef, 0x4e, 0x76, 0x87, 0xee, 0xd0, 0xdd, 0x45, 0xf5, 0xf1, 0xec,
+	0x0d, 0x4a, 0x28, 0xe0, 0x4a, 0x9a, 0x5f, 0x1d, 0xba, 0xee, 0x70, 0xcc, 0x13, 0xab, 0x1c, 0x1e,
+	0xbd, 0x06, 0x8d, 0x6f, 0xc5, 0x71, 0x18, 0x7f, 0x3b, 0xe3, 0x7e, 0x40, 0x56, 0xa1, 0x8a, 0xb2,
+	0x59, 0xda, 0x2e, 0xed, 0xe8, 0x2c, 0x14, 0xe8, 0x53, 0x58, 0xef, 0x8e, 0xdc, 0x77, 0xdf, 0x78,
+	0x6e, 0x9f, 0xfb, 0xfe, 0x91, 0xed, 0x07, 0x91, 0xfd, 0x3a, 0x2c, 0xf4, 0xb8, 0x63, 0x39, 0x81,
+	0x74, 0x90, 0x12, 0xd9, 0x04, 0xbd, 0x7b, 0xe6, 0xcb, 0xad, 0x8b, 0xdb, 0xa5, 0x1d, 0x8d, 0x25,
+	0x0a, 0xfa, 0x02, 0x96, 0xbb, 0x67, 0x4e, 0xbf, 0xed, 0x4e, 0x26, 0x76, 0x0c, 0x75, 0x08, 0x4b,
+	0x47, 0x56, 0xc0, 0xfd, 0x20, 0x54, 0xf7, 0xba, 0x08, 0x59, 0xdf, 0x5f, 0x6d, 0x25, 0x87, 0xee,
+	0x45, 0xab, 0xc3, 0xca, 0xfb, 0x3f, 0xae, 0x5e, 0x60, 0x39, 0x0f, 0xfa, 0x1a, 0x48, 0x1a, 0xd8,
+	0x9f, 0xba, 0x8e, 0xcf, 0xc9, 0x7d, 0x68, 0xb6, 0x67, 0x9e, 0xc7, 0x9d, 0xff, 0x02, 0x9d, 0x77,
+	0xa1, 0x04, 0x8c, 0x87, 0x3c, 0xc8, 0x9c, 0x99, 0xbe, 0x82, 0xe5, 0x94, 0xee, 0xa3, 0x3e, 0xee,
+	0x16, 0x2c, 0xb1, 0x99, 0xd3, 0xb3, 0xfc, 0x93, 0x28, 0x40, 0x1b, 0xa0, 0x09, 0xb1, 0xed, 0x0e,
+	0x38, 0x02, 0x56, 0x59, 0x2c, 0xd3, 0x4f, 0xa0, 0x19, 0x5b, 0xcb, 0x63, 0xac, 0xc3, 0x02, 0xe3,
+	0xfe, 0x6c, 0x1c, 0x5f, 0x4d, 0x28, 0xd1, 0xdf, 0x6b, 0x50, 0x8b, 0x20, 0x37, 0x41, 0x97, 0xcb,
+	0xce, 0x7d, 0x34, 0xab, 0xb0, 0x44, 0x41, 0x5a, 0xa0, 0xb7, 0x27, 0x83, 0x27, 0x3c, 0x18, 0xb9,
+	0x03, 0xbc, 0xc4, 0xa5, 0x7d, 0xa3, 0x15, 0xa6, 0x72, 0xac, 0x67, 0x89, 0x09, 0xf9, 0x2c, 0x9b,
+	0x4c, 0x66, 0x19, 0xdf, 0x7a, 0x45, 0xba, 0xa4, 0xb7, 0x58, 0x36, 0xeb, 0x9e, 0xcf, 0xcb, 0x2f,
+	0xb3, 0x82, 0x10, 0x57, 0x24, 0x84, 0xda, 0x88, 0xcd, 0x4b, 0xce, 0x23, 0x58, 0x39, 0x18, 0x07,
+	0xdc, 0x3b, 0xe8, 0xf7, 0xdd, 0x99, 0x13, 0x63, 0x56, 0x11, 0x73, 0x43, 0x62, 0x2a, 0x2c, 0x98,
+	0xca, 0x8d, 0xdc, 0x83, 0xe6, 0x63, 0x7b, 0x3c, 0x6e, 0xbb, 0x8e, 0x13, 0x21, 0x2d, 0x20, 0xd2,
+	0xba, 0x44, 0xca, 0xed, 0xb2, 0xbc, 0x39, 0x69, 0x83, 0xd1, 0xf3, 0xac, 0x3e, 0xef, 0x4e, 0xad,
+	0x18, 0xa2, 0x86, 0x10, 0x97, 0x24, 0x44, 0x7e, 0x9b, 0x15, 0x1c, 0x48, 0x07, 0xc8, 0x43, 0x1e,
+	0x1c, 0xb9, 0xfd, 0x93, 0x8e, 0xf3, 0xc6, 0x8d, 0x60, 0x34, 0x84, 0xb9, 0x2c, 0x61, 0x8a, 0x06,
+	0x4c, 0xe1, 0x44, 0x1e, 0x60, 0xf6, 0xf6, 0x4e, 0x9d, 0x34, 0x92, 0x8e, 0x48, 0x66, 0x82, 0x94,
+	0xdd, 0x67, 0x45, 0x17, 0x11, 0x67, 0x51, 0x05, 0x56, 0x7f, 0xc4, 0xd3, 0x48, 0x90, 0x89, 0xb3,
+	0xc2, 0x82, 0xa9, 0xdc, 0xc8, 0xe7, 0x00, 0xdd, 0xb3, 0xbe, 0x13, 0x16, 0x82, 0x59, 0xcf, 0x1c,
+	0xa7, 0xc0, 0x1a, 0x2c, 0x65, 0x4b, 0xee, 0x80, 0x1e, 0x57, 0xa3, 0xd9, 0xc8, 0x04, 0x36, 0x5f,
+	0xb9, 0x2c, 0xb1, 0x24, 0xbb, 0x50, 0x93, 0xb5, 0x63, 0x1a, 0xe8, 0xb4, 0x26, 0x9d, 0xb2, 0xf5,
+	0xc7, 0x22, 0x2b, 0xf2, 0x0a, 0xd6, 0x18, 0x9f, 0xb8, 0x3f, 0x70, 0xf1, 0x1b, 0x70, 0x11, 0xd6,
+	0x9e, 0x75, 0x3c, 0xe6, 0xe6, 0x32, 0xba, 0xff, 0x3f, 0x72, 0x57, 0xd9, 0x44, 0x60, 0x6a, 0x04,
+	0x72, 0x00, 0x8b, 0xe2, 0xa2, 0x90, 0xd5, 0x0e, 0x6d, 0x67, 0x60, 0x12, 0x84, 0xfc, 0x5f, 0xea,
+	0x62, 0xe3, 0xbd, 0x08, 0x2a, 0xeb, 0x41, 0x1f, 0xc0, 0xa5, 0x42, 0x3d, 0x48, 0x4a, 0xb8, 0x09,
+	0x5a, 0x97, 0xfb, 0xbe, 0xed, 0x3a, 0xbe, 0x59, 0xda, 0x2e, 0xef, 0xd4, 0xf7, 0x9b, 0x2d, 0xd9,
+	0x86, 0xa4, 0x9e, 0xc5, 0x06, 0xf4, 0xd7, 0x1a, 0x68, 0xb1, 0xe7, 0xc7, 0x25, 0x8a, 0x55, 0xa8,
+	0x7e, 0xed, 0x79, 0xae, 0x87, 0x0c, 0xd1, 0x60, 0xa1, 0x40, 0x5e, 0xce, 0x3d, 0xb8, 0xa4, 0x81,
+	0xad, 0x79, 0x34, 0x10, 0x5a, 0xb1, 0xb9, 0xef, 0xfd, 0x0c, 0x56, 0xb3, 0x15, 0x2d, 0x61, 0xab,
+	0x99, 0xe0, 0xaa, 0x4c, 0x98, 0xd2, 0x51, 0x54, 0x72, 0x52, 0xdc, 0x12, 0x6c, 0x21, 0x93, 0x70,
+	0xf9, 0x6d, 0x56, 0x70, 0x10, 0xe5, 0x97, 0xaa, 0x6e, 0x89, 0x52, 0xcb, 0xe4, 0x7b, 0x61, 0x9f,
+	0x15, 0x5d, 0x64, 0xf9, 0x25, 0xc5, 0x2d, 0x91, 0xb4, 0x7c, 0xf9, 0xe5, 0x2d, 0x98, 0xca, 0x4d,
+	0xf2, 0x4b, 0x5c, 0xe1, 0x12, 0x4c, 0xcf, 0xf3, 0x4b, 0xce, 0x80, 0x29, 0x9c, 0x44, 0xd8, 0xb3,
+	0x05, 0x2e, 0xc1, 0x20, 0x9f, 0xd3, 0x05, 0x13, 0xa6, 0x74, 0x24, 0x5f, 0x08, 0x6a, 0x88, 0x18,
+	0x40, 0x52, 0xc3, 0x65, 0x05, 0x35, 0x48, 0x90, 0x94, 0x31, 0xb9, 0x5b, 0xe4, 0x06, 0xb3, 0xc8,
+	0x0d, 0xd2, 0x31, 0x45, 0x0e, 0x7b, 0x79, 0x72, 0x58, 0xcf, 0x93, 0x83, 0xf4, 0x89, 0xd9, 0xe1,
+	0xf5, 0xf9, 0xec, 0x70, 0xed, 0x7c, 0x76, 0x90, 0x68, 0x73, 0xe8, 0xe1, 0x50, 0x4d, 0x0f, 0x9b,
+	0x6a, 0x7a, 0x90, 0x58, 0x39, 0x7e, 0xe8, 0x28, 0xbb, 0x22, 0x4e, 0x17, 0x38, 0x9d, 0x75, 0x06,
+	0x58, 0xe0, 0x65, 0x16, 0xcb, 0x62, 0x94, 0xe8, 0x22, 0x4d, 0x60, 0xc1, 0xea, 0x4c, 0x4a, 0xf4,
+	0x4b, 0x75, 0x5d, 0x11, 0x0a, 0x0d, 0x4b, 0xe8, 0xbb, 0xb3, 0xbe, 0xa8, 0x45, 0xc4, 0xd3, 0x58,
+	0x46, 0x47, 0x3b, 0x85, 0x76, 0x2a, 0x48, 0x46, 0x22, 0x49, 0x92, 0x29, 0xb3, 0x44, 0x41, 0x4c,
+	0xa8, 0x7d, 0xc7, 0x3d, 0xc1, 0x4d, 0x48, 0x31, 0x15, 0x16, 0x89, 0xf4, 0x56, 0xb1, 0x1a, 0x85,
+	0x75, 0xf6, 0xe9, 0x91, 0x48, 0x5f, 0x16, 0xbb, 0x30, 0x31, 0xa0, 0xdc, 0x9e, 0x0c, 0xe4, 0xa0,
+	0x24, 0x96, 0x82, 0xa2, 0x84, 0x81, 0x8f, 0xcf, 0xd2, 0x59, 0x28, 0x88, 0x13, 0xf6, 0x46, 0x1e,
+	0xf7, 0x47, 0xee, 0x78, 0x80, 0xb1, 0x28, 0xb3, 0x44, 0x41, 0xaf, 0x2b, 0x0a, 0x9a, 0x10, 0xa8,
+	0x88, 0xb5, 0xc4, 0xc6, 0x35, 0x5d, 0x55, 0xf5, 0x70, 0xfa, 0x5b, 0x09, 0xb4, 0x48, 0x27, 0xce,
+	0x8f, 0x57, 0x2e, 0x6f, 0xa3, 0xc2, 0x22, 0x51, 0x00, 0x3e, 0xe6, 0x67, 0xe2, 0x60, 0xe5, 0x9d,
+	0x06, 0xc3, 0x35, 0xb9, 0x11, 0x7a, 0x3e, 0x11, 0xa3, 0x61, 0x19, 0xf9, 0x77, 0xa9, 0x85, 0x5f,
+	0x14, 0x91, 0x96, 0xc5, 0xfb, 0x64, 0x1b, 0xea, 0xb6, 0xcf, 0x2c, 0x67, 0x88, 0x79, 0x85, 0xd4,
+	0xaa, 0xb1, 0xb4, 0x8a, 0x5c, 0x87, 0xda, 0x23, 0x77, 0x3c, 0xe0, 0x9e, 0x6f, 0x56, 0xb1, 0x4b,
+	0x2c, 0x86, 0x60, 0x2f, 0x2c, 0x5b, 0xd4, 0x38, 0x8b, 0x76, 0x85, 0xa1, 0xd0, 0x09, 0xc3, 0x05,
+	0xa5, 0xa1, 0xdc, 0xa5, 0xdf, 0x2b, 0x29, 0x4a, 0xbc, 0x4a, 0xdb, 0xe9, 0x44, 0x71, 0xc7, 0x35,
+	0xb9, 0x0d, 0x8d, 0xc8, 0x4e, 0x70, 0x38, 0xbe, 0xa6, 0xe8, 0x53, 0x61, 0x86, 0xc7, 0x10, 0x19,
+	0x23, 0xba, 0xa2, 0x98, 0x64, 0xe8, 0x08, 0xea, 0xbd, 0x53, 0xe7, 0xdf, 0x45, 0x94, 0xb9, 0xef,
+	0xe2, 0x88, 0x8a, 0x35, 0xb9, 0x09, 0xb5, 0x67, 0xd3, 0x00, 0x3b, 0x65, 0x38, 0xc6, 0x2e, 0x27,
+	0x01, 0x95, 0x1b, 0x2c, 0xb2, 0xa0, 0x3f, 0x97, 0xa0, 0x26, 0x1f, 0x4e, 0xee, 0x81, 0xd6, 0xf6,
+	0xb8, 0x15, 0xf0, 0x83, 0x40, 0x8e, 0xfd, 0x1b, 0xad, 0xf0, 0x2b, 0xac, 0x15, 0x7d, 0x85, 0xa5,
+	0x86, 0x7f, 0x4d, 0x0c, 0xff, 0x3f, 0xfe, 0x79, 0xb5, 0xc4, 0x62, 0x2f, 0xb2, 0x0d, 0x95, 0x27,
+	0x3c, 0xb0, 0x30, 0xf3, 0xea, 0xfb, 0x8d, 0x96, 0xf8, 0x1c, 0xec, 0x9d, 0x3a, 0x42, 0xc7, 0x70,
+	0x47, 0xbc, 0xca, 0x73, 0x9f, 0x7b, 0xbd, 0x53, 0x07, 0x0f, 0xa7, 0xb1, 0x48, 0x24, 0x7b, 0xa0,
+	0x8b, 0x98, 0x8b, 0x53, 0xfa, 0x66, 0x05, 0x43, 0x47, 0xa2, 0x5e, 0x92, 0xc4, 0x82, 0x25, 0x46,
+	0xe2, 0x93, 0x49, 0x41, 0xdd, 0xaa, 0x9b, 0xd9, 0xc3, 0x78, 0xe6, 0x2e, 0x66, 0x29, 0x41, 0x47,
+	0x80, 0xb4, 0x09, 0x5d, 0x53, 0x0e, 0x86, 0xf4, 0xa7, 0x12, 0xe8, 0xb1, 0x52, 0x10, 0xcf, 0x53,
+	0x77, 0xc0, 0x7b, 0x67, 0x53, 0x2e, 0x1f, 0x17, 0xcb, 0x82, 0x78, 0xc4, 0xba, 0x33, 0x90, 0x65,
+	0x28, 0x25, 0x51, 0x87, 0x08, 0x80, 0x4e, 0x21, 0x27, 0x25, 0x0a, 0x71, 0xf8, 0xe7, 0x3e, 0x1f,
+	0x60, 0x6a, 0x57, 0x18, 0xae, 0x85, 0xee, 0x81, 0xc7, 0xc3, 0x96, 0x5f, 0x61, 0xb8, 0x16, 0x4f,
+	0x7e, 0x64, 0x07, 0xcc, 0x0a, 0x6c, 0x17, 0xbb, 0xf7, 0x45, 0x16, 0xcb, 0xf4, 0xa9, 0xba, 0x77,
+	0x91, 0xbb, 0xb0, 0x18, 0x2b, 0x31, 0x0c, 0xe1, 0x1c, 0x15, 0x8f, 0x3b, 0xb1, 0x43, 0xd6, 0x8c,
+	0x32, 0xd8, 0x3c, 0x6f, 0x1e, 0x4c, 0xb2, 0xf3, 0x7e, 0x36, 0x3b, 0xcf, 0xe3, 0xbd, 0x3b, 0x70,
+	0xe5, 0xdc, 0x2e, 0x22, 0x48, 0xac, 0x2d, 0xd8, 0x53, 0x7e, 0x2e, 0x86, 0x02, 0xdd, 0xc3, 0x57,
+	0x2b, 0xcc, 0x91, 0xf3, 0x8f, 0x40, 0x6f, 0xc2, 0x9a, 0xb2, 0xb5, 0x88, 0xa8, 0x62, 0x1b, 0x92,
+	0x69, 0x22, 0xd6, 0x37, 0xfe, 0x2e, 0xa5, 0xa6, 0x41, 0xa2, 0xcb, 0x3f, 0x14, 0x8c, 0x0b, 0x64,
+	0x05, 0x9a, 0xb9, 0x01, 0xcd, 0x28, 0x11, 0x03, 0x1a, 0xe9, 0x16, 0x62, 0x5c, 0x24, 0x0d, 0xd0,
+	0x22, 0x36, 0x37, 0xca, 0x64, 0x11, 0xf4, 0x98, 0x53, 0x8d, 0x0a, 0x69, 0x42, 0x3d, 0x45, 0x24,
+	0x46, 0x95, 0x2c, 0x01, 0x24, 0xe9, 0x6b, 0x2c, 0x08, 0xbc, 0xf4, 0xbd, 0x19, 0x35, 0x61, 0x91,
+	0xcc, 0x01, 0x86, 0x26, 0x10, 0xe3, 0xf6, 0x6e, 0xe8, 0xa4, 0x1e, 0x37, 0x78, 0x63, 0x91, 0x5c,
+	0x9e, 0xd3, 0xbb, 0x8d, 0x25, 0xb2, 0x9c, 0x6b, 0xbd, 0x46, 0xf3, 0xf0, 0xab, 0xf7, 0x1f, 0xb6,
+	0x4a, 0xbf, 0x7c, 0xd8, 0x2a, 0xfd, 0xf5, 0x61, 0xab, 0xf4, 0xba, 0x95, 0xfa, 0x6b, 0x66, 0x62,
+	0x05, 0x9e, 0x7d, 0xea, 0x7a, 0xf6, 0xd0, 0x76, 0x22, 0xc1, 0xe1, 0xbb, 0xd3, 0x93, 0xe1, 0xee,
+	0xf4, 0x78, 0x17, 0x53, 0xe5, 0x78, 0x01, 0xe9, 0xe0, 0xf6, 0x3f, 0x01, 0x00, 0x00, 0xff, 0xff,
+	0xc7, 0xe2, 0xd1, 0x31, 0x1d, 0x12, 0x00, 0x00,
 }
 
 func (m *QueryRequest) Marshal() (dAtA []byte, err error) {
@@ -1983,6 +2351,72 @@ func (m *GetCommitResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *RunTaskRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RunTaskRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RunTaskRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.TaskCode != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.TaskCode))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *RunTaskResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RunTaskResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RunTaskResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Result) > 0 {
+		i -= len(m.Result)
+		copy(dAtA[i:], m.Result)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Result)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *Request) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -2006,6 +2440,48 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.GetLatestBind != nil {
+		{
+			size, err := m.GetLatestBind.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x92
+	}
+	if m.RemoveRemoteLockTable != nil {
+		{
+			size, err := m.RemoveRemoteLockTable.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x8a
+	}
+	if m.RunTask != nil {
+		{
+			size, err := m.RunTask.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x82
 	}
 	if m.GetCommit != nil {
 		{
@@ -2204,6 +2680,48 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.GetLatestBind != nil {
+		{
+			size, err := m.GetLatestBind.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x92
+	}
+	if m.RemoveRemoteLockTable != nil {
+		{
+			size, err := m.RemoveRemoteLockTable.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x8a
+	}
+	if m.RunTask != nil {
+		{
+			size, err := m.RunTask.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x82
 	}
 	if m.GetCommit != nil {
 		{
@@ -2862,12 +3380,12 @@ func (m *TxnInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x12
 	}
-	n25, err25 := github_com_gogo_protobuf_types.StdTimeMarshalTo(m.CreateAt, dAtA[i-github_com_gogo_protobuf_types.SizeOfStdTime(m.CreateAt):])
-	if err25 != nil {
-		return 0, err25
+	n31, err31 := github_com_gogo_protobuf_types.StdTimeMarshalTo(m.CreateAt, dAtA[i-github_com_gogo_protobuf_types.SizeOfStdTime(m.CreateAt):])
+	if err31 != nil {
+		return 0, err31
 	}
-	i -= n25
-	i = encodeVarintQuery(dAtA, i, uint64(n25))
+	i -= n31
+	i = encodeVarintQuery(dAtA, i, uint64(n31))
 	i--
 	dAtA[i] = 0xa
 	return len(dAtA) - i, nil
@@ -3053,6 +3571,141 @@ func (m *GetCacheInfoResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *RemoveRemoteLockTableRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RemoveRemoteLockTableRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RemoveRemoteLockTableRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Version != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.Version))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.TableID != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.TableID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *RemoveRemoteLockTableResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RemoveRemoteLockTableResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RemoveRemoteLockTableResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Count != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.Count))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetLatestBindRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetLatestBindRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetLatestBindRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.TableID != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.TableID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GetLatestBindResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GetLatestBindResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GetLatestBindResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Bind) > 0 {
+		i -= len(m.Bind)
+		copy(dAtA[i:], m.Bind)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Bind)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintQuery(dAtA []byte, offset int, v uint64) int {
 	offset -= sovQuery(v)
 	base := offset
@@ -3153,6 +3806,37 @@ func (m *GetCommitResponse) Size() (n int) {
 	return n
 }
 
+func (m *RunTaskRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.TaskCode != 0 {
+		n += 1 + sovQuery(uint64(m.TaskCode))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *RunTaskResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Result)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
 func (m *Request) Size() (n int) {
 	if m == nil {
 		return 0
@@ -3204,6 +3888,18 @@ func (m *Request) Size() (n int) {
 	if m.GetCommit != nil {
 		l = m.GetCommit.Size()
 		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.RunTask != nil {
+		l = m.RunTask.Size()
+		n += 2 + l + sovQuery(uint64(l))
+	}
+	if m.RemoveRemoteLockTable != nil {
+		l = m.RemoveRemoteLockTable.Size()
+		n += 2 + l + sovQuery(uint64(l))
+	}
+	if m.GetLatestBind != nil {
+		l = m.GetLatestBind.Size()
+		n += 2 + l + sovQuery(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3280,6 +3976,18 @@ func (m *Response) Size() (n int) {
 	if m.GetCommit != nil {
 		l = m.GetCommit.Size()
 		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.RunTask != nil {
+		l = m.RunTask.Size()
+		n += 2 + l + sovQuery(uint64(l))
+	}
+	if m.RemoveRemoteLockTable != nil {
+		l = m.RemoveRemoteLockTable.Size()
+		n += 2 + l + sovQuery(uint64(l))
+	}
+	if m.GetLatestBind != nil {
+		l = m.GetLatestBind.Size()
+		n += 2 + l + sovQuery(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3608,6 +4316,70 @@ func (m *GetCacheInfoResponse) Size() (n int) {
 			l = e.Size()
 			n += 1 + l + sovQuery(uint64(l))
 		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *RemoveRemoteLockTableRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.TableID != 0 {
+		n += 1 + sovQuery(uint64(m.TableID))
+	}
+	if m.Version != 0 {
+		n += 1 + sovQuery(uint64(m.Version))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *RemoveRemoteLockTableResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Count != 0 {
+		n += 1 + sovQuery(uint64(m.Count))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetLatestBindRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.TableID != 0 {
+		n += 1 + sovQuery(uint64(m.TableID))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GetLatestBindResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Bind)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -4110,6 +4882,159 @@ func (m *GetCommitResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *RunTaskRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RunTaskRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RunTaskRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TaskCode", wireType)
+			}
+			m.TaskCode = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TaskCode |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RunTaskResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RunTaskResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RunTaskResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Result", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Result = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *Request) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -4534,6 +5459,114 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				m.GetCommit = &GetCommitRequest{}
 			}
 			if err := m.GetCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 16:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RunTask", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RunTask == nil {
+				m.RunTask = &RunTaskRequest{}
+			}
+			if err := m.RunTask.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 17:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemoveRemoteLockTable", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RemoveRemoteLockTable == nil {
+				m.RemoveRemoteLockTable = &RemoveRemoteLockTableRequest{}
+			}
+			if err := m.RemoveRemoteLockTable.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 18:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetLatestBind", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.GetLatestBind == nil {
+				m.GetLatestBind = &GetLatestBindRequest{}
+			}
+			if err := m.GetLatestBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5066,6 +6099,114 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				m.GetCommit = &GetCommitResponse{}
 			}
 			if err := m.GetCommit.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 16:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RunTask", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RunTask == nil {
+				m.RunTask = &RunTaskResponse{}
+			}
+			if err := m.RunTask.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 17:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemoveRemoteLockTable", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RemoveRemoteLockTable == nil {
+				m.RemoveRemoteLockTable = &RemoveRemoteLockTableResponse{}
+			}
+			if err := m.RemoveRemoteLockTable.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 18:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GetLatestBind", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.GetLatestBind == nil {
+				m.GetLatestBind = &GetLatestBindResponse{}
+			}
+			if err := m.GetLatestBind.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -6807,6 +7948,318 @@ func (m *GetCacheInfoResponse) Unmarshal(dAtA []byte) error {
 			if err := m.CacheInfoList[len(m.CacheInfoList)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RemoveRemoteLockTableRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RemoveRemoteLockTableRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RemoveRemoteLockTableRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TableID", wireType)
+			}
+			m.TableID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TableID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Version", wireType)
+			}
+			m.Version = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Version |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RemoveRemoteLockTableResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RemoveRemoteLockTableResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RemoveRemoteLockTableResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Count", wireType)
+			}
+			m.Count = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Count |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetLatestBindRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetLatestBindRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetLatestBindRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TableID", wireType)
+			}
+			m.TableID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TableID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *GetLatestBindResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GetLatestBindResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GetLatestBindResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Bind", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Bind = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

@@ -5238,17 +5238,16 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range entries {
-		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
-			assert.NoError(t, err)
-			t.Logf("table %d", tid)
-			if ins != nil {
-				t.Log(common.ApiBatchToString(ins, 3))
-			}
-			if del != nil {
-				t.Log(common.ApiBatchToString(del, 3))
-			}
+	entry := entries[len(entries)-1]
+	for _, tid := range tids {
+		ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+		assert.NoError(t, err)
+		t.Logf("table %d", tid)
+		if ins != nil {
+			t.Log(common.ApiBatchToString(ins, 3))
+		}
+		if del != nil {
+			t.Log(common.ApiBatchToString(del, 3))
 		}
 	}
 }
@@ -6777,7 +6776,7 @@ func TestAlterFakePk(t *testing.T) {
 	for _, v := range tnDelBat.Vecs {
 		require.Equal(t, 2, v.Length())
 	}
-	t.Log(tnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnDelBat.GetVectorByName(catalog.AttrPKVal).PPString(10))
 
 }
 

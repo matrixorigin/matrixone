@@ -43,7 +43,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
@@ -203,9 +207,13 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return "", err
+		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			ctx.GetAccountId() != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -552,7 +560,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}
@@ -584,7 +592,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 	if tableDef.Partition != nil {
