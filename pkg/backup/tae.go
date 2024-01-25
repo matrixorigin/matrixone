@@ -101,6 +101,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
+	var oNames []objectio.ObjectName
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -118,12 +119,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		var oNames []objectio.ObjectName
+		var oneNames []objectio.ObjectName
 		var data *logtail.CheckpointData
 		if i == 0 {
-			oNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
 		} else {
-			oNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
 		}
 		if err != nil {
 			return err
@@ -132,27 +133,22 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		table.UpdateTable(data)
 		gcFiles := table.SoftGC()
 		mergeGCFile(gcFiles, gcFileMap)
-		for _, oName := range oNames {
-			if files[oName.String()] == nil {
-				dentry, err := srcFs.StatFile(ctx, oName.String())
-				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-						isGC(gcFileMap, oName.String()) {
-						continue
-					} else {
-						// FIXME: if file not found, it may be gc file, but we can't sure
-						if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-							logutil.Warnf("backup file not found, it may have been: %v, ", dentry.Name)
-							continue
-						}
-						return err
-					}
+		oNames = append(oNames, oneNames...)
+	}
+	for _, oName := range oNames {
+		if files[oName.String()] == nil {
+			dentry, err := srcFs.StatFile(ctx, oName.String())
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+					isGC(gcFileMap, oName.String()) {
+					continue
+				} else {
+					return err
 				}
-				files[oName.String()] = dentry
 			}
+			files[oName.String()] = dentry
 		}
 	}
-
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
 	for _, dentry := range files {
@@ -167,7 +163,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			} else {
 				// FIXME: if file not found, it may be gc file, but we can't sure
 				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					logutil.Warnf("backup file not found, it may have been: %v, ", dentry.Name)
+					logutil.Warnf("backup file not found, it may have been gc: %v, ", dentry.Name)
 					continue
 				}
 				return err
