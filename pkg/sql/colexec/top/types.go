@@ -40,9 +40,11 @@ type container struct {
 }
 
 type Argument struct {
-	Limit int64
-	ctr   *container
-	Fs    []*plan.OrderBySpec
+	Limit        int64
+	TopValueTag  int32
+	SendTopValue bool
+	ctr          *container
+	Fs           []*plan.OrderBySpec
 
 	info     *vm.OperatorInfo
 	children []vm.Operator

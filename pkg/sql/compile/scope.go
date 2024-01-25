@@ -706,14 +706,14 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				MaxParallel: 1,
 			}
 			for j := range ss {
+				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
+				newarg.SendTopValue = arg.SendTopValue
+				newarg.TopValueTag = arg.TopValueTag
 				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Top,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg: top.NewArgument().
-						WithFs(arg.Fs).
-						WithLimit(arg.Limit),
-
+					Op:          vm.Top,
+					Idx:         in.Idx,
+					IsFirst:     in.IsFirst,
+					Arg:         newarg,
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
 					MaxParallel: int32(len(ss)),
