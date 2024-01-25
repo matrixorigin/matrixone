@@ -352,6 +352,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.clearTableCache()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--

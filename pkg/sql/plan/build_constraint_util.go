@@ -210,14 +210,14 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		tbl = aliasTbl.Expr
 	}
 
-	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
 		tblInfo.needAggFilter = true
-		err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, tblInfo, aliasMap, withMap)
+		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
 		}
-		if joinTbl.Right != nil {
-			return setTableExprToDmlTableInfo(ctx, joinTbl.Right, tblInfo, aliasMap, withMap)
+		if jionTbl.Right != nil {
+			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap, withMap)
 		}
 		return nil
 	}
