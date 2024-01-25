@@ -697,6 +697,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	var fromLoc, toLoc *time.Location
+	if ivecs[1].IsConst() && !ivecs[1].IsConstNull() {
+		fromTz, _ := fromTzs.GetStrValue(0)
+		fromLoc = convertTimezone(string(fromTz))
+	}
+	if ivecs[2].IsConst() && !ivecs[2].IsConstNull() {
+		toTz, _ := toTzs.GetStrValue(0)
+		toLoc = convertTimezone(string(toTz))
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		date, null1 := dates.GetValue(i)
 		fromTz, null2 := fromTzs.GetStrValue(i)
@@ -713,19 +723,23 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			return nil
 		} else {
-			fromLoc := convertTimezone(string(fromTz))
-			if fromLoc == nil {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
+			if !ivecs[1].IsConst() {
+				fromLoc = convertTimezone(string(fromTz))
+				if fromLoc == nil {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					return nil
 				}
-				return nil
 			}
-			toLoc := convertTimezone(string(toTz))
-			if toLoc == nil {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
+			if !ivecs[2].IsConst() {
+				toLoc = convertTimezone(string(toTz))
+				if toLoc == nil {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					return nil
 				}
-				return nil
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
