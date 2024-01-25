@@ -555,6 +555,7 @@ type service struct {
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
+	hakeeperConnected      chan struct{}
 	initTxnSenderOnce      sync.Once
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once

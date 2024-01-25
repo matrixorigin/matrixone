@@ -103,13 +103,13 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
 	srv.registerServices()
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
 	srv.initQueryService()
-
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initCacheServer(); err != nil {
 		return nil, err
@@ -237,9 +237,7 @@ func (s *service) Start() error {
 	if err != nil {
 		return err
 	}
-	if err := s.startCNStoreHeartbeat(); err != nil {
-		return err
-	}
+
 	return s.server.Start()
 }
 
@@ -456,6 +454,8 @@ func (s *service) serverShutdown(isgraceful bool) error {
 
 func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err error) {
 	s.initHakeeperClientOnce.Do(func() {
+		s.hakeeperConnected = make(chan struct{})
+
 		ctx, cancel := context.WithTimeout(
 			context.Background(),
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
@@ -472,6 +472,10 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
 		if ok {
 			ss.(*status.Server).SetHAKeeperClient(client)
+		}
+
+		if err = s.startCNStoreHeartbeat(); err != nil {
+			return
 		}
 	})
 	client = s._hakeeperClient
@@ -634,7 +638,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 
 func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
-	s.lockService = lockservice.NewLockService(cfg)
+	s.lockService = lockservice.NewLockService(
+		cfg,
+		lockservice.WithWait(func() {
+			<-s.hakeeperConnected
+		}))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
 

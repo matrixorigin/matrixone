@@ -100,8 +100,12 @@ func (s *service) heartbeat(ctx context.Context) {
 		return
 	}
 
+	select {
+	case <-s.hakeeperConnected:
+	default:
+		close(s.hakeeperConnected)
+	}
 	s.config.DecrCount()
-
 	s.handleCommands(cb.Commands)
 }
 
