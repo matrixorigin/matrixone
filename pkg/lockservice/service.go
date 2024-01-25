@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
@@ -65,7 +66,9 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		allocating map[uint64]chan struct{}
+		allocating  map[uint64]chan struct{}
+		restartTime timestamp.Timestamp
+		status      pb.Status
 	}
 }
 
@@ -106,6 +109,11 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
+
+	if !s.canLockOnServiceStatus(txnID, options.SnapShotTs) {
+		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
+	}
+
 	v2.TxnLockTotalCounter.Inc()
 
 	start := time.Now()
@@ -170,6 +178,12 @@ func (s *service) Unlock(
 	if txn == nil {
 		return nil
 	}
+
+	if s.isStatus(pb.Status_ServiceLockWaiting) &&
+		s.activeTxnHolder.empty() {
+		s.setStatus(pb.Status_ServiceUnLockSucc)
+	}
+
 	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
@@ -184,6 +198,31 @@ func (s *service) Unlock(
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
 	return nil
+}
+
+func (s *service) canLockOnServiceStatus(txnID []byte, snapShotTs timestamp.Timestamp) bool {
+	if snapShotTs.IsEmpty() {
+		return true
+	}
+	if !s.isStatus(pb.Status_ServiceLockEnable) &&
+		!s.activeTxnHolder.hasActiveTxn(txnID) {
+		if s.getRestartTime().LessEq(snapShotTs) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *service) setRestartTime() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.restartTime, _ = s.clock.Now()
+}
+
+func (s *service) getRestartTime() timestamp.Timestamp {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.restartTime
 }
 
 func (s *service) GetServiceID() string {
@@ -216,6 +255,24 @@ func (s *service) Close() error {
 		close(s.fetchWhoWaitingListC)
 	})
 	return err
+}
+
+func (s *service) setStatus(status pb.Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.status = status
+}
+
+func (s *service) getStatus() pb.Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.status
+}
+
+func (s *service) isStatus(status pb.Status) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mu.status == status
 }
 
 func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, error) {
@@ -361,7 +418,10 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 }
 
 type activeTxnHolder interface {
+	empty() bool
+	getAllTxn() [][]byte
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
+	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	keepRemoteActiveTxn(remoteService string)
 	getTimeoutRemoveTxn(
@@ -441,6 +501,34 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	}
 	logTxnCreated(txn)
 	return txn
+}
+
+func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
+	txnKey := util.UnsafeBytesToString(txnID)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if v := h.getActiveLocked(txnKey); v != nil {
+		return true
+	}
+	return false
+}
+
+func (h *mapBasedTxnHolder) empty() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.mu.activeTxns) == 0
+}
+
+func (h *mapBasedTxnHolder) getAllTxn() [][]byte {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	txns := make([][]byte, len(h.mu.activeTxns))
+	i := 0
+	for k := range h.mu.activeTxns {
+		txns[i] = util.UnsafeStringToBytes(k)
+		i++
+	}
+	return txns
 }
 
 func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {

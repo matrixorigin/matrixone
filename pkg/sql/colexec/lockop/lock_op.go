@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"strings"
 )
 
 var (
@@ -411,6 +410,7 @@ func doLock(
 		Policy:          lock.WaitPolicy_Wait,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		SnapShotTs:      txnOp.CreateTS(),
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -427,18 +427,25 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
-	result, err := lockService.Lock(
-		ctx,
-		tableID,
-		rows,
-		txn.ID,
-		options)
+	var err error
+	var result lock.Result
+	for {
+		result, err = lockService.Lock(
+			ctx,
+			tableID,
+			rows,
+			txn.ID,
+			options)
+		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+			break
+		}
+	}
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 
 	// add bind locks
-	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
+	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 

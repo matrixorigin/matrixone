@@ -59,6 +59,96 @@ func TestRPCSend(t *testing.T) {
 	)
 }
 
+func TestSetRestartServiceRPCSend(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_SetRestartService,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					resp.SetRestartService.OK = true
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			resp, err := c.Send(ctx,
+				&lock.Request{
+					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
+					Method:            lock.Method_SetRestartService})
+			require.NoError(t, err)
+			assert.NotNil(t, resp)
+			require.True(t, resp.SetRestartService.OK)
+			releaseResponse(resp)
+		},
+	)
+}
+
+func TestCanRestartServiceRPCSend(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_CanRestartService,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					resp.CanRestartService.OK = true
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			resp, err := c.Send(ctx,
+				&lock.Request{
+					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
+					Method:            lock.Method_CanRestartService})
+			require.NoError(t, err)
+			assert.NotNil(t, resp)
+			require.True(t, resp.CanRestartService.OK)
+			releaseResponse(resp)
+		},
+	)
+}
+
+func TestRemainTxnServiceRPCSend(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_RemainTxnInService,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					resp.RemainTxnInService.RemainTxn = -1
+					writeResponse(ctx, cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			resp, err := c.Send(ctx,
+				&lock.Request{
+					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
+					Method:            lock.Method_RemainTxnInService})
+			require.NoError(t, err)
+			assert.NotNil(t, resp)
+			require.Equal(t, int32(-1), resp.RemainTxnInService.RemainTxn)
+			releaseResponse(resp)
+		},
+	)
+}
+
 func TestRPCSendWithNotSupport(t *testing.T) {
 	runRPCTests(
 		t,
