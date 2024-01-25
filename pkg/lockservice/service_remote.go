@@ -27,7 +27,7 @@ import (
 )
 
 func (s *service) initRemote() {
-	rpcClient, err := NewClient(s.cfg.RPC, s)
+	rpcClient, err := NewClient(s.cfg.RPC)
 	if err != nil {
 		panic(err)
 	}

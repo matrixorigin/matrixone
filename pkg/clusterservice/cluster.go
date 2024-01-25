@@ -206,6 +206,20 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 	return nil
 }
 
+func (c *cluster) RemoveCN(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.mu.cnServices, id)
+}
+
+func (c *cluster) AddCN(s metadata.CNService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.mu.cnServices[s.ServiceID] = s
+}
+
 func (c *cluster) waitReady() {
 	<-c.readyC
 }
