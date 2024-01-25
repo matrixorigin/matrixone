@@ -56,14 +56,12 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
-	service *service
 }
 
-func NewClient(cfg morpc.Config, s *service) (Client, error) {
+func NewClient(cfg morpc.Config) (Client, error) {
 	c := &client{
 		cfg:     &cfg,
 		cluster: clusterservice.GetMOCluster(),
-		service: s,
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -177,67 +175,6 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
 
-		if c.service != nil {
-			fn := func() (bool, error) {
-				switch request.Method {
-				case pb.Method_GetBind,
-					pb.Method_KeepLockTableBind:
-					return true, nil
-				default:
-					oldBind := request.GetLockTable()
-					newBind, err := getLockTableBind(
-						c.service.remote.client,
-						oldBind.Group,
-						oldBind.Table,
-						oldBind.OriginTable,
-						c.service.serviceID,
-						oldBind.Sharding)
-					if err != nil {
-						getLogger().Error("failed to update lock table bind",
-							zap.String("target", sid),
-							zap.Any("cns", cns),
-							zap.String("request", request.DebugString()))
-						return false, err
-					}
-
-					// bind not changed, means the remote cn is not registered into
-					// hakeeper, retry
-					if !oldBind.Changed(newBind) {
-						return false, nil
-					}
-
-					getLogger().Warn("update lock table bind",
-						zap.String("target", sid),
-						zap.Any("cns", cns),
-						zap.String("newBind", newBind.DebugString()),
-						zap.String("request", request.DebugString()))
-					c.service.handleBindChanged(newBind)
-					return true, nil
-				}
-			}
-
-			for {
-				changed, err := fn()
-				if err != nil {
-					return nil, err
-				}
-				if changed {
-					break
-				}
-
-				c.cluster.GetCNServiceWithoutWorkingState(
-					clusterservice.NewServiceIDSelector(sid),
-					func(s metadata.CNService) bool {
-						address = s.LockServiceAddress
-						return false
-					})
-				if address != "" {
-					break
-				}
-
-				time.Sleep(time.Second)
-			}
-		}
 	}
 	return c.client.Send(ctx, address, request)
 }
