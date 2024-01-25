@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans"
 	"strconv"
 	"strings"
 
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
@@ -199,6 +199,7 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		vecf64List := s.bytesListToVecF64List(arrGroup)
 
 		// 2. run kmeans
+		//clusterer, err := faiss.NewFaiss(vecf64List, int(s.clusterCnt))
 		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, s.initType, s.normalize)
 		if err != nil {
 			return nil, err
