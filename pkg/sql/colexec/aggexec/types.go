@@ -15,59 +15,53 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+    "github.com/matrixorigin/matrixone/pkg/container/types"
+    "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
-	// GroupNotMatched is a constant for the BatchFill method.
-	// if the group is GroupNotMatched, the BatchFill method will ignore the row.
-	GroupNotMatched = 0
+    // GroupNotMatched is a constant for the BatchFill method.
+    // if the group is GroupNotMatched, the BatchFill method will ignore the row.
+    GroupNotMatched = 0
 )
 
 func init() {
 }
 
 type AggFuncExec interface {
-	// TypesInfo return the argument types and return type of the function.
-	TypesInfo() ([]types.Type, types.Type)
+    // Init initialize the aggregation.
+    // Init()
 
-	// Fill BulkFill and BatchFill add the value to the aggregation.
-	Fill(groupIndex int, row int, vectors []*vector.Vector) error
-	BulkFill(groupIndex int, vectors []*vector.Vector) error
-	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
+    // AggID() int64
 
-	// SetPreparedResult add a partial result to speed up.
-	SetPreparedResult(partialResult any, groupIndex int)
+    // TypesInfo return the argument types and return type of the function.
+    TypesInfo() ([]types.Type, types.Type)
 
-	// Flush return the aggregation result.
-	Flush() (*vector.Vector, error)
+    // Fill BulkFill and BatchFill add the value to the aggregation.
+    Fill(groupIndex int, row int, vectors []*vector.Vector) error
+    BulkFill(groupIndex int, vectors []*vector.Vector) error
+    BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
-	// Copy returns a copy of the aggregation.
-	// This copy will be allocated in the inputting memory pool.
-	// todo: there is no place use this method now.
-	//  please refer to the old codes' Dup(pool) method.
-	//Copy(mp *mpool.MPool) AggFuncExec
+    // SetPreparedResult add a partial result to speed up.
+    SetPreparedResult(partialResult any, groupIndex int)
 
-	// Free free the aggregation.
-	// This method will do the reset and reuse the aggregation if possible.
-	Free()
+    // Flush return the aggregation result.
+    Flush() (*vector.Vector, error)
+
+    // Copy returns a copy of the aggregation.
+    // This copy will be allocated in the inputting memory pool.
+    // todo: there is no place use this method now.
+    //  please refer to the old codes' Dup(pool) method.
+    //Copy(mp *mpool.MPool) AggFuncExec
+
+    // Free free the aggregation.
+    // This method will do the reset and reuse the aggregation if possible.
+    Free()
 }
 
 // indicate who implements the AggFuncExec interface.
 var (
-	_ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
-	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
+    _ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
+    _ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
+    _ AggFuncExec = (*multiAggFuncExec2)(nil)
 )
-
-// AggFuncPrivate1 and AggFuncPrivate2 are the private struct for aggregation.
-//
-//	1 for single column aggregation.
-//	2 for multi column aggregation.
-//
-// all the aggregation function should implement this interface.
-type AggFuncPrivate1 interface {
-}
-type AggFuncPrivate2 interface {
-	getAddFunc(idx int) any
-}
