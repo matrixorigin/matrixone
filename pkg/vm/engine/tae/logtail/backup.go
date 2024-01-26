@@ -538,6 +538,13 @@ func ReWriteCheckpointAndBlockFromKey(
 
 	defer func() {
 		for i := range objectsData {
+			if objectsData[i].obj != nil && objectsData[i].obj.data != nil {
+				for z := range objectsData[i].obj.data {
+					for y := range objectsData[i].obj.data[z].Vecs {
+						objectsData[i].obj.data[z].Vecs[y].Free(common.DebugAllocator)
+					}
+				}
+			}
 			for j := range objectsData[i].data {
 				if objectsData[i].data[j].data == nil {
 					continue
