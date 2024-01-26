@@ -148,8 +148,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	// if the pool is full, there is a 50 % chance that we can stop the query for performance.
-	if ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
+	// perform hack.
+	if arg.Perform && ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
 		result.Batch, err = ctr.samplePool.Output(true)
 		result.Status = vm.ExecStop
 		ctr.workDone = true

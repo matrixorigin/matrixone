@@ -1132,7 +1132,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 
 func constructSample(n *plan.Node) *sample.Argument {
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
-		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy, n.SampleFunc.IsFullScan)
 	}
 	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
 		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)

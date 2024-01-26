@@ -40,6 +40,10 @@ type Argument struct {
 
 	// it determines which sample action (random sample by rows / percents, sample by order and so on) to take.
 	Type int
+	// Perform is used to hack the sample operator.
+	// If true, the sample action will randomly stop the sample process after it has sampled enough rows.
+	// This just for performance, and it will cause centroids skewed.
+	Perform bool
 
 	Rows     int
 	Percents float64
@@ -141,6 +145,7 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 
 	arg := NewArgument()
 	arg.Type = mergeSampleByRow
+	arg.Perform = rowSampleArg.Perform
 	arg.Rows = rowSampleArg.Rows
 	arg.IBucket = 0
 	arg.NBucket = 0
@@ -149,9 +154,10 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 	return arg
 }
 
-func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
+func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, fullScan bool) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByRow
+	arg.Perform = !fullScan
 	arg.Rows = rows
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
@@ -163,6 +169,7 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
 func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByPercent
+	arg.Perform = false
 	arg.Percents = percent
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
@@ -247,9 +254,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	in.Agg = &pipeline.Group{
-		Ibucket: uint64(arg.IBucket),
-		Nbucket: uint64(arg.NBucket),
-		Exprs:   arg.GroupExprs,
+		Ibucket:  uint64(arg.IBucket),
+		Nbucket:  uint64(arg.NBucket),
+		Exprs:    arg.GroupExprs,
+		NeedEval: arg.Perform,
 	}
 	in.SampleFunc = &pipeline.SampleFunc{
 		SampleColumns: arg.SampleExprs,
@@ -269,10 +277,10 @@ func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	s := opr.GetSampleFunc()
 	g := opr.GetAgg()
 	if s.SampleType == pipeline.SampleFunc_Rows {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval)
 	} else if s.SampleType == pipeline.SampleFunc_Percent {
 		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
 	} else {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval)
 	}
 }

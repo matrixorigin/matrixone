@@ -34,6 +34,9 @@ type SampleFuncCtx struct {
 	percents float64
 	columns  []*plan.Expr
 
+	// fullScan will scan all the blocks to avoid the centroids skewed.
+	// but this may cost much time.
+	fullScan bool
 	// start and offset in the select clause.
 	start  int
 	offset int
@@ -137,8 +140,10 @@ func generateSamplePlanNode(ctx *BindContext, childNodeID int32) *plan.Node {
 	}
 	if ctx.sampleFunc.sRows {
 		sampleNode.SampleFunc.Rows = ctx.sampleFunc.rows
+		sampleNode.SampleFunc.IsFullScan = ctx.sampleFunc.fullScan
 	} else {
 		sampleNode.SampleFunc.Percent = ctx.sampleFunc.percents
+		sampleNode.SampleFunc.IsFullScan = true
 	}
 	return sampleNode
 }
