@@ -86,7 +86,7 @@ jobs:
           cat mo.yml
           echo "============================="
 
-          # ./run.sh -n -g -o -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e optimistic 2>&1
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -137,7 +137,7 @@ jobs:
           cat mo.yml
           echo "============================="
           
-          # ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}
