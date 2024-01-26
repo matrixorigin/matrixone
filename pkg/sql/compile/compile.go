@@ -398,8 +398,8 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			select {
 			case <-cc:
 				return
-			case <-time.After(time.Minute):
-				profile.ProfileGoroutine(os.Stdin, 2)
+			case <-time.After(time.Second * 90):
+				profile.ProfileGoroutine(os.Stdout, 2)
 				return
 			}
 		}()
