@@ -388,9 +388,11 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if strings.Contains(c.sql, "insert into t select * from t") {
-		logutil.Infof(">>>> %x run %s", c.proc.TxnOperator.Txn().ID, c.sql)
+		id := c.proc.TxnOperator.Txn().ID
+		sql := c.sql
+		logutil.Infof(">>>> %x run %s", id, sql)
 		defer func() {
-			logutil.Infof(">>>> %x run %s end", c.proc.TxnOperator.Txn().ID, c.sql)
+			logutil.Infof(">>>> %x run %s end", id, sql)
 		}()
 	}
 
