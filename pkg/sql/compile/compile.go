@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -390,9 +391,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if strings.Contains(c.sql, "insert into t select * from t") {
 		id := c.proc.TxnOperator.Txn().ID
 		sql := c.sql
-		logutil.Infof(">>>> %x run sql: <%s>\n", id, sql)
+		fmt.Fprintf(os.Stdout, "### %x run sql(%d): <%s>\n", id, len(sql), sql)
 		defer func() {
-			logutil.Infof(">>>> %x run end, error: %+v sql: <%s>\n", id, err, sql)
+			fmt.Fprintf(os.Stdout, "### %x run end, error: %+v sql(%d): <%s>\n", id, err, len(sql), sql)
 		}()
 	}
 
