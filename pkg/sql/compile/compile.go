@@ -390,9 +390,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if strings.Contains(c.sql, "insert into t select * from t") {
 		id := c.proc.TxnOperator.Txn().ID
 		sql := c.sql
-		logutil.Infof(">>>> %x run %s", id, sql)
+		logutil.Infof(">>>> %x run sql: <%s>\n", id, sql)
 		defer func() {
-			logutil.Infof(">>>> %x run %s end", id, sql)
+			logutil.Infof(">>>> %x run end, error: %+v sql: <%s>\n", id, err, sql)
 		}()
 	}
 
