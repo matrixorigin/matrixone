@@ -2097,8 +2097,8 @@ func LoadCNSubBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
-	var bats []*batch.Batch
 	var releases []func()
+	bats := make([]*batch.Batch, 0)
 	defer func() {
 		for i := range releases {
 			if releases[i] != nil {
@@ -2117,7 +2117,6 @@ func LoadCNSubBlkColumnsByMeta(
 	if err != nil {
 		return nil, err
 	}
-	bats = make([]*batch.Batch, 0)
 	for i := range ioResults {
 		ioResults[i].Attrs = make([]string, len(colNames))
 		copy(ioResults[i].Attrs, colNames)
