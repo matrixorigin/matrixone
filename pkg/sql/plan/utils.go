@@ -1074,7 +1074,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSort()
+		colexec.SortInFilter(vec)
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err

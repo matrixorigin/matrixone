@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -432,7 +431,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			vec = newVec
 		}
 
-		vec.InplaceSort()
+		colexec.SortInFilter(vec)
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return err
