@@ -34,9 +34,9 @@ type SampleFuncCtx struct {
 	percents float64
 	columns  []*plan.Expr
 
-	// fullScan will scan all the blocks to avoid the centroids skewed.
+	// sampleUsingRow will scan all the blocks to avoid the centroids skewed.
 	// but this may cost much time.
-	fullScan bool
+	sampleUsingRow bool
 	// start and offset in the select clause.
 	start  int
 	offset int
@@ -51,7 +51,7 @@ func (s *SampleFuncCtx) GenerateSampleFunc(se *tree.SampleExpr) error {
 		return moerr.NewSyntaxErrorNoCtx("cannot use more than one sample function at select clause.")
 	}
 	s.hasSampleFunc = true
-	s.sRows, s.rows, s.percents = se.GetSampleDetail()
+	s.sRows, s.sampleUsingRow, s.rows, s.percents = se.GetSampleDetail()
 
 	return nil
 }
@@ -140,10 +140,10 @@ func generateSamplePlanNode(ctx *BindContext, childNodeID int32) *plan.Node {
 	}
 	if ctx.sampleFunc.sRows {
 		sampleNode.SampleFunc.Rows = ctx.sampleFunc.rows
-		sampleNode.SampleFunc.IsFullScan = ctx.sampleFunc.fullScan
+		sampleNode.SampleFunc.UsingRow = ctx.sampleFunc.sampleUsingRow
 	} else {
 		sampleNode.SampleFunc.Percent = ctx.sampleFunc.percents
-		sampleNode.SampleFunc.IsFullScan = true
+		sampleNode.SampleFunc.UsingRow = true
 	}
 	return sampleNode
 }

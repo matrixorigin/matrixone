@@ -40,10 +40,9 @@ type Argument struct {
 
 	// it determines which sample action (random sample by rows / percents, sample by order and so on) to take.
 	Type int
-	// Perform is used to hack the sample operator.
+	// UsingBlock is used to speed up the sample process but will cause centroids skewed.
 	// If true, the sample action will randomly stop the sample process after it has sampled enough rows.
-	// This just for performance, and it will cause centroids skewed.
-	Perform bool
+	UsingBlock bool
 
 	Rows     int
 	Percents float64
@@ -145,7 +144,7 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 
 	arg := NewArgument()
 	arg.Type = mergeSampleByRow
-	arg.Perform = rowSampleArg.Perform
+	arg.UsingBlock = rowSampleArg.UsingBlock
 	arg.Rows = rowSampleArg.Rows
 	arg.IBucket = 0
 	arg.NBucket = 0
@@ -154,10 +153,10 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 	return arg
 }
 
-func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, fullScan bool) *Argument {
+func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, usingRow bool) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByRow
-	arg.Perform = !fullScan
+	arg.UsingBlock = !usingRow
 	arg.Rows = rows
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
@@ -169,7 +168,7 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, fullScan bo
 func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByPercent
-	arg.Perform = false
+	arg.UsingBlock = false
 	arg.Percents = percent
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
@@ -257,7 +256,7 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 		Ibucket:  uint64(arg.IBucket),
 		Nbucket:  uint64(arg.NBucket),
 		Exprs:    arg.GroupExprs,
-		NeedEval: arg.Perform,
+		NeedEval: arg.UsingBlock,
 	}
 	in.SampleFunc = &pipeline.SampleFunc{
 		SampleColumns: arg.SampleExprs,

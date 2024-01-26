@@ -8174,13 +8174,23 @@ sample_function_expr:
     SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
     {
 	v := int($5.(int64))
-	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, true)
 	if err != nil {
 	    yylex.Error(err.Error())
 	    return 1
 	}
 	$$ = val
     }
+|   SAMPLE '(' '*' ',' INTEGRAL ROWS ')' USING ROWS
+        {
+    	v := int($5.(int64))
+    	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, false)
+    	if err != nil {
+    	    yylex.Error(err.Error())
+    	    return 1
+    	}
+    	$$ = val
+        }
 |   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
     {
 	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
@@ -8203,13 +8213,23 @@ sample_function_expr:
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
     	v := int($5.(int64))
-    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, true)
     	if err != nil {
     	    yylex.Error(err.Error())
     	    return 1
     	}
     	$$ = val
     }
+|   SAMPLE '(' expression_list ',' INTEGRAL ROWS ')' USING ROWS
+        {
+        	v := int($5.(int64))
+        	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, false)
+        	if err != nil {
+        	    yylex.Error(err.Error())
+        	    return 1
+        	}
+        	$$ = val
+        }
 |   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
         val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)

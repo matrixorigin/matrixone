@@ -148,8 +148,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	// perform hack.
-	if arg.Perform && ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
+	if arg.UsingBlock && ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
 		result.Batch, err = ctr.samplePool.Output(true)
 		result.Status = vm.ExecStop
 		ctr.workDone = true
