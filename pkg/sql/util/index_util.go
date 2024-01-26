@@ -126,7 +126,6 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 	// resolve vs
 	length := vs[0].Length()
 	vct := types.T_varchar.ToType()
-	//nsp := new(nulls.Nulls)
 	val := make([][]byte, 0, length)
 	if length > cap(ps) {
 		for _, p := range ps {
@@ -137,11 +136,11 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 		ps = types.NewPackerArray(length, proc.Mp())
 	}
 	defer func() {
-		for _, p := range ps {
-			if p != nil {
-				p.Reset()
+		defer func() {
+			for i := 0; i < length; i++ {
+				ps[i].Reset()
 			}
-		}
+		}()
 	}()
 	bitMap := new(nulls.Nulls)
 
@@ -443,7 +442,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 		}
 	}
 
-	for i := range ps {
+	for i := 0; i < length; i++ {
 		if !nulls.Contains(bitMap, uint64(i)) {
 			val = append(val, ps[i].GetBuf())
 		}
@@ -479,10 +478,8 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, ps []*ty
 		ps = types.NewPackerArray(rowCount, proc.Mp())
 	}
 	defer func() {
-		for _, p := range ps {
-			if p != nil {
-				p.Reset()
-			}
+		for i := 0; i < rowCount; i++ {
+			ps[i].Reset()
 		}
 	}()
 
@@ -497,7 +494,7 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, ps []*ty
 	}
 
 	vec := proc.GetVector(types.T_varchar.ToType())
-	for i := uint64(0); i < uint64(rowCount); i++ {
+	for i := 0; i < rowCount; i++ {
 		if err := vector.AppendBytes(vec, ps[i].GetBuf(), false, proc.Mp()); err != nil {
 			proc.PutVector(vec)
 			return nil, nil, err
