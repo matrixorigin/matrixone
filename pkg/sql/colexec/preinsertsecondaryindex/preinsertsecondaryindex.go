@@ -88,7 +88,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// colCount >= 2 is more common.
 	if colCount == 1 {
 		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		vec, bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		if err != nil {
+			return result, err
+		}
 	} else {
 		vs := make([]*vector.Vector, colCount)
 		for vIdx, pIdx := range secondaryColumnPos {
@@ -102,7 +105,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())
 
-	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	if err != nil {
+		return result, err
+	}
 	arg.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {

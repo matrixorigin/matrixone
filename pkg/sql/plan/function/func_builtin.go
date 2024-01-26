@@ -988,7 +988,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		// if you are using it inside the builtInSerial then, you should pass bitMap
 		panic("for builtInSerial(), bitmap should not be nil")
 	}
-	hasNull := v.AllNull()
+	hasNull := v.HasNull()
 	switch v.GetType().Oid {
 	case types.T_bool:
 		s := vector.ExpandFixedCol[bool](v)

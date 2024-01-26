@@ -97,7 +97,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				break
 			}
 		}
-		b.Vecs[0], bitMap = compactSingleIndexCol(vec, proc)
+		b.Vecs[0], bitMap, _ = compactSingleIndexCol(vec, proc)
 	}
 
 	if len(b.Attrs) > 1 {
@@ -107,7 +107,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1] = compactPrimaryCol(vec, bitMap, proc)
+		b.Vecs[1], _ = compactPrimaryCol(vec, bitMap, proc)
 	}
 
 	b.SetRowCount(b.Vecs[0].Length())
@@ -136,169 +136,286 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 		}
 		ps = types.NewPackerArray(length, proc.Mp())
 	}
+	defer func() {
+		for _, p := range ps {
+			if p != nil {
+				p.Reset()
+			}
+		}
+	}()
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range vs {
+		vNull := v.GetNulls()
+		hasNull := v.HasNull()
 		switch v.GetType().Oid {
 		case types.T_bool:
 			s := vector.MustFixedCol[bool](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeBool(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeBool(b)
 				}
 			}
 		case types.T_int8:
 			s := vector.MustFixedCol[int8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeInt8(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeInt8(b)
 				}
 			}
 		case types.T_int16:
 			s := vector.MustFixedCol[int16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeInt16(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeInt16(b)
 				}
 			}
 		case types.T_int32:
 			s := vector.MustFixedCol[int32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeInt32(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeInt32(b)
 				}
 			}
 		case types.T_int64:
 			s := vector.MustFixedCol[int64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeInt64(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeInt64(b)
 				}
 			}
 		case types.T_uint8:
 			s := vector.MustFixedCol[uint8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeUint8(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeUint8(b)
 				}
 			}
 		case types.T_uint16:
 			s := vector.MustFixedCol[uint16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeUint16(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeUint16(b)
 				}
 			}
 		case types.T_uint32:
 			s := vector.MustFixedCol[uint32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeUint32(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeUint32(b)
 				}
 			}
 		case types.T_uint64:
 			s := vector.MustFixedCol[uint64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeUint64(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeUint64(b)
 				}
 			}
 		case types.T_float32:
 			s := vector.MustFixedCol[float32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeFloat32(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeFloat32(b)
 				}
 			}
 		case types.T_float64:
 			s := vector.MustFixedCol[float64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeFloat64(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeFloat64(b)
 				}
 			}
 		case types.T_date:
 			s := vector.MustFixedCol[types.Date](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDate(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeDate(b)
 				}
 			}
 		case types.T_time:
 			s := vector.MustFixedCol[types.Time](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeTime(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeTime(b)
 				}
 			}
 		case types.T_datetime:
 			s := vector.MustFixedCol[types.Datetime](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDatetime(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeDatetime(b)
 				}
 			}
 		case types.T_timestamp:
 			s := vector.MustFixedCol[types.Timestamp](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeTimestamp(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeTimestamp(b)
 				}
 			}
 		case types.T_enum:
 			s := vector.MustFixedCol[types.Enum](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeEnum(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeEnum(b)
 				}
 			}
 		case types.T_decimal64:
 			s := vector.MustFixedCol[types.Decimal64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDecimal64(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeDecimal64(b)
 				}
 			}
 		case types.T_decimal128:
 			s := vector.MustFixedCol[types.Decimal128](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDecimal128(b)
+					}
+				}
+			} else {
+				for i, b := range s {
 					ps[i].EncodeDecimal128(b)
 				}
 			}
@@ -310,11 +427,16 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
 			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
 			vs := vector.MustStrCol(v)
-			for i := range vs {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					nulls.Add(bitMap, uint64(i))
-				} else {
-
+			if hasNull {
+				for i := range vs {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeStringType([]byte(vs[i]))
+					}
+				}
+			} else {
+				for i := range vs {
 					ps[i].EncodeStringType([]byte(vs[i]))
 				}
 			}
@@ -385,9 +507,20 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, ps []*ty
 	return vec, new(nulls.Nulls), nil
 }
 
-func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
-	nsp := new(nulls.Nulls)
+func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {
 	vec := proc.GetVector(*v.GetType())
+	var err error
+	defer func() {
+		if err != nil {
+			vec.Free(proc.GetMPool())
+		}
+	}()
+
+	hasNull := v.HasNull()
+	if !hasNull {
+		err = vector.GetUnionAllFunction(*v.GetType(), proc.GetMPool())(vec, v)
+		return vec, v.GetNulls(), err
+	}
 	length := v.Length()
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -398,74 +531,74 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](v)
-		ns := make([]int8, 0, len(s)-nulls.Size(nsp))
+		ns := make([]int8, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int16:
 		s := vector.MustFixedCol[int16](v)
-		ns := make([]int16, 0, len(s)-nulls.Size(nsp))
+		ns := make([]int16, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int32:
 		s := vector.MustFixedCol[int32](v)
-		ns := make([]int32, 0, len(s)-nulls.Size(nsp))
+		ns := make([]int32, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int64:
 		s := vector.MustFixedCol[int64](v)
-		ns := make([]int64, 0, len(s)-nulls.Size(nsp))
+		ns := make([]int64, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustFixedCol[uint8](v)
-		ns := make([]uint8, 0, len(s)-nulls.Size(nsp))
+		ns := make([]uint8, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustFixedCol[uint16](v)
-		ns := make([]uint16, 0, len(s)-nulls.Size(nsp))
+		ns := make([]uint16, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustFixedCol[uint32](v)
-		ns := make([]uint32, 0, len(s)-nulls.Size(nsp))
+		ns := make([]uint32, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
 		vec = vector.NewVec(*v.GetType())
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustFixedCol[uint64](v)
-		ns := make([]uint64, 0, len(s)-nulls.Size(nsp))
+		ns := make([]uint64, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
@@ -474,91 +607,91 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float32:
 		s := vector.MustFixedCol[float32](v)
-		ns := make([]float32, 0, len(s)-nulls.Size(nsp))
+		ns := make([]float32, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float64:
 		s := vector.MustFixedCol[float64](v)
-		ns := make([]float64, 0, len(s)-nulls.Size(nsp))
+		ns := make([]float64, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
 		vec = vector.NewVec(*v.GetType())
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_date:
 		s := vector.MustFixedCol[types.Date](v)
-		ns := make([]types.Date, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Date, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
 		vec = vector.NewVec(*v.GetType())
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_time:
 		s := vector.MustFixedCol[types.Time](v)
-		ns := make([]types.Time, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Time, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustFixedCol[types.Datetime](v)
-		ns := make([]types.Datetime, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Datetime, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustFixedCol[types.Timestamp](v)
-		ns := make([]types.Timestamp, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Timestamp, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_enum:
 		s := vector.MustFixedCol[types.Enum](v)
-		ns := make([]types.Enum, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Enum, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
-		ns := make([]types.Decimal64, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Decimal64, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustFixedCol[types.Decimal128](v)
-		ns := make([]types.Decimal128, 0, len(s)-nulls.Size(nsp))
+		ns := make([]types.Decimal128, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s := vector.MustBytesCol(v)
-		ns := make([][]byte, 0, len(s)-nulls.Size(nsp))
+		ns := make([][]byte, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
@@ -566,11 +699,22 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 		}
 		vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec, v.GetNulls()
+	return vec, v.GetNulls(), nil
 }
-func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) *vector.Vector {
-	//nsp := new(nulls.Nulls)
+
+func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) (*vector.Vector, error) {
 	vec := proc.GetVector(*v.GetType())
+	var err error
+	defer func() {
+		if err != nil {
+			vec.Free(proc.GetMPool())
+		}
+	}()
+
+	if bitMap.IsEmpty() {
+		err = vector.GetUnionAllFunction(*v.GetType(), proc.GetMPool())(vec, v)
+		return vec, err
+	}
 	length := v.Length()
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -581,7 +725,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](v)
 		ns := make([]int8, 0)
@@ -590,7 +734,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int16:
 		s := vector.MustFixedCol[int16](v)
 		ns := make([]int16, 0)
@@ -599,7 +743,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int32:
 		s := vector.MustFixedCol[int32](v)
 		ns := make([]int32, 0)
@@ -608,7 +752,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int64:
 		s := vector.MustFixedCol[int64](v)
 		ns := make([]int64, 0)
@@ -617,7 +761,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint8:
 		s := vector.MustFixedCol[uint8](v)
 		ns := make([]uint8, 0)
@@ -626,7 +770,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint16:
 		s := vector.MustFixedCol[uint16](v)
 		ns := make([]uint16, 0)
@@ -635,7 +779,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint32:
 		s := vector.MustFixedCol[uint32](v)
 		ns := make([]uint32, 0)
@@ -644,7 +788,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_uint64:
 		s := vector.MustFixedCol[uint64](v)
 		ns := make([]uint64, 0)
@@ -653,7 +797,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float32:
 		s := vector.MustFixedCol[float32](v)
 		ns := make([]float32, 0)
@@ -662,7 +806,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float64:
 		s := vector.MustFixedCol[float64](v)
 		ns := make([]float64, 0)
@@ -671,7 +815,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_date:
 		s := vector.MustFixedCol[types.Date](v)
 		ns := make([]types.Date, 0)
@@ -680,7 +824,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_time:
 		s := vector.MustFixedCol[types.Time](v)
 		ns := make([]types.Time, 0)
@@ -689,7 +833,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_datetime:
 		s := vector.MustFixedCol[types.Datetime](v)
 		ns := make([]types.Datetime, 0)
@@ -698,7 +842,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_timestamp:
 		s := vector.MustFixedCol[types.Timestamp](v)
 		ns := make([]types.Timestamp, 0)
@@ -707,7 +851,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_enum:
 		s := vector.MustFixedCol[types.Enum](v)
 		ns := make([]types.Enum, 0)
@@ -716,7 +860,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0)
@@ -725,7 +869,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal128:
 		s := vector.MustFixedCol[types.Decimal128](v)
 		ns := make([]types.Decimal128, 0)
@@ -734,7 +878,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s := vector.MustBytesCol(v)
@@ -746,5 +890,5 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec
+	return vec, nil
 }

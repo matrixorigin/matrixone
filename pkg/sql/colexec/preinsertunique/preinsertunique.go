@@ -86,23 +86,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if colCount == 1 {
 		pos := uniqueColumnPos[indexColPos]
-		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		vec, bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		if err != nil {
+			return result, err
+		}
 	} else {
 		vs := make([]*vector.Vector, colCount)
 		for vIdx, pIdx := range uniqueColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
 		vec, bitMap = util.SerialWithCompacted(vs, proc, arg.ps)
-		for _, p := range arg.ps {
-			if p != nil {
-				p.Reset()
-			}
-		}
 	}
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())
 
-	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	if err != nil {
+		return result, err
+	}
 	arg.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
