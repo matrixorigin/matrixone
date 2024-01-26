@@ -136,11 +136,9 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 		ps = types.NewPackerArray(length, proc.Mp())
 	}
 	defer func() {
-		defer func() {
-			for i := 0; i < length; i++ {
-				ps[i].Reset()
-			}
-		}()
+		for i := 0; i < length; i++ {
+			ps[i].Reset()
+		}
 	}()
 	bitMap := new(nulls.Nulls)
 
