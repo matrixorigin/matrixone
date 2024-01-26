@@ -508,7 +508,7 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 
 func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, skipLoadObjectStats bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewIncrementalCollector(start, end)
+		collector := NewIncrementalCollector(start, end, skipLoadObjectStats)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -772,7 +772,8 @@ type BaseCollector struct {
 	*catalog.LoopProcessor
 	start, end types.TS
 
-	data *CheckpointData
+	data                *CheckpointData
+	skipLoadObjectStats bool
 
 	// to prefetch object meta when fill in object info batch
 
@@ -796,13 +797,14 @@ type IncrementalCollector struct {
 	*BaseCollector
 }
 
-func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
+func NewIncrementalCollector(start, end types.TS, skipLoadObjectStats bool) *IncrementalCollector {
 	collector := &IncrementalCollector{
 		BaseCollector: &BaseCollector{
-			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(common.CheckpointAllocator),
-			start:         start,
-			end:           end,
+			LoopProcessor:       new(catalog.LoopProcessor),
+			data:                NewCheckpointData(common.CheckpointAllocator),
+			start:               start,
+			end:                 end,
+			skipLoadObjectStats: skipLoadObjectStats,
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -2922,7 +2924,10 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 		return nil
 	}
 
-	needPrefetch, _ := entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	var needPrefetch bool
+	if !collector.skipLoadObjectStats {
+		needPrefetch, _ = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	}
 
 	if collector.isPrefetch {
 		if needPrefetch {
