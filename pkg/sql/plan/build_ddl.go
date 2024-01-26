@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -1061,6 +1062,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		case *tree.ForeignKey:
 			if createTable.Temporary {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+			}
+			err := adjustConstraintName(ctx.GetContext(), createTable.TableDef.GetName(), def)
+			if err != nil {
+				return err
 			}
 			fkData, err := getForeignKeyData(ctx, createTable.Database, createTable.TableDef, def)
 			if err != nil {
@@ -2382,6 +2387,27 @@ func getTableComment(tableDef *plan.TableDef) string {
 	return comment
 }
 
+// constraintNameAreWhiteSpaces does not include empty name
+func constraintNameAreWhiteSpaces(constraint string) bool {
+	return len(constraint) != 0 && len(strings.TrimSpace(constraint)) == 0
+}
+
+// genConstraintName generates a constraint name
+func GenConstraintName(tableName string) string {
+	constraintId, _ := uuid.NewV7()
+	return fmt.Sprintf("%s_%v", tableName, constraintId)
+}
+
+func adjustConstraintName(ctx context.Context, tableName string, def *tree.ForeignKey) error {
+	//user add a constraint name
+	if constraintNameAreWhiteSpaces(def.ConstraintSymbol) {
+		return moerr.NewErrWrongNameForIndex(ctx, def.ConstraintSymbol)
+	} else {
+		def.ConstraintSymbol = GenConstraintName(tableName)
+	}
+	return nil
+}
+
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	databaseName := string(stmt.Table.SchemaName)
@@ -2421,6 +2447,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 	var primaryKeys []string
 	var indexs []string
+	var detectSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	for i, option := range stmt.Options {
@@ -2428,6 +2455,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
 			constraintName := string(opt.Name)
+			if constraintNameAreWhiteSpaces(constraintName) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+			}
 			alterTableDrop.Name = constraintName
 			name_not_found := true
 			switch opt.Typ {
@@ -2481,7 +2511,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAdd:
 			switch def := opt.Def.(type) {
 			case *tree.ForeignKey:
-				//TODO: check self refer fk
+				err = adjustConstraintName(ctx.GetContext(), tableName, def)
+				if err != nil {
+					return nil, err
+				}
+
 				fkData, err := getForeignKeyData(ctx, databaseName, tableDef, def)
 				if err != nil {
 					return nil, err
@@ -2496,6 +2530,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
+				detectSqls = append(detectSqls, genSqlsForFkRefer(databaseName, tableDef)...)
 			case *tree.UniqueIndex:
 				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 				if err != nil {
@@ -2841,7 +2876,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	if err != nil {
 		return nil, err
 	}
-
+	alterTable.DetectSqls = detectSqls
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

@@ -420,9 +420,17 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			//get the detect sql
 			query := c.pn.GetQuery()
 			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
-				query.StmtType == plan.Query_UPDATE) {
+				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
 				fmt.Fprintf(os.Stderr, "detect fk self refer. %v -> %v\n", query.StmtType, query.DetectSqls)
 				err = detectFkSelfRefer(runC, query.DetectSqls)
+			}
+			ddl := c.pn.GetDdl()
+			if err == nil && ddl != nil {
+				alterTable := ddl.GetAlterTable()
+				if len(alterTable.GetDetectSqls()) != 0 {
+					fmt.Fprintf(os.Stderr, "detect fk self refer(alter table). %v -> %v\n", query.StmtType, query.DetectSqls)
+					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
+				}
 			}
 		}
 
@@ -493,7 +501,6 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 	return nil
 }
-
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	v2.TxnStatementRetryCounter.Inc()

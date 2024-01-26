@@ -123,8 +123,7 @@ update t1 set b = NULL where a= 4;
 --no error. number 4 is not referred.
 delete from t1 where a = 4;
 
---no error in mysql
---error in mo. internal error: unexpected input batch for column expression
+--no error
 update t1 set a = NULL where a = 3;
 
 --no error

@@ -798,11 +798,22 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					switch refAction {
 					case plan.ForeignKeyDef_NO_ACTION, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_SET_DEFAULT:
 						// plan : sink_scan -> join(f1 semi join c1 & get f1's col) -> filter(assert(isempty(f1's col)))
+						/*
+							CORNER CASE: for the reason of the deep copy
+								create table t1(a int unique key,b int, foreign key fk1(b) references t1(a));
+								insert into t1 values (1,1);
+								insert into t1 values (2,1);
+								insert into t1 values (3,2);
+
+								update t1 set a = NULL where a = 4;
+								--> ERROR 20101 (HY000): internal error: unexpected input batch for column expression
+						*/
+						copied := DeepCopyTableDef(childTableDef, true)
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
-							TableDef:    childTableDef,
+							TableDef:    copied,
 							ProjectList: childProjectList,
 						}, bindCtx)
 
