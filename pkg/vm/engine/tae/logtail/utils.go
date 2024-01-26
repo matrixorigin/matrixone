@@ -1725,6 +1725,13 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	data.updateTableMeta(tid, ObjectInfo, delStart, delEnd)
 }
 
+func (data *CheckpointData) UpdateObjectInsertMeta(tid uint64, delStart, delEnd int32) {
+	if delEnd <= delStart {
+		return
+	}
+	data.resetTableMeta(tid, ObjectInfo, delStart, delEnd)
+}
+
 func (data *CheckpointData) resetTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
@@ -1806,6 +1813,8 @@ func (data *CheckpointData) FormatData(mp *mpool.MPool) (err error) {
 			data.bats[idx].Vecs[i] = vec
 		}
 	}
+	data.bats[MetaIDX].Close()
+	data.bats[TNMetaIDX].Close()
 	data.bats[MetaIDX] = makeRespBatchFromSchema(checkpointDataSchemas_Curr[MetaIDX], mp)
 	data.bats[TNMetaIDX] = makeRespBatchFromSchema(checkpointDataSchemas_Curr[TNMetaIDX], mp)
 	for tid := range data.meta {
