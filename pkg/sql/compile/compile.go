@@ -75,6 +75,7 @@ import (
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -388,12 +389,23 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
-	if strings.Contains(c.sql, "insert into t select * from t") {
+	if strings.Contains(c.sql, "insert into t select * from t;") {
 		id := c.proc.TxnOperator.Txn().ID
 		sql := c.sql
 		fmt.Fprintf(os.Stdout, "### %x run sql(%d): <%s>\n", id, len(sql), sql)
+		cc := make(chan struct{})
+		go func() {
+			select {
+			case <-cc:
+				return
+			case <-time.After(time.Minute):
+				profile.ProfileGoroutine(os.Stdin, 2)
+				return
+			}
+		}()
 		defer func() {
 			fmt.Fprintf(os.Stdout, "### %x run end, error: %+v sql(%d): <%s>\n", id, err, len(sql), sql)
+			close(cc)
 		}()
 	}
 
