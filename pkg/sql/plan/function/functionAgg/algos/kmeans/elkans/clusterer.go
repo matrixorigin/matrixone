@@ -374,14 +374,14 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 	for c := range newCentroids {
 		if membersCount[c] == 0 {
 			// pick a vector randomly from existing vectors as the new centroid
-			newCentroids[c] = km.vectorList[km.rand.Intn(km.vectorCnt)]
+			//newCentroids[c] = km.vectorList[km.rand.Intn(km.vectorCnt)]
 
 			//// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
-			//randVector := make([]float64, km.vectorList[0].Len())
-			//for l := range randVector {
-			//	randVector[l] = km.rand.Float64()
-			//}
-			//newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
+			randVector := make([]float64, km.vectorList[0].Len())
+			for l := range randVector {
+				randVector[l] = km.rand.Float64()
+			}
+			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
 			if km.normalize {
