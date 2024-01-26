@@ -594,7 +594,7 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, sortIDX int32) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -637,6 +637,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		tbl.GetTableDef(ctx),
 		newExprs,
 		&blocks,
+		sortIDX,
 		tbl.proc.Load(),
 	); err != nil {
 		return
@@ -669,6 +670,7 @@ func (tbl *txnTable) rangesOnePart(
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
 	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	sortIDX int32, //for ordered scan, the idx of orderby column
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
@@ -843,6 +845,10 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Sorted = obj.Sorted
 				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
+				if sortIDX != -1 {
+					zm := blkMeta.MustGetColumn(uint16(sortIDX)).ZoneMap()
+					blk.ZmForSort = zm.Clone()
+				}
 				if obj.HasDeltaLoc {
 					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
 					if ok {
@@ -1442,7 +1448,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) mergeCompaction(
-	compactedBlks map[objectio.BlockInfo][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
@@ -1464,11 +1470,11 @@ func (tbl *txnTable) mergeCompaction(
 	}
 	s3writer.SetSeqnums(tbl.seqnums)
 
-	for blk, deletes := range compactedBlks {
+	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
 		bat, e := blockio.BlockCompactionRead(
 			tbl.db.txn.proc.Ctx,
-			blk.MetaLocation(),
+			blkmetaloc[:],
 			deletes,
 			tbl.seqnums,
 			tbl.typs,

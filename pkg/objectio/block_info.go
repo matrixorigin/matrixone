@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,6 +61,7 @@ type BlockInfo struct {
 	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
+	ZmForSort  index.ZM
 
 	//TODO:: putting them here is a bad idea, remove
 	//this block can be distributed to remote nodes.

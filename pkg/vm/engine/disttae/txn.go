@@ -719,7 +719,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[tableKey]map[objectio.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -732,14 +732,14 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				dbName:    pos.dbName,
 				name:      pos.tbName,
 			}]; ok {
-				v[pos.blkInfo] = offsets
+				v[pos.blkInfo.MetaLoc] = offsets
 			} else {
 				compactedBlks[tableKey{
 					accountId: pos.accountId,
 					dbName:    pos.dbName,
 					name:      pos.tbName,
 				}] =
-					map[objectio.BlockInfo][]int64{pos.blkInfo: offsets}
+					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
 			delete(txn.cnBlkId_Pos, *blkId)
