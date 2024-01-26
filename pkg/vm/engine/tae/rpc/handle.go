@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
 
@@ -365,6 +366,42 @@ func (h *Handle) HandleGetLogTail(
 	}
 	*resp = res
 	return
+}
+
+func (h *Handle) HandleCommitMerge(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *api.MergeCommitEntry,
+	resp *db.InspectResp) (cb func(), err error) {
+
+	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
+	if err != nil {
+		return
+	}
+	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
+	if err != nil {
+		return
+	}
+	err = txn.Commit(ctx)
+	if err != nil {
+		txn.Rollback(ctx)
+		resp.Message = err.Error()
+	} else {
+		b := &bytes.Buffer{}
+		b.WriteString("merged success\n")
+		for _, o := range req.CreatedObjs {
+			stat := objectio.ObjectStats(o)
+			b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
+				stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
+				common.HumanReadableBytes(int(stat.OriginSize())),
+				common.HumanReadableBytes(int(stat.Size())),
+			))
+			b.WriteByte('\n')
+		}
+		resp.Message = b.String()
+	}
+	return nil, err
 }
 
 func (h *Handle) HandleFlushTable(

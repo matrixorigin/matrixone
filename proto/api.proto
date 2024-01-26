@@ -39,6 +39,7 @@ enum OpCode {
     OpBackup        = 2006;
     OpTraceSpan     = 2007;
     OpStorageUsage  = 2008;
+    OpCommitMerge   = 2009;
 }
 
 // TNPingRequest ping request
@@ -377,4 +378,15 @@ message BlkTransMap {
 
 message BlkTransferBooking {
     repeated BlkTransMap mappings = 1[(gogoproto.nullable) = false];
+}
+
+
+message MergeCommitEntry {
+    uint64 db_id = 1;
+    uint64 tbl_id = 2;
+    string table_name = 3;
+    timestamp.Timestamp start_ts = 4[(gogoproto.nullable) = false];
+    repeated bytes merged_objs = 5;
+    repeated bytes created_objs = 6;
+    BlkTransferBooking booking = 7;
 }

@@ -42,6 +42,7 @@ var (
 	BackupMethod        = "BACKUP"
 	TraceSpanMethod     = "TRACESPAN"
 	CoreDumpMethod      = "COREDUMP"
+	MergeObjectsMethod  = "MERGEOBJECTS"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -69,6 +70,7 @@ var (
 		UseSnapshotMethod:   handleUseSnapshotTS,
 		GetSnapshotMethod:   handleGetSnapshotTS,
 		CheckpointMethod:    handleCheckpoint(),
+		MergeObjectsMethod:  handleMerge(),
 		ForceGCMethod:       handleCNGC,
 		InspectMethod:       handleInspectTN(),
 		LabelMethod:         handleSetLabel,

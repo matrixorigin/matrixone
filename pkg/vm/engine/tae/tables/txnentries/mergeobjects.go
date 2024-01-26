@@ -96,6 +96,7 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	entry.pageIds = nil
 	return
 }
+
 func (entry *mergeObjectsEntry) ApplyRollback() (err error) {
 	//TODO::?
 	return

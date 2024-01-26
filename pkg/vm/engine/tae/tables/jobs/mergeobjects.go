@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -47,7 +48,7 @@ type mergeObjectsTask struct {
 	mergedObjs  []*catalog.ObjectEntry
 	createdBlks []*catalog.BlockEntry
 	compacted   []handle.Block
-	commitEntry *mergesort.MergeCommitEntry
+	commitEntry *api.MergeCommitEntry
 	rel         handle.Relation
 	did, tid    uint64
 }
@@ -156,15 +157,16 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-func (task *mergeObjectsTask) PrepareCommitEntry() *mergesort.MergeCommitEntry {
+func (task *mergeObjectsTask) PrepareCommitEntry() *api.MergeCommitEntry {
 	schema := task.rel.Schema().(*catalog.Schema)
-	commitEntry := &mergesort.MergeCommitEntry{}
-	commitEntry.DbID = task.did
-	commitEntry.TableID = task.tid
-	commitEntry.Tablename = schema.Name
-	commitEntry.StartTs = task.txn.GetStartTS()
+	commitEntry := &api.MergeCommitEntry{}
+	commitEntry.DbId = task.did
+	commitEntry.TblId = task.tid
+	commitEntry.TableName = schema.Name
+	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
 	for _, o := range task.mergedObjs {
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.GetObjectStats())
+		obj := o.GetObjectStats()
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj.Clone().Marshal())
 	}
 	task.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
@@ -226,24 +228,25 @@ func (task *mergeObjectsTask) GetCreatedBlocks() []*catalog.BlockEntry {
 	return task.createdBlks
 }
 
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.BlockEntry, error) {
-	database, err := txn.GetDatabaseByID(entry.DbID)
+func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.BlockEntry, error) {
+	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := database.GetRelationByID(entry.TableID)
+	rel, err := database.GetRelationByID(entry.TblId)
 	if err != nil {
 		return nil, err
 	}
 
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
-	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjectStats))
+	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	mergedBlks := make([]*catalog.BlockEntry, 0, len(entry.MergedObjs)*2)
-	createdBlks := make([]*catalog.BlockEntry, 0, len(entry.CreatedObjectStats)*2)
+	createdBlks := make([]*catalog.BlockEntry, 0, len(entry.CreatedObjs)*2)
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
 	// drop merged blocks and objects
-	for _, drop := range entry.MergedObjs {
+	for _, item := range entry.MergedObjs {
+		drop := objectio.ObjectStats(item)
 		objID := drop.ObjectName().ObjectId()
 		obj, err := rel.GetObject(objID)
 		if err != nil {
@@ -265,7 +268,8 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 	}
 
 	// construct new object,
-	for _, stats := range entry.CreatedObjectStats {
+	for _, stats := range entry.CreatedObjs {
+		stats := objectio.ObjectStats(stats)
 		objID := stats.ObjectName().ObjectId()
 		obj, err := rel.CreateNonAppendableObject(false, new(objectio.CreateObjOpt).WithId(objID))
 		if err != nil {
@@ -319,7 +323,7 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 		rt,
 	)
 
-	if err = txn.LogTxnEntry(entry.DbID, entry.TableID, txnEntry, ids); err != nil {
+	if err = txn.LogTxnEntry(entry.DbId, entry.TblId, txnEntry, ids); err != nil {
 		return nil, err
 	}
 

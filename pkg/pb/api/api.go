@@ -26,6 +26,7 @@ var (
 		OpCode_OpAddFaultPoint: "AddFaultPoint",
 		OpCode_OpBackup:        "Backup",
 		OpCode_OpTraceSpan:     "TraceSpan",
+		OpCode_OpCommitMerge:   "CommitMerge",
 	}
 )
 
@@ -160,5 +161,13 @@ func (m *PrecommitWriteCmd) MarshalBinary() ([]byte, error) {
 }
 
 func (m *PrecommitWriteCmd) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }

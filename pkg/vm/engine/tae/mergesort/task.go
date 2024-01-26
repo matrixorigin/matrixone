@@ -44,21 +44,11 @@ type DisposableVecPool interface {
 type MergeTaskHost interface {
 	DisposableVecPool
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
-	PrepareCommitEntry() *MergeCommitEntry
+	PrepareCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriterFunc() func() *blockio.BlockWriter
 }
 
-type MergeCommitEntry struct {
-	DbID               uint64
-	TableID            uint64
-	Tablename          string
-	StartTs            types.TS
-	MergedObjs         []objectio.ObjectStats // deleted
-	CreatedObjectStats []objectio.ObjectStats // created
-	Booking            *api.BlkTransferBooking
-}
-
-func (e *MergeCommitEntry) InitTransfermapping(blkcnt int) {
+func InitTransfermapping(e *api.MergeCommitEntry, blkcnt int) {
 	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
@@ -100,20 +90,22 @@ func DoMergeAndWrite(
 	now := time.Now()
 	/*out args, keep the transfer infomation*/
 	commitEntry := mergehost.PrepareCommitEntry()
-	objs := ""
+	fromObjsDesc := ""
 	for _, o := range commitEntry.MergedObjs {
-		objs = fmt.Sprintf("%s%s,", objs, common.ShortObjId(*o.ObjectName().ObjectId()))
+		obj := objectio.ObjectStats(o)
+		fromObjsDesc = fmt.Sprintf("%s%s,", fromObjsDesc, common.ShortObjId(*obj.ObjectName().ObjectId()))
 	}
+	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
 	logutil.Info("[Start] Mergeblocks",
-		zap.String("table", commitEntry.Tablename),
-		zap.String("txn-start-ts", commitEntry.StartTs.ToString()),
-		zap.String("from-objs", objs),
+		zap.String("table", commitEntry.TableName),
+		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
+		zap.String("from-objs", fromObjsDesc),
 	)
 	phaseDesc := "prepare data"
 	defer func() {
 		if err != nil {
 			logutil.Error("[DoneWithErr] Mergeblocks",
-				zap.String("table", commitEntry.Tablename),
+				zap.String("table", tableDesc),
 				zap.Error(err),
 				zap.String("phase", phaseDesc),
 			)
@@ -130,7 +122,7 @@ func DoMergeAndWrite(
 	}
 	defer release()
 
-	commitEntry.InitTransfermapping(len(batches))
+	InitTransfermapping(commitEntry, len(batches))
 
 	fromLayout := make([]uint32, 0, len(batches))
 	totalRowCount := 0
@@ -169,8 +161,8 @@ func DoMergeAndWrite(
 
 	if totalRowCount == 0 {
 		logutil.Info("[Done] Mergeblocks due to all deleted",
-			zap.String("table", commitEntry.Tablename),
-			zap.String("txn-start-ts", commitEntry.StartTs.ToString()))
+			zap.String("table", tableDesc),
+			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()))
 		CleanTransMapping(commitEntry.Booking)
 		return
 	}
@@ -281,14 +273,16 @@ func DoMergeAndWrite(
 
 	// no tomestone actually
 	cobjstats := writer.GetObjectStats()[:objectio.SchemaTombstone]
-	commitEntry.CreatedObjectStats = cobjstats
+	for _, cobj := range cobjstats {
+		commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobj.Clone().Marshal())
+	}
 	cobj := fmt.Sprintf("%s(%v)Rows(%v)",
 		common.ShortObjId(*cobjstats[0].ObjectName().ObjectId()),
 		cobjstats[0].BlkCnt(),
 		cobjstats[0].Rows())
 	logutil.Info("[Done] Mergeblocks",
-		zap.String("table", commitEntry.Tablename),
-		zap.String("txn-start-ts", commitEntry.StartTs.ToString()),
+		zap.String("table", tableDesc),
+		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("to-objs", cobj),
 		common.DurationField(time.Since(now)))
 

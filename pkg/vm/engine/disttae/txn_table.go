@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -47,6 +48,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -2558,28 +2561,48 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }
 
-// func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) error {
-// 	snapshot := tbl.db.txn.op.SnapshotTS()
-// 	proc := tbl.proc.Load()
-// 	state, err := tbl.getPartitionState()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	var sortkeyPos int
-// 	var sortkeyIsPK bool
-// 	if tbl.primaryIdx > 0 {
-// 		if tbl.clusterByIdx < 0 {
-// 			sortkeyPos = tbl.primaryIdx
-// 			sortkeyIsPK = true
-// 		} else {
-// 			panic("nuts")
-// 		}
-// 	} else if tbl.clusterByIdx > 0 {
-// 		sortkeyPos = tbl.clusterByIdx
-// 		sortkeyIsPK = false
-// 	}
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	snapshot := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
+	for _, objstat := range objstats {
+		info, exist := state.GetObject(*objstat.ObjectShortName())
+		if !exist {
+			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+		}
+		objInfos = append(objInfos, info)
+	}
 
-// 	tbl.ensureSeqnumsAndTypesExpectRowid()
+	sortkeyPos := -1
+	sortkeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortkeyPos = tbl.primaryIdx
+			sortkeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortkeyPos = tbl.clusterByIdx
+		sortkeyIsPK = false
+	}
 
-// 	return nil
-// }
+	tbl.ensureSeqnumsAndTypesExpectRowid()
+
+	taskHost := NewCNMergeTask(
+		ctx, tbl, snapshot, state, // context
+		sortkeyPos, sortkeyIsPK, // schema
+		objInfos, // targets
+	)
+
+	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
+	if err != nil {
+		return nil, err
+	}
+
+	// commit this to tn
+	return taskHost.commitEntry, nil
+}

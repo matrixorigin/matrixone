@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -31,29 +32,61 @@ import (
 )
 
 type CNMergeTask struct {
-	ctx context.Context
+	ctx  context.Context
+	host *txnTable
 	// txn
 	snapshot types.TS // start ts, fixed
 	state    *logtailreplay.PartitionState
 	proc     *process.Process
 
 	// schema
-	name        string       // table name
 	version     uint32       // version
 	colseqnums  []uint16     // no rowid column
 	coltypes    []types.Type // no rowid column
-	blkMaxRow   int
-	sortkeyPos  int // (composite) primary key, cluster by etc. -1 meas no sort key
+	colattrs    []string     // no rowid column
+	sortkeyPos  int          // (composite) primary key, cluster by etc. -1 meas no sort key
 	sortkeyIsPK bool
 
 	// targets
 	targets []logtailreplay.ObjectInfo
 
 	// commit things
-	entry *mergesort.MergeCommitEntry
+	commitEntry *api.MergeCommitEntry
 
 	// auxiliaries
 	fs fileservice.FileService
+}
+
+func NewCNMergeTask(
+	ctx context.Context,
+	tbl *txnTable,
+	snapshot types.TS,
+	state *logtailreplay.PartitionState,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	targets []logtailreplay.ObjectInfo,
+) *CNMergeTask {
+	proc := tbl.proc.Load()
+	attrs := make([]string, 0, len(tbl.seqnums))
+	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
+	}
+	fs := proc.FileService
+	return &CNMergeTask{
+		ctx:         ctx,
+		host:        tbl,
+		snapshot:    snapshot,
+		state:       state,
+		proc:        proc,
+		version:     tbl.version,
+		colseqnums:  tbl.seqnums,
+		coltypes:    tbl.typs,
+		colattrs:    attrs,
+		sortkeyPos:  sortkeyPos,
+		sortkeyIsPK: sortkeyIsPK,
+		targets:     targets,
+		fs:          fs,
+	}
 }
 
 // impl DisposableVecPool
@@ -71,14 +104,16 @@ func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), err
 	return r, d, func() {}, e
 }
 
-func (t *CNMergeTask) PrepareCommitEntry() *mergesort.MergeCommitEntry {
-	commitEntry := &mergesort.MergeCommitEntry{}
-	commitEntry.Tablename = t.name
-	commitEntry.StartTs = t.snapshot
+func (t *CNMergeTask) PrepareCommitEntry() *api.MergeCommitEntry {
+	commitEntry := &api.MergeCommitEntry{}
+	commitEntry.DbId = t.host.db.databaseId
+	commitEntry.TblId = t.host.tableId
+	commitEntry.TableName = t.host.tableName
+	commitEntry.StartTs = t.snapshot.ToTimestamp()
 	for _, o := range t.targets {
-		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.ObjectStats)
+		commitEntry.MergedObjs = append(commitEntry.MergedObjs, o.ObjectStats.Clone().Marshal())
 	}
-	t.entry = commitEntry
+	t.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
 	return commitEntry
 }
@@ -163,5 +198,6 @@ func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, del
 		dels.Add(uint64(offset))
 	}
 	iter.Close()
+	bat.SetAttributes(t.colattrs)
 	return
 }
