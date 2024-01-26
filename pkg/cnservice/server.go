@@ -103,6 +103,10 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+
+	for _, opt := range options {
+		opt(srv)
+	}
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	srv.registerServices()
@@ -164,10 +168,6 @@ func NewService(
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
-	for _, opt := range options {
-		opt(srv)
-	}
-
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
@@ -220,7 +220,6 @@ func NewService(
 }
 
 func (s *service) Start() error {
-	s.initTaskServiceHolder()
 	s.initSqlWriterFactory()
 
 	if err := s.queryService.Start(); err != nil {

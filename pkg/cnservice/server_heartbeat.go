@@ -103,6 +103,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	select {
 	case <-s.hakeeperConnected:
 	default:
+		s.initTaskServiceHolder()
 		close(s.hakeeperConnected)
 	}
 	s.config.DecrCount()
