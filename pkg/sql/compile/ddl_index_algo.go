@@ -130,7 +130,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
 	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
@@ -163,11 +163,13 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 
 	// 2. Sampling SQL Logic
-	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	//sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	//TODO: this change will be reverted once m-schen implements sample( ,d rows normal) in the query engine.
+	samplePercent := catalog.CalcSamplePercent(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %f percent) as `%s` from `%s`.`%s`)",
 		indexColumnName,
-		sampleCnt,
+		samplePercent,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
@@ -206,7 +208,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metaTableName,
+		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 
 		indexColumnName,
@@ -216,7 +218,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		kmeansNormalize,
 		sampleSQL,
 	)
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
+	if err != nil {
+		return err
+	}
+
 	err = c.runSql(clusterCentersSQL)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
 	if err != nil {
 		return err
 	}
@@ -315,10 +328,35 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTblPkColMaySerial,
 	)
 
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	if err != nil {
+		return err
+	}
+
 	err = c.runSql(mappingSQL)
 	if err != nil {
 		return err
 	}
 
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
+	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		" VALUES ('%s', NOW()) "+
+		" ON DUPLICATE KEY UPDATE %s = NOW();",
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+
+		metrics,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	))
 }
