@@ -259,8 +259,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		err = ses.TxnBegin()
 		convey.So(err, convey.ShouldBeNil)
-		err = ses.SetAutocommit(false)
-		convey.So(err, convey.ShouldNotBeNil)
+		err = ses.SetAutocommit(true, false)
+		convey.So(err, convey.ShouldBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
 		_, _, err = ses.GetTxnHandler().GetTxn()
@@ -269,10 +269,10 @@ func TestSession_TxnBegin(t *testing.T) {
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
 
-		err = ses.SetAutocommit(true)
+		err = ses.SetAutocommit(false, true)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = ses.SetAutocommit(false)
+		err = ses.SetAutocommit(false, false)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

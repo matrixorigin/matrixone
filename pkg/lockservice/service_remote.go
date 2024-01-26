@@ -40,7 +40,7 @@ var methodVersions = map[pb.Method]int64{
 }
 
 func (s *service) initRemote() {
-	rpcClient, err := NewClient(s.cfg.RPC)
+	rpcClient, err := NewClient(s.cfg.RPC, s)
 	if err != nil {
 		panic(err)
 	}
