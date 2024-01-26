@@ -17,12 +17,14 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -3495,6 +3497,159 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
 	return
+}
+
+func (v *Vector) InplaceSort() {
+	switch v.GetType().Oid {
+	case types.T_bool:
+		col := MustFixedCol[bool](v)
+		sort.Slice(col, func(i, j int) bool {
+			return !col[i] && col[j]
+		})
+
+	case types.T_int8:
+		col := MustFixedCol[int8](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int16:
+		col := MustFixedCol[int16](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int32:
+		col := MustFixedCol[int32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int64:
+		col := MustFixedCol[int64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint8:
+		col := MustFixedCol[uint8](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint16:
+		col := MustFixedCol[uint16](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint32:
+		col := MustFixedCol[uint32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint64:
+		col := MustFixedCol[uint64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_float32:
+		col := MustFixedCol[float32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_float64:
+		col := MustFixedCol[float64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_date:
+		col := MustFixedCol[types.Date](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_datetime:
+		col := MustFixedCol[types.Datetime](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_time:
+		col := MustFixedCol[types.Time](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_timestamp:
+		col := MustFixedCol[types.Timestamp](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_enum:
+		col := MustFixedCol[types.Enum](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_decimal64:
+		col := MustFixedCol[types.Decimal64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_decimal128:
+		col := MustFixedCol[types.Decimal128](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_TS:
+		col := MustFixedCol[types.TS](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_uuid:
+		col := MustFixedCol[types.Uuid](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Lt(col[j])
+		})
+
+	case types.T_Rowid:
+		col := MustFixedCol[types.Rowid](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		col, area := MustVarlenaRawData(v)
+		sort.Slice(col, func(i, j int) bool {
+			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		})
+
+	case types.T_array_float32:
+		col, area := MustVarlenaRawData(v)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float32](
+				types.GetArray[float32](&col[i], area),
+				types.GetArray[float32](&col[j], area),
+			) < 0
+		})
+	case types.T_array_float64:
+		col, area := MustVarlenaRawData(v)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float64](
+				types.GetArray[float64](&col[i], area),
+				types.GetArray[float64](&col[j], area),
+			) < 0
+		})
+	}
 }
 
 func BuildVarlenaInline(v1, v2 *types.Varlena) {
