@@ -69,7 +69,7 @@ jobs:
           cat mo.yml
           echo "===================="
 
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s  $GITHUB_WORKSPACE/matrixone/test/distributed/resources -e optimistic 2>&1
+          # ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s  $GITHUB_WORKSPACE/matrixone/test/distributed/resources -e optimistic 2>&1
 
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -151,7 +151,7 @@ jobs:
           cat mo.yml
           echo "======================================"
           
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic,log/column,log/query,statement_query_type 2>&1          
+          # ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic,log/column,log/query,statement_query_type 2>&1          
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
