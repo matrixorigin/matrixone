@@ -17,8 +17,6 @@ package util
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -51,7 +50,7 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 
 // BuildUniqueKeyBatch used in test to validate
 // serialWithCompacted(), compactSingleIndexCol() and compactPrimaryCol()
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process) (*batch.Batch, int) {
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process, ps []*types.Packer) (*batch.Batch, int) {
 	var b *batch.Batch
 	if originTablePrimaryKey == "" {
 		b = &batch.Batch{
@@ -89,7 +88,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0], bitMap = serialWithCompacted(vs, proc)
+		b.Vecs[0], bitMap = serialWithCompacted(vs, proc, ps)
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
@@ -123,13 +122,20 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3)]
 // result bitmap is [2]
-func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
+func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types.Packer) (*vector.Vector, *nulls.Nulls) {
 	// resolve vs
 	length := vs[0].Length()
 	vct := types.T_varchar.ToType()
 	//nsp := new(nulls.Nulls)
 	val := make([][]byte, 0, length)
-	ps := types.NewPackerArray(length, proc.Mp())
+	if length > cap(ps) {
+		for _, p := range ps {
+			if p != nil {
+				p.FreeMem()
+			}
+		}
+		ps = types.NewPackerArray(length, proc.Mp())
+	}
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range vs {
@@ -335,17 +341,48 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, ps []*types.Packer) (*vector.Vector, *nulls.Nulls, error) {
 	if len(vs) == 0 {
 		// return empty vector and empty bitmap
 		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
 	}
 
-	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
 	rowCount := vs[0].Length()
-	_ = function.BuiltInSerialFull(vs, result, proc, rowCount)
-	resultVec := result.GetResultVector()
-	return resultVec, new(nulls.Nulls), nil
+	if rowCount > cap(ps) {
+		for _, p := range ps {
+			if p != nil {
+				p.FreeMem()
+			}
+		}
+		ps = types.NewPackerArray(rowCount, proc.Mp())
+	}
+	defer func() {
+		for _, p := range ps {
+			if p != nil {
+				p.Reset()
+			}
+		}
+	}()
+
+	for _, v := range vs {
+		if v.IsConstNull() {
+			for i := 0; i < v.Length(); i++ {
+				ps[i].EncodeNull()
+			}
+			continue
+		}
+		function.SerialHelper(v, nil, ps, true)
+	}
+
+	vec := proc.GetVector(types.T_varchar.ToType())
+	for i := uint64(0); i < uint64(rowCount); i++ {
+		if err := vector.AppendBytes(vec, ps[i].GetBuf(), false, proc.Mp()); err != nil {
+			proc.PutVector(vec)
+			return nil, nil, err
+		}
+	}
+
+	return vec, new(nulls.Nulls), nil
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {

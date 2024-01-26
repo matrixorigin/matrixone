@@ -16,6 +16,7 @@ package preinsertunique
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -39,7 +40,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert unique key")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ps = types.NewPackerArray(8192, proc.Mp())
 	return nil
 }
 
@@ -90,7 +92,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range uniqueColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap = util.SerialWithCompacted(vs, proc)
+		vec, bitMap = util.SerialWithCompacted(vs, proc, arg.ps)
+		for _, p := range arg.ps {
+			if p != nil {
+				p.Reset()
+			}
+		}
 	}
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())

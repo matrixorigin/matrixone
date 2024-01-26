@@ -40,7 +40,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert secondary key")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ps = types.NewPackerArray(8192, proc.Mp())
 	return nil
 }
 
@@ -93,7 +94,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc)
+		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc, arg.ps)
 		if err != nil {
 			return result, err
 		}
