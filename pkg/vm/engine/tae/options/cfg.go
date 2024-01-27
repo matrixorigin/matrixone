@@ -53,7 +53,7 @@ type CheckpointCfg struct {
 type GCCfg struct {
 	GCTTL          time.Duration `toml:"gc-ttl"`
 	ScanGCInterval time.Duration `toml:"scan-gc-interval"`
-	DisableGC      bool          `toml:"DisableGC"`
+	DisableGC      bool          `toml:"disableGC"`
 }
 
 type CatalogCfg struct {

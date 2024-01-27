@@ -67,7 +67,7 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC boo
 	}
 	g.Unlock()
 
-	logutil.Infof("[DB GC] files to delete: %v", g.objects)
+	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
 	var err error
 	if !disableGC {
 		err = g.fs.DelFiles(ctx, g.objects)
