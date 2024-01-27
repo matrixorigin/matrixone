@@ -119,7 +119,7 @@ type Config struct {
 	GCCfg struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
-		DisableGC      bool          `toml:"DisableGC"`
+		DisableGC      bool          `toml:"disable-gc"`
 	}
 
 	LogtailServer struct {
