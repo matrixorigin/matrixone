@@ -518,7 +518,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, sk
 			return
 		}
 		if !skipLoadObjectStats {
-			err = collector.PostLoop(c)
+			err = collector.LoadAndCollectObject(c, collector.VisitObj)
 		}
 
 		if collectUsage {
@@ -560,7 +560,7 @@ func GlobalCheckpointDataFactory(
 		if err != nil {
 			return
 		}
-		err = collector.PostLoop(c)
+		err = collector.LoadAndCollectObject(c, collector.VisitObj)
 
 		collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
 		FillUsageBatOfGlobal(collector)
@@ -2698,7 +2698,7 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteIDX],
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
-func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
+func (collector *BaseCollector) LoadAndCollectObject(c *catalog.Catalog, visitObject func(*catalog.ObjectEntry) error) error {
 	if collector.isPrefetch {
 		collector.isPrefetch = false
 	} else {
@@ -2711,7 +2711,7 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 		return err
 	}
 	p := &catalog.LoopProcessor{}
-	p.ObjectFn = collector.VisitObj
+	p.ObjectFn = visitObject
 	err = c.RecurLoop(p)
 	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
