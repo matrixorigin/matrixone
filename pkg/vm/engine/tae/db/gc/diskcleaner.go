@@ -46,6 +46,9 @@ type DiskCleaner struct {
 	fs  *objectio.ObjectFS
 	ctx context.Context
 
+	// disableGC is used to control whether to delete objects
+	disableGC bool
+
 	// ckpClient is used to get the instance of the specified checkpoint
 	ckpClient checkpoint.RunnerReader
 
@@ -101,12 +104,14 @@ func NewDiskCleaner(
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
+	disableGC bool,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
 		ctx:       ctx,
 		fs:        fs,
 		ckpClient: ckpClient,
 		catalog:   catalog,
+		disableGC: disableGC,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
@@ -348,7 +353,7 @@ func (cleaner *DiskCleaner) tryGC() error {
 	gc := cleaner.softGC()
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	err := cleaner.delWorker.ExecDelete(cleaner.ctx, gc)
+	err := cleaner.delWorker.ExecDelete(cleaner.ctx, gc, cleaner.disableGC)
 	if err != nil {
 		return err
 	}
