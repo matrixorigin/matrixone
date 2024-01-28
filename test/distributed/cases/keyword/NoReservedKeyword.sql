@@ -81,3 +81,17 @@ select 1 as sequences, 1 as sequence, 1 as increment, 1 as cycle, 1 as minvalue,
 select 1 as publication, 1 as subscriptions, 1 as publications, 1 as roles, 1 as backend, 1 as servers, 1 as stage, 1 as stages, 1 as credentials;
 
 select 1 as vecf32, 1 as vecf64, 1 as backup, 1 as filesystem, 1 as handler, 1 as sample, 1 as percent, 1 as ownership;
+
+drop database if exists test;
+create database test;
+use test;
+create table test01(`db_type` blob default null);
+insert into test01 values (_binary "relational database");
+insert into test01 values (_binary "nosql Database");
+insert into test01 values (_binary "object-oriented database");
+insert into test01 values (_binary "hierarchical database");
+insert into test01 values (_binary "network database");
+insert into test01 values (_binary "in-memory database");
+insert into test01 values (null);
+select * from test01;
+drop database test;
