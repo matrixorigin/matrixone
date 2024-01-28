@@ -75,6 +75,30 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
+func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
+	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+
+	if len(indexInfo.GetIndexTables()) != 1 {
+		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+	}
+
+	def := indexInfo.GetIndexTables()[0]
+	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
+	err := c.runSql(createSQL)
+	if err != nil {
+		return err
+	}
+
+	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
+	for _, insertSQL := range insertSQLs {
+		err = c.runSql(insertSQL)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
