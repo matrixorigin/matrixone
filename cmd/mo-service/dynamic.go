@@ -122,6 +122,7 @@ func genDynamicCNConfigs(
 			string(baseCNConfig),
 			uuid,
 			port,
+			i,
 			frontendPort,
 			unixSocketPort)
 		f, err := os.CreateTemp(
