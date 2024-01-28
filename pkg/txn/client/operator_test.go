@@ -219,7 +219,7 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				require.NotEqual(t, lock.LockTable{}, bind)
 
 				// table 3 will be kept
-				bind, err = s.GetLockTableBind(tableID3)
+				bind, err = s.GetLockTableBind(0, tableID3)
 				require.NoError(t, err)
 				require.NotEqual(t, lock.LockTable{}, bind)
 			},
