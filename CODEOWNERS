@@ -156,7 +156,7 @@
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
-/pkg/util/metric/v2 @zhangxu19830126
+/pkg/util/metric/v2 @zhangxu19830126 @aptend
 
 # pkg/vectorize
 /pkg/vectorize @aunjgr
@@ -168,6 +168,11 @@
 /pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
+/pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
+/pkg/vm/engine/tae/logstore @XuPeng-SH @jiangxinmeng1
+/pkg/vm/engine/tae/wal @XuPeng-SH @jiangxinmeng1
+/pkg/vm/engine/tae/blockio @XuPeng-SH @LeftHandCold
+
 
 # proxy
 /pkg/proxy @zhangxu19830126 @volgariver6
@@ -187,3 +192,5 @@
 /proto/plan.proto @nnsgmsone
 /proto/timestamp.proto @zhangxu19830126
 /proto/txn.proto @zhangxu19830126
+/proto/api.proto @XuPeng-SH
+/proto/logtail.proto @XuPeng-SH
