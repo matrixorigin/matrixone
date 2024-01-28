@@ -55,6 +55,10 @@ enum CmdMethod {
 
   CoreDumpConfig = 12;
   RunTask = 13;
+
+  // RemoveRemoteLockTable remove remote lock table on all cn
+  RemoveRemoteLockTable = 14;
+  GetLatestBind         = 15;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -159,6 +163,9 @@ message Request {
 
   CoreDumpConfigRequest CoreDumpConfig = 15;
   RunTaskRequest RunTask = 16;
+
+  RemoveRemoteLockTableRequest  RemoveRemoteLockTable = 17;
+  GetLatestBindRequest GetLatestBind = 18;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -197,6 +204,9 @@ message Response {
 
   CoreDumpConfigResponse CoreDumpConfig = 15;
   RunTaskResponse RunTask = 16;
+
+  RemoveRemoteLockTableResponse  RemoveRemoteLockTable = 17;
+  GetLatestBindResponse          GetLatestBind         = 18;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -301,4 +311,25 @@ message CacheInfo{
 
 message GetCacheInfoResponse{
   repeated CacheInfo CacheInfoList = 1;
+}
+
+
+
+message RemoveRemoteLockTableRequest {
+  uint32 GroupID = 1;
+  uint64 TableID = 2;
+  uint64 Version = 3;
+}
+
+message RemoveRemoteLockTableResponse {
+  int32 Count = 1;
+}
+
+message GetLatestBindRequest {
+  uint32 GroupID = 1;
+  uint64 TableID = 2;
+}
+
+message GetLatestBindResponse {
+  string Bind = 1;
 }
