@@ -993,3 +993,10 @@ func (txn *Transaction) rollbackCreateTableLocked() {
 		return true
 	})
 }
+
+func (txn *Transaction) clearTableCache() {
+	txn.tableCache.tableMap.Range(func(key, value any) bool {
+		txn.tableCache.tableMap.Delete(key)
+		return true
+	})
+}
