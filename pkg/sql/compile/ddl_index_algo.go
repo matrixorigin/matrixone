@@ -75,7 +75,7 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
