@@ -508,7 +508,7 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 
 func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, skipLoadObjectStats bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
-		collector := NewIncrementalCollector(start, end)
+		collector := NewIncrementalCollector(start, end, skipLoadObjectStats)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
@@ -518,7 +518,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS, collectUsage bool, sk
 			return
 		}
 		if !skipLoadObjectStats {
-			err = collector.PostLoop(c)
+			err = collector.LoadAndCollectObject(c, collector.VisitObj)
 		}
 
 		if collectUsage {
@@ -560,7 +560,7 @@ func GlobalCheckpointDataFactory(
 		if err != nil {
 			return
 		}
-		err = collector.PostLoop(c)
+		err = collector.LoadAndCollectObject(c, collector.VisitObj)
 
 		collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
 		FillUsageBatOfGlobal(collector)
@@ -772,7 +772,8 @@ type BaseCollector struct {
 	*catalog.LoopProcessor
 	start, end types.TS
 
-	data *CheckpointData
+	data                *CheckpointData
+	skipLoadObjectStats bool
 
 	// to prefetch object meta when fill in object info batch
 
@@ -796,13 +797,14 @@ type IncrementalCollector struct {
 	*BaseCollector
 }
 
-func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
+func NewIncrementalCollector(start, end types.TS, skipLoadObjectStats bool) *IncrementalCollector {
 	collector := &IncrementalCollector{
 		BaseCollector: &BaseCollector{
-			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(common.CheckpointAllocator),
-			start:         start,
-			end:           end,
+			LoopProcessor:       new(catalog.LoopProcessor),
+			data:                NewCheckpointData(common.CheckpointAllocator),
+			start:               start,
+			end:                 end,
+			skipLoadObjectStats: skipLoadObjectStats,
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -1723,6 +1725,13 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	data.updateTableMeta(tid, ObjectInfo, delStart, delEnd)
 }
 
+func (data *CheckpointData) UpdateObjectInsertMeta(tid uint64, delStart, delEnd int32) {
+	if delEnd <= delStart {
+		return
+	}
+	data.resetTableMeta(tid, ObjectInfo, delStart, delEnd)
+}
+
 func (data *CheckpointData) resetTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
@@ -1804,6 +1813,8 @@ func (data *CheckpointData) FormatData(mp *mpool.MPool) (err error) {
 			data.bats[idx].Vecs[i] = vec
 		}
 	}
+	data.bats[MetaIDX].Close()
+	data.bats[TNMetaIDX].Close()
 	data.bats[MetaIDX] = makeRespBatchFromSchema(checkpointDataSchemas_Curr[MetaIDX], mp)
 	data.bats[TNMetaIDX] = makeRespBatchFromSchema(checkpointDataSchemas_Curr[TNMetaIDX], mp)
 	for tid := range data.meta {
@@ -2696,7 +2707,7 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteIDX],
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
-func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
+func (collector *BaseCollector) LoadAndCollectObject(c *catalog.Catalog, visitObject func(*catalog.ObjectEntry) error) error {
 	if collector.isPrefetch {
 		collector.isPrefetch = false
 	} else {
@@ -2709,7 +2720,7 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 		return err
 	}
 	p := &catalog.LoopProcessor{}
-	p.ObjectFn = collector.VisitObj
+	p.ObjectFn = visitObject
 	err = c.RecurLoop(p)
 	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
@@ -2913,7 +2924,10 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 		return nil
 	}
 
-	needPrefetch, _ := entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	var needPrefetch bool
+	if !collector.skipLoadObjectStats {
+		needPrefetch, _ = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	}
 
 	if collector.isPrefetch {
 		if needPrefetch {
