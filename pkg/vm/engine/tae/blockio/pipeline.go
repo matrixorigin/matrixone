@@ -154,7 +154,11 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 			res = &tasks.JobResult{}
 			var name string
 			if params.reader == nil {
-				name = params.key.Name().String()
+				if params.fileName != "" {
+					name = params.fileName
+				} else {
+					name = params.key.Name().String()
+				}
 			} else {
 				name = params.reader.GetName()
 			}
