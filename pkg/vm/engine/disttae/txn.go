@@ -86,7 +86,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
-	if typ == INSERT {
+	if typ == INSERT || typ == INSERT_TXN {
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.RowCount()
@@ -269,7 +269,7 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
-		if (e.typ == DELETE || e.typ == UPDATE) &&
+		if (e.typ == DELETE || e.typ == DELETE_TXN || e.typ == UPDATE) &&
 			e.databaseId == catalog.MO_DATABASE_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
@@ -278,7 +278,7 @@ func (txn *Transaction) checkDup() error {
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
-		if e.typ == INSERT {
+		if e.typ == INSERT || e.typ == INSERT_TXN {
 			if _, ok := tablesDef[e.tableId]; !ok {
 				tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
 				if err != nil {
@@ -328,7 +328,7 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
-		if e.typ == DELETE {
+		if e.typ == DELETE || e.typ == DELETE_TXN {
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
@@ -808,6 +808,11 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
 		if entry.typ != INSERT ||
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
@@ -842,7 +847,13 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
@@ -979,6 +990,13 @@ func (txn *Transaction) rollbackCreateTableLocked() {
 		if value.(*txnTable).createByStatementID == txn.statementID {
 			txn.createMap.Delete(key)
 		}
+		return true
+	})
+}
+
+func (txn *Transaction) clearTableCache() {
+	txn.tableCache.tableMap.Range(func(key, value any) bool {
+		txn.tableCache.tableMap.Delete(key)
 		return true
 	})
 }
