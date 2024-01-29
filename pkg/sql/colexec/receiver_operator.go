@@ -117,6 +117,25 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 	}
 }
 
+// todo: There is a bug that the receiver may not clean all the input data.
+//
+//	 its situation just like the following code:
+//	 the sender:
+//			select {
+//				case <-ctx.Done():
+//					return
+//				case receiver <- data:
+//					return
+//			}
+//	 the receiver:
+//	     cancel the context
+//		    for len(receiver) > 0 {
+//				d := <-receiver
+//				clean(d)
+//			}
+//	 the sender may send data to receiver after the receiver cancel the context. it's a random bug.
+//	 in fact, this will not cause any problem, but the memory count of mpool will be wrong because
+//	 the batch is not cleaned sometimes.
 func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	if len(r.receiverListener) > 0 {
 		// Remove the proc context.Done waiter because it MUST BE done

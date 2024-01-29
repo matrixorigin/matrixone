@@ -37,30 +37,55 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyFunc
 	ShuffleToAllFunc
+
+	argName = "dispatch"
+)
+
+type senderStatus int
+
+// the status of the sender.
+const (
+	normalSending senderStatus = iota
+	stopSending
 )
 
 type container struct {
-	// the clientsession info for the channel you want to dispatch
+	// the status of the container.
+	// if status is stopSending, the container can stop sending.
+	sendStatus senderStatus
+
+	// the information of remote receivers.
 	remoteReceivers []process.WrapCs
-	// sendFunc is the rule you want to send batch
-	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
 
-	// isRemote specify it is a remote receiver or not
-	isRemote bool
-	// prepared specify waiting remote receiver ready or not
-	prepared bool
+	// sendFunc was responsible for sending batch to the receivers.
+	// this function should fill the reference count of the batch.
+	sendFunc func(proc *process.Process, bat *batch.Batch) error
 
-	// for send-to-any function decide send to which reg
-	sendCnt       int
+	// the number of receivers.
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// function `send to any` will use this field to determine which receiver to send.
+	sendCnt int
 
 	remoteToIdx map[uuid.UUID]int
 	hasData     bool
 
 	batchCnt []int
 	rowCnt   []int
+}
+
+func (ctr *container) resumeSending() {
+	ctr.sendStatus = normalSending
+}
+
+func (ctr *container) stopSending() {
+	ctr.sendStatus = stopSending
+}
+
+func (ctr *container) isStopSending() bool {
+	return ctr.sendStatus == stopSending
 }
 
 type Argument struct {
@@ -136,28 +161,37 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.Children = append(arg.Children, child)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+func (arg *Argument) Free(proc *process.Process, executeFailed bool, err error) {
 	if arg.ctr != nil {
-		if arg.ctr.isRemote {
-			for _, r := range arg.ctr.remoteReceivers {
-				r.Err <- err
-			}
+		for _, r := range arg.ctr.remoteReceivers {
+			r.Err <- err
+		}
 
-			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
+		if arg.ctr.remoteRegsCnt > 0 {
+			uuids := make([]uuid.UUID, len(arg.RemoteRegs))
 			for i := range arg.RemoteRegs {
-				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
+				uuids[i] = arg.RemoteRegs[i].Uuid
 			}
 			colexec.Srv.DeleteUuids(uuids)
 		}
 	}
 
 	for i := range arg.LocalRegs {
-		if !pipelineFailed {
-			select {
-			case <-arg.LocalRegs[i].Ctx.Done():
-			case arg.LocalRegs[i].Ch <- nil:
-			}
+		select {
+		case <-arg.LocalRegs[i].Ctx.Done():
+		case arg.LocalRegs[i].Ch <- nil:
 		}
+		// todo: it seems that it was a bug here that we need to close the channel.
+		//  else sometimes the receiver will block forever.
+		//  so I kept the old code here.
+		//  it's a good case to reproduce the bug.
+		//   comment the close code below, and run the following sql:
+		//	 ```
+		// 	 create table t5(a int primary key, b int);
+		//	 create table t6(b int, c int, foreign key(b) references t5(a));
+		//   alter table t6 add column d int;
+		//   ```
+		//  the alter sql will be blocked.
 		close(arg.LocalRegs[i].Ch)
 	}
 }

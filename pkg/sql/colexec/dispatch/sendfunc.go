@@ -16,172 +16,185 @@ package dispatch
 
 import (
 	"context"
-	"hash/crc32"
-	"sync/atomic"
-
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"hash/crc32"
 )
 
-// common sender: send to all LocalReceiver
-func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	var refCountAdd int64
-	var err error
-	if !ap.RecSink {
-		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
-		atomic.AddInt64(&bat.Cnt, refCountAdd)
-		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-			jm.IncRef(refCountAdd)
-			jm.SetDupCount(int64(ap.ctr.localRegsCnt))
-		}
-	}
-	var bats []*batch.Batch
-	if ap.RecSink {
-		bats = append(bats, bat)
-		for k := 1; k < len(ap.LocalRegs); k++ {
-			bat, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bats = append(bats, bat)
-		}
+// common sender: send to all LocalReceivers
+func (arg *Argument) sendToAllLocalReceivers(proc *process.Process, bat *batch.Batch) error {
+	list, err := increaseReferenceBeforeSend(bat, arg.ctr.localRegsCnt, arg.RecSink, proc)
+	if err != nil {
+		return err
 	}
 
-	for i, reg := range ap.LocalRegs {
-		if ap.RecSink {
-			bat = bats[i]
-		}
-		select {
-		case <-proc.Ctx.Done():
-			handleUnsent(proc, bat, refCountAdd, int64(i))
-			return true, nil
-
-		case <-reg.Ctx.Done():
-			if ap.IsSink {
-				atomic.AddInt64(&bat.Cnt, -1)
+	if arg.RecSink {
+		for i, b := range list {
+			select {
+			case <-proc.Ctx.Done():
+			case <-arg.LocalRegs[i].Ctx.Done():
+			case arg.LocalRegs[i].Ch <- b:
 				continue
 			}
-			handleUnsent(proc, bat, refCountAdd, int64(i))
-			return true, nil
 
-		case reg.Ch <- bat:
+			for j := i; j < len(list); j++ {
+				proc.PutBatch(list[j])
+			}
+			return nil
+		}
+
+	} else {
+		for i, reg := range arg.LocalRegs {
+			select {
+			case <-proc.Ctx.Done():
+				decreaseReferenceAfterSend(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				arg.ctr.stopSending()
+				return nil
+
+			case <-reg.Ctx.Done():
+				if arg.IsSink {
+					bat.AddCnt(-1)
+					continue
+				}
+				decreaseReferenceAfterSend(bat, arg.RecSink, arg.ctr.localRegsCnt, i)
+				arg.ctr.stopSending()
+				return nil
+
+			case reg.Ch <- bat:
+			}
 		}
 	}
-	return false, nil
+
+	return nil
 }
 
-// common sender: send to all RemoteReceiver
-func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		if end {
-			return true, nil
-		}
+// common sender: send to all RemoteReceivers
+func (arg *Argument) sendToAllRemoteReceivers(proc *process.Process, bat *batch.Batch) error {
+	data, err := types.Encode(bat)
+	if err != nil {
+		return err
 	}
 
-	{ // send to remote regs
-		encodeData, errEncode := types.Encode(bat)
-		if errEncode != nil {
-			return false, errEncode
-		}
-		for _, r := range ap.ctr.remoteReceivers {
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-				return false, err
-			}
-		}
-	}
-
-	return false, nil
-}
-
-func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) (err error) {
-	for i, reg := range ap.LocalRegs {
-		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex == batIndex {
-			if bat != nil && bat.RowCount() != 0 {
-				select {
-				case <-proc.Ctx.Done():
-					return nil
-
-				case <-reg.Ctx.Done():
-					return nil
-
-				case reg.Ch <- bat:
-				}
-			}
-		}
-	}
-
-	forShuffle := false
-	for _, r := range ap.ctr.remoteReceivers {
-		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex == batIndex {
-			if bat != nil && bat.RowCount() != 0 {
-				forShuffle = true
-
-				encodeData, errEncode := types.Encode(bat)
-				if errEncode != nil {
-					err = errEncode
-					break
-				}
-				if err = sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-					break
-				}
-			}
-		}
-	}
-
-	if forShuffle {
-		// in shuffle dispatch, this batch only send to remote CN, we can safely put it back into pool
-		proc.PutBatch(bat)
-	}
-	return err
-}
-
-func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
-	localRegsCnt := uint32(ap.ctr.localRegsCnt)
-	for i, reg := range ap.LocalRegs {
-		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && bat.RowCount() != 0 {
-				select {
-				case <-proc.Ctx.Done():
-					return nil
-
-				case <-reg.Ctx.Done():
-					return nil
-
-				case reg.Ch <- bat:
-				}
-			}
+	for _, receiver := range arg.ctr.remoteReceivers {
+		if err = sendBatchToClientSession(proc.Ctx, data, receiver); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
-	localRegsCnt := uint32(ap.ctr.localRegsCnt)
-	atomic.AddInt64(&bat.Cnt, 1)
-	defer atomic.AddInt64(&bat.Cnt, -1)
-	for i, reg := range ap.LocalRegs {
-		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && bat.RowCount() != 0 {
+// common sender: send to all RemoteReceivers and LocalReceivers
+func (arg *Argument) sendToAllReceivers(proc *process.Process, bat *batch.Batch) error {
+	if err := arg.sendToAllRemoteReceivers(proc, bat); err != nil {
+		return err
+	}
+	return arg.sendToAllLocalReceivers(proc, bat)
+}
+
+// common sender: send to any LocalReceiver
+// if the reg which you want to send to is closed, send it to the next one.
+func (arg *Argument) sendToAnyLocalReceiver(proc *process.Process, bat *batch.Batch) error {
+	bat.AddCnt(1)
+	for arg.ctr.aliveRegCnt > 0 {
+		idx := arg.ctr.sendCnt % arg.ctr.localRegsCnt
+		reg := arg.LocalRegs[idx]
+		select {
+		case <-proc.Ctx.Done():
+			bat.AddCnt(-1)
+			arg.ctr.stopSending()
+			return nil
+
+		case <-reg.Ctx.Done():
+			arg.LocalRegs = append(arg.LocalRegs[:idx], arg.LocalRegs[idx+1:]...)
+			arg.ctr.localRegsCnt--
+			arg.ctr.aliveRegCnt--
+
+		case reg.Ch <- bat:
+			arg.ctr.sendCnt++
+			return nil
+		}
+	}
+	if arg.ctr.aliveRegCnt == 0 {
+		bat.AddCnt(-1)
+		arg.ctr.stopSending()
+	}
+	return nil
+}
+
+// common sender: send to any RemoteReceiver
+// if the reg which you want to send to is closed, send it to the next one.
+func (arg *Argument) sendToAnyRemoteReceiver(proc *process.Process, bat *batch.Batch) error {
+	data, err := types.Encode(bat)
+	if err != nil {
+		return err
+	}
+
+	for {
+		idx := arg.ctr.sendCnt % arg.ctr.remoteRegsCnt
+		reg := arg.ctr.remoteReceivers[idx]
+
+		if err = sendBatchToClientSession(proc.Ctx, data, reg); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
+				arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers[:idx], arg.ctr.remoteReceivers[idx+1:]...)
+				arg.ctr.remoteRegsCnt--
+				arg.ctr.aliveRegCnt--
+				if arg.ctr.aliveRegCnt == 0 {
+					arg.ctr.stopSending()
+					return nil
+				}
+				continue
+			}
+			return err
+		}
+		arg.ctr.sendCnt++
+		return nil
+	}
+}
+
+func (arg *Argument) sendToAnyReceiver(proc *process.Process, bat *batch.Batch) error {
+	toLocal := (arg.ctr.sendCnt % arg.ctr.aliveRegCnt) < arg.ctr.localRegsCnt
+
+	if toLocal {
+		if err := arg.sendToAnyLocalReceiver(proc, bat); err != nil {
+			return err
+		}
+		if arg.ctr.isStopSending() {
+			arg.ctr.resumeSending()
+			return arg.sendToAnyRemoteReceiver(proc, bat)
+		}
+	} else {
+		if err := arg.sendToAnyRemoteReceiver(proc, bat); err != nil {
+			return err
+		}
+		if arg.ctr.isStopSending() {
+			arg.ctr.resumeSending()
+			return arg.sendToAnyLocalReceiver(proc, bat)
+		}
+	}
+
+	return nil
+}
+
+func sendToRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	for i, reg := range arg.LocalRegs {
+		if uint32(arg.ShuffleRegIdxLocal[i]) == regIndex {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
 				select {
 				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
 					return nil
 
 				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
 					return nil
 
 				case reg.Ch <- bat:
@@ -189,15 +202,15 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 			}
 		}
 	}
-	for _, r := range ap.ctr.remoteReceivers {
-		batIndex := uint32(ap.ctr.remoteToIdx[r.Uid])
-		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			if bat != nil && bat.RowCount() != 0 {
-				encodeData, errEncode := types.Encode(bat)
-				if errEncode != nil {
-					return errEncode
+
+	for _, r := range arg.ctr.remoteReceivers {
+		if uint32(arg.ctr.remoteToIdx[r.Uid]) == regIndex {
+			if bat.RowCount() != 0 {
+				data, err := types.Encode(bat)
+				if err != nil {
+					return err
 				}
-				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				if err = sendBatchToClientSession(proc.Ctx, data, r); err != nil {
 					return err
 				}
 			}
@@ -206,142 +219,147 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 	return nil
 }
 
-// shuffle to all receiver (include LocalReceiver and RemoteReceiver)
-func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		if end {
-			return true, nil
-		}
-	}
+func sendToLocalMatchedRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	cnt := uint32(arg.ctr.localRegsCnt)
 
-	ap.ctr.batchCnt[bat.ShuffleIDX]++
-	ap.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
-	if ap.ShuffleType == plan2.ShuffleToRegIndex {
-		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
-	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {
-		return false, sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
-	} else {
-		return false, sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
-	}
-}
+	for i, reg := range arg.LocalRegs {
+		if regIndex%cnt == uint32(arg.ShuffleRegIdxLocal[i])%cnt {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
+				select {
+				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
 
-// send to all receiver (include LocalReceiver and RemoteReceiver)
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	end, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
-	if remoteErr != nil || end {
-		return end, remoteErr
-	}
+				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
 
-	return sendToAllLocalFunc(bat, ap, proc)
-}
-
-// common sender: send to any LocalReceiver
-// if the reg which you want to send to is closed
-// send it to next one.
-func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	for {
-		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
-		reg := ap.LocalRegs[sendto]
-		select {
-		case <-proc.Ctx.Done():
-			return true, nil
-
-		case <-reg.Ctx.Done():
-			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
-			ap.ctr.localRegsCnt--
-			ap.ctr.aliveRegCnt--
-			close(reg.Ch)
-			if ap.ctr.localRegsCnt == 0 {
-				return true, nil
-			}
-
-		case reg.Ch <- bat:
-			ap.ctr.sendCnt++
-			return false, nil
-		}
-	}
-}
-
-// common sender: send to any RemoteReceiver
-// if the reg which you want to send to is closed
-// send it to next one.
-func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		// update the cnt
-		ap.ctr.remoteRegsCnt = len(ap.ctr.remoteReceivers)
-		ap.ctr.aliveRegCnt = ap.ctr.remoteRegsCnt + ap.ctr.localRegsCnt
-		if end || ap.ctr.remoteRegsCnt == 0 {
-			return true, nil
-		}
-	}
-	select {
-	case <-proc.Ctx.Done():
-		return true, nil
-
-	default:
-	}
-
-	encodeData, errEncode := types.Encode(bat)
-	if errEncode != nil {
-		return false, errEncode
-	}
-
-	for {
-		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
-		reg := ap.ctr.remoteReceivers[regIdx]
-
-		if err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
-				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
-				ap.ctr.remoteRegsCnt--
-				ap.ctr.aliveRegCnt--
-				if ap.ctr.remoteRegsCnt == 0 {
-					return true, nil
+				case reg.Ch <- bat:
 				}
-				ap.ctr.sendCnt++
-				continue
-			} else {
-				return false, err
 			}
 		}
-		ap.ctr.sendCnt++
-		return false, nil
+	}
+
+	return nil
+}
+
+func sendToAllMatchedRegs(arg *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	cnt := uint32(arg.ctr.localRegsCnt)
+
+	for i, reg := range arg.LocalRegs {
+		if uint32(arg.ShuffleRegIdxLocal[i])%cnt == regIndex%cnt {
+			if bat.RowCount() != 0 {
+				bat.AddCnt(1)
+				select {
+				case <-proc.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case <-reg.Ctx.Done():
+					bat.AddCnt(-1)
+					arg.ctr.stopSending()
+					return nil
+
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+
+	for _, r := range arg.ctr.remoteReceivers {
+		if uint32(arg.ctr.remoteToIdx[r.Uid])%cnt == regIndex%cnt {
+			if bat.RowCount() != 0 {
+				data, err := types.Encode(bat)
+				if err != nil {
+					return err
+				}
+				if err = sendBatchToClientSession(proc.Ctx, data, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (arg *Argument) shuffleToAllReceivers(proc *process.Process, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+	arg.ctr.batchCnt[bat.ShuffleIDX]++
+	arg.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
+	if arg.ShuffleType == plan2.ShuffleToRegIndex {
+		return sendToRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
+	} else if arg.ShuffleType == plan2.ShuffleToLocalMatchedReg {
+		return sendToLocalMatchedRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
+	} else {
+		return sendToAllMatchedRegs(arg, proc, bat, uint32(bat.ShuffleIDX))
 	}
 }
 
-// Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
-func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	toLocal := (ap.ctr.sendCnt % ap.ctr.aliveRegCnt) < ap.ctr.localRegsCnt
-	if toLocal {
-		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)
+func increaseReferenceBeforeSend(
+	bat *batch.Batch,
+	localReceiverCnt int, isRecSink bool,
+	proc *process.Process) (batchList []*batch.Batch, err error) {
+	defer func() {
 		if err != nil {
-			return false, nil
+			for _, b := range batchList {
+				proc.PutBatch(b)
+			}
+			if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+				jm.SetRef(1)
+				jm.SetDupCount(1)
+			}
 		}
-		if allclosed { // all local reg closed, change sendFunc to send remote only
-			proc.PutBatch(bat)
-			ap.ctr.sendFunc = sendToAnyRemoteFunc
-			return ap.ctr.sendFunc(bat, ap, proc)
-		}
-	} else {
-		allclosed, err := sendToAnyRemoteFunc(bat, ap, proc)
-		if err != nil {
-			return false, nil
-		}
-		if allclosed { // all remote reg closed, change sendFunc to send local only
-			ap.ctr.sendFunc = sendToAnyLocalFunc
-			return ap.ctr.sendFunc(bat, ap, proc)
-		}
-	}
-	return false, nil
+	}()
 
+	// todo: there is a bug about CTE, some operators will change the batch's data even if its
+	//       reference cnt is not 1, so we need to copy the batch here
+	if isRecSink {
+		batchList = make([]*batch.Batch, localReceiverCnt)
+		if len(batchList) > 0 {
+			bat.AddCnt(1)
+			batchList[0] = bat
+		}
+
+		mp := proc.Mp()
+		for i := 1; i < len(batchList); i++ {
+			batchList[i], err = bat.Dup(mp)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return batchList, err
+	}
+
+	bat.AddCnt(localReceiverCnt)
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		// set the reference of join map as the count of local receivers.
+		jm.SetRef(int64(localReceiverCnt))
+		jm.SetDupCount(int64(localReceiverCnt))
+	}
+
+	return batchList, err
+}
+
+func decreaseReferenceAfterSend(
+	bat *batch.Batch,
+	isRecSink bool,
+	localReceiverCnt int, succeedCnt int) {
+	if isRecSink {
+		return
+	}
+
+	cntSub := succeedCnt - localReceiverCnt
+	bat.AddCnt(cntSub)
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		jm.IncRef(int64(cntSub))
+		jm.IncDupCount(int64(cntSub))
+	}
 }
 
 func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs process.WrapCs) error {
@@ -355,20 +373,17 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Sid = pipeline.Status_Last
 			msg.Checksum = checksum
 		}
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
-			return err
-		}
-		return nil
+		return wcs.Cs.Write(ctx, msg)
 	}
 
-	start := 0
-	for start < len(encodeBatData) {
-		end := start + maxMessageSizeToMoRpc
+	for start, end := 0, 0; start < len(encodeBatData); start = end {
+		end = start + maxMessageSizeToMoRpc
 		sid := pipeline.Status_WaitingNext
-		if end > len(encodeBatData) {
+		if end >= len(encodeBatData) {
 			end = len(encodeBatData)
 			sid = pipeline.Status_Last
 		}
+
 		msg := cnclient.AcquireMessage()
 		{
 			msg.Id = wcs.MsgId
@@ -381,19 +396,6 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 		if err := wcs.Cs.Write(ctx, msg); err != nil {
 			return err
 		}
-		start = end
 	}
 	return nil
-}
-
-// success count is always no greater than refcnt
-func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
-	diff := successCnt - refCnt
-	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(diff)
-		jm.SetDupCount(diff)
-	}
-
-	proc.PutBatch(bat)
 }

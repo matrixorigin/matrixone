@@ -121,11 +121,19 @@ func (jm *JoinMap) Dup() *JoinMap {
 	}
 }
 
+func (jm *JoinMap) SetRef(ref int64) {
+	atomic.StoreInt64(jm.cnt, ref)
+}
+
 func (jm *JoinMap) IncRef(ref int64) {
 	atomic.AddInt64(jm.cnt, ref)
 }
 
 func (jm *JoinMap) SetDupCount(ref int64) {
+	atomic.StoreInt64(jm.dupCnt, ref)
+}
+
+func (jm *JoinMap) IncDupCount(ref int64) {
 	atomic.AddInt64(jm.dupCnt, ref)
 }
 
