@@ -443,9 +443,9 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	// Any account should shows database MO_CATALOG_DB_NAME
 	if accountId == catalog.System_Account {
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
+		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, accountClause, catalog.SystemDBAttr_Name)
 	} else {
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
+		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database ORDER BY %s", MO_CATALOG_DB_NAME, catalog.SystemDBAttr_Name)
 	}
 
 	if stmt.Where != nil {
@@ -542,6 +542,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	// Do not show sequences.
 	sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemSequenceRel)
+
+	// Order by relname
+	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemRelAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -775,30 +778,28 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if tableDef.Indexes != nil {
-				uniqueColName := make(map[string]bool)
 				for _, indexdef := range tableDef.Indexes {
+					name := indexdef.Parts[0]
 					if indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
+						if isPrimaryKey(tableDef, indexdef.Parts) {
+							for _, name := range indexdef.Parts {
+								keyStr += " when attname = "
+								keyStr += "'" + name + "'"
+								keyStr += " then 'PRI'"
 							}
-							keyStr += " when attname = "
-							keyStr += "'" + name + "'"
-							keyStr += " then 'UNI'"
-							uniqueColName[name] = true
-						}
-					}
-				}
-				for _, indexdef := range tableDef.Indexes {
-					if !indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
-							}
+						} else if isMultiplePriKey(indexdef) {
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
+						} else {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
 						}
+					} else {
+						keyStr += " when attname = "
+						keyStr += "'" + name + "'"
+						keyStr += " then 'MUL'"
 					}
 				}
 			}
@@ -878,8 +879,34 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relkind != '%s' and relname != '%s' and relname not like '%s' and (%s)"
-
+	sql := `select
+				relname as 'Name',
+				'Tae' as 'Engine',
+				'Dynamic' as 'Row_format',
+				0 as 'Rows',
+				0 as 'Avg_row_length',
+				0 as 'Data_length',
+				0 as 'Max_data_length',
+				0 as 'Index_length',
+				'NULL' as 'Data_free',
+				0 as 'Auto_increment',
+				created_time as 'Create_time',
+				'NULL' as 'Update_time',
+				'NULL' as 'Check_time',
+				'utf-8' as 'Collation',
+				'NULL' as 'Checksum',
+				'' as 'Create_options',
+				rel_comment as 'Comment',
+				owner as 'Role_id',
+				'-' as 'Role_name'
+			from
+				%s.mo_tables
+			where
+				reldatabase = '%s'
+				and relkind != '%s'
+				and relname != '%s'
+				and relname not like '%s'
+				and (%s)`
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
 
 	if stmt.Where != nil {
@@ -1206,11 +1233,12 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSQLStmt(ctx, sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
@@ -1218,6 +1246,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
@@ -1229,6 +1258,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}

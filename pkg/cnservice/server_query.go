@@ -16,11 +16,13 @@ package cnservice
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -48,6 +50,8 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -178,6 +182,39 @@ func (s *service) handleShowProcessList(ctx context.Context, req *query.Request,
 	return nil
 }
 
+func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.RunTask == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	s.task.Lock()
+	defer s.task.Unlock()
+
+	code := task.TaskCode(req.RunTask.TaskCode)
+	if s.task.runner == nil {
+		resp.RunTask = &query.RunTaskResponse{
+			Result: "Task Runner Not Ready",
+		}
+		return nil
+	}
+	exec := s.task.runner.GetExecutor(code)
+	if exec == nil {
+		resp.RunTask = &query.RunTaskResponse{
+			Result: "Task Not Found",
+		}
+		return nil
+	}
+	go func() {
+		_ = exec(context.Background(), &task.AsyncTask{
+			ID:       0,
+			Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
+		})
+	}()
+	resp.RunTask = &query.RunTaskResponse{
+		Result: "OK",
+	}
+	return nil
+}
+
 // processList returns all the sessions. For sys tenant, return all sessions; but for common
 // tenant, just return the sessions belong to the tenant.
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
@@ -260,5 +297,24 @@ func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, re
 		}
 	})
 
+	return nil
+}
+
+func (s *service) handleRemoveRemoteLockTable(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response) error {
+	removed, err := s.lockService.CloseRemoteLockTable(
+		req.RemoveRemoteLockTable.GroupID,
+		req.RemoveRemoteLockTable.TableID,
+		req.RemoveRemoteLockTable.Version)
+	if err != nil {
+		return err
+	}
+
+	resp.RemoveRemoteLockTable = &query.RemoveRemoteLockTableResponse{}
+	if removed {
+		resp.RemoveRemoteLockTable.Count = 1
+	}
 	return nil
 }

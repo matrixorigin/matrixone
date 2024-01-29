@@ -2,7 +2,7 @@ select 1 as account, 1 as accounts, 1 as modify, 1 as action, 1 as against, 1 as
 
 select 1 as auto_random, 1 as avg_row_length, 1 as avg, 1 as bsi, 1 as begin;
 
-select 1 as _binary, 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
+select 1 as bindings, 1 as bit, 1 as bit_cast, 1 as bool;
 
 select 1 as boolean, 1 as btree, 1 as ivfflat, 1 as bit_or, 1 as bit_and, 1 as cancel, 1 as charset, 1 as checksum;
 
@@ -81,3 +81,17 @@ select 1 as sequences, 1 as sequence, 1 as increment, 1 as cycle, 1 as minvalue,
 select 1 as publication, 1 as subscriptions, 1 as publications, 1 as roles, 1 as backend, 1 as servers, 1 as stage, 1 as stages, 1 as credentials;
 
 select 1 as vecf32, 1 as vecf64, 1 as backup, 1 as filesystem, 1 as handler, 1 as sample, 1 as percent, 1 as ownership;
+
+drop database if exists test;
+create database test;
+use test;
+create table test01(`db_type` blob default null);
+insert into test01 values (_binary "relational database");
+insert into test01 values (_binary "nosql Database");
+insert into test01 values (_binary "object-oriented database");
+insert into test01 values (_binary "hierarchical database");
+insert into test01 values (_binary "network database");
+insert into test01 values (_binary "in-memory database");
+insert into test01 values (null);
+select * from test01;
+drop database test;

@@ -663,10 +663,8 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, ts types.TS,
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
 		if len(b.dataDelBatch.Vecs) == 2 {
-			b.dataDelBatch.AddVector(
-				delBatch.Attrs[2],
-				containers.MakeVector(*delBatch.Vecs[2].GetType(), common.LogtailAllocator),
-			)
+			b.dataDelBatch.AddVector(catalog.AttrPKVal,
+				containers.MakeVector(*delBatch.GetVectorByName(catalog.AttrPKVal).GetType(), common.LogtailAllocator))
 		}
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore

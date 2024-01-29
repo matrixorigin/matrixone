@@ -142,7 +142,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -465,7 +465,12 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		buf.WriteRune(ch)
 	}
 	sql := buf.String()
-	_, err := getRewriteSQLStmt(ctx, sql)
+	stmt, err := getRewriteSQLStmt(ctx, sql)
+	defer func() {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return "", err
 	}

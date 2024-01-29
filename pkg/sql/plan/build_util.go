@@ -130,10 +130,6 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				} else {
 					width = types.MaxVarcharLen
 				}
-
-				if fstr == "varbinary" {
-					return nil, moerr.NewSyntaxError(ctx, "Should specify width to varbinary type")
-				}
 			}
 
 			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
@@ -475,7 +471,8 @@ func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
 
 // Check whether the table column name is an internal key
 func checkTableColumnNameValid(name string) bool {
-	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName {
+	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
+		name == catalog.TableTailAttrCommitTs || name == catalog.TableTailAttrAborted || name == catalog.TableTailAttrPKVal {
 		return false
 	}
 	return true

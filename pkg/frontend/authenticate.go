@@ -1449,6 +1449,8 @@ const (
 
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
+	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
+
 	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
@@ -1601,6 +1603,9 @@ func getSqlForCheckStageStatus(ctx context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
 
+func getSqlForCheckUdfWithDb(dbName string) string {
+	return fmt.Sprintf(checkUdfWithDb, dbName)
+}
 func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (string, error) {
 	err := inputNameIsInvalid(ctx, stage)
 	if err != nil {
@@ -4500,6 +4505,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var bodyStr string
 	var checkDatabase string
 	var dbName string
+	var dbExists bool
 	var funcId int64
 	var erArray []ExecResult
 
@@ -4514,6 +4520,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	// validate database name and signature (name + args)
@@ -4597,6 +4612,81 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	}
 	// no such function
 	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
+}
+
+func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement, rm rmPkg) (err error) {
+	var sql string
+	var bodyStr string
+	var funcId int64
+	var erArray []ExecResult
+	var dbName string
+
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		dbName = string(st.Name)
+	default:
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// validate database name and signature (name + args)
+	bh.ClearExecResultSet()
+	sql = getSqlForCheckUdfWithDb(dbName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			funcId, err = erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			bodyStr, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return err
+			}
+
+			handleArgMatch := func() (rtnErr error) {
+				//put it into the single transaction
+				rtnErr = bh.Exec(ctx, "begin;")
+				defer func() {
+					rtnErr = finishTxn(ctx, bh, rtnErr)
+					if rtnErr == nil {
+						u := &function.NonSqlUdfBody{}
+						if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+							rm(u.Body)
+						}
+					}
+				}()
+				if rtnErr != nil {
+					return rtnErr
+				}
+
+				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
+
+				rtnErr = bh.Exec(ctx, sql)
+				if rtnErr != nil {
+					return rtnErr
+				}
+				return rtnErr
+			}
+
+			err = handleArgMatch()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return err
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -5928,6 +6018,14 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							typ:                   scanTyp,
 							databaseName:          node.ObjRef.GetSchemaName(),
 							tableName:             node.ObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableOperation,
+						})
+					} else if node.ParentObjRef != nil {
+						appendPt(privilegeTips{
+							typ:                   scanTyp,
+							databaseName:          node.ParentObjRef.GetSchemaName(),
+							tableName:             node.ParentObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
 							clusterTableOperation: clusterTableOperation,
 						})
@@ -7657,6 +7755,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 	return false, nil
 }
 
+func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	var sqlForCheckDatabase string
+	var erArray []ExecResult
+	var err error
+	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	defer span.End()
+	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sqlForCheckDatabase)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) (err error) {
 	var exists bool
@@ -8435,6 +8560,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
+	var dbExists bool
 	var checkExistence string
 	var argsJson []byte
 	var argsCondition string
@@ -8451,6 +8577,15 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
