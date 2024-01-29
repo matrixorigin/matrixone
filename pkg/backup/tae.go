@@ -148,10 +148,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			files[oName.String()] = dentry
 		}
 	}
+	copyFiles := make([]*fileservice.DirEntry, 0)
 	for _, dentry := range files {
 		if dentry.IsDir {
 			panic("not support dir")
 		}
+		copyFiles = append(copyFiles, dentry)
 		params := blockio.BuildPrefetchFileParams(srcFs, dentry.Name)
 		err := blockio.PrefetchWithMerged(params)
 		if err != nil {
@@ -161,7 +163,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
-	for _, dentry := range files {
+	for _, dentry := range copyFiles {
 		if dentry.IsDir {
 			panic("not support dir")
 		}
