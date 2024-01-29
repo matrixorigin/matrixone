@@ -994,8 +994,14 @@ func (tbl *txnTable) tryFastRanges(
 			}
 
 			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-					return true
+				if isVec {
+					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+						return true
+					}
+				} else {
+					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+						return true
+					}
 				}
 
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
