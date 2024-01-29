@@ -191,7 +191,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
+	//for system_metrics.metric and system.statement_info,
+	//it is special under the no sys account, should switch into the sys account first.
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
+	}
+	if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
