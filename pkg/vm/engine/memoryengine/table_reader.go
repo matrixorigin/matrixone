@@ -40,7 +40,7 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte) (readers []engine.Reader, err error) {
+func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool) (readers []engine.Reader, err error) {
 	readers = make([]engine.Reader, parallel)
 	shardIDs := ShardIdSlice(bytes)
 

@@ -604,9 +604,10 @@ type blockReader struct {
 	withFilterMixin
 
 	// used for prefetch
-	infos       [][]*objectio.BlockInfo
-	steps       []int
-	currentStep int
+	dontPrefetch bool
+	infos        [][]*objectio.BlockInfo
+	steps        []int
+	currentStep  int
 
 	scanType int
 	// block list to scan
