@@ -102,3 +102,20 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 		}()
 	})
 }
+
+func (s *service) CloseRemoteLockTable(
+	group uint32,
+	tableID uint64,
+	version uint64) (bool, error) {
+	removed := false
+	s.tableGroups.removeWithFilter(func(id uint64, lt lockTable) bool {
+		ok := id == tableID &&
+			lt.getBind().Version == version &&
+			lt.getBind().Group == group
+		if ok {
+			removed = ok
+		}
+		return ok
+	})
+	return removed, nil
+}
