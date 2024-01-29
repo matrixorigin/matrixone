@@ -1247,8 +1247,8 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		}
 	}
 
-	// 3. if table does not have data, we stop here.
-	totalCnt, err := s.handleIndexAndPKColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	// 3. get count of secondary index column in original table
+	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}
