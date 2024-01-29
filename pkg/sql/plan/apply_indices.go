@@ -258,17 +258,18 @@ END0:
 		}
 
 		numParts := len(idxDef.Parts)
+		numKeyParts := numParts
 		if !idxDef.Unique {
-			numParts--
+			numKeyParts--
 		}
-		if numParts == 0 {
+		if numKeyParts == 0 {
 			continue
 		}
 
 		usePartialIndex := false
 
 		filterIdx = filterIdx[:0]
-		for i := 0; i < numParts; i++ {
+		for i := 0; i < numKeyParts; i++ {
 			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
 			idx, ok := col2filter[colIdx]
 			if !ok {
@@ -294,7 +295,7 @@ END0:
 		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
 		var idxFilter *plan.Expr
-		if idxDef.Unique && numParts == 1 {
+		if numParts == 1 {
 			idx := filterIdx[0]
 
 			args := node.FilterList[idx].GetF().Args
@@ -313,7 +314,7 @@ END0:
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
 			funcName := "="
-			if !idxDef.Unique || len(filterIdx) < numParts {
+			if len(filterIdx) < numParts {
 				funcName = "prefix_eq"
 			}
 			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
