@@ -785,8 +785,8 @@ type BaseCollector struct {
 	Usage struct {
 		// db, tbl deletes
 		Deletes        []interface{}
-		SegInserts     []*catalog.ObjectEntry
-		SegDeletes     []*catalog.ObjectEntry
+		ObjInserts     []*catalog.ObjectEntry
+		ObjDeletes     []*catalog.ObjectEntry
 		ReservedAccIds map[uint64]struct{}
 	}
 
@@ -3041,12 +3041,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if objNode.HasDropCommitted() {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 			}
 		} else {
 			// create and non-append, record into the usage ins bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegInserts = append(collector.Usage.SegInserts, entry)
+				collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
 			}
 		}
 
@@ -3073,7 +3073,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+		collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
