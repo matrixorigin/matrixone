@@ -5,7 +5,7 @@ use fk_self_refer;
 ----create fk on a primary key----
 -- test only one fk self refer in a table
 drop table if exists t1;
-create table t1(a int primary key,b int, foreign key fk1(b) references t1(a));
+create table t1(a int primary key,b int, constraint `c1` foreign key fk1(b) references t1(a));
 show tables;
 show create table t1;
 insert into t1 values (1,1);
@@ -84,7 +84,7 @@ delete from t1 where a = 3;
 ----create fk on a unique key----
 -- test only one fk self refer in a table
 drop table if exists t1;
-create table t1(a int unique key,b int, foreign key fk1(b) references t1(a));
+create table t1(a int unique key,b int,constraint `c1` foreign key fk1(b) references t1(a));
 show tables;
 show create table t1;
 insert into t1 values (1,1);

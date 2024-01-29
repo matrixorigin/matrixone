@@ -262,6 +262,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	*/
 	oldFks := make(map[*plan.ForeignKeyDef]bool)
 	fksHasEmptyName := make([]*plan.ForeignKeyDef, 0)
+	newAddedFkNames := make(map[string]bool)
 	oldFkNames := make(map[string]bool)
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
@@ -357,8 +358,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		case *plan.AlterTable_Action_AddFk:
 			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrForeignKeyDuplicateName(c.ctx, act.AddFk.Fkey.Name)
+				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
 			}
+			if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
+			}
+			newAddedFkNames[act.AddFk.Fkey.Name] = true
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
@@ -574,7 +579,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, fkey := range t.Fkeys {
 				//For compatibility, regenerate constraint name for the constraint with empty name.
 				if len(fkey.Name) == 0 {
-					fkey.Name = plan2.GenConstraintName(tblName)
+					fkey.Name = plan2.GenConstraintName()
 					newFkeys = append(newFkeys, fkey)
 				} else if _, ok := removeRefChildTbls[fkey.Name]; !ok {
 					newFkeys = append(newFkeys, fkey)

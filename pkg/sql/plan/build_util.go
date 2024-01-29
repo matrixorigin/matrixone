@@ -493,8 +493,94 @@ func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	return false
 }
 
-func genSqlsForFkRefer(dbName string, tableDef *TableDef) (detectSqls []string) {
-	tblName := tableDef.Name
+//func genSqlsForFkSelfRefer(dbName string, tableDef *TableDef) (detectSqls []string) {
+//	tblName := tableDef.Name
+//
+//	makeSelectList := func(table string, strs []string) string {
+//		bb := strings.Builder{}
+//		for i, str := range strs {
+//			if i > 0 {
+//				bb.WriteByte(',')
+//			}
+//			//table
+//			bb.WriteByte('`')
+//			bb.WriteString(table)
+//			bb.WriteByte('`')
+//			bb.WriteByte('.')
+//			//column
+//			bb.WriteByte('`')
+//			bb.WriteString(str)
+//			bb.WriteByte('`')
+//		}
+//		return bb.String()
+//	}
+//
+//	makeWhere := func(table string, strs []string) string {
+//		bb := strings.Builder{}
+//		for i, str := range strs {
+//			if i > 0 {
+//				bb.WriteString(" and ")
+//			}
+//			//table
+//			bb.WriteByte('`')
+//			bb.WriteString(table)
+//			bb.WriteByte('`')
+//			bb.WriteByte('.')
+//			//column
+//			bb.WriteByte('`')
+//			bb.WriteString(str)
+//			bb.WriteByte('`')
+//			//is not null
+//			bb.WriteString(" is not null")
+//		}
+//		bb.WriteByte(' ')
+//		return bb.String()
+//	}
+//
+//	if len(tableDef.Fkeys) > 0 {
+//		colIdToName := make(map[uint64]string)
+//		for _, col := range tableDef.Cols {
+//			colIdToName[col.ColId] = col.Name
+//		}
+//		//check fk self refer
+//		//for fk self refer,generate detect
+//		for _, fkey := range tableDef.Fkeys {
+//			if fkey.ForeignTbl == 0 {
+//				//fk cols
+//				fkCols := make([]string, 0)
+//				//refer cols
+//				referCols := make([]string, 0)
+//				for _, fkColId := range fkey.Cols {
+//					fkCols = append(fkCols, colIdToName[fkColId])
+//				}
+//				for _, referColId := range fkey.ForeignCols {
+//					referCols = append(referCols, colIdToName[referColId])
+//				}
+//
+//				xtable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+//				where := fmt.Sprintf("where %s", makeWhere(tblName, fkCols))
+//				sql0 := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
+//					makeSelectList(tblName, fkCols),
+//					xtable,
+//					where,
+//					makeSelectList(tblName, referCols),
+//					xtable,
+//				)
+//
+//				//make detect sql
+//				sql := strings.Join([]string{
+//					"select count(*) = 0 from (",
+//					sql0,
+//					")",
+//				}, " ")
+//				detectSqls = append(detectSqls, sql)
+//			}
+//		}
+//	}
+//	return
+//}
+
+func genSqlsForFkSelfRefer(dbName, tblName string, cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) (detectSqls []string) {
 
 	wrap := func(table string, strs []string) string {
 		bb := strings.Builder{}
@@ -537,14 +623,14 @@ func genSqlsForFkRefer(dbName string, tableDef *TableDef) (detectSqls []string) 
 		return bb.String()
 	}
 
-	if len(tableDef.Fkeys) > 0 {
+	if len(fkeys) > 0 {
 		colIdToName := make(map[uint64]string)
-		for _, col := range tableDef.Cols {
+		for _, col := range cols {
 			colIdToName[col.ColId] = col.Name
 		}
 		//check fk self refer
 		//for fk self refer,generate detect
-		for _, fkey := range tableDef.Fkeys {
+		for _, fkey := range fkeys {
 			if fkey.ForeignTbl == 0 {
 				//fk cols
 				fkCols := make([]string, 0)
@@ -578,4 +664,114 @@ func genSqlsForFkRefer(dbName string, tableDef *TableDef) (detectSqls []string) 
 		}
 	}
 	return
+}
+
+func makeSelectList(table string, strs []string) string {
+	bb := strings.Builder{}
+	for i, str := range strs {
+		if i > 0 {
+			bb.WriteByte(',')
+		}
+		//table
+		bb.WriteByte('`')
+		bb.WriteString(table)
+		bb.WriteByte('`')
+		bb.WriteByte('.')
+		//column
+		bb.WriteByte('`')
+		bb.WriteString(str)
+		bb.WriteByte('`')
+	}
+	return bb.String()
+}
+
+func makeWhere(table string, strs []string) string {
+	bb := strings.Builder{}
+	for i, str := range strs {
+		if i > 0 {
+			bb.WriteString(" and ")
+		}
+		//table
+		bb.WriteByte('`')
+		bb.WriteString(table)
+		bb.WriteByte('`')
+		bb.WriteByte('.')
+		//column
+		bb.WriteByte('`')
+		bb.WriteString(str)
+		bb.WriteByte('`')
+		//is not null
+		bb.WriteString(" is not null")
+	}
+	bb.WriteByte(' ')
+	return bb.String()
+}
+
+func colIdsToNames(ctx context.Context, colIds []uint64, colDefs []*plan.ColDef) ([]string, error) {
+	colId2Name := make(map[uint64]string)
+	for _, def := range colDefs {
+		colId2Name[def.ColId] = def.Name
+	}
+	names := make([]string, 0)
+	for _, colId := range colIds {
+		if name, has := colId2Name[colId]; !has {
+			return nil, moerr.NewInternalError(ctx, fmt.Sprintf("colId %d does exist", colId))
+		} else {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+func genSqlForCheckFKConstraints(ctx context.Context,
+	fkey *plan.ForeignKeyDef,
+	childDbName, childTblName string, colsOfChild []*plan.ColDef,
+	parentDbName, parentTblName string, colsOfParent []*plan.ColDef) (string, error) {
+
+	//fk column names
+	fkCols, err := colIdsToNames(ctx, fkey.Cols, colsOfChild)
+	if err != nil {
+		return "", err
+	}
+	//referred column names
+	referCols, err := colIdsToNames(ctx, fkey.ForeignCols, colsOfParent)
+	if err != nil {
+		return "", err
+	}
+
+	childTableClause := fmt.Sprintf("`%s`.`%s`", childDbName, childTblName)
+	parentTableClause := fmt.Sprintf("`%s`.`%s`", parentDbName, parentTblName)
+	where := fmt.Sprintf("where %s", makeWhere(childTblName, fkCols))
+	except := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
+		makeSelectList(childTblName, fkCols),
+		childTableClause,
+		where,
+		makeSelectList(parentTblName, referCols),
+		parentTableClause,
+	)
+
+	//make detect sql
+	sql := strings.Join([]string{
+		"select count(*) = 0 from (",
+		except,
+		")",
+	}, " ")
+	return sql, nil
+}
+
+func genSqlsForCheckFKSelfRefer(ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
+	ret := make([]string, 0)
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		sql, err := genSqlForCheckFKConstraints(ctx, fkey, dbName, tblName, cols, dbName, tblName, cols)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, sql)
+	}
+	return ret, nil
 }

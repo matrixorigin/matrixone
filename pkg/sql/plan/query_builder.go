@@ -2572,7 +2572,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
 			}
 
-			// For MySQL compatibility, wrap bare ColRefs in any_value()
+            // For MySQL compatibility, makeSelectList bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
 			}

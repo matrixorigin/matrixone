@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
-	"os"
-	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -1063,7 +1061,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if createTable.Temporary {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 			}
-			err := adjustConstraintName(ctx.GetContext(), createTable.TableDef.GetName(), def)
+			err := adjustConstraintName(ctx.GetContext(), def)
 			if err != nil {
 				return err
 			}
@@ -2392,18 +2390,20 @@ func constraintNameAreWhiteSpaces(constraint string) bool {
 	return len(constraint) != 0 && len(strings.TrimSpace(constraint)) == 0
 }
 
-// genConstraintName generates a constraint name
-func GenConstraintName(tableName string) string {
+// GenConstraintName yields uuid
+func GenConstraintName() string {
 	constraintId, _ := uuid.NewV7()
-	return fmt.Sprintf("%s_%v", tableName, constraintId)
+	return constraintId.String()
 }
 
-func adjustConstraintName(ctx context.Context, tableName string, def *tree.ForeignKey) error {
+func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 	//user add a constraint name
 	if constraintNameAreWhiteSpaces(def.ConstraintSymbol) {
 		return moerr.NewErrWrongNameForIndex(ctx, def.ConstraintSymbol)
 	} else {
-		def.ConstraintSymbol = GenConstraintName(tableName)
+		if len(def.ConstraintSymbol) == 0 {
+			def.ConstraintSymbol = GenConstraintName()
+		}
 	}
 	return nil
 }
@@ -2511,7 +2511,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAdd:
 			switch def := opt.Def.(type) {
 			case *tree.ForeignKey:
-				err = adjustConstraintName(ctx.GetContext(), tableName, def)
+				err = adjustConstraintName(ctx.GetContext(), def)
 				if err != nil {
 					return nil, err
 				}
@@ -2530,7 +2530,30 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				detectSqls = append(detectSqls, genSqlsForFkRefer(databaseName, tableDef)...)
+				if fkData.IsSelfRefer {
+					err = checkFkColsAreValid(ctx, fkData, tableDef)
+					if err != nil {
+						return nil, err
+					}
+					sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), databaseName, tableDef.Name, tableDef.Cols, []*plan.ForeignKeyDef{fkData.Def})
+					if err != nil {
+						return nil, err
+					}
+					detectSqls = append(detectSqls, sqls...)
+				} else {
+					//get table def of parent table
+					_, parentTableDef := ctx.Resolve(fkData.parentDbName, fkData.parentTableName)
+					if parentTableDef == nil {
+						return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkData.parentDbName, fkData.parentTableName)
+					}
+					sql, err := genSqlForCheckFKConstraints(ctx.GetContext(), fkData.Def,
+						databaseName, tableDef.Name, tableDef.Cols,
+						fkData.parentDbName, fkData.parentTableName, parentTableDef.Cols)
+					if err != nil {
+						return nil, err
+					}
+					detectSqls = append(detectSqls, sql)
+				}
 			case *tree.UniqueIndex:
 				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 				if err != nil {
@@ -3030,10 +3053,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		parentDbName = ctx.DefaultDatabase()
 	}
 
-	for _, part := range refer.KeyParts {
-		fmt.Fprintf(os.Stderr, "refer name %v\n", part.ColName.Parts[0])
-	}
-
 	//foreign key reference to itself
 	if IsFkSelfRefer(parentDbName, parentTableName, dbName, tableDef.Name) {
 		//should be handled later for fk self reference
@@ -3120,9 +3139,6 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 		columnNamePos[col.Name] = i
 	}
 
-	fmt.Fprintf(os.Stderr, "columnIdPos: %v \n", columnIdPos)
-	fmt.Fprintf(os.Stderr, "columnNamePos: %v \n", columnNamePos)
-
 	//2. check if the referred column does not exist in the parent table
 	for _, keyPart := range fkData.Refer.KeyParts {
 		colName := keyPart.ColName.Parts[0]
@@ -3143,7 +3159,6 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 
 	//3. collect pk column info of the parent table
 	if parentTableDef.Pkey != nil {
-		fmt.Fprintf(os.Stderr, "primary key : %v\n", parentTableDef.Pkey.Names)
 		collectIndexColumn(parentTableDef.Pkey.Names)
 	}
 
@@ -3152,7 +3167,6 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 	// now tableRef.Indices are empty, you can not test it
 	for _, index := range parentTableDef.Indexes {
 		if index.Unique {
-			fmt.Fprintf(os.Stderr, "unique key : %v\n", index.Parts)
 			collectIndexColumn(index.Parts)
 		}
 	}
@@ -3187,9 +3201,6 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *fkData, parentTableDef *Ta
 	}
 
 	if len(matchCol) == 0 {
-		fmt.Fprintf(os.Stderr, "fk %v\n", fkData.Cols.Cols)
-		fmt.Fprintf(os.Stderr, "%v\n", uniqueColumns)
-		debug.PrintStack()
 		return moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
 	} else {
 		fkData.Def.ForeignCols = matchCol

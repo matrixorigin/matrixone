@@ -8,23 +8,23 @@ d int, e int,
 f int, g int,
 primary key (a,b),
 unique key (a,c),
-foreign key fk1(d,e) references t1(a,b),
-foreign key fk2(f,g) references t1(a,c)
+constraint `c1` foreign key fk1(d,e) references t1(a,b),
+constraint `c2` foreign key fk2(f,g) references t1(a,c)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`f`,`g`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `c1` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`f`,`g`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,2,1,1,2,1,1);
 insert into t1 values (1,3,2,1,3,1,2);
 insert into t1 values (1,4,3,1,5,1,2);
-Cannot delete or update a parent row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into t1 values (1,4,3,1,4,1,4);
-Cannot delete or update a parent row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into t1 values (1,4,3,1,4,1,3);
 update t1 set b = 5 where b = 4;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set e = 5 where b = 4;
-Cannot delete or update a parent row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update t1 set e = NULL where b = 4;
 update t1 set b = 3 where b = 4;
 Duplicate entry '(1,3)' for key '__mo_cpkey_col'
@@ -32,7 +32,7 @@ update t1 set b = 5 where b = 4;
 update t1 set c = 4 where b = 5;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set g = 4 where b = 5;
-Cannot delete or update a parent row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update t1 set g = 2 where b = 5;
 update t1 set c = 2 where b = 5;
 Duplicate entry '(1,2)' for key '__mo_index_idx_col'
@@ -76,14 +76,14 @@ h int, i int,
 j int, k int,
 primary key (a,b),
 unique key (a,c),
-foreign key fk1(d,e) references t1(a,b),
-foreign key fk2(f,h) references t1(a,c),
-foreign key fk3(h,i) references p1(pa,pb),
-foreign key fk4(h,k) references q2(qa,qb)
+constraint `c1` foreign key fk1(d,e) references t1(a,b),
+constraint `c2` foreign key fk2(f,h) references t1(a,c),
+constraint `c3` foreign key fk3(h,i) references p1(pa,pb),
+constraint `c4` foreign key fk4(h,k) references q2(qa,qb)
 );
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\n`h` INT DEFAULT NULL,\n`i` INT DEFAULT NULL,\n`j` INT DEFAULT NULL,\n`k` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`f`,`h`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`h`,`i`) REFERENCES `p1` (`pa`,`pb`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`h`,`k`) REFERENCES `q2` (`qa`,`qb`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\n`h` INT DEFAULT NULL,\n`i` INT DEFAULT NULL,\n`j` INT DEFAULT NULL,\n`k` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `c1` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`f`,`h`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c3` FOREIGN KEY (`h`,`i`) REFERENCES `p1` (`pa`,`pb`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c4` FOREIGN KEY (`h`,`k`) REFERENCES `q2` (`qa`,`qb`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,2,3,1,2,1,3,4,4,4,4);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into p1 values (4,4);
@@ -130,7 +130,7 @@ delete from t1 where b = 2;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 drop table if exists p1;
 internal error: can not drop table 'p1' referenced by some foreign key constraint
-create table t1(a int primary key,b int, foreign key fk1(b) references t1(a));
+create table t1(a int primary key,b int,constraint `c1` foreign key fk1(b) references t1(a));
 table t1 already exists
 show tables;
 Tables_in_fk_self_refer3
@@ -139,7 +139,7 @@ q2
 t1
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\n`h` INT DEFAULT NULL,\n`i` INT DEFAULT NULL,\n`j` INT DEFAULT NULL,\n`k` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`f`,`h`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`h`,`i`) REFERENCES `p1` (`pa`,`pb`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `` FOREIGN KEY (`h`,`k`) REFERENCES `q2` (`qa`,`qb`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT NOT NULL,\n`c` INT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` INT DEFAULT NULL,\n`f` INT DEFAULT NULL,\n`g` INT DEFAULT NULL,\n`h` INT DEFAULT NULL,\n`i` INT DEFAULT NULL,\n`j` INT DEFAULT NULL,\n`k` INT DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `a` (`a`,`c`),\nCONSTRAINT `c1` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c2` FOREIGN KEY (`f`,`h`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c3` FOREIGN KEY (`h`,`i`) REFERENCES `p1` (`pa`,`pb`) ON DELETE RESTRICT ON UPDATE RESTRICT,\nCONSTRAINT `c4` FOREIGN KEY (`h`,`k`) REFERENCES `q2` (`qa`,`qb`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,1);
 Column count doesn't match value count at row 1
 insert into t1 values (2,1);

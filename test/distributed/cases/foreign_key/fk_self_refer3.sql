@@ -11,8 +11,8 @@ create table t1(a int, b int,
                 f int, g int,
                 primary key (a,b),
                 unique key (a,c),
-                foreign key fk1(d,e) references t1(a,b),
-                foreign key fk2(f,g) references t1(a,c)
+                constraint `c1` foreign key fk1(d,e) references t1(a,b),
+                constraint `c2` foreign key fk2(f,g) references t1(a,c)
 );
 show create table t1;
 
@@ -116,10 +116,10 @@ create table t1(a int, b int,
                 j int, k int,
                 primary key (a,b),
                 unique key (a,c),
-                foreign key fk1(d,e) references t1(a,b),
-                foreign key fk2(f,h) references t1(a,c),
-                foreign key fk3(h,i) references p1(pa,pb),
-                foreign key fk4(h,k) references q2(qa,qb)
+                constraint `c1` foreign key fk1(d,e) references t1(a,b),
+                constraint `c2` foreign key fk2(f,h) references t1(a,c),
+                constraint `c3` foreign key fk3(h,i) references p1(pa,pb),
+                constraint `c4` foreign key fk4(h,k) references q2(qa,qb)
 );
 show create table t1;
 
@@ -204,7 +204,7 @@ delete from t1 where b = 2;
 
 ---delete or update rows on fk self table
 drop table if exists p1;
-create table t1(a int primary key,b int, foreign key fk1(b) references t1(a));
+create table t1(a int primary key,b int,constraint `c1` foreign key fk1(b) references t1(a));
 show tables;
 show create table t1;
 insert into t1 values (1,1);

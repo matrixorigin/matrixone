@@ -77,7 +77,12 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 			return nil, err
 		}
 		putDmlPlanCtx(upPlanCtx)
-		detectSqls = append(detectSqls, genSqlsForFkRefer(tblInfo.objRef[i].SchemaName, tableDef)...)
+		sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+			tblInfo.objRef[i].SchemaName, tableDef.Name, tableDef.Cols, tableDef.Fkeys)
+		if err != nil {
+			return nil, err
+		}
+		detectSqls = append(detectSqls, sqls...)
 	}
 	if err != nil {
 		return nil, err

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/constant"
-	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -281,7 +280,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		var fkTableDef *TableDef
 
 		//fk self reference
-		fmt.Fprintf(os.Stderr, "fk parent %v\n", fk.ForeignTbl)
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
@@ -291,15 +289,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		fkColIdToName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
 			fkColIdToName[col.ColId] = col.Name
-			fmt.Fprintf(os.Stderr, "parent: %s -> %v\n", col.Name, col.ColId)
 		}
 		fkColNames := make([]string, len(fk.ForeignCols))
-		fmt.Fprintf(os.Stderr, "ForeignCols %v\n", fk.ForeignCols)
 		for i, colId := range fk.ForeignCols {
 			fkColNames[i] = fkColIdToName[colId]
 		}
-		fmt.Fprintf(os.Stderr, "fkColNames %v\n", fkColNames)
-
 		if rowCount != 0 {
 			createStr += ",\n"
 		}

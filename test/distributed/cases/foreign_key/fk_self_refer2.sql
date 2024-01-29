@@ -6,8 +6,8 @@ drop table if exists t1;
 ----create two FKs on a primary key----
 -- test only two FKs self refer in a table
 create table t1(a int primary key,b int,c int,
-                foreign key fk1(b) references t1(a),
-                foreign key fk2(c) references t1(a)
+                constraint `c1` foreign key fk1(b) references t1(a),
+                constraint `c2` foreign key fk2(c) references t1(a)
 );
 show create table t1;
 
@@ -93,8 +93,8 @@ drop table if exists t1;
 ----create two FKs on a unique key----
 -- test only two FKs self refer in a table
 create table t1(a int unique key,b int,c int,
-                foreign key fk1(b) references t1(a),
-                foreign key fk2(c) references t1(a)
+                constraint `c1` foreign key fk1(b) references t1(a),
+                constraint `c2` foreign key fk2(c) references t1(a)
 );
 show create table t1;
 
@@ -208,8 +208,8 @@ drop table if exists t1;
 create table t1(a int primary key,
                 b int unique key,
                 c int,
-                foreign key fk1(c) references t1(a),
-                foreign key fk2(c) references t1(b)
+                constraint `c1` foreign key fk1(c) references t1(a),
+                constraint `c2` foreign key fk2(c) references t1(b)
 );
 show create table t1;
 
