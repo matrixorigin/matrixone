@@ -244,7 +244,7 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	deletes, segDeletes, segInserts := mockDeletesAndInserts(
 		usages, delDbIds, delTblIds, delSegIdxes, insSegIdxes)
 
-	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
+	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs(), false)
 	iCollector.UsageMemo = memo
 	defer iCollector.Close()
 
