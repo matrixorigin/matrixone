@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -35,6 +37,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
@@ -100,7 +103,15 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
+	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []objectio.ObjectName
+	defer func() {
+		logutil.Info("backup", common.OperationField("exec backup"),
+			common.AnyField("load checkpoint cost", loadDuration),
+			common.AnyField("copy file cost", copyDuration),
+			common.AnyField("rewrite checkpoint cost", reWriteDuration))
+	}()
+	now := time.Now()
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -134,6 +145,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		mergeGCFile(gcFiles, gcFileMap)
 		oNames = append(oNames, oneNames...)
 	}
+	loadDuration += time.Since(now)
 	for _, oName := range oNames {
 		if files[oName.String()] == nil {
 			dentry, err := srcFs.StatFile(ctx, oName.String())
@@ -149,6 +161,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 	}
 	copyFiles := make([]*fileservice.DirEntry, 0)
+	now = time.Now()
 	for _, dentry := range files {
 		if dentry.IsDir {
 			panic("not support dir")
@@ -183,7 +196,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			checksum: checksum,
 		})
 	}
-
+	copyDuration += time.Since(now)
 	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp")
 	if err != nil {
 		return err
@@ -194,6 +207,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
+	now = time.Now()
 	if trimInfo != "" {
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
@@ -246,6 +260,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			size: dentry.Size,
 		})
 	}
+	reWriteDuration += time.Since(now)
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {
