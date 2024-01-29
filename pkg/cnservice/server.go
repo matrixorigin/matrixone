@@ -104,6 +104,22 @@ func NewService(
 		gossipNode:  gossipNode,
 	}
 
+	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
+		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
+		messageAcquirer func() morpc.Message) error {
+		return nil
+	}
+
 	for _, opt := range options {
 		opt(srv)
 	}
@@ -192,22 +208,6 @@ func NewService(
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
-
-	srv.requestHandler = func(ctx context.Context,
-		cnAddr string,
-		message morpc.Message,
-		cs morpc.ClientSession,
-		engine engine.Engine,
-		fService fileservice.FileService,
-		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
-		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
-		cli client.TxnClient,
-		aicm *defines.AutoIncrCacheManager,
-		messageAcquirer func() morpc.Message) error {
-		return nil
-	}
 
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
