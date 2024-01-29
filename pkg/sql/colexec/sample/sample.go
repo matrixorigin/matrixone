@@ -40,8 +40,18 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 		buf.WriteString(fmt.Sprintf("merge sample %d rows ", arg.Rows))
 	case sampleByRow:
 		buf.WriteString(fmt.Sprintf(" sample %d rows ", arg.Rows))
+		if arg.UsingBlock {
+			buf.WriteString("using blocks ")
+		} else {
+			buf.WriteString("using rows ")
+		}
 	case sampleByPercent:
 		buf.WriteString(fmt.Sprintf(" sample %.2f percent ", arg.Percents))
+		if arg.UsingBlock {
+			buf.WriteString("using blocks ")
+		} else {
+			buf.WriteString("using rows ")
+		}
 	default:
 		buf.WriteString("unknown sample type")
 	}
@@ -158,7 +168,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	anal.Output(result.Batch, arg.info.IsLast)
 	arg.buf = result.Batch
-	return result, err
+	return result, nil
 }
 
 func getGroupKeyWidth(exprList []*plan.Expr) (keyWidth int, groupKeyNullable bool) {
