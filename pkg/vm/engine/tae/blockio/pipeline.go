@@ -154,11 +154,7 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 			res = &tasks.JobResult{}
 			var name string
 			if params.reader == nil {
-				if params.fileName != "" {
-					name = params.fileName
-				} else {
-					name = params.key.Name().String()
-				}
+				name = params.key.Name().String()
 			} else {
 				name = params.reader.GetName()
 			}
@@ -430,7 +426,7 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
 		option := item.(PrefetchParams)
-		if len(option.ids) == 0 && option.fileName == "" {
+		if len(option.ids) == 0 && !option.prefetchFile {
 			job := prefetchMetaJob(
 				context.Background(),
 				item.(PrefetchParams),

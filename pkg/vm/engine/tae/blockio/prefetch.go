@@ -15,6 +15,7 @@
 package blockio
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -23,11 +24,11 @@ import (
 // provides the merge function, which can merge the PrefetchParams requests of
 // multiple blocks in an object/file
 type PrefetchParams struct {
-	ids      map[uint16]*objectio.ReadBlockOptions
-	fs       fileservice.FileService
-	key      objectio.Location
-	reader   *objectio.ObjectReader
-	fileName string
+	ids          map[uint16]*objectio.ReadBlockOptions
+	fs           fileservice.FileService
+	key          objectio.Location
+	reader       *objectio.ObjectReader
+	prefetchFile bool
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
@@ -37,10 +38,15 @@ func BuildPrefetchParams(service fileservice.FileService, key objectio.Location)
 
 func BuildPrefetchFileParams(service fileservice.FileService, name string) PrefetchParams {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
+	reader, err := NewFileReader(service, name)
+	if err != nil {
+		panic(fmt.Sprintf("build prefetch file params failed: %v", err))
+	}
 	return PrefetchParams{
-		ids:      ids,
-		fs:       service,
-		fileName: name,
+		ids:          ids,
+		fs:           service,
+		prefetchFile: true,
+		reader:       reader.GetObjectReader(),
 	}
 }
 
