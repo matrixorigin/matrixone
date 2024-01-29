@@ -117,6 +117,11 @@ type Instruction struct {
 	// flag for analyzeInfo record the row information
 	IsFirst bool
 	IsLast  bool
+
+	CnAddr      string
+	OperatorID  int32
+	ParallelID  int32
+	MaxParallel int32
 }
 
 type Operator interface {
@@ -138,6 +143,21 @@ type Operator interface {
 
 	//AppendChild append child to operator
 	AppendChild(child Operator)
+
+	//Release an operator
+	Release()
+
+	//GetCnAddr
+	GetCnAddr() string
+
+	//GetOperatorID
+	GetOperatorID() int32
+
+	//GetParalleID
+	GetParalleID() int32
+
+	//GetMaxParallel
+	GetMaxParallel() int32
 }
 
 var CancelResult = CallResult{
@@ -193,6 +213,11 @@ type OperatorInfo struct {
 	ParallelMajor bool
 	IsFirst       bool
 	IsLast        bool
+
+	CnAddr      string
+	OperatorID  int32
+	ParallelID  int32
+	MaxParallel int32
 }
 type Instructions []Instruction
 

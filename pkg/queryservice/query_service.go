@@ -28,17 +28,21 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
-	pb.CmdMethod_ShowProcessList:    defines.MORPCVersion1,
-	pb.CmdMethod_AlterAccount:       defines.MORPCVersion1,
-	pb.CmdMethod_KillConn:           defines.MORPCVersion1,
-	pb.CmdMethod_TraceSpan:          defines.MORPCVersion1,
-	pb.CmdMethod_GetLockInfo:        defines.MORPCVersion1,
-	pb.CmdMethod_GetTxnInfo:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheInfo:       defines.MORPCVersion1,
-	pb.CmdMethod_SyncCommit:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCommit:          defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion: defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion: defines.MORPCMinVersion,
+	pb.CmdMethod_ShowProcessList:       defines.MORPCVersion1,
+	pb.CmdMethod_AlterAccount:          defines.MORPCVersion1,
+	pb.CmdMethod_KillConn:              defines.MORPCVersion1,
+	pb.CmdMethod_TraceSpan:             defines.MORPCVersion1,
+	pb.CmdMethod_GetLockInfo:           defines.MORPCVersion1,
+	pb.CmdMethod_GetTxnInfo:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheInfo:          defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCommit:             defines.MORPCVersion1,
+	pb.CmdMethod_RunTask:               defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
+	pb.CmdMethod_CoreDumpConfig:        defines.MORPCMinVersion,
+	pb.CmdMethod_RemoveRemoteLockTable: defines.MORPCVersion1,
+	pb.CmdMethod_GetLatestBind:         defines.MORPCVersion1,
 }
 
 // QueryService is used to send query request to another CN service.
@@ -111,6 +115,7 @@ func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context
 func (s *queryService) initHandleFunc() {
 	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
 	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
+	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 
 // SendMessage implements the QueryService interface.

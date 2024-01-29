@@ -52,6 +52,13 @@ enum CmdMethod {
 
   GetProtocolVersion = 10;
   SetProtocolVersion = 11;
+
+  CoreDumpConfig = 12;
+  RunTask = 13;
+
+  // RemoveRemoteLockTable remove remote lock table on all cn
+  RemoveRemoteLockTable = 14;
+  GetLatestBind         = 15;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -91,6 +98,14 @@ message GetCommitResponse {
   timestamp.Timestamp CurrentCommitTS = 1 [(gogoproto.nullable) = false];
 }
 
+message CoreDumpConfigRequest {
+	// enable or disable
+	string Action = 1;
+}
+
+message CoreDumpConfigResponse {
+}
+
 message GetProtocolVersionRequest {
 }
 
@@ -107,6 +122,14 @@ message SetProtocolVersionRequest {
 message SetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+}
+
+message RunTaskRequest {
+  int32 TaskCode = 1;
+}
+
+message RunTaskResponse {
+  string Result = 1;
 }
 
 // Request is the query request.
@@ -137,6 +160,12 @@ message Request {
 
   GetProtocolVersionRequest GetProtocolVersion = 13;
   SetProtocolVersionRequest SetProtocolVersion = 14;
+
+  CoreDumpConfigRequest CoreDumpConfig = 15;
+  RunTaskRequest RunTask = 16;
+
+  RemoveRemoteLockTableRequest  RemoveRemoteLockTable = 17;
+  GetLatestBindRequest GetLatestBind = 18;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -172,6 +201,12 @@ message Response {
 
   GetProtocolVersionResponse GetProtocolVersion = 13;
   SetProtocolVersionResponse SetProtocolVersion = 14;
+
+  CoreDumpConfigResponse CoreDumpConfig = 15;
+  RunTaskResponse RunTask = 16;
+
+  RemoveRemoteLockTableResponse  RemoveRemoteLockTable = 17;
+  GetLatestBindResponse          GetLatestBind         = 18;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -276,4 +311,25 @@ message CacheInfo{
 
 message GetCacheInfoResponse{
   repeated CacheInfo CacheInfoList = 1;
+}
+
+
+
+message RemoveRemoteLockTableRequest {
+  uint32 GroupID = 1;
+  uint64 TableID = 2;
+  uint64 Version = 3;
+}
+
+message RemoveRemoteLockTableResponse {
+  int32 Count = 1;
+}
+
+message GetLatestBindRequest {
+  uint32 GroupID = 1;
+  uint64 TableID = 2;
+}
+
+message GetLatestBindResponse {
+  string Bind = 1;
 }

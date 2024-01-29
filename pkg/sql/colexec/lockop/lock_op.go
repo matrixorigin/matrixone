@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,8 +41,11 @@ var (
 	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
+const argName = "lock_op"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("lock-op(")
+	buf.WriteString(argName)
+	buf.WriteString(": lock-op(")
 	n := len(arg.targets) - 1
 	for idx, target := range arg.targets {
 		buf.WriteString(fmt.Sprintf("%d-%d-%d",
@@ -326,6 +330,8 @@ func LockRows(
 	vec *vector.Vector,
 	pkType types.Type,
 	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -336,7 +342,9 @@ func LockRows(
 
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false, false).
+		WithLockSharding(sharding).
 		WithLockMode(lockMode).
+		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
@@ -416,9 +424,11 @@ func doLock(
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
-		Policy:          lock.WaitPolicy_Wait,
+		Policy:          proc.WaitPolicy,
 		Mode:            opts.mode,
 		TableDefChanged: opts.changeDef,
+		Sharding:        opts.sharding,
+		Group:           opts.group,
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -527,6 +537,18 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 	}
 }
 
+// WithLockSharding set lock sharding
+func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
+	opts.sharding = sharding
+	return opts
+}
+
+// WithLockGroup set lock group
+func (opts LockOptions) WithLockGroup(group uint32) LockOptions {
+	opts.group = group
+	return opts
+}
+
 // WithLockMode set lock mode, Exclusive or Shared
 func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
 	opts.mode = mode
@@ -572,10 +594,10 @@ func (opts LockOptions) WithHasNewVersionInRangeFunc(fn hasNewVersionInRangeFunc
 }
 
 // NewArgument create new lock op argument.
-func NewArgument(engine engine.Engine) *Argument {
-	return &Argument{
-		engine: engine,
-	}
+func NewArgumentByEngine(engine engine.Engine) *Argument {
+	arg := reuse.Alloc[Argument](nil)
+	arg.engine = engine
+	return arg
 }
 
 // Block return if lock operator is a blocked node.

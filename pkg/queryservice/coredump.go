@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,4 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package queryservice
+
+import (
+	"context"
+	"strings"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/util"
+)
+
+func handleCoreDumpConfig(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.CoreDumpConfig == nil {
+		return nil
+	}
+	switch strings.ToLower(req.CoreDumpConfig.Action) {
+	case "enable":
+		util.EnableCoreDump()
+	case "disable":
+		util.DisableCoreDump()
+	}
+	resp.CoreDumpConfig = &pb.CoreDumpConfigResponse{}
+	return nil
+}

@@ -347,6 +347,7 @@ message HashBuild {
   repeated plan.Expr conds = 6;
   bool hash_on_pk = 7;
   bool need_merged_batch = 8;
+  bool need_allocate_sels = 9;
 }
 
 message ExternalName2ColIndex {
@@ -455,7 +456,8 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  repeated string payload = 4;
+  string payload = 4;
+  uint32 type = 5;
 }
 
 message ProcessLimitation {

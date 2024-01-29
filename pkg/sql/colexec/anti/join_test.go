@@ -83,8 +83,8 @@ func TestString(t *testing.T) {
 
 func TestAnti(t *testing.T) {
 	for _, tc := range tcs {
-		bat := hashBuild(t, tc)
-		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+		bats := hashBuild(t, tc)
+		if jm, ok := bats[0].AuxData.(*hashmap.JoinMap); ok {
 			jm.SetDupCount(int64(1))
 		}
 		err := tc.arg.Prepare(tc.proc)
@@ -95,7 +95,9 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
+		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
@@ -117,6 +119,7 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			ok, err := tc.arg.Call(tc.proc)
@@ -156,7 +159,7 @@ func BenchmarkAnti(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			bat := hashBuild(t, tc)
+			bats := hashBuild(t, tc)
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -165,7 +168,8 @@ func BenchmarkAnti(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
-			tc.proc.Reg.MergeReceivers[1].Ch <- bat
+			tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
+			tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
@@ -264,21 +268,26 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 				IsFirst: false,
 				IsLast:  false,
 			},
+			NeedAllocateSels: true,
+			NeedMergedBatch:  true,
 		},
 	}
 }
 
-func hashBuild(t *testing.T, tc antiTestCase) *batch.Batch {
+func hashBuild(t *testing.T, tc antiTestCase) []*batch.Batch {
 	err := tc.barg.Prepare(tc.proc)
 	require.NoError(t, err)
 	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil
 	}
-	ok, err := tc.barg.Call(tc.proc)
+	ok1, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
-	require.Equal(t, false, ok.Status == vm.ExecStop)
-	return ok.Batch
+	require.Equal(t, false, ok1.Status == vm.ExecStop)
+	ok2, err := tc.barg.Call(tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, false, ok2.Status == vm.ExecStop)
+	return []*batch.Batch{ok1.Batch, ok2.Batch}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null

@@ -167,6 +167,8 @@ type TxnOperator interface {
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+
+	PKDedupCount() int
 }
 
 // TxnIDGenerator txn id generator
@@ -227,8 +229,10 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	WriteOffset() uint64
+
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
-	Adjust() error
+	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	Rollback(ctx context.Context) error

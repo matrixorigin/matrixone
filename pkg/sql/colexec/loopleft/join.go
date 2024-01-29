@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "loop_left"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" loop left join ")
+	buf.WriteString(argName)
+	buf.WriteString(": loop left join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -99,17 +102,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
 		}
-		ctr.bat = bat
+		if bat == nil {
+			break
+		}
+		ctr.bat, _, err = proc.AppendBatchFromOffset(ctr.bat, bat, 0)
+		if err != nil {
+			return err
+		}
+		proc.PutBatch(bat)
 	}
 	return nil
 }

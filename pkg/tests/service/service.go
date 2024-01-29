@@ -282,14 +282,15 @@ type testCluster struct {
 // NewCluster construct a cluster for integration test.
 func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
+		Level:  "fatal",
 		Format: "console",
 	})
 	opt.validate()
 
+	uid, _ := uuid.NewV7()
 	c := &testCluster{
 		t:       t,
-		testID:  uuid.New().String(),
+		testID:  uid.String(),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}

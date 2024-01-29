@@ -257,15 +257,22 @@ func (s *service) Close() error {
 	}
 	// stop I/O pipeline
 	blockio.Stop()
-	if err := s.gossipNode.Leave(time.Second); err != nil {
-		return err
+
+	if s.gossipNode != nil {
+		if err := s.gossipNode.Leave(time.Second); err != nil {
+			return err
+		}
 	}
+
 	if s.cacheServer != nil {
 		if err := s.cacheServer.Close(); err != nil {
 			return err
 		}
 	}
-	return s.server.Close()
+	if err := s.server.Close(); err != nil {
+		return err
+	}
+	return s.lockService.Close()
 }
 
 // ID implements the frontend.BaseService interface.
@@ -606,6 +613,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
+		opts = append(opts,
+			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),

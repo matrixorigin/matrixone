@@ -22,6 +22,7 @@ import (
 
 const (
 	internalTimeout = time.Second * 10
+	oneWayTimeout   = time.Second * 600
 )
 
 // Timeout return true if the message is timeout
@@ -38,6 +39,9 @@ func (m RPCMessage) Timeout() bool {
 func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 	if m.internal {
 		return internalTimeout, nil
+	}
+	if m.oneWay {
+		return oneWayTimeout, nil
 	}
 
 	d, ok := m.Ctx.Deadline()

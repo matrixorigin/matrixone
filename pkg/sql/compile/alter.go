@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -98,7 +99,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 5.2 delete all of the original table
+	// 5.2 delete all index table of the original table
 	if qry.TableDef.Indexes != nil {
 		for _, indexdef := range qry.TableDef.Indexes {
 			if indexdef.TableExist {
@@ -109,27 +110,50 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 6. Recreate the original table
-	err = c.runSql(qry.CreateTableSql)
+	//6. obtain relation for new tables
+	newRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
 		return err
 	}
 
-	// 7. import data from the temporary replica table into the original table
-	err = c.runSql(qry.InsertDataSql)
+	//--------------------------------------------------------------------------------------------------------------
+	// 7. rename temporary replica table into the original table( Table Id remains unchanged)
+	copyTblName := qry.CopyTableDef.Name
+	req := api.NewRenameTableReq(newRel.GetDBID(c.ctx), newRel.GetTableID(c.ctx), copyTblName, tblName)
+	tmp, err := req.Marshal()
 	if err != nil {
 		return err
 	}
+	constraint := make([][]byte, 0)
+	constraint = append(constraint, tmp)
+	newRel.TableRenameInTxn(c.ctx, constraint)
+	//--------------------------------------------------------------------------------------------------------------
 
-	// 8. Delete temporary replica table
-	if err = dbSource.Delete(c.ctx, qry.CopyTableDef.Name); err != nil {
-		return err
-	}
+	{
+		// 8. invoke reindex for the new table, if it contains ivf index.
+		multiTableIndexes := make(map[string]*MultiTableIndex)
+		newTableDef := newRel.GetTableDef(c.ctx)
 
-	// 9. obtain relation for new tables
-	newRel, err := dbSource.Relation(c.ctx, tblName, nil)
-	if err != nil {
-		return err
+		for _, indexDef := range newTableDef.Indexes {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			}
+		}
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	// get and update the change mapping information of table colIds

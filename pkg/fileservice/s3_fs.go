@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
 )
 
@@ -64,7 +65,10 @@ func NewS3FS(
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
+	noDefaultCredential bool,
 ) (*S3FS, error) {
+
+	args.NoDefaultCredentials = noDefaultCredential
 
 	fs := &S3FS{
 		name:            args.Name,
@@ -105,19 +109,6 @@ func NewS3FS(
 	return fs, nil
 }
 
-// NewS3FSOnMinio creates S3FS on minio server
-// this is needed because the URL scheme of minio server does not compatible with AWS'
-func NewS3FSOnMinio(
-	ctx context.Context,
-	args ObjectStorageArguments,
-	cacheConfig CacheConfig,
-	perfCounterSets []*perfcounter.CounterSet,
-	noCache bool,
-) (*S3FS, error) {
-	args.IsMinio = true
-	return NewS3FS(ctx, args, cacheConfig, perfCounterSets, noCache)
-}
-
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
@@ -150,9 +141,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
-			int64(*config.DiskCapacity),
-			config.DiskMinEvictInterval.Duration,
-			*config.DiskEvictTarget,
+			int(*config.DiskCapacity),
 			s.perfCounterSets,
 		)
 		if err != nil {
@@ -564,7 +553,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				C: bytesCounter,
 			},
 			closeFunc: func() error {
-				metric.S3ReadIODurationHistogram.Observe(time.Since(t0).Seconds())
+				s3ReadIODuration := time.Since(t0)
+				statistic.StatsInfoFromContext(ctx).AddS3AccessTimeConsumption(s3ReadIODuration)
+
+				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 				return r.Close()
 			},
@@ -826,7 +818,7 @@ func newTracePoint() *tracePoint {
 	return tp
 }
 
-func (tp tracePoint) Name() string {
+func (tp tracePoint) TypeName() string {
 	return "fileservice.tracePoint"
 }
 

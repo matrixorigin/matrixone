@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -55,10 +54,10 @@ func ApplyRuntimeFilters(
 	ctx context.Context,
 	proc *process.Process,
 	tableDef *plan.TableDef,
-	blockInfos [][]byte,
+	blockInfos objectio.BlockInfoSlice,
 	exprs []*plan.Expr,
 	runtimeFilters []*pipeline.RuntimeFilter,
-) ([][]byte, error) {
+) ([]byte, error) {
 	var err error
 	evaluators := make([]RuntimeFilterEvaluator, len(runtimeFilters))
 
@@ -76,7 +75,7 @@ func ApplyRuntimeFilters(
 
 		case pipeline.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
-				Zm: objectio.ZoneMap(filter.Data),
+				Zm: filter.Data,
 			}
 		}
 	}
@@ -95,7 +94,7 @@ func ApplyRuntimeFilters(
 	columnMap := make(map[int]int)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 
 	defer func() {
 		for i := range vecs {
@@ -111,8 +110,8 @@ func ApplyRuntimeFilters(
 		return nil, err
 	}
 	curr := 1 // Skip the first block which is always the memtable
-	for i := 1; i < len(blockInfos); i++ {
-		blk := catalog.DecodeBlockInfo(blockInfos[i])
+	for i := 1; i < blockInfos.Len(); i++ {
+		blk := blockInfos.Get(i)
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
@@ -155,9 +154,9 @@ func ApplyRuntimeFilters(
 		}
 
 		// store the block in ranges
-		blockInfos[curr] = blockInfos[i]
+		blockInfos.Set(curr, blk)
 		curr++
 	}
 
-	return blockInfos[:curr], nil
+	return blockInfos.Slice(0, curr), nil
 }

@@ -277,8 +277,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
-%token <str>  HEXNUM
+%token <item> INTEGRAL HEX FLOAT
+%token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -417,10 +417,10 @@ import (
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
-%token <str> CLUSTER_CENTERS SPHERICAL_KMEANS
+%token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
@@ -620,8 +620,9 @@ import (
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
-%type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
+%type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
+%type <exprs> value_expression_list
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
@@ -696,7 +697,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword separator_opt spherical_kmeans_opt
+%type <str> name_confict distinct_keyword separator_opt kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -3155,13 +3156,8 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            Users: $4,
-            Role: $5,
-            MiscOpt: $6,
-            CommentOrAttribute: $7,
-        }
+        // ifExists Users Role MiscOpt CommentOrAttribute
+        $$ = tree.NewAlterUser($3, $4, $5, $6, $7)
     }
 
 default_role_opt:
@@ -3630,6 +3626,10 @@ show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
 	$$ = &tree.ShowSubscriptions{Like: $3}
+    }
+|   SHOW SUBSCRIPTIONS ALL like_opt
+    {
+	$$ = &tree.ShowSubscriptions{All: true, Like: $4}
     }
 
 like_opt:
@@ -6967,11 +6967,11 @@ values_opt:
         expr := tree.NewMaxValue()
         $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
-|   VALUES LESS THAN '(' expression_list ')'
+|   VALUES LESS THAN '(' value_expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
     }
-|   VALUES IN '(' expression_list ')'
+|   VALUES IN '(' value_expression_list ')'
     {
     $$ = &tree.ValuesIn{ValueList: $4}
     }
@@ -8098,6 +8098,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
+    {
+	$$ = tree.NewSerialExtractExpr($3, $5, $7)
+    }
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
@@ -8529,11 +8533,11 @@ separator_opt:
        $$ = $2
     }
 
-spherical_kmeans_opt:
+kmeans_opt:
     {
-        $$ = "1,vector_l2_ops,random"
+        $$ = "1,vector_l2_ops,random,false"
     }
-|   SPHERICAL_KMEANS STRING
+|   KMEANS STRING
     {
        $$ = $2
     }
@@ -8582,7 +8586,7 @@ function_call_aggregate:
             OrderBy:$5,
 	    }
     }
-|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt spherical_kmeans_opt ')' window_spec_opt
+|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
   	     name := tree.SetUnresolvedName(strings.ToLower($1))
 		$$ = &tree.FuncExpr{
@@ -9258,6 +9262,16 @@ expression_list_opt:
         $$ = $1
     }
 
+value_expression_list:
+    value_expression
+    {
+        $$ = tree.Exprs{$1}
+    }
+|   value_expression_list ',' value_expression
+    {
+        $$ = append($1, $3)
+    }
+
 expression_list:
     expression
     {
@@ -9294,13 +9308,18 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   MAXVALUE
-    {
-        $$ = tree.NewMaxValue()
-    }
 |   boolean_primary
     {
         $$ = $1
+    }
+
+value_expression:
+    expression {
+        $$ = $1
+    }
+|   MAXVALUE
+    {
+        $$ = tree.NewMaxValue()
     }
 
 boolean_primary:
@@ -9548,17 +9567,7 @@ literal:
     }
 |   BIT_LITERAL
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
@@ -10840,7 +10849,6 @@ non_reserved_keyword:
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS
-|	UNDERSCORE_BINARY
 |	BOOLEAN
 |   BTREE
 |	IVFFLAT
@@ -10952,6 +10960,7 @@ non_reserved_keyword:
 |	HANDLER
 |	SAMPLE
 |	PERCENT
+|	OWNERSHIP
 
 func_not_keyword:
     DATE_ADD
@@ -10982,7 +10991,7 @@ not_keyword:
 |   EXTRACT
 |   GROUP_CONCAT
 |   CLUSTER_CENTERS
-|   SPHERICAL_KMEANS
+|   KMEANS
 |   MAX
 |   MID
 |   MIN
@@ -11011,6 +11020,7 @@ not_keyword:
 |   CURRVAL
 |   LASTVAL
 |   HEADERS
+|   SERIAL_EXTRACT
 |   BIT_CAST
 
 //mo_keywords:

@@ -84,8 +84,12 @@ const (
 	TSUpgradeTLSEnd   TS = "TSUpgradeTLSEnd"
 
 	// mysql protocol
-	TSAuthenticateStart TS = "TSAuthenticateStart"
-	TSAuthenticateEnd   TS = "TSAuthenticateEnd"
+	TSAuthenticateStart  TS = "TSAuthenticateStart"
+	TSAuthenticateEnd    TS = "TSAuthenticateEnd"
+	TSSendErrPacketStart TS = "TSSendErrPacketStart"
+	TSSendErrPacketEnd   TS = "TSSendErrPacketEnd"
+	TSSendOKPacketStart  TS = "TSSendOKPacketStart"
+	TSSendOKPacketEnd    TS = "TSSendOKPacketEnd"
 
 	// session
 	TSCheckTenantStart      TS = "TSCheckTenantStart"
@@ -541,11 +545,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnCtx context.Context
 	var txnOp TxnOperator
+	var err error
 	if sharedTxnHandler != nil {
 		if !sharedTxnHandler.IsValidTxnOperator() {
 			panic("shared txn is invalid")
 		}
-		txnCtx, txnOp = sharedTxnHandler.GetTxnOperator()
+		txnCtx, txnOp, err = sharedTxnHandler.GetTxnOperator()
+		if err != nil {
+			panic(err)
+		}
 	}
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient, txnCtx, txnOp)
 
@@ -590,13 +598,11 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.uuid, _ = uuid.NewUUID()
+	ses.uuid, _ = uuid.NewV7()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
 	ses.SetAutoIncrCacheManager(aicm)
-
-	var err error
 	if ses.mp == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -865,8 +871,12 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, er
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
 	tnStore := metadata.TNService{
-		ServiceID:         uuid.NewString(),
+		ServiceID:         uid.String(),
 		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}
@@ -917,6 +927,10 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		bh.ses.SetOutputCallback(batchFetcher)
 	}
 	return bh
+}
+
+var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) BackgroundExec {
+	return ses.GetRawBatchBackgroundExec(ctx)
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
@@ -1394,7 +1408,10 @@ func (ses *Session) GetTxnInfo() string {
 	if txnH == nil {
 		return ""
 	}
-	_, txnOp := txnH.GetTxnOperator()
+	_, txnOp, err := txnH.GetTxnOperator()
+	if err != nil {
+		return ""
+	}
 	if txnOp == nil {
 		return ""
 	}
@@ -1527,9 +1544,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
-	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	sysTenantCtx := defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
@@ -1586,7 +1601,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	//step3 : get the password of the user
 
 	ses.timestampMap[TSCheckUserStart] = time.Now()
-	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := defines.AttachAccountId(ses.GetRequestContext(), uint32(tenantID))
 
 	logDebugf(sessionInfo, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
@@ -1760,9 +1775,7 @@ func (ses *Session) InitGlobalSystemVariables() error {
 	tenantInfo := ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		sysTenantCtx := defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
@@ -1808,9 +1821,7 @@ func (ses *Session) InitGlobalSystemVariables() error {
 			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
 	} else {
-		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx := defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
@@ -2041,6 +2052,10 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	} else {
 		bh.ses.SetRequestContext(ctx)
 	}
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
 	// For determine this is a background sql.
@@ -2056,6 +2071,11 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
@@ -2080,6 +2100,10 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 		ctx = bh.ses.GetRequestContext()
 	} else {
 		bh.ses.SetRequestContext(ctx)
+	}
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -2126,6 +2150,10 @@ type SqlHelper struct {
 
 func (sh *SqlHelper) GetCompilerContext() any {
 	return sh.ses.txnCompileCtx
+}
+
+func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
 }
 
 // Made for sequence func. nextval, setval.

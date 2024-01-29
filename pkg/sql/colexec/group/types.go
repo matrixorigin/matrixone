@@ -17,6 +17,7 @@ package group
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -53,7 +54,7 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	//idx        *index.LowCardinalityIndex
+	// idx        *index.LowCardinalityIndex
 
 	aggVecs           []evalVector
 	groupVecs         []evalVector
@@ -92,8 +93,71 @@ type Argument struct {
 	children []vm.Operator
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithAggs(aggs []agg.Aggregate) *Argument {
+	arg.Aggs = aggs
+	return arg
+}
+
+func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
+	arg.Exprs = exprs
+	return arg
+}
+
+func (arg *Argument) WithTypes(types []types.Type) *Argument {
+	arg.Types = types
+	return arg
+}
+
+func (arg *Argument) WithMultiAggs(multiAggs []group_concat.Argument) *Argument {
+	arg.MultiAggs = multiAggs
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {

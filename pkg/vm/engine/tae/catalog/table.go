@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 
@@ -44,7 +45,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats   common.TableCompactStat
+	Stats   *common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
 	entries map[types.Objectid]*common.GenericDLNode[*ObjectEntry]
@@ -85,6 +86,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		Stats:     common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -103,6 +105,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		Stats:     common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
@@ -127,6 +130,7 @@ func NewReplayTableEntry() *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		link:    common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries: make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		Stats:   common.NewTableCompactStat(),
 	}
 	return e
 }
@@ -141,6 +145,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode: node,
 		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
 		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		Stats:     common.NewTableCompactStat(),
 	}
 }
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -315,12 +320,22 @@ type TableStat struct {
 	Csize     int
 }
 
-func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w bytes.Buffer) {
+func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat TableStat, w bytes.Buffer) {
 
 	it := entry.MakeObjectIt(true)
-	composeSortKey := false
-	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
-		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
+	zonemapKind := common.ZonemapPrintKindNormal
+	if schema := entry.GetLastestSchema(); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+		zonemapKind = common.ZonemapPrintKindCompose
+	}
+
+	if level == common.PPL3 { // some magic, do not ask why
+		zonemapKind = common.ZonemapPrintKindHex
+	}
+
+	scanCount := 0
+	needCount := end - start
+	if needCount < 0 {
+		needCount = math.MaxInt
 	}
 
 	for ; it.Valid(); it.Next() {
@@ -328,6 +343,14 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w by
 		if !objectEntry.IsActive() {
 			continue
 		}
+		scanCount++
+		if scanCount <= start {
+			continue
+		}
+		if needCount <= 0 {
+			break
+		}
+		needCount--
 		stat.ObjectCnt += 1
 		if objectEntry.GetLoaded() {
 			stat.Loaded += 1
@@ -340,7 +363,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w by
 			_, _ = w.WriteString(objectEntry.ID.String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
-			_, _ = w.WriteString(objectEntry.StatsString(composeSortKey))
+			_, _ = w.WriteString(objectEntry.StatsString(zonemapKind))
 		}
 		if w.Len() > 8*common.Const1MBytes {
 			w.WriteString("\n...(truncated for too long, more than 8 MB)")
@@ -353,8 +376,8 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel) (stat TableStat, w by
 	return
 }
 
-func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
-	stat, detail := entry.ObjectStats(level)
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel, start, end int) string {
+	stat, detail := entry.ObjectStats(level, start, end)
 
 	var avgCsize, avgRow, avgOsize int
 	if stat.Loaded > 0 {
@@ -364,8 +387,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v",
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s, avgCsize %v\n"+
+			"Update History:\n  rows %v\n  dels %v ",
 		stat.ObjectCnt, stat.ObjectCnt-stat.Loaded, avgRow, common.HumanReadableBytes(avgOsize), common.HumanReadableBytes(avgCsize),
+		entry.Stats.RowCnt.String(), entry.Stats.RowDel.String(),
 	)
 	detail.WriteString(summary)
 	return detail.String()

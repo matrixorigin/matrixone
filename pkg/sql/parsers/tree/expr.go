@@ -817,6 +817,10 @@ func (node *Subquery) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement Subquery Accept")
 }
 
+func (node *Subquery) String() string {
+	return "subquery"
+}
+
 func NewSubquery(s SelectStatement, e bool) *Subquery {
 	return &Subquery{
 		Select: s,
@@ -1120,6 +1124,56 @@ type ResolvableTypeReference interface {
 
 var _ ResolvableTypeReference = &UnresolvedObjectName{}
 var _ ResolvableTypeReference = &T{}
+
+type SerialExtractExpr struct {
+	exprImpl
+	SerialExpr Expr
+	IndexExpr  Expr
+	ResultType ResolvableTypeReference
+}
+
+func (node *SerialExtractExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("serial_extract(")
+	node.SerialExpr.Format(ctx)
+	ctx.WriteString(", ")
+	node.IndexExpr.Format(ctx)
+	ctx.WriteString(" as ")
+	node.ResultType.(*T).InternalType.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+// Accept implements NodeChecker interface
+func (node *SerialExtractExpr) Accept(v Visitor) (Expr, bool) {
+	//TODO: need validation from @iamlinjunhong
+
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*SerialExtractExpr)
+
+	tmpNode, ok := node.SerialExpr.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.SerialExpr = tmpNode
+
+	tmpNode, ok = node.IndexExpr.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.IndexExpr = tmpNode
+
+	return v.Exit(node)
+}
+
+func NewSerialExtractExpr(serialExpr Expr, indexExpr Expr, typ ResolvableTypeReference) *SerialExtractExpr {
+	return &SerialExtractExpr{
+		SerialExpr: serialExpr,
+		IndexExpr:  indexExpr,
+		ResultType: typ,
+	}
+}
 
 // the Cast expression
 type CastExpr struct {

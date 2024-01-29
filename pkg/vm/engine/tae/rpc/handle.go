@@ -768,9 +768,7 @@ func (h *Handle) HandleCreateDatabase(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
 	if _, err = txn.CreateDatabaseWithCtx(
 		ctx,
@@ -822,9 +820,7 @@ func (h *Handle) HandleCreateRelation(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return
@@ -983,7 +979,7 @@ func (h *Handle) HandleWrite(
 		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
@@ -1059,7 +1055,7 @@ func (h *Handle) HandleWrite(
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}
@@ -1139,7 +1135,8 @@ func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMem
 
 		tblIt := entry.MakeTableIt(true)
 		for tblIt.Valid() {
-			insUsage := logtail.UsageData{AccId: accId, DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+			insUsage := logtail.UsageData{
+				AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
 
 			tblEntry := tblIt.Get().GetPayload()
 			if tblEntry.HasDropCommitted() {
@@ -1173,7 +1170,9 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
-	defer v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	memo.EnterProcessing()
 	defer func() {
@@ -1191,11 +1190,11 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	newIds := make([]uint32, 0)
 	for _, id := range req.AccIds {
 		if usages != nil {
-			if size, exist := usages[uint32(id)]; exist {
-				memo.AddReqTrace(uint32(id), size, start, "req")
+			if size, exist := usages[uint64(id)]; exist {
+				memo.AddReqTrace(uint64(id), size, start, "req")
 				resp.AccIds = append(resp.AccIds, int32(id))
 				resp.Sizes = append(resp.Sizes, size)
-				delete(usages, uint32(id))
+				delete(usages, uint64(id))
 				continue
 			}
 		}
@@ -1204,7 +1203,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	for accId, size := range usages {
-		memo.AddReqTrace(accId, size, start, "oth")
+		memo.AddReqTrace(uint64(accId), size, start, "oth")
 		resp.AccIds = append(resp.AccIds, int32(accId))
 		resp.Sizes = append(resp.Sizes, size)
 	}
@@ -1213,10 +1212,10 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
 
 	for idx := range newIds {
-		if size, exist := memo.GatherNewAccountSize(newIds[idx]); exist {
+		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
 			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
-			memo.AddReqTrace(newIds[idx], size, start, "new")
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
 		}
 	}
 

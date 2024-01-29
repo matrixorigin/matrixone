@@ -15,14 +15,13 @@
 package shuffle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
-
-const shuffleBatchSize = 8192 * 3 / 4
 
 type Argument struct {
 	ctr                *container
@@ -37,8 +36,51 @@ type Argument struct {
 	ShuffleRangeInt64  []int64
 }
 
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
@@ -46,18 +88,19 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type container struct {
-	ending       bool
-	sels         [][]int32
-	shuffledBats []*batch.Batch
-	lastSentIdx  int
+	ending        bool
+	sels          [][]int32
+	shufflePool   []*batch.Batch
+	sendPool      []*batch.Batch
+	lastSentBatch *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
-		for i := range arg.ctr.shuffledBats {
-			if arg.ctr.shuffledBats[i] != nil {
-				arg.ctr.shuffledBats[i].Clean(proc.Mp())
-				arg.ctr.shuffledBats[i] = nil
+		for i := range arg.ctr.shufflePool {
+			if arg.ctr.shufflePool[i] != nil {
+				arg.ctr.shufflePool[i].Clean(proc.Mp())
+				arg.ctr.shufflePool[i] = nil
 			}
 		}
 		arg.ctr.sels = nil

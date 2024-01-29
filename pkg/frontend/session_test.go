@@ -46,7 +46,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.TODO()
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
@@ -102,7 +102,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.TODO()
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		idx := int64(1)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
@@ -172,7 +172,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.TODO()
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		cnt := 0
@@ -240,8 +240,9 @@ func TestSession_TxnBegin(t *testing.T) {
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, false, nil, nil)
-		session.SetRequestContext(context.Background())
-		session.SetConnectContext(context.Background())
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		session.SetRequestContext(ctx)
+		session.SetConnectContext(ctx)
 		return session
 	}
 	convey.Convey("new session", t, func() {
@@ -258,8 +259,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		err = ses.TxnBegin()
 		convey.So(err, convey.ShouldBeNil)
-		err = ses.SetAutocommit(false)
-		convey.So(err, convey.ShouldNotBeNil)
+		err = ses.SetAutocommit(true, false)
+		convey.So(err, convey.ShouldBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
 		_, _, err = ses.GetTxnHandler().GetTxn()
@@ -268,10 +269,10 @@ func TestSession_TxnBegin(t *testing.T) {
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
 
-		err = ses.SetAutocommit(true)
+		err = ses.SetAutocommit(false, true)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = ses.SetAutocommit(false)
+		err = ses.SetAutocommit(false, false)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -547,8 +548,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		session := NewSession(proto, nil, pu, gSysVars, false, nil, nil)
-		session.SetRequestContext(context.Background())
-		session.SetConnectContext(context.Background())
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		session.SetRequestContext(ctx)
+		session.SetConnectContext(ctx)
 		return session
 	}
 
@@ -807,7 +809,7 @@ func TestTxnHandler_TxnOpenLog(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.TODO()
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()

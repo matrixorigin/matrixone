@@ -15,6 +15,7 @@
 package table_scan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -30,11 +31,55 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 
-	buf *batch.Batch
+	buf    *batch.Batch
+	tmpBuf *batch.Batch
+}
+
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
+}
+
+func (arg *Argument) GetCnAddr() string {
+	return arg.info.CnAddr
+}
+
+func (arg *Argument) GetOperatorID() int32 {
+	return arg.info.OperatorID
+}
+
+func (arg *Argument) GetParalleID() int32 {
+	return arg.info.ParallelID
+}
+
+func (arg *Argument) GetMaxParallel() int32 {
+	return arg.info.MaxParallel
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
@@ -45,5 +90,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
+	}
+
+	if arg.tmpBuf != nil {
+		arg.tmpBuf.Clean(proc.Mp())
+		arg.tmpBuf = nil
 	}
 }

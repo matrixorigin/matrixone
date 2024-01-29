@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -814,6 +815,11 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
+		// `DELETE_TXN` and `INSERT_TXN` are only used for CN workspace consumption, not sent to DN
+		if e.typ == DELETE_TXN || e.typ == INSERT_TXN {
+			continue
+		}
+
 		//SKIP update/delete on mo_columns
 		//The TN does not counsume the update/delete on mo_columns.
 		//there are update/delete entries on mo_columns just after one on mo_tables.
@@ -828,7 +834,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 		if e.bat == nil || e.bat.IsEmpty() {
 			continue
 		}
-		if e.tableId == catalog.MO_TABLES_ID && e.typ == INSERT {
+		if e.tableId == catalog.MO_TABLES_ID && (e.typ == INSERT || e.typ == INSERT_TXN) {
 			logutil.Infof("precommit: create table: %s-%v", tid, vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
@@ -1127,19 +1133,17 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	var accountId, userId, roleId uint32
+	var err error
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
+	accountId, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		userId = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		roleId = v.(uint32)
-	}
-	return accountId, userId, roleId
+	userId = defines.GetUserId(ctx)
+	roleId = defines.GetRoleId(ctx)
+	return accountId, userId, roleId, nil
 }
 
 /*
@@ -1212,18 +1216,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
+		accountId:  id,
 	}
 }
 
@@ -1287,167 +1291,167 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 // 	return false
 // }
 
-func transferIval[T int32 | int64](v T, oid types.T) (bool, bool, any) {
+func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, false, int8(v)
+		return true, int8(v)
 	case types.T_int16:
-		return true, false, int16(v)
+		return true, int16(v)
 	case types.T_int32:
-		return true, false, int32(v)
+		return true, int32(v)
 	case types.T_int64:
-		return true, false, int64(v)
+		return true, int64(v)
 	case types.T_uint8:
-		return true, false, uint8(v)
+		return true, uint8(v)
 	case types.T_uint16:
-		return true, false, uint16(v)
+		return true, uint16(v)
 	case types.T_uint32:
-		return true, false, uint32(v)
+		return true, uint32(v)
 	case types.T_uint64:
-		return true, false, uint64(v)
+		return true, uint64(v)
 	case types.T_float32:
-		return true, false, float32(v)
+		return true, float32(v)
 	case types.T_float64:
-		return true, false, float64(v)
+		return true, float64(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferUval[T uint32 | uint64](v T, oid types.T) (bool, bool, any) {
+func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, false, int8(v)
+		return true, int8(v)
 	case types.T_int16:
-		return true, false, int16(v)
+		return true, int16(v)
 	case types.T_int32:
-		return true, false, int32(v)
+		return true, int32(v)
 	case types.T_int64:
-		return true, false, int64(v)
+		return true, int64(v)
 	case types.T_uint8:
-		return true, false, uint8(v)
+		return true, uint8(v)
 	case types.T_uint16:
-		return true, false, uint16(v)
+		return true, uint16(v)
 	case types.T_uint32:
-		return true, false, uint32(v)
+		return true, uint32(v)
 	case types.T_uint64:
-		return true, false, uint64(v)
+		return true, uint64(v)
 	case types.T_float32:
-		return true, false, float32(v)
+		return true, float32(v)
 	case types.T_float64:
-		return true, false, float64(v)
+		return true, float64(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferFval(v float32, oid types.T) (bool, bool, any) {
+func transferFval(v float32, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, false, float32(v)
+		return true, float32(v)
 	case types.T_float64:
-		return true, false, float64(v)
+		return true, float64(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferDval(v float64, oid types.T) (bool, bool, any) {
+func transferDval(v float64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, false, float32(v)
+		return true, float32(v)
 	case types.T_float64:
-		return true, false, float64(v)
+		return true, float64(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferSval(v string, oid types.T) (bool, bool, any) {
+func transferSval(v string, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_json:
-		return true, false, []byte(v)
+		return true, []byte(v)
 	case types.T_char, types.T_varchar:
-		return true, false, []byte(v)
+		return true, []byte(v)
 	case types.T_text, types.T_blob:
-		return true, false, []byte(v)
+		return true, []byte(v)
 	case types.T_binary, types.T_varbinary:
-		return true, false, []byte(v)
+		return true, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])
-		return true, false, uv
+		return true, uv
 		//TODO: should we add T_array for this code?
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferBval(v bool, oid types.T) (bool, bool, any) {
+func transferBval(v bool, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_bool:
-		return true, false, v
+		return true, v
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferDateval(v int32, oid types.T) (bool, bool, any) {
+func transferDateval(v int32, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_date:
-		return true, false, types.Date(v)
+		return true, types.Date(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferTimeval(v int64, oid types.T) (bool, bool, any) {
+func transferTimeval(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_time:
-		return true, false, types.Time(v)
+		return true, types.Time(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferDatetimeval(v int64, oid types.T) (bool, bool, any) {
+func transferDatetimeval(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_datetime:
-		return true, false, types.Datetime(v)
+		return true, types.Datetime(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferTimestampval(v int64, oid types.T) (bool, bool, any) {
+func transferTimestampval(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_timestamp:
-		return true, false, types.Timestamp(v)
+		return true, types.Timestamp(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferDecimal64val(v int64, oid types.T) (bool, bool, any) {
+func transferDecimal64val(v int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal64:
-		return true, false, types.Decimal64(v)
+		return true, types.Decimal64(v)
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
+func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	switch oid {
 	case types.T_decimal128:
-		return true, false, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
+		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
-		return false, false, nil
+		return false, nil
 	}
 }
 
-func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
-	var infos [][]*catalog.BlockInfo
+func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objectio.BlockInfo, []int) {
+	var infos [][]*objectio.BlockInfo
 	objMap := make(map[string]int)
 	lenObjs := 0
 	for _, blkInfo := range blkInfos {
@@ -1458,7 +1462,7 @@ func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{blkInfo})
+			infos = append(infos, []*objectio.BlockInfo{blkInfo})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1485,7 +1489,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	return rds
 }
 
-func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfBlocks int, infos [][]*objectio.BlockInfo, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		//distribute objects and steps for prefetch

@@ -272,9 +272,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
 	canTruncate := delCtx.isDeleteWithoutFilters
 
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
 	if len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account) ||
+		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
 		canTruncate = false
 	}
@@ -572,7 +576,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable, delCtx.partitionInfos)
-	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
+	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
@@ -1115,20 +1119,27 @@ func makeInsertPlan(
 					return err
 				}
 
-				originTableMessageForFuzzy := &OriginTableMessageForFuzzy{
-					ParentTableName: tableDef.Name,
-				}
-				partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
-				set := make(map[string]int)
-				for i, n := range indexdef.Parts {
-					set[n] = i
-				}
-				for _, c := range tableDef.Cols { // sort
-					if i, ok := set[c.Name]; ok {
-						partialUniqueCols[i] = c
+				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
+
+				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
+				// with the primary key of the hidden table as the unique key.
+				// package contains some information needed by the fuzzy filter to run background SQL.
+				if indexdef.GetUnique() {
+					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
+						ParentTableName: tableDef.Name,
 					}
+					partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
+					set := make(map[string]int)
+					for i, n := range indexdef.Parts {
+						set[n] = i
+					}
+					for _, c := range tableDef.Cols { // sort
+						if i, ok := set[c.Name]; ok {
+							partialUniqueCols[i] = c
+						}
+					}
+					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 				}
-				originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
@@ -1743,6 +1754,27 @@ func makeOneDeletePlan(
 	canTruncate bool,
 ) (int32, error) {
 	if isUK || isSK {
+		// append filter
+		rowIdTyp := types.T_Rowid.ToType()
+		rowIdColExpr := &plan.Expr{
+			Typ: makePlan2Type(&rowIdTyp),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(delNodeInfo.deleteIndex),
+				},
+			},
+		}
+		filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*Expr{rowIdColExpr})
+		if err != nil {
+			return -1, err
+		}
+		filterNode := &Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeId},
+			FilterList: []*plan.Expr{filterExpr},
+		}
+		lastNodeId = builder.appendNode(filterNode, bindCtx)
+
 		// append lock
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,
@@ -1871,6 +1903,50 @@ func haveSecondaryKey(tableDef *TableDef) bool {
 	return false
 }
 
+// Check if the unique key is the primary key of the table
+// When the unqiue key meet the following conditions, it is the primary key of the table
+// 1. There is no primary key in the table.
+// 2. The unique key is the only unique key of the table.
+// 3. The columns of the unique key are not null by default.
+func isPrimaryKey(tableDef *TableDef, colNames []string) bool {
+	// Ensure there is no real primary key in the table.
+	// FakePrimaryKeyColName is for tables without a primary key.
+	// So we need to exclude FakePrimaryKeyColName.
+	if len(tableDef.Pkey.Names) != 1 {
+		return false
+	}
+	if tableDef.Pkey.Names[0] != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	// Ensure the unique key is the only unique key of the table.
+	uniqueKeyCount := 0
+	for _, indexdef := range tableDef.Indexes {
+		if indexdef.Unique {
+			uniqueKeyCount++
+		}
+	}
+	// All the columns of the unique key are not null by default.
+	if uniqueKeyCount == 1 {
+		for _, col := range tableDef.Cols {
+			for _, colName := range colNames {
+				if col.Name == colName {
+					if col.Default.NullAbility {
+						return false
+					}
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// Check if the unique key is the multiple primary key of the table
+// When the unique key contains more than one column, it is the multiple primary key of the table.
+func isMultiplePriKey(indexdef *plan.IndexDef) bool {
+	return len(indexdef.Parts) > 1
+}
+
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
 	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type, lockTable bool, partitionInfos map[uint64]*partSubTableInfo) *deleteNodeInfo {
@@ -1914,7 +1990,14 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 	if tableDef.Indexes != nil {
 		for _, indexdef := range tableDef.Indexes {
 			if indexdef.TableExist {
-				delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				if catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+					delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+				} else if catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					// apply deletes only for entries table.
+					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+						delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
+					}
+				}
 			}
 		}
 	}
@@ -2396,27 +2479,63 @@ func appendPreInsertSkVectorPlan(
 	idxRefs []*ObjectRef,
 	indexTableDefs []*TableDef) (int32, error) {
 
-	/* 	The overall plan
-	----------------------------------------------------------------------------------------------------------------------------
-	| Insert on db.entries												                                                        |
-	|   ->  Lock                                                                                                                |
-	|         ->  Sort                                                                                                          |
-	|               Sort Key: l2_distance(__mo_index_centroid, embedding) ASC                                                   |
-	|               Limit: 1                                                                                                    |
-	|               ->  Join                                                                                                    |
-	|                     Join Type: INNER                                                                                      |
-	|                     ->  Sink Scan                                                                                         |
-	|                           DataSource: Plan 0                                                                              |
-	|                     ->  Filter                                                                                            |
-	|                           Filter Cond: (centroids.__mo_index_centroid_version = cast(meta.'__mo_index_value' as bigint))  |
-	|                           ->  Join                                                                                        |
-	|                                 Join Type: SINGLE                                                                         |
-	|                                 ->  Table Scan on db.centroids											                |
-	|                                 ->  Project                                                                               |
-	|                                       ->  Filter                                                                          |
-	|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
-	|                                             ->  Table Scan on db.meta													    |
-	-----------------------------------------------------------------------------------------------------------------------------
+	/*
+		### Sample SQL:
+		create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id));
+		insert into tbl values("1", "10", "[1,2,3]");
+		insert into tbl values("2", "20", "[1,2,4]");
+		insert into tbl values("3", "30", "[1,2.4,4]");
+		insert into tbl values("4", "40", "[1,2,5]");
+		insert into tbl values("5", "50", "[1,3,5]");
+		insert into tbl values("6", "60", "[100,44,50]");
+		insert into tbl values("7", "70", "[120,50,70]");
+		insert into tbl values("8", "80", "[130,40,90]");
+
+		create table centroids (`__mo_index_centroid_version` BIGINT NOT NULL, `__mo_index_centroid_id` BIGINT NOT NULL, `__mo_index_centroid` VECF32(3) DEFAULT NULL, PRIMARY KEY (`__mo_index_centroid_version`,`__mo_index_centroid_id`));
+		insert into centroids values(0,1,"[1,2,3]");
+		insert into centroids values(0,2,"[130,40,90]");
+
+		select
+		`__mo_index_centroid_version`,
+		`__mo_index_centroid_id`,
+		`id`
+		from
+		(select
+		`centroids`.`__mo_index_centroid_version`,
+		`centroids`.`__mo_index_centroid_id`,
+		`tbl`.`id`,
+		ROW_NUMBER() OVER (PARTITION BY `tbl`.`id` ORDER BY l2_distance(`centroids`.`__mo_index_centroid`, tbl.embedding) ) as `__mo_index_rn`
+		from
+		tbl cross join (select * from `centroids` where `__mo_index_centroid_version` = 0) as `centroids`)
+		where `__mo_index_rn` =1;
+
+		### Corresponding Plan
+		----------------------------------------------------------------------------------------------------------------------------------------------
+		| Plan 2:                                                                                                                                     |
+		| Insert on a.entries												                                                                          |
+		|   ->  Lock                                                                                                                                  |
+		|         ->  Project                                                                                                                         |
+		|               ->  Filter                                                                                                                    |
+		|                     Filter Cond: (#[0,3] = 1)                                                                                               |
+		|                     ->  Window                                                                                                              |
+		|                           Window Function: row_number(); Partition By: id; Order By: l2_distance(__mo_index_centroid, data)                 |
+		|                           ->  Partition                                                                                                     |
+		|                                 Sort Key: id INTERNAL                                                                                       |
+		|                                 ->  Join                                                                                                    |
+		|                                       Join Type: INNER                                                                                      |
+		|                                       ->  Project                                                                                           |
+		|                                             ->  Sink Scan                                                                                   |
+		|                                                   DataSource: Plan 0                                                                        |
+		|                                       ->  Filter                                                                                            |
+		|                                             Filter Cond: (__mo_index_centroid_version = #[0,3])                                             |
+		|                                             ->  Join                                                                                        |
+		|                                                   Join Type: SINGLE                                                                         |
+		|                                                   ->  Table Scan on a.centroids             												  |
+		|                                                   ->  Project                                                                               |
+		|                                                         ->  Filter                                                                          |
+		|                                                               Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                    |
+		|                                                               ->  Table Scan on a.meta 													  |
+			------------------------------------------------------------------------------------------------------------------------------------------
 	*/
 
 	//1.a get vector & pk column details
@@ -2458,6 +2577,7 @@ func appendPreInsertSkVectorPlan(
 	}
 
 	// 4. create a cross join node for tbl and centroids
+	// Projections: centroids.version, centroids.centroid_id, tbl.pk, centroids.centroid, tbl.embedding
 	var leftChildTblId = lastNodeId
 	var rightChildCentroidsId = currVersionCentroidsTblScanId
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
@@ -2465,13 +2585,21 @@ func appendPreInsertSkVectorPlan(
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 
-	// 5. sort by l2_distance(tbl.vector, centroids.centroid) limit 1
-	// project version, centroid_id, pk, serial(version,pk)
-	sortByL2DistanceId, err := makeSortByL2DistAndLimit1AndProject4(builder, bindCtx, crossJoinTblAndCentroidsID, lastNodeId, isUpdate)
+	// 5. partition by tbl.pk
+	// 6. Window operation
+	// 7. Filter records where row_number() = 1
+	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID)
 	if err != nil {
 		return -1, err
 	}
-	lastNodeId = sortByL2DistanceId
+
+	// 8. Final project: centroids.version, centroids.centroid_id, tbl.pk, cp_col
+	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId, lastNodeId, isUpdate)
+	if err != nil {
+		return -1, err
+	}
+
+	lastNodeId = projectId
 
 	if lockNodeId, ok := appendLockNode(
 		builder,

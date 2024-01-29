@@ -58,7 +58,7 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		&s.tables)
+		s.tableGroups)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -127,7 +127,9 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	l, err := s.getLockTable(req.LockTable.Table)
+	l, err := s.getLockTable(
+		req.LockTable.Group,
+		req.LockTable.Table)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
@@ -175,7 +177,7 @@ func (s *service) handleRemoteUnlock(
 		writeResponse(ctx, cancel, resp, err, cs)
 		return
 	}
-	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
+	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
 	writeResponse(ctx, cancel, resp, err, cs)
 }
 
@@ -243,7 +245,9 @@ func (s *service) handleKeepRemoteLock(
 func (s *service) getLocalLockTable(
 	req *pb.Request,
 	resp *pb.Response) (lockTable, error) {
-	l, err := s.getLockTableWithCreate(req.LockTable.Table, false)
+	l, err := s.getLockTable(
+		req.LockTable.Group,
+		req.LockTable.Table)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +274,13 @@ func (s *service) getLocalLockTable(
 		uuid := getUUIDFromServiceIdentifier(s.serviceID)
 		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
 		if strings.EqualFold(uuid, uuidRequest) {
-			l.close()
-			s.tables.Delete(bind.Table)
+			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
+				zap.String("bind", bind.DebugString()))
+			// only remove old bind lock table
+			s.tableGroups.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return lt.getBind().Equal(bind)
+				})
 			return nil, ErrLockTableBindChanged
 		}
 
@@ -341,8 +350,11 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 
 func getLockTableBind(
 	c Client,
+	group uint32,
 	tableID uint64,
-	serviceID string) (pb.LockTable, error) {
+	originTableID uint64,
+	serviceID string,
+	sharding pb.Sharding) (pb.LockTable, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	defer cancel()
 
@@ -352,6 +364,9 @@ func getLockTableBind(
 	req.Method = pb.Method_GetBind
 	req.GetBind.ServiceID = serviceID
 	req.GetBind.Table = tableID
+	req.GetBind.OriginTable = originTableID
+	req.GetBind.Sharding = sharding
+	req.GetBind.Group = group
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {

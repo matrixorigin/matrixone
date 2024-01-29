@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_recursive"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" merge recursive ")
+	buf.WriteString(argName)
+	buf.WriteString(": merge recursive ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {

@@ -108,7 +108,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 					assert.Equal(t, types.BuildTS(math.MaxInt64, 1), v)
 				}
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, tableID, conflictRow, 1))
+			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
 			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 			<-c
 		},
@@ -164,7 +164,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, tableID, conflictRow, 1))
+			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
 			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn01"), timestamp.Timestamp{PhysicalTime: math.MaxInt64}))
 			<-c
 		},
@@ -230,7 +230,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, tableID, conflictRow, 1))
+			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
 			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
 			<-c
 		},
@@ -297,7 +297,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				_, err = arg2.Call(proc)
 				require.NoError(t, err)
 			}()
-			require.NoError(t, lockservice.WaitWaiters(proc.LockService, tableID, conflictRow, 1))
+			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
 			require.NoError(t, proc.LockService.Unlock(proc.Ctx, []byte("txn02"), timestamp.Timestamp{}))
 			<-c
 		},
@@ -365,7 +365,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			require.NoError(t, err)
 
 			go func() {
-				require.NoError(t, lockservice.WaitWaiters(proc.LockService, tableID, conflictRow, 1))
+				require.NoError(t, lockservice.WaitWaiters(proc.LockService, 0, tableID, conflictRow, 1))
 				require.NoError(t, proc.LockService.Unlock(
 					proc.Ctx,
 					[]byte("txn01"),
@@ -455,7 +455,7 @@ func runLockNonBlockingOpTest(
 			offset := int32(0)
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgument(nil)
+			arg := NewArgumentByEngine(nil)
 			arg.info = &vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,
@@ -497,7 +497,7 @@ func runLockBlockingOpTest(
 
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgument(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
+			arg := NewArgumentByEngine(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
 
 			var batches []*batch.Batch
 			var batches2 []*batch.Batch

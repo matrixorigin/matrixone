@@ -78,9 +78,8 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(`%s`), count(`%s`) from `%s`.`%s`;",
+	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
 		indexColumnName,
-		originalTableDef.Pkey.PkeyColName,
 		qryDatabase,
 		originalTableDef.Name)
 	rs, err := c.runSqlWithResult(countTotalSql)
@@ -89,17 +88,11 @@ func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qr
 	}
 
 	var totalCnt int64
-	var pkeyCnt int64
 	rs.ReadRows(func(cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
-		pkeyCnt = executor.GetFixedRows[int64](cols[1])[0]
 		return false
 	})
 	rs.Close()
-
-	if totalCnt != pkeyCnt {
-		return 0, moerr.NewInvalidInputNoCtx("vecfxx column contains nulls.")
-	}
 
 	return totalCnt, nil
 }
@@ -136,52 +129,10 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile, _ *plan.IndexDef, qryDatabase string, _ *plan.TableDef,
-	metadataTableName string,
-	centroidsTableName string,
-	entriesTableName string) error {
-
-	/*
-		Sample SQL:
-		delete from a.centroids where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-		delete from a.entries   where version = (select CAST(`value` as BIGINT) from a.meta where `key` = 'version');
-	*/
-
-	deleteCentroidsSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err := c.runSql(deleteCentroidsSQL)
-	if err != nil {
-		return err
-	}
-
-	deleteEntriesSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
-		qryDatabase,
-		entriesTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-	err = c.runSql(deleteEntriesSQL)
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
 
-	// 1. algo params
+	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
@@ -192,9 +143,27 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 	kmeansInitType := "kmeansplusplus"
+	kmeansNormalize := "true"
+
+	// 1.b init centroids table with default centroid, if centroids are not enough.
+	// NOTE: we can run re-index to improve the centroid quality.
+	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+		initSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			qryDatabase,
+			indexDef.IndexTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+		)
+		err := c.runSql(initSQL)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	// 2. Sampling SQL Logic
-	var sampleCnt = catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
+	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
 	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
 		indexColumnName,
@@ -220,7 +189,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		ROW_NUMBER() OVER(),
 		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
 		FROM
-		(SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
+		(SELECT cluster_centers(`embedding` kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
 		CROSS JOIN
 		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
 	*/
@@ -231,7 +200,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		"ROW_NUMBER() OVER(), "+
 		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
 		"FROM "+
-		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
+		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
 		"CROSS JOIN "+
 		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
 		insertSQL,
@@ -244,6 +213,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		centroidParamsLists,
 		centroidParamsDistFn,
 		kmeansInitType,
+		kmeansNormalize,
 		sampleSQL,
 	)
 	err = c.runSql(clusterCentersSQL)
@@ -310,64 +280,39 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
-	// 5. non-null original table rows
-	nonNullOriginalTableRowsSql := fmt.Sprintf("(select %s, %s from `%s`.`%s` where `%s` is not null) `%s`",
-		originalTblPkColsCommaSeperated,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-		indexColumnName,
-		originalTableDef.Name,
-	)
-
 	/*
 		Sample SQL:
-		SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM
-		(
-		SELECT
-		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
-		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
-		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, tbl.embedding) ) as `__mo_index_rn`
-		FROM tbl
-		CROSS JOIN
-		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
-		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
+		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
+		SELECT     `centroids_tbl`.`__mo_index_centroid_version`,
+		           serial_extract( min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`, normalize_l2(`tbl`.embedding) ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
+		           `tbl`.`id`
+		FROM tbl CROSS JOIN(SELECT * FROM   `a`.`centroids_tbl` WHERE  `__mo_index_centroid_version` = 0) AS `centroids_tbl`
+		GROUP BY   `tbl`.`id`;
+
 	*/
 	// 5. final SQL
 	mappingSQL := fmt.Sprintf("%s "+
-		"SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM "+
-		"("+
-		"SELECT "+
-		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
-		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
-		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, %s.%s)) as `__mo_index_rn` "+
-		"FROM "+
-		" %s CROSS JOIN %s "+
-		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
+		"select `%s`.`__mo_index_centroid_version`, "+
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, normalize_l2(`%s`.%s)), `%s`.`%s`)), 1 as bigint), "+
+		"%s "+
+		"from %s CROSS JOIN %s group by %s;",
 		insertSQL,
 
 		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		// NOTE: no need to add tableName here, because it could be serial()
-		originalTblPkColMaySerial,
 
-		originalTblPkColMaySerial,
 		algoParamsDistFn,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		originalTableDef.Name,
 		indexColumnName,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 
-		nonNullOriginalTableRowsSql,
+		originalTblPkColMaySerial, // NOTE: no need to add tableName here, because it could be serial()
+
+		originalTableDef.Name,
 		centroidsTableForCurrentVersionSql,
+		originalTblPkColMaySerial,
 	)
 
 	err = c.runSql(mappingSQL)
