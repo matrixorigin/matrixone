@@ -16,7 +16,17 @@ package tree
 
 import (
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[AlterSequence](
+		func() *AlterSequence { return &AlterSequence{} },
+		func(a *AlterSequence) { a.reset() },
+		reuse.DefaultOptions[AlterSequence]().
+			WithEnableChecker())
+}
 
 type CreateSequence struct {
 	statementImpl
@@ -172,6 +182,21 @@ type AlterSequence struct {
 	Cycle       *CycleOption
 }
 
+func NewAlterSequence(ifexists bool, name *TableName, typ *TypeOption, incrementby *IncrementByOption, minvalue *MinValueOption, maxvalue *MaxValueOption, startwith *StartWithOption, cycle *CycleOption) *AlterSequence {
+	alter := reuse.Alloc[AlterSequence](nil)
+	alter.IfExists = ifexists
+	alter.Name = name
+	alter.Type = typ
+	alter.IncrementBy = incrementby
+	alter.MinValue = minvalue
+	alter.MaxValue = maxvalue
+	alter.StartWith = startwith
+	alter.Cycle = cycle
+	return alter
+}
+
+func (node *AlterSequence) Free() { reuse.Free[AlterSequence](node, nil) }
+
 func (node *AlterSequence) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter sequence ")
 
@@ -202,5 +227,7 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterSequence) TypeName() string          { return "tree.AlterSequence" }
 func (node *AlterSequence) GetStatementType() string { return "Alter Sequence" }
 func (node *AlterSequence) GetQueryType() string     { return QueryTypeDDL }
+func (node *AlterSequence) reset()                   {}
