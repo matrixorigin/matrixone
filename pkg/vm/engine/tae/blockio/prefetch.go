@@ -117,11 +117,7 @@ func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 		if p.reader != nil {
 			name = p.reader.GetName()
 		} else {
-			if p.key.IsEmpty() {
-				name = p.fileName
-			} else {
-				name = p.key.Name().String()
-			}
+			name = p.key.Name().String()
 		}
 		old, ok := pc[name]
 		if !ok {
