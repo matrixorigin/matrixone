@@ -398,6 +398,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	switch {
 	case remote:
+		if s.DataSource.OrderBy != nil {
+			panic("ordered scan can't run on remote CN!")
+		}
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -424,6 +427,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
 			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
 		default:
+			mcpu = 1
+		}
+		if s.DataSource.OrderBy != nil {
+			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
@@ -464,6 +471,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			idSlice := memoryengine.ShardIdSlice(s.NodeInfo.Data)
 			mcpu = DeterminRuntimeDOP(numCpu, idSlice.Len())
 		default:
+			mcpu = 1
+		}
+		if s.DataSource.OrderBy != nil {
+			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
 		if rel.GetEngineType() == engine.Memory ||
@@ -543,6 +554,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.Run(c)
 	}
 
+	if s.DataSource.OrderBy != nil {
+		panic("ordered scan must run on only one parallel!")
+	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Normal)
@@ -553,9 +567,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			RelationName: s.DataSource.RelationName,
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
-			OrderBy:      s.DataSource.OrderBy,
 		}
-		ss[i].DataSource.R.SetOrderBy(ss[i].DataSource.OrderBy)
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope, err := newParallelScope(c, s, ss)
