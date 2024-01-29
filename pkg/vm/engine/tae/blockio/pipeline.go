@@ -430,7 +430,7 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
 		option := item.(PrefetchParams)
-		if len(option.ids) == 0 {
+		if len(option.ids) == 0 && option.fileName == "" {
 			job := prefetchMetaJob(
 				context.Background(),
 				item.(PrefetchParams),
