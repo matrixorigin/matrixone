@@ -382,9 +382,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
-	ErrFKRowIsReferenced:  {ER_ROW_IS_REFERENCED, []string{MySQLDefaultSqlState}, "Cannot delete or update a parent row: a foreign key constraint fails"},
-	ErrDuplicateKeyName:   {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
-	ErrFKNoReferencedRow2: {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
+	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{MySQLDefaultSqlState}, "Cannot delete or update a parent row: a foreign key constraint fails"},
+	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
+	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},

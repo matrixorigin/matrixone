@@ -20,6 +20,9 @@ type Deallocate struct {
 	Name   Identifier
 }
 
+func (node *Deallocate) Free() {
+}
+
 func (node *Deallocate) Format(ctx *FmtCtx) {
 	if node.IsDrop {
 		ctx.WriteString("drop")
