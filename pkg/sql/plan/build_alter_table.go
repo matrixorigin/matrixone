@@ -142,7 +142,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
