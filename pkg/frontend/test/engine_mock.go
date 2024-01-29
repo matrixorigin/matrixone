@@ -630,6 +630,20 @@ func (mr *MockRelationMockRecorder) TableDefs(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs), arg0)
 }
 
+// TableRenameInTxn mocks base method.
+func (m *MockRelation) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TableRenameInTxn", ctx, constraint)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TableRenameInTxn indicates an expected call of TableRenameInTxn.
+func (mr *MockRelationMockRecorder) TableRenameInTxn(ctx, constraint interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableRenameInTxn", reflect.TypeOf((*MockRelation)(nil).TableRenameInTxn), ctx, constraint)
+}
+
 // Update mocks base method.
 func (m *MockRelation) Update(arg0 context.Context, arg1 *batch.Batch) error {
 	m.ctrl.T.Helper()
