@@ -299,8 +299,6 @@ type TNUsageMemo struct {
 		vers    []uint32
 		delayed map[uint64]UsageData
 	}
-
-	eliminated [2]types.TS
 }
 
 func NewTNUsageMemo() *TNUsageMemo {
