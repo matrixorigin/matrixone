@@ -40,6 +40,12 @@ func ReleaseIOEntry(entry *fileservice.IOEntry) {
 	}
 }
 
+func ReleaseIOVector(vector *fileservice.IOVector) {
+	if enableCacheRelease {
+		vector.Release()
+	}
+}
+
 func ReadExtent(
 	ctx context.Context,
 	name string,
