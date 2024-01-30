@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -44,6 +45,9 @@ type PartitionReader struct {
 }
 
 var _ engine.Reader = new(PartitionReader)
+
+func (r *PartitionReader) SetFilterZM(objectio.ZoneMap) {
+}
 
 func (r *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil

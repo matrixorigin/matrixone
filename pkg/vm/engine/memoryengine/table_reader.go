@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -173,6 +174,9 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 		return resp.Batch, nil
 	}
 
+}
+
+func (r *TableReader) SetFilterZM(objectio.ZoneMap) {
 }
 
 func (r *TableReader) GetOrderBy() []*plan.OrderBySpec {

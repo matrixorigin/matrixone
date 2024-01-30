@@ -255,6 +255,9 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
 
+func (r *emptyReader) SetFilterZM(objectio.ZoneMap) {
+}
+
 func (r *emptyReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }
@@ -303,6 +306,10 @@ func (r *blockReader) Close() error {
 	r.blks = nil
 	r.buffer = nil
 	return nil
+}
+
+func (r *blockReader) SetFilterZM(zm objectio.ZoneMap) {
+	r.filterZM = zm.Clone()
 }
 
 func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {
@@ -364,11 +371,6 @@ func (r *blockReader) Read(
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// if the block list is empty, return nil
-	if len(r.blks) == 0 {
-		return nil, nil
-	}
-
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	if r.OrderBy != nil {
 		desc := r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
@@ -376,9 +378,19 @@ func (r *blockReader) Read(
 			r.sortBlockList(desc)
 			r.sorted = true
 		}
-		for {
-
+		i := 0
+		for i < len(r.blks) {
+			if r.needReadBlkByZM(desc, r.blks[i].ZmForSort) {
+				r.blks = r.blks[i:]
+				break
+			}
+			i++
 		}
+	}
+
+	// if the block list is empty, return nil
+	if len(r.blks) == 0 {
+		return nil, nil
 	}
 
 	// move to the next block at the end of this call
@@ -674,11 +686,25 @@ func NewMergeReader(readers []engine.Reader) *mergeReader {
 	}
 }
 
+func (r *mergeReader) SetFilterZM(zm objectio.ZoneMap) {
+	for i := range r.rds {
+		r.rds[i].SetFilterZM(zm)
+	}
+}
+
 func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
+	for i := range r.rds {
+		if r.rds[i].GetOrderBy() != nil {
+			return r.rds[i].GetOrderBy()
+		}
+	}
 	return nil
 }
 
-func (r *mergeReader) SetOrderBy([]*plan.OrderBySpec) {
+func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+	for i := range r.rds {
+		r.rds[i].SetOrderBy(orderby)
+	}
 }
 
 func (r *mergeReader) Close() error {

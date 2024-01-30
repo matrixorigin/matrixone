@@ -651,6 +651,7 @@ type Reader interface {
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
+	SetFilterZM(objectio.ZoneMap)
 }
 
 type Database interface {
