@@ -22,6 +22,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,11 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -2165,6 +2166,10 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	lvec := parameters[0]
 	rval := parameters[1].GetBytesAt(0)
 	res := vector.MustFixedCol[bool](result.GetResultVector())
+
+	if !lvec.GetSorted() {
+		return StartsWith(parameters, result, proc, length)
+	}
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 	lowerBound := sort.Search(len(lcol), func(i int) bool {
