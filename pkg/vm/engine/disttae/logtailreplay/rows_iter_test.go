@@ -75,7 +75,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
@@ -128,7 +128,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
@@ -162,7 +162,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
@@ -237,7 +237,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
@@ -290,7 +290,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
@@ -308,7 +308,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
@@ -380,7 +380,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 			},
@@ -399,7 +399,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		}
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(vec1),
@@ -474,7 +474,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "i"},
-			Vecs: []*api.Vector{
+			Vecs: []api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
 				mustVectorToProto(primaryKeyVec), // with primary key
