@@ -265,10 +265,12 @@ func (blk *baseBlock) LoadPersistedColumnData(
 	if err != nil {
 		return nil, err
 	}
+	id := blk.meta.AsCommonID()
+	id.SetBlockOffset(blkID)
 	return LoadPersistedColumnData(
 		ctx,
 		blk.rt,
-		blk.meta.AsCommonID(),
+		id,
 		def,
 		location,
 		mp,

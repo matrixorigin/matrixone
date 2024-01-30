@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -115,6 +116,7 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
+	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
@@ -126,12 +128,13 @@ func TestHiddenWithPK1(t *testing.T) {
 				defer view.Close()
 				offsets := make([]uint32, 0)
 				meta := blk.GetMeta().(*catalog.ObjectEntry)
-				t.Log(meta.String())
+				t.Logf("%v, blk %d", meta.String(), j)
 				_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					assert.Equal(t, meta.ID, bid)
+					expectedBid := objectio.NewBlockidWithObjectID(&meta.ID, uint16(j))
+					assert.Equal(t, *expectedBid, bid, "expect %v, get %v", expectedBid.String(), bid.String())
 					offsets = append(offsets, offset)
 					return
 				}, nil)
@@ -139,7 +142,11 @@ func TestHiddenWithPK1(t *testing.T) {
 				if meta.IsAppendable() {
 					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 				} else {
-					assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					if j != 2 {
+						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					} else {
+						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+					}
 				}
 			}
 			it.Next()
@@ -169,7 +176,7 @@ func TestHiddenWithPK1(t *testing.T) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-					assert.Equal(t, meta.ID, bid)
+					assert.Equal(t, *objectio.NewBlockidWithObjectID(&meta.ID, uint16(j)), bid)
 					offsets = append(offsets, offset)
 					return
 				}, nil)
@@ -177,7 +184,11 @@ func TestHiddenWithPK1(t *testing.T) {
 				if meta.IsAppendable() {
 					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 				} else {
-					assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					if j != 2 {
+						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					} else {
+						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+					}
 				}
 
 			}

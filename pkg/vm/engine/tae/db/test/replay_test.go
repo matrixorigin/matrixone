@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -67,7 +68,16 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				_, err := rel.CreateNonAppendableObject(false)
+				obj, err := rel.CreateNonAppendableObject(false)
+				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
+				objMeta.Lock()
+				baseNode := objMeta.GetLatestNodeLocked().BaseNode
+				err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
+				assert.Nil(t, err)
+				err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
+				assert.Nil(t, err)
+				assert.False(t, baseNode.IsEmpty())
+				objMeta.Unlock()
 				assert.Nil(t, err)
 			}
 			assert.Nil(t, txn.Commit(context.Background()))
