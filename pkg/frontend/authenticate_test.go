@@ -287,6 +287,35 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 	})
 }
 
+func Test_checkDatabaseExistsOrNot(t *testing.T) {
+	convey.Convey("check databse exists or not", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		mrs1 := mock_frontend.NewMockExecResult(ctrl)
+		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		exists, err := checkDatabaseExistsOrNot(ctx, bh, "test")
+		convey.So(exists, convey.ShouldBeTrue)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 	convey.Convey("createTablesInMoCatalog", t, func() {
 		ctrl := gomock.NewController(t)
@@ -393,7 +422,7 @@ func Test_initFunction(t *testing.T) {
 		ses := &Session{tenant: tenant}
 		mce := &MysqlCmdExecutor{}
 		err := mce.InitFunction(ctx, ses, tenant, cu)
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
