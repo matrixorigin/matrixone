@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -252,4 +254,52 @@ func (ctr *container) sort() {
 		cmp.Set(0, ctr.bat.Vecs[i])
 	}
 	heap.Init(ctr)
+}
+
+func (ap *Argument) getTopValue() (any, bool) {
+	ctr := ap.ctr
+	// not enough items in the heap.
+	if int64(len(ctr.sels)) < ap.Limit {
+		return nil, false
+	}
+	x := int(ctr.sels[0])
+	vec := ctr.cmps[ctr.poses[0]].Vector()
+	if vec.GetType().IsVarlen() {
+		return vec.GetBytesAt(x), true
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return vector.GetFixedAt[int8](vec, x), true
+	case types.T_int16:
+		return vector.GetFixedAt[int16](vec, x), true
+	case types.T_int32:
+		return vector.GetFixedAt[int32](vec, x), true
+	case types.T_int64:
+		return vector.GetFixedAt[int64](vec, x), true
+	case types.T_uint8:
+		return vector.GetFixedAt[uint8](vec, x), true
+	case types.T_uint16:
+		return vector.GetFixedAt[uint16](vec, x), true
+	case types.T_uint32:
+		return vector.GetFixedAt[uint32](vec, x), true
+	case types.T_uint64:
+		return vector.GetFixedAt[uint64](vec, x), true
+	case types.T_float32:
+		return vector.GetFixedAt[float32](vec, x), true
+	case types.T_float64:
+		return vector.GetFixedAt[float64](vec, x), true
+	case types.T_date:
+		return vector.GetFixedAt[types.Date](vec, x), true
+	case types.T_datetime:
+		return vector.GetFixedAt[types.Datetime](vec, x), true
+	case types.T_timestamp:
+		return vector.GetFixedAt[types.Timestamp](vec, x), true
+	case types.T_time:
+		return vector.GetFixedAt[types.Time](vec, x), true
+	case types.T_decimal64:
+		return vector.GetFixedAt[types.Decimal64](vec, x), true
+	case types.T_decimal128:
+		return vector.GetFixedAt[types.Decimal128](vec, x), true
+	}
+	return nil, false
 }

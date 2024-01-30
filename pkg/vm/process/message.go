@@ -51,7 +51,7 @@ func (m MsgType) MessageName() string {
 
 func NewMessageBoard() *MessageBoard {
 	m := &MessageBoard{
-		Messages: make([]Message, 0, 1024),
+		Messages: make([]*Message, 0, 1024),
 		RwMutex:  &sync.RWMutex{},
 		Mutex:    &sync.Mutex{},
 	}
@@ -69,25 +69,23 @@ type Message interface {
 	Serialize() []byte
 	Deserialize([]byte) Message
 	NeedBlock() bool
-	NeedDestroy() bool
-	Destroy()
 	GetMsgTag() int32
 	GetReceiverAddr() MessageAddress
 }
 
 type MessageBoard struct {
-	Messages []Message
+	Messages []*Message
 	RwMutex  *sync.RWMutex // for nonblock message
 	Mutex    *sync.Mutex   // for block message
 	Cond     *sync.Cond    //for block message
 }
 
 type MessageReceiver struct {
-	offset      int32
-	tags        []int32
-	destroyList []int32
-	addr        *MessageAddress
-	mb          *MessageBoard
+	offset   int32
+	tags     []int32
+	received []int32
+	addr     *MessageAddress
+	mb       *MessageBoard
 }
 
 func (proc *Process) SendMessage(m Message) {
@@ -95,7 +93,7 @@ func (proc *Process) SendMessage(m Message) {
 	mb.RwMutex.Lock()
 	defer mb.RwMutex.Unlock()
 	if m.GetReceiverAddr().cnAddr == CURRENTCN { // message for current CN
-		mb.Messages = append(mb.Messages, m)
+		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
 			mb.Cond.Broadcast()
@@ -119,32 +117,30 @@ func (mr *MessageReceiver) receiveMessageNonBlock(result []Message) {
 	defer mr.mb.RwMutex.RUnlock()
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
-		message := mr.mb.Messages[mr.offset]
+		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
 		}
 		for i := range mr.tags {
 			if mr.tags[i] == message.GetMsgTag() {
 				result = append(result, message)
-				if message.NeedDestroy() {
-					mr.destroyList = append(mr.destroyList, mr.offset)
-				}
+				mr.received = append(mr.received, mr.offset)
 				break
 			}
 		}
 	}
 }
 
-func (mr *MessageReceiver) DestroyMessage() {
-	if len(mr.destroyList) == 0 {
+func (mr *MessageReceiver) Free() {
+	if len(mr.received) == 0 {
 		return
 	}
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
-	for i := range mr.destroyList {
-		mr.mb.Messages[i].Destroy()
+	for i := range mr.received {
+		mr.mb.Messages[i] = nil
 	}
-	mr.destroyList = mr.destroyList[:0]
+	mr.received = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
@@ -171,4 +167,49 @@ func MatchAddress(m Message, raddr *MessageAddress) bool {
 		return false
 	}
 	return true
+}
+
+func AddrBroadCastOnCurrentCN() MessageAddress {
+	return MessageAddress{
+		cnAddr:     CURRENTCN,
+		operatorID: -1,
+		parallelID: -1,
+	}
+}
+
+func AddrBroadCastOnALLCN() MessageAddress {
+	return MessageAddress{
+		cnAddr:     ALLCN,
+		operatorID: -1,
+		parallelID: -1,
+	}
+}
+
+var _ Message = new(TopValueMessage)
+
+type TopValueMessage struct {
+	topvalue int64
+	tag      int32
+	signed   bool
+	min      bool
+}
+
+func (t TopValueMessage) Serialize() []byte {
+	panic("top value message only broadcasts on current CN, don't need to serialize")
+}
+
+func (t TopValueMessage) Deserialize([]byte) Message {
+	panic("top value message only broadcasts on current CN, don't need to deserialize")
+}
+
+func (t TopValueMessage) NeedBlock() bool {
+	return false
+}
+
+func (t TopValueMessage) GetMsgTag() int32 {
+	return t.tag
+}
+
+func (t TopValueMessage) GetReceiverAddr() MessageAddress {
+	return AddrBroadCastOnCurrentCN()
 }
