@@ -54,6 +54,7 @@ func (node *TruncateTable) reset() {
 	// if node.Name != nil {
 	// 	reuse.Free[TableName](node.Name, nil)
 	// }
+	*node = TruncateTable{}
 }
 
 func (node TruncateTable) TypeName() string { return "tree.TruncateTable" }

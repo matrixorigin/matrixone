@@ -123,6 +123,7 @@ func (node *DropFunction) reset() {
 	// if node.Name != nil {
 	// 	reuse.Free[FunctionName](node.Name, nil)
 	// }
+	*node = DropFunction{}
 }
 
 func NewDropFunction(name *FunctionName, args FunctionArgs) *DropFunction {

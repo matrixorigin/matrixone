@@ -167,6 +167,7 @@ func (node *DropProcedure) reset() {
 	// if node.Name != nil {
 	// 	reuse.Free[ProcedureName](node.Name, nil)
 	// }
+	*node = DropProcedure{}
 }
 
 func NewDropProcedure(n *ProcedureName, i bool) *DropProcedure {

@@ -105,6 +105,7 @@ func (node *ExplainStmt) Free() {
 }
 
 func (node *ExplainStmt) reset() {
+	*node = ExplainStmt{}
 }
 
 func (node ExplainStmt) TypeName() string { return "tree.ExplainStmt" }
@@ -163,6 +164,7 @@ func (node *ExplainAnalyze) Free() {
 }
 
 func (node *ExplainAnalyze) reset() {
+	*node = ExplainAnalyze{}
 }
 
 func (node ExplainAnalyze) TypeName() string { return "tree.ExplainAnalyze" }
@@ -195,6 +197,7 @@ func (node *ExplainFor) Free() {
 }
 
 func (node *ExplainFor) reset() {
+	*node = ExplainFor{}
 }
 
 func (node ExplainFor) TypeName() string { return "tree.ExplainFor" }

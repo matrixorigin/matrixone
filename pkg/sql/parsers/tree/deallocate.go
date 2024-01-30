@@ -50,6 +50,7 @@ func (node *Deallocate) GetQueryType() string     { return QueryTypeOth }
 func (node Deallocate) TypeName() string { return "tree.Deallocate" }
 
 func (node *Deallocate) reset() {
+	*node = Deallocate{}
 }
 
 func NewDeallocate(name Identifier, isDrop bool) *Deallocate {

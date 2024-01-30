@@ -61,6 +61,7 @@ func (node *DropConnector) Free() {
 func (node DropConnector) TypeName() string { return "tree.DropConnector" }
 
 func (node *DropConnector) reset() {
+	*node = DropConnector{}
 }
 
 func NewDropConnector(i bool, n TableNames) *DropConnector {
@@ -108,6 +109,7 @@ func (node *CreateConnector) reset() {
 	// 		reuse.Free[ConnectorOption](item, nil)
 	// 	}
 	// }
+	*node = CreateConnector{}
 }
 
 type ConnectorOption struct {
@@ -129,4 +131,5 @@ func (node *ConnectorOption) Free() {
 func (node ConnectorOption) TypeName() string { return "tree.ConnectorOption" }
 
 func (node *ConnectorOption) reset() {
+	*node = ConnectorOption{}
 }

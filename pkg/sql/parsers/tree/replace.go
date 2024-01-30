@@ -74,6 +74,7 @@ func (node *Replace) reset() {
 	// if node.Rows != nil {
 	// 	reuse.Free[Select](node.Rows, nil)
 	// }
+	*node = Replace{}
 }
 
 func (node Replace) TypeName() string { return "tree.Replace" }

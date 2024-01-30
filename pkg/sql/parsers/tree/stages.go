@@ -82,6 +82,7 @@ func (node *DropStage) Format(ctx *FmtCtx) {
 }
 
 func (node *DropStage) reset() {
+	*node = DropStage{}
 }
 
 func (node *DropStage) GetStatementType() string { return "Drop Stage" }
@@ -124,6 +125,7 @@ func (node *AlterStage) Format(ctx *FmtCtx) {
 }
 
 func (node *AlterStage) reset() {
+	*node = AlterStage{}
 }
 
 func (node *AlterStage) GetStatementType() string { return "Alter Stage" }

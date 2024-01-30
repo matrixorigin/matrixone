@@ -63,6 +63,7 @@ func (node *PrepareStmt) Free() {
 }
 
 func (node *PrepareStmt) reset() {
+	*node = PrepareStmt{}
 }
 
 func (node PrepareStmt) TypeName() string { return "tree.PrepareStmt" }
@@ -88,6 +89,7 @@ func (node *PrepareString) Free() {
 }
 
 func (node *PrepareString) reset() {
+	*node = PrepareString{}
 }
 
 func (node PrepareString) TypeName() string { return "tree.PrepareString" }

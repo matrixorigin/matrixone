@@ -92,6 +92,7 @@ func (node *Use) reset() {
 	// if node.Role != nil {
 	// 	reuse.Free[Role](node.Role, nil)
 	// }
+	*node = Use{}
 }
 
 func (node Use) TypeName() string { return "tree.Use" }

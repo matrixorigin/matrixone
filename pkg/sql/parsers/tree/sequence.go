@@ -166,7 +166,9 @@ func (node *DropSequence) Free() { reuse.Free[DropSequence](node, nil) }
 
 func (node DropSequence) TypeName() string { return "tree.DropSequence" }
 
-func (node DropSequence) reset() {}
+func (node *DropSequence) reset() {
+	*node = DropSequence{}
+}
 
 func NewDropSequence(ifexists bool, names TableNames) *DropSequence {
 	drop := reuse.Alloc[DropSequence](nil)
@@ -248,4 +250,6 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 func (node AlterSequence) TypeName() string          { return "tree.AlterSequence" }
 func (node *AlterSequence) GetStatementType() string { return "Alter Sequence" }
 func (node *AlterSequence) GetQueryType() string     { return QueryTypeDDL }
-func (node *AlterSequence) reset()                   {}
+func (node *AlterSequence) reset() {
+	*node = AlterSequence{}
+}

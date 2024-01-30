@@ -93,6 +93,7 @@ func (node *DropDatabase) Free() {
 }
 
 func (node *DropDatabase) reset() {
+	*node = DropDatabase{}
 }
 
 func (node DropDatabase) TypeName() string { return "tree.DropDatabase" }
@@ -128,6 +129,7 @@ func (node *DropTable) Free() {
 }
 
 func (node *DropTable) reset() {
+	*node = DropTable{}
 }
 
 func (node DropTable) TypeName() string { return "tree.DropTable" }
@@ -163,6 +165,7 @@ func (node *DropView) Free() {
 }
 
 func (node *DropView) reset() {
+	*node = DropView{}
 }
 
 func (node DropView) TypeName() string { return "tree.DropView" }
@@ -210,6 +213,7 @@ func (node *DropIndex) reset() {
 	// 		reuse.Free[MiscOption](item, nil)
 	// 	}
 	// }
+	*node = DropIndex{}
 }
 
 func (node DropIndex) TypeName() string { return "tree.DropIndex" }
@@ -254,6 +258,7 @@ func (node *DropRole) reset() {
 	// 		reuse.Free[Role](item, nil)
 	// 	}
 	// }
+	*node = DropRole{}
 }
 
 func (node DropRole) TypeName() string { return "tree.DropRole" }
@@ -293,10 +298,11 @@ func (node *DropUser) Free() {
 
 func (node *DropUser) reset() {
 	// if node.Users != nil {
-		// for _, item := range node.Users {
-		// 	reuse.Free[User](item, nil)
-		// }
+	// for _, item := range node.Users {
+	// 	reuse.Free[User](item, nil)
 	// }
+	// }
+	*node = DropUser{}
 }
 
 func (node DropUser) TypeName() string { return "tree.DropUser" }
@@ -331,6 +337,7 @@ func (node *DropAccount) Free() {
 }
 
 func (node *DropAccount) reset() {
+	*node = DropAccount{}
 }
 
 func (node DropAccount) TypeName() string { return "tree.DropAccount" }
@@ -372,6 +379,7 @@ func (node *DropPublication) Free() {
 }
 
 func (node *DropPublication) reset() {
+	*node = DropPublication{}
 }
 
 func (node DropPublication) TypeName() string { return "tree.DropPublication" }
