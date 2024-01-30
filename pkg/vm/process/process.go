@@ -302,6 +302,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			return dst, 0, err
 		}
+		dst.Vecs[i].SetSorted(false)
 	}
 	dst.AddRowCount(length)
 	return dst, length, nil

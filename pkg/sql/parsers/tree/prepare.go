@@ -23,6 +23,9 @@ type prepareImpl struct {
 	Format string
 }
 
+func (e *prepareImpl) Free() {
+}
+
 type PrepareStmt struct {
 	prepareImpl
 	Name Identifier

@@ -77,8 +77,8 @@ message Vector {
 };
 
 message Batch {
-    repeated string attrs = 1;
-    repeated Vector vecs  = 2;
+    repeated string attrs = 1 [(gogoproto.nullable) = false];
+    repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
 };
 
 message TableID {
@@ -277,6 +277,7 @@ enum AlterKind {
     UpdateConstraint = 5;
     UpdatePolicy     = 6;
     AddPartition     = 7;
+    RenameColumn     = 8;
 }
 
 message AlterTablePolicy {
@@ -297,6 +298,12 @@ message AlterTableComment {
 message AlterTableRenameTable {
     string old_name = 1;
     string new_name = 2;
+}
+
+message AlterTableRenameCol {
+    string old_name = 1;
+    string new_name = 2;
+    uint32 sequence_num = 3;  // used to double check
 }
 
 message AlterTableAddColumn {
@@ -327,6 +334,7 @@ message AlterTableReq {
         AlterTableConstraint update_cstr     = 8;
         AlterTablePolicy update_policy       = 9;
         AlterTableAddPartition add_partition = 10;
+        AlterTableRenameCol rename_col       = 11;
     }
 }
 

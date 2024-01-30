@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"strconv"
 	"time"
 	"unsafe"
@@ -90,7 +92,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
-		if entry.typ == INSERT {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			rows = rows + int64(entry.bat.RowCount())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
@@ -283,7 +285,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
-		if entry.typ == INSERT {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededCols[s]; ok {
 					ret += int64(entry.bat.Vecs[i].Size())
@@ -729,7 +731,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	for _, entry := range tbl.writes {
-		if entry.typ == INSERT {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			continue
 		}
 		// entry.typ == DELETE
@@ -897,12 +899,12 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
-	if tbl.primaryIdx == -1 {
+	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
 	}
 
-	val := extractPKValueFromEqualExprs(
+	val, isVec := extractPKValueFromEqualExprs(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
@@ -928,6 +930,12 @@ func (tbl *txnTable) tryFastRanges(
 		}
 	}()
 
+	var vec *vector.Vector
+	if isVec {
+		vec = vector.NewVec(types.T_any.ToType())
+		_ = vec.UnmarshalBinary(val)
+	}
+
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -936,9 +944,16 @@ func (tbl *txnTable) tryFastRanges(
 			var zmCkecked bool
 			// if the object info contains a pk zonemap, fast-check with the zonemap
 			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().ContainsKey(val) {
-					zmHit++
-					return
+				if isVec {
+					if !obj.SortKeyZoneMap().AnyIn(vec) {
+						zmHit++
+						return
+					}
+				} else {
+					if !obj.SortKeyZoneMap().ContainsKey(val) {
+						zmHit++
+						return
+					}
 				}
 				zmCkecked = true
 			}
@@ -959,10 +974,16 @@ func (tbl *txnTable) tryFastRanges(
 
 			// check whether the object is skipped by zone map
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked &&
-				!meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-				return
-
+			if !zmCkecked {
+				if isVec {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+						return
+					}
+				} else {
+					if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+						return
+					}
+				}
 			}
 
 			bf = nil
@@ -973,8 +994,14 @@ func (tbl *txnTable) tryFastRanges(
 			}
 
 			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-					return true
+				if isVec {
+					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+						return true
+					}
+				} else {
+					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+						return true
+					}
 				}
 
 				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
@@ -983,10 +1010,16 @@ func (tbl *txnTable) tryFastRanges(
 					return false
 				}
 				var exist bool
-				if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-					return false
-				} else if !exist {
-					return true
+				if isVec {
+					if exist = blkBfIdx.MayContainsAny(vec); !exist {
+						return true
+					}
+				} else {
+					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
+						return false
+					} else if !exist {
+						return true
+					}
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1277,6 +1310,181 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 
 	// update TableDef
 	tbl.GetTableDef(ctx)
+	return nil
+}
+
+func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	// 1. delete cn metadata of table
+	accountId, userId, roleId, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
+	databaseId := tbl.GetDBID(ctx)
+	db := tbl.db
+
+	var id uint64
+	var rowid types.Rowid
+	var rowids []types.Rowid
+	key := genTableKey(accountId, tbl.tableName, databaseId)
+	if value, ok := db.txn.createMap.Load(key); ok {
+		db.txn.createMap.Delete(key)
+		table := value.(*txnTable)
+		id = table.tableId
+		rowid = table.rowid
+		rowids = table.rowids
+		if tbl != table {
+			panic("The table object in createMap should be the current table object")
+		}
+	} else if value, ok := db.txn.tableCache.tableMap.Load(key); ok {
+		table := value.(*txnTable)
+		id = table.tableId
+		rowid = table.rowid
+		rowids = table.rowids
+		if tbl != table {
+			panic("The table object in tableCache should be the current table object")
+		}
+		db.txn.tableCache.tableMap.Delete(key)
+	} else {
+		// I think it is unnecessary to make a judgment on this branch because the table is already in use, so it must be in the cache
+		item := &cache.TableItem{
+			Name:       tbl.tableName,
+			DatabaseId: databaseId,
+			AccountId:  accountId,
+			Ts:         db.txn.op.SnapshotTS(),
+		}
+		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+			return moerr.GetOkExpectedEOB()
+		}
+		id = item.Id
+		rowid = item.Rowid
+		rowids = item.Rowids
+	}
+
+	bat, err := genDropTableTuple(rowid, id, db.databaseId, tbl.tableName, db.databaseName, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	for _, store := range db.txn.tnStores {
+		if err := db.txn.WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
+			bat.Clean(db.txn.proc.Mp())
+			return err
+		}
+	}
+
+	// Add writeBatch(delete,mo_columns) to filter table in mo_columns.
+	// Every row in writeBatch(delete,mo_columns) needs rowid
+	for _, rid := range rowids {
+		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err = db.txn.WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+	}
+	db.txn.deletedTableMap.Store(key, id)
+
+	//------------------------------------------------------------------------------------------------------------------
+	// 2. send alter message to DN
+	bat, err = genTableAlterTuple(constraint, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = db.txn.WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(db.txn.proc.Mp())
+		return err
+	}
+
+	req := &api.AlterTableReq{}
+	if err = req.Unmarshal(constraint[0]); err != nil {
+		return err
+	} else {
+		rename_table := req.Operation.(*api.AlterTableReq_RenameTable)
+		newTblName := rename_table.RenameTable.NewName
+		tbl.tableName = newTblName
+	}
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
+
+	//------------------------------------------------------------------------------------------------------------------
+	// 3. insert new table metadata
+	newtbl := new(txnTable)
+	newtbl.accountId = accountId
+
+	newRowId, err := db.txn.allocateID(ctx)
+	if err != nil {
+		return err
+	}
+	newtbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{newRowId}))
+	newtbl.comment = tbl.comment
+	newtbl.relKind = tbl.relKind
+	newtbl.createSql = tbl.createSql
+	newtbl.viewdef = tbl.viewdef
+	newtbl.partitioned = tbl.partitioned
+	newtbl.partition = tbl.partition
+	newtbl.constraint = tbl.constraint
+	newtbl.primaryIdx = tbl.primaryIdx
+	newtbl.primarySeqnum = tbl.primarySeqnum
+	newtbl.clusterByIdx = tbl.clusterByIdx
+	newtbl.db = db
+	newtbl.defs = tbl.defs
+	newtbl.tableName = tbl.tableName
+	newtbl.tableId = tbl.tableId
+	newtbl.GetTableDef(ctx)
+
+	{
+		sql := getSql(ctx)
+		bat, err := genCreateTableTuple(newtbl, sql, accountId, userId, roleId, newtbl.tableName,
+			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err := db.txn.WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+	}
+
+	cols, err := genColumns(accountId, newtbl.tableName, db.databaseName, newtbl.tableId, db.databaseId, newtbl.defs)
+	if err != nil {
+		return err
+	}
+
+	newtbl.rowids = make([]types.Rowid, len(cols))
+	for i, col := range cols {
+		newtbl.rowids[i] = db.txn.genRowId()
+		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err := db.txn.WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+		if col.constraintType == catalog.SystemColPKConstraint {
+			newtbl.primaryIdx = i
+			newtbl.primarySeqnum = i
+		}
+		if col.isClusterBy == 1 {
+			newtbl.clusterByIdx = i
+		}
+	}
+
+	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
+	newtbl.db.txn.addCreateTable(newkey, newtbl)
+	newtbl.db.txn.deletedTableMap.Delete(newkey)
 	return nil
 }
 
@@ -1599,7 +1807,7 @@ func (tbl *txnTable) makeEncodedPK(
 			isExactlyEqual = len(pk.Names) == cnt
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, isNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
+			ok, isNull, _, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), true, tbl.proc.Load())
 			hasNull = isNull
 			if hasNull {
 				return
@@ -1993,7 +2201,7 @@ func (tbl *txnTable) updateDeleteInfo(
 		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
 		}
-		if entry.typ == DELETE && entry.fileName == "" {
+		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			pkVec := entry.bat.GetVector(1)
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {

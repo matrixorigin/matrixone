@@ -1101,7 +1101,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if fn.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
+	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
 	for i := range fn.Args {
@@ -1202,11 +1202,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
-			if constT.Width <= columnT.Width {
-				return true
-			} else {
-				return false
-			}
+			return constT.Width <= columnT.Width
 		case types.T_text:
 			return true
 		default:
@@ -1250,8 +1246,6 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 			return constVal <= math.MaxUint32 && constVal >= 0
 		case types.T_uint64:
 			return constVal >= 0
-		case types.T_varchar:
-			return true
 		case types.T_float32:
 			//float32 has 6 significant digits.
 			return constVal <= 100000 && constVal >= -100000
@@ -1414,6 +1408,27 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
 	}
 	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
+}
+
+func StatFile(param *tree.ExternParam) error {
+	filePath := strings.TrimSpace(param.Filepath)
+	if strings.HasPrefix(filePath, "etl:") {
+		filePath = path.Clean(filePath)
+	} else {
+		filePath = path.Clean("/" + filePath)
+	}
+	param.Filepath = filePath
+	fs, readPath, err := GetForETLWithType(param, filePath)
+	if err != nil {
+		return err
+	}
+	st, err := fs.StatFile(param.Ctx, readPath)
+	if err != nil {
+		return err
+	}
+	param.Ctx = nil
+	param.FileSize = st.Size
+	return nil
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
