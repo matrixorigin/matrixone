@@ -24,16 +24,19 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -102,7 +105,15 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
+	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []objectio.ObjectName
+	defer func() {
+		logutil.Info("backup", common.OperationField("exec backup"),
+			common.AnyField("load checkpoint cost", loadDuration),
+			common.AnyField("copy file cost", copyDuration),
+			common.AnyField("rewrite checkpoint cost", reWriteDuration))
+	}()
+	now := time.Now()
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -136,6 +147,8 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		mergeGCFile(gcFiles, gcFileMap)
 		oNames = append(oNames, oneNames...)
 	}
+	loadDuration += time.Since(now)
+	now = time.Now()
 	for _, oName := range oNames {
 		if files[oName.String()] == nil {
 			dentry, err := srcFs.StatFile(ctx, oName.String())
@@ -173,29 +186,40 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		})
 	}
 
-	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp")
-	if err != nil {
-		return err
-	}
-	taeFileList = append(taeFileList, sizeList...)
-	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc")
-	if err != nil {
-		return err
-	}
-	taeFileList = append(taeFileList, sizeList...)
+	var cnLoc, tnLoc, mergeStart, mergeEnd string
+	var end, start types.TS
+	var version uint64
 	if trimInfo != "" {
+		var err error
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
-		cnLoc := ckpStr[0]
-		mergeEnd := ckpStr[2]
-		tnLoc := ckpStr[3]
-		mergeStart := ckpStr[4]
-		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+		cnLoc = ckpStr[0]
+		mergeEnd = ckpStr[2]
+		tnLoc = ckpStr[3]
+		mergeStart = ckpStr[4]
+		end = types.StringToTS(mergeEnd)
+		start = types.StringToTS(mergeStart)
+		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
 			return err
 		}
+	}
+
+	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp", start)
+	if err != nil {
+		return err
+	}
+	taeFileList = append(taeFileList, sizeList...)
+	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc", start)
+	if err != nil {
+		return err
+	}
+	copyDuration += time.Since(now)
+	taeFileList = append(taeFileList, sizeList...)
+	now = time.Now()
+	if trimInfo != "" {
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
 			return err
@@ -204,8 +228,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		end := types.StringToTS(mergeEnd)
-		start := types.StringToTS(mergeStart)
 		var checkpointFiles []string
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start, softDeletes)
@@ -235,6 +257,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			size: dentry.Size,
 		})
 	}
+	reWriteDuration += time.Since(now)
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {
@@ -243,16 +266,22 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	return nil
 }
 
-func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) ([]*taeFile, error) {
+func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, backup types.TS) ([]*taeFile, error) {
 	var checksum []byte
 	files, err := srcFs.List(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 	taeFileList := make([]*taeFile, 0, len(files))
+
 	for _, file := range files {
 		if file.IsDir {
 			panic("not support dir")
+		}
+		start, _ := blockio.DecodeCheckpointMetadataFileName(file.Name)
+		if !backup.IsEmpty() && start.GreaterEq(backup) {
+			logutil.Infof("[Backup] skip file %v", file.Name)
+			continue
 		}
 		checksum, err = CopyFile(ctx, srcFs, dstFs, &file, dir)
 		if err != nil {
