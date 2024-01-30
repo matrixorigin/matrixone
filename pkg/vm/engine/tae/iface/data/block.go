@@ -137,7 +137,15 @@ type Block interface {
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
-	CollectDeleteInRangeAfterDeltalocation(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, e *bitmap.Bitmap,rror)
+	CollectDeleteInRangeAfterDeltalocation(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (bat *containers.Batch, err error)
+	PersistedCollectDeleteInRange(
+		ctx context.Context,
+		b *containers.Batch,
+		blkID uint16,
+		start, end types.TS,
+		withAborted bool,
+		mp *mpool.MPool,
+	) (bat *containers.Batch, err error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

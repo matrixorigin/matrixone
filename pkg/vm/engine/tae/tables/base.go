@@ -21,10 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-<<<<<<< HEAD
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-=======
->>>>>>> main
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -312,7 +309,7 @@ func (blk *baseBlock) loadLatestPersistedDeletes(
 		return
 	}
 	node := mvcc.GetLatestMVCCNode(blkID)
-	if node == nil{
+	if node == nil {
 		return
 	}
 	location := node.BaseNode.DeltaLoc
@@ -827,7 +824,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	emtpyDelBlkIdx = &bitmap.Bitmap{}
 	emtpyDelBlkIdx.InitWithSize(int64(blk.meta.BlockCnt()))
 	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
-		deletes, minTS,_, err := blk.inMemoryCollectDeleteInRange(
+		deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 			ctx,
 			blkID,
 			start,
@@ -842,7 +839,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 		if !minTS.IsEmpty() && currentEnd.Greater(minTS) {
 			currentEnd = minTS.Prev()
 		}
-		deletes, err = blk.persistedCollectDeleteInRange(
+		deletes, err = blk.PersistedCollectDeleteInRange(
 			ctx,
 			deletes,
 			blkID,
@@ -883,30 +880,47 @@ func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	// persisted is persistedTS of deletes of the blk
-	// it equals startTS of the last delta location
-	bat, _, persisted, err := blk.inMemoryCollectDeleteInRange(
-		ctx,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
-	if err != nil {
-		return
-	}
-	// if persisted > start,
-	// there's another delta location committed.
-	// It includes more deletes than former delta location.
-	if persisted.Greater(start) {
-		bat, err = blk.persistedCollectDeleteInRange(
+	for i := uint16(0); i < uint16(blk.meta.BlockCnt()); i++ {
+		// persisted is persistedTS of deletes of the blk
+		// it equals startTS of the last delta location
+		deletes, _, persisted, err := blk.inMemoryCollectDeleteInRange(
 			ctx,
-			bat,
+			i,
 			start,
 			end,
 			withAborted,
 			mp,
 		)
+		if err != nil {
+			return nil, err
+		}
+		// if persisted > start,
+		// there's another delta location committed.
+		// It includes more deletes than former delta location.
+		if persisted.Greater(start) {
+			deletes, err = blk.PersistedCollectDeleteInRange(
+				ctx,
+				deletes,
+				i,
+				start,
+				end,
+				withAborted,
+				mp,
+			)
+		}
+		if deletes != nil && deletes.Length() != 0 {
+			if bat == nil {
+				bat = containers.NewBatch()
+				bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
+				bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
+				bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
+				if withAborted {
+					bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
+				}
+			}
+			bat.Extend(deletes)
+			deletes.Close()
+		}
 	}
 	return
 }
@@ -933,7 +947,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 }
 
 // collect the row if its committs is in [start,end]
-func (blk *baseBlock) persistedCollectDeleteInRange(
+func (blk *baseBlock) PersistedCollectDeleteInRange(
 	ctx context.Context,
 	b *containers.Batch,
 	blkID uint16,

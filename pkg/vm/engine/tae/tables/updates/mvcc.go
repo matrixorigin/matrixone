@@ -496,7 +496,11 @@ func (n *ObjectMVCCHandle) GetLatestMVCCNode(blkOffset uint16) *catalog.MVCCNode
 	}
 	return mvcc.deltaloc.GetLatestNodeLocked()
 }
-func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS, deltalocBat *containers.Batch, tnInsertBat *containers.Batch) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
+func (n *ObjectMVCCHandle) VisitDeletes(
+	ctx context.Context,
+	start, end types.TS,
+	deltalocBat *containers.Batch,
+	tnInsertBat *containers.Batch) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	n.RLock()
 	defer n.RUnlock()
 	deltalocStart = deltalocBat.Length()
@@ -515,7 +519,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(ctx context.Context, start, end types.TS
 		}
 		if !skipData {
 			deletes := n.deletes[blkOffset]
-			delBat, _, err := deletes.InMemoryCollectDeleteInRange(ctx, start, end, false, common.LogtailAllocator)
+			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, start, end, false, common.LogtailAllocator)
 			if err != nil {
 				if delBatch != nil {
 					delBatch.Close()
@@ -742,8 +746,9 @@ func (n *MVCCHandle) IsDeletedLocked(
 func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS, pkType types.Type, mp *mpool.MPool,
 ) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
+	aborts *nulls.Bitmap, deletes []uint32, minTS, persistedTS types.TS,
 ) {
+	persistedTS = n.persistedTS
 	if n.deletes.IsEmpty() {
 		return
 	}
@@ -827,11 +832,11 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
-) (bat *containers.Batch, minTS types.TS, err error) {
+) (bat *containers.Batch, minTS, persisitedTS types.TS, err error) {
 	n.RLock()
 	schema := n.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS := n.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS, persisitedTS := n.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
 	n.RUnlock()
 	if rowID == nil {
 		return
@@ -857,6 +862,54 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 		abort.Close()
 		bat.Deletes = abortedMap
 		bat.Compact()
+	}
+	return
+}
+
+func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
+	ctx context.Context,
+	start, end types.TS, // start is startTS of deltalocation
+	withAborted bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, err error) {
+	// persisted is persistedTS of deletes of the blk
+	// it equals startTS of the last delta location
+	deletes, _, persisted, err := n.InMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// if persisted > start,
+	// there's another delta location committed.
+	// It includes more deletes than former delta location.
+	if persisted.Greater(start) {
+		deletes, err = n.meta.GetBlockData().PersistedCollectDeleteInRange(
+			ctx,
+			deletes,
+			n.blkID,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+	}
+	if deletes != nil && deletes.Length() != 0 {
+		if bat == nil {
+			bat = containers.NewBatch()
+			bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
+			bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
+			bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
+			if withAborted {
+				bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
+			}
+		}
+		bat.Extend(deletes)
+		deletes.Close()
 	}
 	return
 }

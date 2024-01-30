@@ -527,10 +527,10 @@ func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVC
 			// appendable block has been flushed, no need to collect data
 			return true
 		}
+		return false
 	} else {
 		return true
 	}
-	return false
 }
 func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	data := e.GetBlockData()

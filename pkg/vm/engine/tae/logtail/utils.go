@@ -2919,7 +2919,7 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 
 	var needPrefetch bool
 	if !collector.skipLoadObjectStats {
-		needPrefetch, _ = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+		needPrefetch = entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
 	}
 
 	if collector.isPrefetch {

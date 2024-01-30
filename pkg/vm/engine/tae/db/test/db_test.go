@@ -3016,7 +3016,6 @@ func TestCompactBlk2(t *testing.T) {
 
 	txn4, rel2 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
-	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
 	it := rel.MakeObjectIt()
