@@ -130,10 +130,6 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				} else {
 					width = types.MaxVarcharLen
 				}
-
-				if fstr == "varbinary" {
-					return nil, moerr.NewSyntaxError(ctx, "Should specify width to varbinary type")
-				}
 			}
 
 			if (fstr == "char" || fstr == "binary") && width > types.MaxCharLen {
