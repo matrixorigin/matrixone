@@ -107,7 +107,7 @@ func (r *BlockReader) LoadColumns(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, release func(), err error) {
 	metaExt := r.reader.GetMetaExtent()
 	if metaExt == nil || metaExt.End() == 0 {
 		return
@@ -132,6 +132,16 @@ func (r *BlockReader) LoadColumns(
 			return
 		}
 	}
+	release = func() {
+		if ioVectors != nil {
+			objectio.ReleaseIOVector(ioVectors)
+		}
+	}
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
@@ -152,7 +162,7 @@ func (r *BlockReader) LoadSubColumns(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (bats []*batch.Batch, err error) {
+) (bats []*batch.Batch, releases []func(), err error) {
 	metaExt := r.reader.GetMetaExtent()
 	if metaExt == nil || metaExt.End() == 0 {
 		return
@@ -161,6 +171,12 @@ func (r *BlockReader) LoadSubColumns(
 	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
 	if err != nil {
 		return
+	}
+	releases = make([]func(), len(ioVectors))
+	for i, vec := range ioVectors {
+		releases[i] = func() {
+			objectio.ReleaseIOVector(vec)
+		}
 	}
 	bats = make([]*batch.Batch, 0)
 	for idx := range ioVectors {
@@ -187,13 +203,15 @@ func (r *BlockReader) LoadOneSubColumns(
 	dataType uint16,
 	blk uint16,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, release func(), err error) {
 	metaExt := r.reader.GetMetaExtent()
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVector *fileservice.IOVector
-	ioVector, err = r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
+	ioVector, err := r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
+	release = func() {
+		objectio.ReleaseIOVector(ioVector)
+	}
 	if err != nil {
 		return
 	}
@@ -214,14 +232,14 @@ func (r *BlockReader) LoadAllColumns(
 	ctx context.Context,
 	idxs []uint16,
 	m *mpool.MPool,
-) ([]*batch.Batch, error) {
+) ([]*batch.Batch, func(), error) {
 	meta, err := r.reader.ReadAllMeta(ctx, m)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dataMeta := meta.MustDataMeta()
 	if dataMeta.BlockHeader().MetaLocation().End() == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	block := dataMeta.GetBlockMeta(0)
 	if len(idxs) == 0 {
@@ -235,22 +253,29 @@ func (r *BlockReader) LoadAllColumns(
 
 	ioVectors, err := r.reader.ReadAll(ctx, idxs, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	defer func() {
+		if err != nil {
+			if ioVectors != nil {
+				objectio.ReleaseIOVector(ioVectors)
+			}
+		}
+	}()
 	for y := 0; y < int(dataMeta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
 		var obj any
 		for i := range idxs {
 			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].CachedData.Bytes())
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			bat.Vecs[i] = obj.(*vector.Vector)
 			bat.SetRowCount(bat.Vecs[i].Length())
 		}
 		bats = append(bats, bat)
 	}
-	return bats, nil
+	return bats, func() { objectio.ReleaseIOVector(ioVectors) }, nil
 }
 
 func (r *BlockReader) LoadZoneMaps(
