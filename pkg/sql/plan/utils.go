@@ -1872,6 +1872,7 @@ func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
 
 // HasFkSelfReferOnly checks the foreign key referencing itself only.
 // If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
 func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	for _, tbl := range tableDef.RefChildTbls {
 		if tbl != 0 {

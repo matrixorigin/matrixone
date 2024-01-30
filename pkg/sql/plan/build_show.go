@@ -294,6 +294,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		for i, colId := range fk.ForeignCols {
 			fkColNames[i] = fkColIdToName[colId]
 		}
+
 		if rowCount != 0 {
 			createStr += ",\n"
 		}

@@ -490,6 +490,7 @@ func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	return false
 }
 
+// makeSelectList forms SELECT Clause "Select t.a,t.b,... "
 func makeSelectList(table string, strs []string) string {
 	bb := strings.Builder{}
 	for i, str := range strs {
@@ -509,6 +510,7 @@ func makeSelectList(table string, strs []string) string {
 	return bb.String()
 }
 
+// makeWhere forms WHERE Clause "Where t.a is not null and ..."
 func makeWhere(table string, strs []string) string {
 	bb := strings.Builder{}
 	for i, str := range strs {
@@ -531,6 +533,7 @@ func makeWhere(table string, strs []string) string {
 	return bb.String()
 }
 
+// colIdsToNames convert the colId to the col name
 func colIdsToNames(ctx context.Context, colIds []uint64, colDefs []*plan.ColDef) ([]string, error) {
 	colId2Name := make(map[uint64]string)
 	for _, def := range colDefs {
@@ -547,6 +550,26 @@ func colIdsToNames(ctx context.Context, colIds []uint64, colDefs []*plan.ColDef)
 	return names, nil
 }
 
+/*
+genSqlForCheckFKConstraints generates the fk constraint checking sql.
+
+basic logic of fk constraint check.
+
+	parent table:
+		T(a)
+	child table:
+		S(b)
+		foreign key (b) references T(a)
+
+
+	generated sql :
+		select count(*) == 0 from (
+			select distinct S.b from S where S.b is not null
+			except
+			select distinct T.a from T
+		)
+	if the result is true, then the fk constraint confirmed.
+*/
 func genSqlForCheckFKConstraints(ctx context.Context,
 	fkey *plan.ForeignKeyDef,
 	childDbName, childTblName string, colsOfChild []*plan.ColDef,
@@ -583,6 +606,9 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 	return sql, nil
 }
 
+// genSqlsForCheckFKSelfRefer generates the fk constraint checking sql.
+// the only difference between genSqlsForCheckFKSelfRefer and genSqlForCheckFKConstraints
+// is the parent table and child table are same in the fk self refer.
 func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	dbName, tblName string,
 	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {

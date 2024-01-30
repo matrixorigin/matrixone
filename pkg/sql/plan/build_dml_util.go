@@ -601,6 +601,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				continue
 			}
 
+			//delete data in parent table may trigger some actions in the child table
 			var childObjRef *ObjectRef
 			var childTableDef *TableDef
 			if tableId == 0 {
@@ -645,7 +646,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
-				fkSelfReferCond := fk.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
+				//child table fk self refer
+				//if the child table in the delete table list, something must be done
+				fkSelfReferCond := fk.ForeignTbl == 0 &&
+					childTableDef.TblId == delCtx.tableDef.TblId
 				if fk.ForeignTbl == delCtx.tableDef.TblId || fkSelfReferCond {
 					// update stmt: update the columns do not contain ref key, skip
 					updateRefColumn := make(map[string]int32)
@@ -808,12 +812,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								update t1 set a = NULL where a = 4;
 								--> ERROR 20101 (HY000): internal error: unexpected input batch for column expression
 						*/
-						copied := DeepCopyTableDef(childTableDef, true)
+						copiedTableDef := DeepCopyTableDef(childTableDef, true)
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
-							TableDef:    copied,
+							TableDef: copiedTableDef,
 							ProjectList: childProjectList,
 						}, bindCtx)
 
@@ -919,6 +923,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childProjectList,
 						}, bindCtx)
 
+						//skip cascade for fk self refer
 						if !fkSelfReferCond {
 							if isUpdate {
 								// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
@@ -1239,7 +1244,9 @@ func makeInsertPlan(
 		if err != nil {
 			return err
 		}
-		//skip fk self refer
+
+		//if the all fk are fk self refer, the lastNodeId is -1.
+		//skip fk self refer here
 		if lastNodeId >= 0 {
 			lastNode := builder.qry.Nodes[lastNodeId]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
@@ -2296,7 +2303,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	lastNodeId := baseNodeId
 	for _, fk := range tableDef.Fkeys {
 		if fk.ForeignTbl == 0 {
-			//
+			//skip fk self refer
 			continue
 		}
 
@@ -2392,7 +2399,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	if lastNodeId == baseNodeId {
-		//no fk
+		//all fk are fk self refer
 		return -1, nil
 	}
 

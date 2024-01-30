@@ -2533,7 +2533,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
+				//for new fk in this alter table, the data in the table must
+				//be checked to confirm that it is compliant with foreign key constraints.
 				if fkData.IsSelfRefer {
+					//fk self refer.
+					//check columns of fk self refer are valid
 					err = checkFkColsAreValid(ctx, fkData, tableDef)
 					if err != nil {
 						return nil, err
@@ -3006,9 +3010,9 @@ type fkData struct {
 }
 
 // getForeignKeyData prepares the foreign key data.
-//for fk refer except the self refer, it is same as the previous one.
-//but for fk self refer, it is different in not checking fk self refer instantly.
-//because it is not ready. It should be checked after the pk,uk has been ready.
+// for fk refer except the self refer, it is same as the previous one.
+// but for fk self refer, it is different in not checking fk self refer instantly.
+// because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*fkData, error) {
 	refer := def.Refer
 	fkData := fkData{
