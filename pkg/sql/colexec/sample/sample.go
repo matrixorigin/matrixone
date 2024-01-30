@@ -168,7 +168,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	anal.Output(result.Batch, arg.info.IsLast)
 	arg.buf = result.Batch
-	return result, nil
+	return result, err
 }
 
 func getGroupKeyWidth(exprList []*plan.Expr) (keyWidth int, groupKeyNullable bool) {
