@@ -295,3 +295,145 @@ func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 func (exec *singleAggFuncExec3[to]) Free() {
 	exec.ret.free()
 }
+
+func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConst() {
+		row = 0
+	}
+
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
+		if exec.receiveNull {
+			exec.groups[groupIndex].fillNull()
+		}
+		return nil
+	}
+
+	exec.groups[groupIndex].fillBytes(vec.GetBytesAt(row))
+	return nil
+}
+
+func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	length := vec.Length()
+
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			if exec.receiveNull {
+				exec.groups[groupIndex].fills(nil, true, length)
+			}
+		} else {
+			exec.groups[groupIndex].fills(vec.GetBytesAt(0), false, length)
+		}
+		return nil
+	}
+
+	exec.arg.Prepare(vec)
+	if exec.arg.w.WithAnyNullValue() {
+		if exec.receiveNull {
+			for i, j := uint64(0), uint64(length); i < j; i++ {
+				v, null := exec.arg.w.GetStrValue(i)
+				if null {
+					exec.groups[groupIndex].fillNull()
+				} else {
+					exec.groups[groupIndex].fillBytes(v)
+				}
+			}
+		} else {
+			for i, j := uint64(0), uint64(length); i < j; i++ {
+				v, null := exec.arg.w.GetStrValue(i)
+				if !null {
+					exec.groups[groupIndex].fillBytes(v)
+				}
+			}
+		}
+		return nil
+	}
+
+	for i, j := uint64(0), uint64(length); i < j; i++ {
+		v, _ := exec.arg.w.GetStrValue(i)
+		exec.groups[groupIndex].fillBytes(v)
+	}
+	return nil
+}
+
+func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			if exec.receiveNull {
+				for i := 0; i < len(groups); i++ {
+					if groups[i] != GroupNotMatched {
+						exec.groups[groups[i]-1].fillNull()
+					}
+				}
+			}
+			return nil
+		}
+
+		value := vec.GetBytesAt(0)
+		for i := 0; i < len(groups); i++ {
+			if groups[i] != GroupNotMatched {
+				exec.groups[groups[i]-1].fillBytes(value)
+			}
+		}
+		return nil
+	}
+
+	exec.arg.Prepare(vec)
+	if exec.arg.w.WithAnyNullValue() {
+		if exec.receiveNull {
+			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+				if groups[idx] != GroupNotMatched {
+					v, null := exec.arg.w.GetStrValue(i)
+					if null {
+						exec.groups[groups[idx]-1].fillNull()
+					} else {
+						exec.groups[groups[idx]-1].fillBytes(v)
+					}
+				}
+				idx++
+			}
+			return nil
+		}
+
+		for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+			if groups[idx] != GroupNotMatched {
+				v, null := exec.arg.w.GetStrValue(i)
+				if !null {
+					exec.groups[groups[idx]-1].fillBytes(v)
+				}
+			}
+			idx++
+		}
+		return nil
+	}
+
+	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+		if groups[idx] != GroupNotMatched {
+			v, _ := exec.arg.w.GetStrValue(i)
+			exec.groups[groups[idx]-1].fillBytes(v)
+		}
+		idx++
+	}
+	return nil
+}
+
+func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
+	if exec.partialResult != nil {
+		exec.groups[exec.partialGroup].fillBytes(exec.partialResult.([]byte))
+	}
+
+	var err error
+	for i, group := range exec.groups {
+		if err = exec.ret.set(i, group.flush()); err != nil {
+			return nil, err
+		}
+	}
+
+	return exec.ret.flush(), nil
+}
+
+func (exec *singleAggFuncExec4) Free() {
+	exec.ret.free()
+}

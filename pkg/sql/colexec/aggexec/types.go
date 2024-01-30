@@ -63,6 +63,8 @@ type AggFuncExec interface {
 var (
 	_ AggFuncExec = (*singleAggFuncExec1[int8, int64])(nil)
 	_ AggFuncExec = (*singleAggFuncExec2[int64])(nil)
+	_ AggFuncExec = (*singleAggFuncExec3[int64])(nil)
+	_ AggFuncExec = &singleAggFuncExec4{}
 	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 )
