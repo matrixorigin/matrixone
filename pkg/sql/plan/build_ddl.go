@@ -921,7 +921,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	colMap := make(map[string]*ColDef)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
-	selfRefFkDatas := make([]*fkData, 0)
+	fkDatasOfFKSelfRefer := make([]*fkData, 0)
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -1076,7 +1076,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 			//save self reference foreign keys
 			if fkData.IsSelfRefer {
-				selfRefFkDatas = append(selfRefFkDatas, fkData)
+				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
@@ -1283,13 +1283,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	//process self reference foreign keys after colDefs and indexes are processed.
-	if len(selfRefFkDatas) > 0 {
+	if len(fkDatasOfFKSelfRefer) > 0 {
 		//for fk self refer. the column id of the tableDef is not ready.
 		//setup fake column id to distinguish the columns
 		for i, def := range createTable.TableDef.Cols {
 			def.ColId = uint64(i)
 		}
-		for _, selfRefer := range selfRefFkDatas {
+		for _, selfRefer := range fkDatasOfFKSelfRefer {
 			if err := checkFkColsAreValid(ctx, selfRefer, createTable.TableDef); err != nil {
 				return err
 			}
@@ -2390,12 +2390,15 @@ func constraintNameAreWhiteSpaces(constraint string) bool {
 	return len(constraint) != 0 && len(strings.TrimSpace(constraint)) == 0
 }
 
-// GenConstraintName yields uuid
+// GenConstraintName yields uuid for the constraint name
 func GenConstraintName() string {
 	constraintId, _ := uuid.NewV7()
 	return constraintId.String()
 }
 
+// adjustConstraintName updates a suitable name for the constraint.
+// throw error if the user input all white space name.
+// regenerate a new name if the user input nothing.
 func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 	//user add a constraint name
 	if constraintNameAreWhiteSpaces(def.ConstraintSymbol) {
@@ -3002,6 +3005,10 @@ type fkData struct {
 	Refer *tree.AttributeReference
 }
 
+// getForeignKeyData prepares the foreign key data.
+//for fk refer except the self refer, it is same as the previous one.
+//but for fk self refer, it is different in not checking fk self refer instantly.
+//because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*fkData, error) {
 	refer := def.Refer
 	fkData := fkData{
@@ -3068,7 +3075,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key %s can not reference to itself", name)
 			}
 		}
-		//for fk self refer. column id is not ready also.
+		//for fk self refer. column id may be not ready.
 
 		fkData.IsSelfRefer = true
 		fkData.parentDbName = parentDbName
@@ -3091,6 +3098,10 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
 
+	//separate the rest of the logic in previous version
+	//into an independent function checkFkColsAreValid
+	//for reusing it in fk self refer that checks the
+	//columns in fk definition are valid or not.
 	if err := checkFkColsAreValid(ctx, &fkData, parentTableDef); err != nil {
 		return nil, err
 	}

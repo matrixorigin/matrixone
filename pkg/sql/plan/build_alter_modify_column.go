@@ -179,7 +179,6 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		//TODO: handle self reference
 		refObjRef, refTableDef := ctx.ResolveById(referredTblId)
 		if refTableDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)

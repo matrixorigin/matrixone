@@ -101,7 +101,6 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 		return err
 	}
 	// We do not support drop column that contain foreign key columns now.
-	//TODO: handle self reference
 	err = checkAlterColumnWithForeignKey(colName, tableDef.RefChildTbls, tableDef.Fkeys, ctx)
 	if err != nil {
 		return err
@@ -134,7 +133,6 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 	}
 
 	// We do not support add column that contain foreign key columns now.
-	//TODO: handle self reference
 	err := checkAlterColumnWithForeignKey(colName, tableDef.RefChildTbls, tableDef.Fkeys, ctx)
 	if err != nil {
 		return err

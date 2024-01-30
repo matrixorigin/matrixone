@@ -161,7 +161,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	//TODO: handle self reference
 	if len(qry.CopyTableDef.RefChildTbls) > 0 {
 		// Restore the original table's foreign key child table ids to the copy table definition
 		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
@@ -200,6 +199,7 @@ func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColD
 	var childRelation engine.Relation
 	var err error
 	if childTblId == 0 {
+		//fk self refer does not update
 		return nil
 	} else {
 		_, _, childRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)

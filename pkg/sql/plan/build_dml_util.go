@@ -596,7 +596,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		baseProject := getProjectionByLastNode(builder, lastNodeId)
 
 		for _, tableId := range delCtx.tableDef.RefChildTbls {
-			//TODO: skip self reference
 			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
 			if _, existInDelTable := delCtx.allDelTableIDs[tableId]; existInDelTable {
 				continue
@@ -605,6 +604,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			var childObjRef *ObjectRef
 			var childTableDef *TableDef
 			if tableId == 0 {
+				//fk self refer
 				childObjRef = delCtx.objRef
 				childTableDef = delCtx.tableDef
 			} else {
@@ -645,8 +645,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			for _, fk := range childTableDef.Fkeys {
-				case2 := fk.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
-				if fk.ForeignTbl == delCtx.tableDef.TblId || case2 {
+				fkSelfReferCond := fk.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
+				if fk.ForeignTbl == delCtx.tableDef.TblId || fkSelfReferCond {
 					// update stmt: update the columns do not contain ref key, skip
 					updateRefColumn := make(map[string]int32)
 					if isUpdate {
@@ -919,7 +919,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childProjectList,
 						}, bindCtx)
 
-						if !case2 {
+						if !fkSelfReferCond {
 							if isUpdate {
 								// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
 								joinProjection := childForJoinProject

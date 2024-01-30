@@ -430,12 +430,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			}
 
 			//detect fk self refer
-			//get the detect sql
+			//update, insert
 			query := c.pn.GetQuery()
 			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
 				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
 				err = detectFkSelfRefer(runC, query.DetectSqls)
 			}
+			//alter table ... add/drop foreign key
 			ddl := c.pn.GetDdl()
 			if err == nil && ddl != nil {
 				alterTable := ddl.GetAlterTable()
@@ -487,32 +488,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 	return result, nil
-}
-
-func detectFkSelfRefer(c *Compile, detectSqls []string) error {
-	if len(detectSqls) == 0 {
-		return nil
-	}
-	for _, sql := range detectSqls {
-		res, err := c.runSqlWithResult(sql)
-		if err != nil {
-			logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
-			return err
-		}
-		defer res.Close()
-
-		if res.Batches != nil {
-			vs := res.Batches[0].Vecs
-			if vs != nil && vs[0].Length() > 0 {
-				yes := vector.GetFixedAt[bool](vs[0], 0)
-				if !yes {
-					return moerr.NewErrFKNoReferencedRow2(c.ctx)
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
@@ -4401,4 +4376,31 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+// detectFkSelfRefer checks if foreign key self refer confirmed
+func detectFkSelfRefer(c *Compile, detectSqls []string) error {
+	if len(detectSqls) == 0 {
+		return nil
+	}
+	for _, sql := range detectSqls {
+		res, err := c.runSqlWithResult(sql)
+		if err != nil {
+			logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+			return err
+		}
+		defer res.Close()
+
+		if res.Batches != nil {
+			vs := res.Batches[0].Vecs
+			if vs != nil && vs[0].Length() > 0 {
+				yes := vector.GetFixedAt[bool](vs[0], 0)
+				if !yes {
+					return moerr.NewErrFKNoReferencedRow2(c.ctx)
+				}
+			}
+		}
+	}
+
+	return nil
 }
