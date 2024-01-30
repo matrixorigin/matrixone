@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -241,16 +242,22 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	return nil
 }
 
-func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) ([]*taeFile, error) {
+func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, backup types.TS) ([]*taeFile, error) {
 	var checksum []byte
 	files, err := srcFs.List(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
 	taeFileList := make([]*taeFile, 0, len(files))
+
 	for _, file := range files {
 		if file.IsDir {
 			panic("not support dir")
+		}
+		start, _ := blockio.DecodeCheckpointMetadataFileName(file.Name)
+		if start.Greater(backup) {
+			logutil.Infof("[Backup] skip file %v", file.Name)
+			continue
 		}
 		checksum, err = CopyFile(ctx, srcFs, dstFs, &file, dir)
 		if err != nil {
