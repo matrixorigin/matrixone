@@ -135,6 +135,12 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		GlobalMinCount:        s.cfg.Ckp.GlobalMinCount,
 		ReservedWALEntryCount: s.cfg.Ckp.ReservedWALEntryCount,
 	}
+
+	gcCfg := &options.GCCfg{
+		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
+		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
+		DisableGC:      s.cfg.GCCfg.DisableGC,
+	}
 	logtailServerAddr := s.logtailServiceListenAddr()
 	logtailServerCfg := &options.LogtailServerCfg{
 		RpcMaxMessageSize:      int64(s.cfg.LogtailServer.RpcMaxMessageSize),
@@ -157,6 +163,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		fs,
 		s.rt,
 		ckpcfg,
+		gcCfg,
 		logtailServerAddr,
 		logtailServerCfg,
 		s.cfg.Txn.IncrementalDedup == "true",
