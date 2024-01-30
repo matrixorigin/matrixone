@@ -232,7 +232,7 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 			usage.Size += old.Size
 		}
 
-		cnUsageCache.Update(usage)
+		cnUsageCache.SetOrReplace(usage)
 	}
 }
 
