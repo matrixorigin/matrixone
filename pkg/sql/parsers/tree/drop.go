@@ -292,11 +292,11 @@ func (node *DropUser) Free() {
 }
 
 func (node *DropUser) reset() {
-	if node.Users != nil {
+	// if node.Users != nil {
 		// for _, item := range node.Users {
 		// 	reuse.Free[User](item, nil)
 		// }
-	}
+	// }
 }
 
 func (node DropUser) TypeName() string { return "tree.DropUser" }
@@ -375,4 +375,3 @@ func (node *DropPublication) reset() {
 }
 
 func (node DropPublication) TypeName() string { return "tree.DropPublication" }
-

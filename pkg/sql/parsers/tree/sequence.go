@@ -26,6 +26,11 @@ func init() {
 		func(a *AlterSequence) { a.reset() },
 		reuse.DefaultOptions[AlterSequence]().
 			WithEnableChecker())
+	reuse.CreatePool[DropSequence](
+		func() *DropSequence { return &DropSequence{} },
+		func(a *DropSequence) { a.reset() },
+		reuse.DefaultOptions[DropSequence]().
+			WithEnableChecker())
 }
 
 type CreateSequence struct {

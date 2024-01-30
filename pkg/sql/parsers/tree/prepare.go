@@ -93,14 +93,14 @@ func (node *PrepareString) reset() {
 func (node PrepareString) TypeName() string { return "tree.PrepareString" }
 
 func NewPrepareStmt(name Identifier, statement Statement) *PrepareStmt {
-	preparestmt := reuse.Alloc[PrepareStmt](nil)	
+	preparestmt := reuse.Alloc[PrepareStmt](nil)
 	preparestmt.Name = name
 	preparestmt.Stmt = statement
 	return preparestmt
 }
 
 func NewPrepareString(name Identifier, sql string) *PrepareString {
-	preparestmt := reuse.Alloc[PrepareString](nil)	
+	preparestmt := reuse.Alloc[PrepareString](nil)
 	preparestmt.Name = name
 	preparestmt.Sql = sql
 	return preparestmt

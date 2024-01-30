@@ -278,19 +278,19 @@ func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt 
 
 func (node *AlterAccount) Free() { reuse.Free[AlterAccount](node, nil) }
 
-func (ca *AlterAccount) Format(ctx *FmtCtx) {
+func (node *AlterAccount) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter account ")
-	if ca.IfExists {
+	if node.IfExists {
 		ctx.WriteString("if exists ")
 	}
-	ctx.WriteString(ca.Name)
-	ca.AuthOption.Format(ctx)
-	ca.StatusOption.Format(ctx)
-	ca.Comment.Format(ctx)
+	ctx.WriteString(node.Name)
+	node.AuthOption.Format(ctx)
+	node.StatusOption.Format(ctx)
+	node.Comment.Format(ctx)
 }
 
-func (ca *AlterAccount) GetStatementType() string { return "Alter Account" }
-func (ca *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
+func (node *AlterAccount) GetStatementType() string { return "Alter Account" }
+func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 
 func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
 
@@ -722,11 +722,11 @@ func NewAccountsSetOption(al bool, se, ad, dr IdentifierList) *AccountsSetOption
 
 func (node AccountsSetOption) TypeName() string { return "tree.AccountsSetOption" }
 
-func (node *AccountsSetOption) reset() {
+// func (node *AccountsSetOption) reset() {
 	// if node.AccountsSet != nil {
 	// 	reuse.Free[AccountsSetOption](node.AccountsSet, nil)
 	// }
-}
+// }
 
 type AlterPublication struct {
 	statementImpl

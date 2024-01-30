@@ -49,9 +49,9 @@ func (node *AnalyzeStmt) Free() {
 func (node AnalyzeStmt) TypeName() string { return "tree.AnalyzeStmt" }
 
 func (node *AnalyzeStmt) reset() {
-	if node.Table != nil {
+	// if node.Table != nil {
 		// reuse.Free[TableName](node.Table, nil)
-	}
+	// }
 }
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
 	analyzestmt := reuse.Alloc[AnalyzeStmt](nil)
