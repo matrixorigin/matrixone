@@ -1879,16 +1879,11 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
-	// use shuffle for load if parallel and no compress
-	useShuffle := param.Parallel && (external.GetCompressType(param, fileList[0]) == tree.NOCOMPRESS)
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
-		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
-		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1906,12 +1901,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	if useShuffle {
-		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-	} else {
-		arg.FuncId = dispatch.SendToAnyLocalFunc
-	}
+	arg.FuncId = dispatch.SendToAnyLocalFunc
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
