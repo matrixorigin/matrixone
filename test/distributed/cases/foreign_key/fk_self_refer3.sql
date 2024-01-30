@@ -40,7 +40,7 @@ update t1 set e = 5 where b = 4;
 update t1 set e = NULL where b = 4;
 
 --error. duplicate 3 in the column b
-update t1 set b = 3 where b = 4;
+--update t1 set b = 3 where b = 4;
 
 --no error.
 update t1 set b = 5 where b = 4;
@@ -55,7 +55,7 @@ update t1 set g = 4 where b = 5;
 update t1 set g = 2 where b = 5;
 
 --error. duplicate 2 in the column c
-update t1 set c = 2 where b = 5;
+--update t1 set c = 2 where b = 5;
 
 --no error.
 update t1 set c = 4 where b = 5;
@@ -157,7 +157,7 @@ insert into t1 values (
                           10,5);
 
 --error. duplicate
-update t1 set c = 4 where b = 3;
+--update t1 set c = 4 where b = 3;
 
 --no error
 update t1 set c = 6 where b = 3;

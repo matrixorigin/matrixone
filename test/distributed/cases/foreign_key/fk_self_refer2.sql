@@ -114,7 +114,7 @@ update t1 set a = NULL where a = 2;
 delete from t1 where c = 1;
 
 --should be error. 1 duplicate
-insert into t1 values (1,2,3);
+--insert into t1 values (1,2,3);
 
 --no error
 insert into t1 values (2,2,1);

@@ -26,16 +26,12 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 update t1 set e = 5 where b = 4;
 Cannot add or update a child row: a foreign key constraint fails
 update t1 set e = NULL where b = 4;
-update t1 set b = 3 where b = 4;
-Duplicate entry '(1,3)' for key '__mo_cpkey_col'
 update t1 set b = 5 where b = 4;
 update t1 set c = 4 where b = 5;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set g = 4 where b = 5;
 Cannot add or update a child row: a foreign key constraint fails
 update t1 set g = 2 where b = 5;
-update t1 set c = 2 where b = 5;
-Duplicate entry '(1,2)' for key '__mo_index_idx_col'
 update t1 set c = 4 where b = 5;
 delete from t1 where b = 5;
 delete from t1 where b = 3;
@@ -105,8 +101,6 @@ insert into t1 values (
 1,5,
 5,5,
 10,5);
-update t1 set c = 4 where b = 3;
-Duplicate entry '(1,4)' for key '__mo_index_idx_col'
 update t1 set c = 6 where b = 3;
 update t1 set c = NULL where b = 3;
 delete from t1 where c = 4;

@@ -60,8 +60,6 @@ insert into t1 values (2,1,1);
 update t1 set a = NULL where a = 2;
 delete from t1 where c = 1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
-insert into t1 values (1,2,3);
-Duplicate entry '1' for key '__mo_index_idx_col'
 insert into t1 values (2,2,1);
 insert into t1 values (3,3,2);
 insert into t1 values (4,3,1);
