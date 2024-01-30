@@ -258,7 +258,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	//added fk in this alter table statement
 	newAddedFkNames := make(map[string]bool)
 	/*
-		get old fks.
+		collect old fk names.
 		ForeignKeyDef.Name may be empty in previous design.
 		So, we only use ForeignKeyDef.Name that is no empty.
 	*/

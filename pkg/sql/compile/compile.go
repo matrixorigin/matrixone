@@ -437,10 +437,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 				err = detectFkSelfRefer(runC, query.DetectSqls)
 			}
 			//alter table ... add/drop foreign key
-			ddl := c.pn.GetDdl()
-			if err == nil && ddl != nil {
-				alterTable := ddl.GetAlterTable()
-				if len(alterTable.GetDetectSqls()) != 0 {
+			if err == nil && c.pn.GetDdl() != nil {
+				alterTable := c.pn.GetDdl().GetAlterTable()
+				if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
 					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
 				}
 			}
@@ -4384,23 +4383,32 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 		return nil
 	}
 	for _, sql := range detectSqls {
-		res, err := c.runSqlWithResult(sql)
+		err := runDetectSql(c, sql)
 		if err != nil {
-			logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 			return err
-		}
-		defer res.Close()
-
-		if res.Batches != nil {
-			vs := res.Batches[0].Vecs
-			if vs != nil && vs[0].Length() > 0 {
-				yes := vector.GetFixedAt[bool](vs[0], 0)
-				if !yes {
-					return moerr.NewErrFKNoReferencedRow2(c.ctx)
-				}
-			}
 		}
 	}
 
+	return nil
+}
+
+// runDetectSql runs the fk detecting sql
+func runDetectSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if !yes {
+				return moerr.NewErrFKNoReferencedRow2(c.ctx)
+			}
+		}
+	}
 	return nil
 }
