@@ -1926,6 +1926,9 @@ func CreateIndexDef(indexInfo *tree.Index,
 		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
+		case catalog.MOIndexMasterAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		case catalog.MoIndexIvfFlatAlgo:
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
@@ -2014,6 +2017,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 						// Ideally, after truncate the user is expected to run re-index.
 						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 					}
+				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}
