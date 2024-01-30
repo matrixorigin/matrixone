@@ -899,8 +899,8 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
-		collector.UsageMemo.LeaveProcessing()
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+		collector.UsageMemo.LeaveProcessing()
 	}()
 
 	log1, cnt := putCacheBack2Track(collector.BaseCollector)
@@ -918,9 +918,9 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
-		collector.UsageMemo.LeaveProcessing()
 		v2.TaskStorageUsageCacheMemUsedGauge.Set(collector.UsageMemo.MemoryUsed())
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+		collector.UsageMemo.LeaveProcessing()
 	}()
 
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
