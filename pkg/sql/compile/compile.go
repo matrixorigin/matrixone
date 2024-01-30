@@ -1429,7 +1429,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
@@ -1497,7 +1498,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
@@ -1809,8 +1811,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.Tail = new(tree.TailParameter)
 		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
 		param.Tail.Fields = &tree.Fields{
-			Terminated: n.ExternScan.Terminated,
-			EnclosedBy: n.ExternScan.EnclosedBy[0],
+			Terminated: &tree.Terminated{
+				Value: n.ExternScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: n.ExternScan.EnclosedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
