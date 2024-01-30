@@ -293,17 +293,20 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
+	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i], common.CheckpointAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+			srcVec := containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+			defer srcVec.Close()
+			vec = srcVec.CloneWindow(0, pkgVec.Length(), common.CheckpointAllocator)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
