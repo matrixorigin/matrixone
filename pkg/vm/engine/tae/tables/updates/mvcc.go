@@ -500,7 +500,8 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	ctx context.Context,
 	start, end types.TS,
 	deltalocBat *containers.Batch,
-	tnInsertBat *containers.Batch) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
+	tnInsertBat *containers.Batch,
+	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
 	n.RLock()
 	defer n.RUnlock()
 	deltalocStart = deltalocBat.Length()
@@ -517,7 +518,7 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 			skipData = newest.GetStart().GreaterEq(end)
 			start = newest.GetStart()
 		}
-		if !skipData {
+		if !skipData && !skipInMemory {
 			deletes := n.deletes[blkOffset]
 			delBat, err := deletes.CollectDeleteInRangeAfterDeltalocation(ctx, start, end, false, common.LogtailAllocator)
 			if err != nil {

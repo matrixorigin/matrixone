@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"sync"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -116,33 +115,32 @@ func (t *GCTable) dropTable(id common.ID) {
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
-	ins, insTxn, del, delTxn := data.GetBlkBatchs()
-	for i := 0; i < ins.Length(); i++ {
-		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
-		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
-		metaLoc := objectio.Location(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		id := common.ID{
-			DbID:    dbid,
-			TableID: tid,
-			BlockID: blkID,
-		}
-		t.addBlock(id, metaLoc.Name().String())
-	}
-	for i := 0; i < del.Length(); i++ {
-		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
-		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
-		metaLoc := objectio.Location(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-
+	obj := data.GetObjectBatchs()
+	for i := 0; i < obj.Length(); i++ {
+		dbid := obj.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		tid := obj.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
+		buf := obj.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		stats := (objectio.ObjectStats)(buf)
+		objName := stats.ObjectName()
+		objID := objName.ObjectId()
+		deleteAt := obj.GetVectorByName(catalog.EntryNode_DeleteAt).Get(i).(types.TS)
 		id := common.ID{
 			TableID: tid,
-			BlockID: blkID.CloneBlockID(),
+			BlockID: *objectio.NewBlockidWithObjectID(objID, 0),
 			DbID:    dbid,
 		}
-		t.deleteBlock(id, metaLoc.Name().String())
+		if deleteAt.IsEmpty() {
+			id := common.ID{
+				DbID:    dbid,
+				TableID: tid,
+				BlockID: *objectio.NewBlockidWithObjectID(objID, 0),
+			}
+			t.addBlock(id, objName.String())
+		} else {
+			t.deleteBlock(id, objName.String())
+		}
 	}
-	_, _, _, del, delTxn = data.GetTblBatchs()
+	_, _, _, del, delTxn := data.GetTblBatchs()
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)

@@ -434,6 +434,15 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
+	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
+	objMeta.Lock()
+	baseNode := objMeta.GetLatestNodeLocked().BaseNode
+	err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
+	assert.Nil(t, err)
+	err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
+	assert.Nil(t, err)
+	assert.False(t, baseNode.IsEmpty())
+	objMeta.Unlock()
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -1350,6 +1359,15 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.SoftDeleteObject(obj.GetID())
 	assert.NoError(t, err)
+	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
+	objMeta.Lock()
+	baseNode := objMeta.GetLatestNodeLocked().BaseNode
+	err = objectio.SetObjectStatsSize(&baseNode.ObjectStats, 1)
+	assert.Nil(t, err)
+	err = objectio.SetObjectStatsRowCnt(&baseNode.ObjectStats, 1)
+	assert.Nil(t, err)
+	assert.False(t, baseNode.IsEmpty())
+	objMeta.Unlock()
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
