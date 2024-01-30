@@ -1578,6 +1578,9 @@ func (mce *MysqlCmdExecutor) handleShowCollation(sc *tree.ShowCollation, proc *p
 
 func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation) error {
 	var err error
+	var bat *batch.Batch
+	//var outputBatches []*batch.Batch
+
 	// Construct the columns.
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1650,12 +1653,14 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		rows = append(rows, row)
 	}
 
+	bat, err = constructCollationBatch(ses, rows)
+	defer bat.Clean(proc.Mp())
+	if err != nil {
+		return err
+	}
+
 	if sc.Where != nil {
-		bat, err := constructCollationBatch(ses, rows)
-		if err != nil {
-			return err
-		}
-		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"Collation", "Charset", "Id", "Default", "Compiled", "Sortlen", "Pad_attribute"})
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
 		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1684,12 +1689,21 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])
+		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
+		v3 := vector.MustStrCol(bat.Vecs[3])
+		v4 := vector.MustStrCol(bat.Vecs[4])
+		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
+		v6 := vector.MustStrCol(bat.Vecs[6])
 		rows = rows[:len(v0)]
 		for i := range v0 {
 			rows[i][0] = v0[i]
 			rows[i][1] = v1[i]
+			rows[i][2] = v2[i]
+			rows[i][3] = v3[i]
+			rows[i][4] = v4[i]
+			rows[i][5] = v5[i]
+			rows[i][6] = v6[i]
 		}
-		bat.Clean(proc.Mp())
 	}
 
 	//sort by name
@@ -1700,6 +1714,14 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 	for _, row := range rows {
 		mrs.AddRow(row)
 	}
+
+	// save query result
+	// outputBatches = make([]*batch.Batch, collationBatchLen)
+	// outputBatches[0] = batch.NewWithSize(collationCols)
+
+	// if openSaveQueryResult(ses) {
+	// 	err = saveResult(ses, []*batch.Batch{bat})
+	// }
 
 	return err
 }
@@ -2977,7 +2999,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
-			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
 			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
 			/*
