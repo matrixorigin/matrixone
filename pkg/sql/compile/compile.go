@@ -1879,7 +1879,8 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
-	useShuffle := param.Parallel
+	// use shuffle for load if parallel and no compress
+	useShuffle := param.Parallel && (external.GetCompressType(param, fileList[0]) == tree.NOCOMPRESS)
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
