@@ -125,7 +125,7 @@ func TestKeepaliveBind(t *testing.T) {
 		t,
 		interval,
 		func(a *lockTableAllocator) {
-			c, err := NewClient(morpc.Config{}, nil)
+			c, err := NewClient(morpc.Config{})
 			require.NoError(t, err)
 			defer func() {
 				assert.NoError(t, c.Close())
