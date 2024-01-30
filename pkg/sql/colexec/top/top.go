@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -63,6 +65,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			return err
 		}
 	}
+	typ := ap.Fs[0].Expr.Typ
+	ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
 	return nil
 }
 
@@ -256,7 +260,29 @@ func (ctr *container) sort() {
 	heap.Init(ctr)
 }
 
-func (ap *Argument) getTopValue() (any, bool) {
+func (ap *Argument) updateTopValueZM() bool {
+	v, ok := ap.getTopValue()
+	if !ok {
+		return false
+	}
+	zm := ap.ctr.topValueZM
+	if zm.IsInited() {
+		index.UpdateZM(zm, v)
+		return true
+	}
+	newZM := objectio.NewZM(zm.GetType(), zm.GetScale())
+	index.UpdateZM(newZM, v)
+
+	res := false
+	if ap.Fs[0].Flag&plan.OrderBySpec_DESC != 0 {
+		res, _ = newZM.AnyGT(zm)
+	} else {
+		res, _ = newZM.AnyLT(zm)
+	}
+	return res
+}
+
+func (ap *Argument) getTopValue() ([]byte, bool) {
 	ctr := ap.ctr
 	// not enough items in the heap.
 	if int64(len(ctr.sels)) < ap.Limit {
@@ -269,37 +295,53 @@ func (ap *Argument) getTopValue() (any, bool) {
 	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		return vector.GetFixedAt[int8](vec, x), true
+		v := vector.GetFixedAt[int8](vec, x)
+		return types.EncodeInt8(&v), true
 	case types.T_int16:
-		return vector.GetFixedAt[int16](vec, x), true
+		v := vector.GetFixedAt[int16](vec, x)
+		return types.EncodeInt16(&v), true
 	case types.T_int32:
-		return vector.GetFixedAt[int32](vec, x), true
+		v := vector.GetFixedAt[int32](vec, x)
+		return types.EncodeInt32(&v), true
 	case types.T_int64:
-		return vector.GetFixedAt[int64](vec, x), true
+		v := vector.GetFixedAt[int64](vec, x)
+		return types.EncodeInt64(&v), true
 	case types.T_uint8:
-		return vector.GetFixedAt[uint8](vec, x), true
+		v := vector.GetFixedAt[uint8](vec, x)
+		return types.EncodeUint8(&v), true
 	case types.T_uint16:
-		return vector.GetFixedAt[uint16](vec, x), true
+		v := vector.GetFixedAt[uint16](vec, x)
+		return types.EncodeUint16(&v), true
 	case types.T_uint32:
-		return vector.GetFixedAt[uint32](vec, x), true
+		v := vector.GetFixedAt[uint32](vec, x)
+		return types.EncodeUint32(&v), true
 	case types.T_uint64:
-		return vector.GetFixedAt[uint64](vec, x), true
+		v := vector.GetFixedAt[uint64](vec, x)
+		return types.EncodeUint64(&v), true
 	case types.T_float32:
-		return vector.GetFixedAt[float32](vec, x), true
+		v := vector.GetFixedAt[float32](vec, x)
+		return types.EncodeFloat32(&v), true
 	case types.T_float64:
-		return vector.GetFixedAt[float64](vec, x), true
+		v := vector.GetFixedAt[float64](vec, x)
+		return types.EncodeFloat64(&v), true
 	case types.T_date:
-		return vector.GetFixedAt[types.Date](vec, x), true
+		v := vector.GetFixedAt[types.Date](vec, x)
+		return types.EncodeDate(&v), true
 	case types.T_datetime:
-		return vector.GetFixedAt[types.Datetime](vec, x), true
+		v := vector.GetFixedAt[types.Datetime](vec, x)
+		return types.EncodeDatetime(&v), true
 	case types.T_timestamp:
-		return vector.GetFixedAt[types.Timestamp](vec, x), true
+		v := vector.GetFixedAt[types.Timestamp](vec, x)
+		return types.EncodeTimestamp(&v), true
 	case types.T_time:
-		return vector.GetFixedAt[types.Time](vec, x), true
+		v := vector.GetFixedAt[types.Time](vec, x)
+		return types.EncodeTime(&v), true
 	case types.T_decimal64:
-		return vector.GetFixedAt[types.Decimal64](vec, x), true
+		v := vector.GetFixedAt[types.Decimal64](vec, x)
+		return types.EncodeDecimal64(&v), true
 	case types.T_decimal128:
-		return vector.GetFixedAt[types.Decimal128](vec, x), true
+		v := vector.GetFixedAt[types.Decimal128](vec, x)
+		return types.EncodeDecimal128(&v), true
 	}
 	return nil, false
 }

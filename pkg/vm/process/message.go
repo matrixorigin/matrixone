@@ -15,6 +15,7 @@
 package process
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 )
 
@@ -188,10 +189,10 @@ func AddrBroadCastOnALLCN() MessageAddress {
 var _ Message = new(TopValueMessage)
 
 type TopValueMessage struct {
-	topvalue int64
-	tag      int32
-	signed   bool
-	min      bool
+	topValueZM objectio.ZoneMap
+	tag        int32
+	signed     bool
+	min        bool
 }
 
 func (t TopValueMessage) Serialize() []byte {

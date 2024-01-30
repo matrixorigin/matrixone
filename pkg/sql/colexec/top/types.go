@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -35,8 +36,8 @@ type container struct {
 	cmps  []compare.Compare
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
-
-	bat *batch.Batch
+	topValueZM              objectio.ZoneMap
+	bat                     *batch.Batch
 }
 
 type Argument struct {
