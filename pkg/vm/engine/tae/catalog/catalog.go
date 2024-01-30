@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -831,6 +832,10 @@ func (catalog *Catalog) ReplayTableRows() {
 			return nil
 		}
 		rows += be.GetBlockData().GetRowsOnReplay()
+		return nil
+	}
+	tableProcessor.TombstoneFn = func(t data.Tombstone) error {
+		rows -= uint64(t.GetDeleteCnt())
 		return nil
 	}
 	processor := new(LoopProcessor)
