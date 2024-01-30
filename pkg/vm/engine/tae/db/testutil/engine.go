@@ -541,7 +541,7 @@ func checkCNCheckpointData(ctx context.Context, t *testing.T, tid uint64, ins, d
 }
 
 func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.DatabaseFn = collector.VisitDB
 	err := c.RecurLoop(p)
@@ -557,7 +557,7 @@ func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel 
 }
 
 func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -573,7 +573,7 @@ func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *a
 }
 
 func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -590,7 +590,7 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 }
 
 func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TombstoneFn = func(be data.Tombstone) error {
 		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
@@ -606,7 +606,7 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
-	collector.PostLoop(c)
+	collector.LoadAndCollectObject(c, collector.VisitObj)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]

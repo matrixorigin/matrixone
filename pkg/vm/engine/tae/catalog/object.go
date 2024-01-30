@@ -265,6 +265,26 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 
 	return
 }
+
+func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*ObjectMVCCNode]) {
+	if entry.IsAppendable() || len(nodes) <= 1 {
+		return
+	}
+	lastNode := nodes[0]
+	for _, n := range nodes {
+		if n.Start.Greater(lastNode.Start) {
+			lastNode = n
+		}
+	}
+	stat := lastNode.BaseNode.ObjectStats
+	entry.Lock()
+	for _, n := range nodes {
+		if n.BaseNode.IsEmpty() {
+			n.BaseNode.ObjectStats = *stat.Clone()
+		}
+	}
+	entry.Unlock()
+}
 func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
 	stats := *objectio.NewObjectStats()
 

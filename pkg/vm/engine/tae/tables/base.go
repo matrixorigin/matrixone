@@ -21,7 +21,10 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+<<<<<<< HEAD
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+=======
+>>>>>>> main
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -824,7 +827,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	emtpyDelBlkIdx = &bitmap.Bitmap{}
 	emtpyDelBlkIdx.InitWithSize(int64(blk.meta.BlockCnt()))
 	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
-		deletes, minTS, err := blk.inMemoryCollectDeleteInRange(
+		deletes, minTS,_, err := blk.inMemoryCollectDeleteInRange(
 			ctx,
 			blkID,
 			start,
@@ -867,13 +870,54 @@ func (blk *baseBlock) CollectDeleteInRange(
 	return
 }
 
+// CollectDeleteInRangeAfterDeltalocation collects deletes after
+// a certain delta location and committed in [start,end]
+// When subscribe a table, it collects delta location, then it collects deletes.
+// To avoid collecting duplicate deletes,
+// it collects after start ts of the delta location.
+// If the delta location is from CN, deletes is committed after startTS.
+// CollectDeleteInRange still collect duplicate deletes.
+func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
+	ctx context.Context,
+	start, end types.TS, // start is startTS of deltalocation
+	withAborted bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, err error) {
+	// persisted is persistedTS of deletes of the blk
+	// it equals startTS of the last delta location
+	bat, _, persisted, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		return
+	}
+	// if persisted > start,
+	// there's another delta location committed.
+	// It includes more deletes than former delta location.
+	if persisted.Greater(start) {
+		bat, err = blk.persistedCollectDeleteInRange(
+			ctx,
+			bat,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+	}
+	return
+}
+
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	blkID uint16,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
-) (bat *containers.Batch, minTS types.TS, err error) {
+) (bat *containers.Batch, minTS, persistedTS types.TS, err error) {
 	blk.RLock()
 	objMVCC := blk.tryGetMVCC()
 	if objMVCC == nil {
