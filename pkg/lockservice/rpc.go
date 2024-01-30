@@ -56,14 +56,12 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
-	service *service
 }
 
-func NewClient(cfg morpc.Config, s *service) (Client, error) {
+func NewClient(cfg morpc.Config) (Client, error) {
 	c := &client{
 		cfg:     &cfg,
 		cluster: clusterservice.GetMOCluster(),
-		service: s,
 	}
 	c.cfg.Adjust()
 	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
@@ -166,7 +164,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	}
 	if address == "" {
 		var cns []string
-		c.cluster.GetCNService(
+		c.cluster.GetCNServiceWithoutWorkingState(
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
@@ -176,29 +174,6 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
-
-		if c.service != nil {
-			switch request.Method {
-			case pb.Method_GetBind,
-				pb.Method_KeepLockTableBind:
-			default:
-				newBind, err := getLockTableBind(
-					c.service.remote.client,
-					request.GetLockTable().Group,
-					request.GetLockTable().Table,
-					request.GetLockTable().OriginTable,
-					c.service.serviceID,
-					request.GetLockTable().Sharding)
-				if err != nil {
-					getLogger().Error("failed to update lock table bind",
-						zap.String("target", sid),
-						zap.Any("cns", cns),
-						zap.String("request", request.DebugString()))
-				}
-
-				c.service.handleBindChanged(newBind)
-			}
-		}
 
 	}
 	return c.client.Send(ctx, address, request)

@@ -226,13 +226,13 @@ func (v *Vector) setupColFromData() {
 	v.capacity = cap(v.data) / tlen
 }
 
-func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
+func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 	nsp, err := vec.nsp.Show()
 	if err != nil {
-		return nil, err
+		return
 	}
 	sz := vec.typ.TypeSize()
-	return &api.Vector{
+	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
 		Area:     vec.area,
@@ -243,7 +243,7 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 	}, nil
 }
 
-func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
+func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	rvec := &Vector{
 		area:         vec.Area,
 		length:       int(vec.Len),

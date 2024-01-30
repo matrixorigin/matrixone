@@ -77,8 +77,8 @@ message Vector {
 };
 
 message Batch {
-    repeated string attrs = 1;
-    repeated Vector vecs  = 2;
+    repeated string attrs = 1 [(gogoproto.nullable) = false];
+    repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
 };
 
 message TableID {
