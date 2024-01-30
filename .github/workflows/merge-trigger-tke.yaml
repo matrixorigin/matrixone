@@ -103,12 +103,12 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
           sleep 100s
           while true; do
-            if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep -c "mo-checkin-regression-*")" -eq 6 ]; then
-              break;
-            else
-              echo "wait mo cluster init finish..."
+           if [ "$(kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep ${{ needs.docker_image_build.outputs.version }} | grep -iv NotReady | grep -ic Ready )" -eq 0 ]; then
+              kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }};
               sleep 15s;
               continue;
+            else
+              break;
             fi
           done
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
