@@ -1126,11 +1126,9 @@ func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
 }
 
 func EliminateErrorsOnCache(c *catalog.Catalog) int {
-	cnt2 := 0
 	collector := BaseCollector{}
 	loop := catalog.LoopProcessor{}
 	loop.ObjectFn = func(entry *catalog.ObjectEntry) error {
-		cnt2++
 		if entry.IsAppendable() || !entry.IsCommitted() {
 			return nil
 		}
@@ -1149,6 +1147,5 @@ func EliminateErrorsOnCache(c *catalog.Catalog) int {
 	collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
 	_, cnt := putCacheBack2Track(&collector)
 
-	fmt.Println(cnt2, len(collector.Usage.ObjInserts), cnt)
 	return cnt
 }
