@@ -39,6 +39,9 @@ type sPool struct {
 	typ     sPoolType
 	isMerge bool
 
+	// if true, the returned batch will contain a column which indicates the number of rows that have been seen.
+	outputRowCount bool
+
 	// a helper to adjust the row picked probability for merge sample.
 	baseRow           int64
 	probabilityFactor float64
@@ -70,12 +73,13 @@ const (
 	percentSamplePool
 )
 
-func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int, outputRowSeen bool) *sPool {
 	return &sPool{
 		proc:           proc,
 		requireReorder: true,
 		typ:            rowSamplePool,
 		isMerge:        false,
+		outputRowCount: outputRowSeen,
 		baseRow:        0,
 		canCheckFull:   false,
 		capacity:       capacity,
@@ -89,18 +93,20 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 		requireReorder: true,
 		typ:            percentSamplePool,
 		isMerge:        false,
+		outputRowCount: false,
 		canCheckFull:   false,
 		percents:       int(per * 100),
 		columns:        make(sampleColumnList, sampleColumnCount),
 	}
 }
 
-func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColumnCount int, outputRowSeen bool) *sPool {
 	return &sPool{
 		proc:           proc,
 		requireReorder: false,
 		typ:            rowSamplePool,
 		isMerge:        true,
+		outputRowCount: outputRowSeen,
 		canCheckFull:   false,
 		capacity:       capacity,
 		columns:        make(sampleColumnList, sampleColumnCount),
@@ -435,7 +441,7 @@ func (s *sPool) updateReused2(columns []*vector.Vector) {
 	}
 }
 
-func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
+func (s *sPool) Result(end bool) (bat *batch.Batch, err error) {
 	if !end {
 		if s.typ == rowSamplePool {
 			return batch.EmptyBatch, nil
@@ -445,11 +451,11 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	mp := s.proc.Mp()
 	seenRows := 0
 	if len(s.sPools) > 0 {
-		bat = s.sPools[0].data.output()
+		bat = s.sPools[0].data.flush()
 		seenRows += s.sPools[0].seen
 		if bat != nil {
 			for i := 1; i < len(s.sPools); i++ {
-				b := s.sPools[i].data.output()
+				b := s.sPools[i].data.flush()
 				if b == nil {
 					continue
 				}
@@ -464,11 +470,11 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 			}
 		}
 	} else if len(s.mPools) > 0 {
-		bat = s.mPools[0].data.output()
+		bat = s.mPools[0].data.flush()
 		seenRows += s.mPools[0].seen
 
 		for i := 1; i < len(s.mPools); i++ {
-			b := s.mPools[i].data.output()
+			b := s.mPools[i].data.flush()
 			if b == nil {
 				continue
 			}
@@ -488,8 +494,7 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 		return batch.EmptyBatch, nil
 	}
 
-	// if this is a row sample, we need to output the seen rows to help merge.
-	if s.typ == rowSamplePool {
+	if s.outputRowCount {
 		bat.Vecs = append(bat.Vecs, nil)
 		bat.Vecs[len(bat.Vecs)-1], err = vector.NewConstFixed[int64](types.T_int64.ToType(), int64(seenRows), bat.RowCount(), mp)
 		if err != nil {

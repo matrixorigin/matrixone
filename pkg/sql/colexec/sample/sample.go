@@ -67,11 +67,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	switch arg.Type {
 	case sampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
+		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs), arg.NeedOutputRowSeen)
 	case sampleByPercent:
 		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
 	case mergeSampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRowsForMerge(proc, arg.Rows, len(arg.SampleExprs))
+		arg.ctr.samplePool = newSamplePoolByRowsForMerge(proc, arg.Rows, len(arg.SampleExprs), arg.NeedOutputRowSeen)
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
@@ -132,7 +132,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if bat == nil {
-		result.Batch, lastErr = ctr.samplePool.Output(true)
+		result.Batch, lastErr = ctr.samplePool.Result(true)
 		anal.Output(result.Batch, arg.info.IsLast)
 		arg.buf = result.Batch
 		result.Status = vm.ExecStop
@@ -159,12 +159,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if arg.UsingBlock && ctr.samplePool.IsFull() && rand.Intn(2) == 0 {
-		result.Batch, err = ctr.samplePool.Output(true)
+		result.Batch, err = ctr.samplePool.Result(true)
 		result.Status = vm.ExecStop
 		ctr.workDone = true
 
 	} else {
-		result.Batch, err = ctr.samplePool.Output(false)
+		result.Batch, err = ctr.samplePool.Result(false)
 	}
 	anal.Output(result.Batch, arg.info.IsLast)
 	arg.buf = result.Batch
