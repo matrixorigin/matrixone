@@ -167,6 +167,7 @@ func (c *Compile) reset() {
 	c.fuzzy = nil
 	c.needLockMeta = false
 	c.isInternal = false
+	c.lastAllocID = 0
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -378,8 +379,10 @@ func (c *Compile) run(s *Scope) error {
 }
 
 func (c *Compile) allocOperatorID() int32 {
+	c.lock.Lock()
 	defer func() {
 		c.lastAllocID++
+		c.lock.Unlock()
 	}()
 
 	return c.lastAllocID
