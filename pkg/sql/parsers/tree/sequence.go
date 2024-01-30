@@ -157,6 +157,19 @@ type DropSequence struct {
 	Names    TableNames
 }
 
+func (node *DropSequence) Free() { reuse.Free[DropSequence](node, nil) }
+
+func (node DropSequence) TypeName() string { return "tree.DropSequence" }
+
+func (node DropSequence) reset() {}
+
+func NewDropSequence(ifexists bool, names TableNames) *DropSequence {
+	drop := reuse.Alloc[DropSequence](nil)
+	drop.IfExists = ifexists
+	drop.Names = names
+	return drop
+}
+
 func (node *DropSequence) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop sequence")
 	if node.IfExists {

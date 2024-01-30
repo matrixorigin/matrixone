@@ -2361,37 +2361,68 @@ begin_stmt:
 use_stmt:
     USE ident
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-            Name: $2,
-        }
+        name := $2
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-        }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE ROLE role_spec
     {
-    $$ = &tree.Use{
-        SecondaryRole: false,
-        Role: $3,
-    }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        role := $3
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE ALL
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeAll,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeAll
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE NONE
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeNone,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeNone
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 
 update_stmt:
@@ -2576,11 +2607,11 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-            explainStmt := tree.NewExplainAnalyze($3, "text")
-            optionElem := tree.MakeOptionElem("analyze", "NULL")
+        explainStmt := tree.NewExplainAnalyze($3, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
-    explainStmt.Options = options
-    $$ = explainStmt
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
@@ -2595,13 +2626,13 @@ explain_stmt:
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
         if tree.IsContainAnalyze($3) {
-             explainStmt := tree.NewExplainAnalyze($5, "text")
-         explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainAnalyze($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         } else {
-             explainStmt := tree.NewExplainStmt($5, "text")
-             explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainStmt($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         }
     }
 
@@ -3785,7 +3816,7 @@ truncate_table_stmt:
     }
 |   TRUNCATE TABLE table_name
     {
-	$$ = tree.NewTruncateTable($3)
+	    $$ = tree.NewTruncateTable($3)
     }
 
 drop_stmt:
@@ -3810,28 +3841,25 @@ drop_ddl_stmt:
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
     {
-        $$ = &tree.DropSequence{
-            IfExists: $3,
-            Names:   $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropSequence(ifExists, name)
     }
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
     {
-        $$ = &tree.DropAccount{
-            IfExists: $3,
-            Name: $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropAccount(ifExists, name)
     }
 
 drop_user_stmt:
     DROP USER exists_opt drop_user_spec_list
     {
-        $$ = &tree.DropUser{
-            IfExists: $3,
-            Users: $4,
-        }
+        var ifExists = $3
+        var users = $4
+        $$ = tree.NewDropUser(ifExists, users)
     }
 
 drop_user_spec_list:
@@ -3856,52 +3884,62 @@ drop_user_spec:
 drop_role_stmt:
     DROP ROLE exists_opt role_spec_list
     {
-        $$ = &tree.DropRole{
-            IfExists: $3,
-            Roles: $4,
-        }
+        var ifExists = $3
+        var roles = $4
+        $$ = tree.NewDropRole(ifExists, roles)
     }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
-        $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.Compare()),
-            TableName: $6,
-            IfExists: $3,
-        }
+        var name = tree.Identifier($4.Compare())
+        var tableName = $6
+        var ifExists = $3
+        $$ = tree.NewDropIndex(name, tableName, ifExists)
     }
 
 drop_table_stmt:
     DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
-        $$ = &tree.DropTable{IfExists: $4, Names: $5}
+        var ifExists = $4
+        var names = $5
+        $$ = tree.NewDropTable(ifExists, names)
     }
 |   DROP SOURCE exists_opt table_name_list
     {
-        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropTable(ifExists, names)
     }
 
 drop_connector_stmt:
     DROP CONNECTOR exists_opt table_name_list
     {
-	$$ = &tree.DropConnector{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropConnector(ifExists, names)
     }
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
     {
-        $$ = &tree.DropView{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropView(ifExists, names)
     }
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 |   DROP SCHEMA exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 
 drop_prepare_stmt:
@@ -3913,26 +3951,23 @@ drop_prepare_stmt:
 drop_function_stmt:
     DROP FUNCTION func_name '(' func_args_list_opt ')'
     {
-        $$ = &tree.DropFunction{
-            Name: $3,
-            Args: $5,
-        }
+        var name = $3
+        var args = $5
+        $$ = tree.NewDropFunction(name, args)
     }
 
 drop_procedure_stmt:
     DROP PROCEDURE proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $3,
-            IfExists: false,
-        }
+        var name = $3
+        var ifExists = false
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 |    DROP PROCEDURE IF EXISTS proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $5,
-            IfExists: true,
-        }
+        var name = $5
+        var ifExists = true
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 
 delete_stmt:
@@ -5917,26 +5952,24 @@ comment_opt:
 alter_stage_stmt:
     ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
     {
-        $$ = &tree.AlterStage{
-            	IfNotExists: $3,
-	            Name: tree.Identifier($4.Compare()),
-	            UrlOption: $6,
-	            CredentialsOption: $7,
-	            StatusOption: $8,
-	            Comment: $9,
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        var urlOption = $6
+        var credentialsOption = $7
+        var statusOption = $8
+        var comment = $9
+        $$ = tree.NewAlterStage(ifNotExists, name, urlOption, credentialsOption, statusOption, comment)
     }
 
 
 alter_publication_stmt:
     ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
     {
-	    $$ = &tree.AlterPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	        AccountsSet: $5,
-	        Comment: $6,
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountsSet = $5
+        var comment = $6
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, comment)
     }
 
 alter_publication_accounts_opt:
@@ -5972,19 +6005,17 @@ alter_publication_accounts_opt:
 drop_publication_stmt:
 DROP PUBLICATION exists_opt ident
     {
-	    $$ = &tree.DropPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropPublication(ifExists, name)
     }
 
 drop_stage_stmt:
 DROP STAGE exists_opt ident
     {
-        $$ = &tree.DropStage{
-            IfNotExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropStage(ifNotExists, name)
     }
 
 account_role_name:
