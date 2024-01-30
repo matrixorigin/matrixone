@@ -205,12 +205,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 	}
 
-	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp", end)
+	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp", start)
 	if err != nil {
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
-	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc", end)
+	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc", start)
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			panic("not support dir")
 		}
 		start, _ := blockio.DecodeCheckpointMetadataFileName(file.Name)
-		if !backup.IsEmpty() && start.Greater(backup) {
+		if !backup.IsEmpty() && start.GreaterEq(backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
