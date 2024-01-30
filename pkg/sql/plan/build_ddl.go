@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"strconv"
 	"strings"
 
@@ -2383,32 +2382,6 @@ func getTableComment(tableDef *plan.TableDef) string {
 		}
 	}
 	return comment
-}
-
-// constraintNameAreWhiteSpaces does not include empty name
-func constraintNameAreWhiteSpaces(constraint string) bool {
-	return len(constraint) != 0 && len(strings.TrimSpace(constraint)) == 0
-}
-
-// GenConstraintName yields uuid for the constraint name
-func GenConstraintName() string {
-	constraintId, _ := uuid.NewV7()
-	return constraintId.String()
-}
-
-// adjustConstraintName updates a suitable name for the constraint.
-// throw error if the user input all white space name.
-// regenerate a new name if the user input nothing.
-func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
-	//user add a constraint name
-	if constraintNameAreWhiteSpaces(def.ConstraintSymbol) {
-		return moerr.NewErrWrongNameForIndex(ctx, def.ConstraintSymbol)
-	} else {
-		if len(def.ConstraintSymbol) == 0 {
-			def.ConstraintSymbol = GenConstraintName()
-		}
-	}
-	return nil
 }
 
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
