@@ -76,6 +76,8 @@ const charsetBinary = 0x3f
 const charsetVarchar = 0x21
 const boolColumnLength = 12
 
+// const charsetVarString = 0xff
+
 func init() {
 	serverVersion.Store("0.5.0")
 }
@@ -1825,6 +1827,9 @@ func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
+		column.SetCharset(charsetVarchar)
+	case defines.MYSQL_TYPE_VAR_STRING:
+		//column.SetCharset(charsetVarString)
 		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
