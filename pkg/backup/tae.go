@@ -184,12 +184,33 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		})
 	}
 
-	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp")
+	var cnLoc, tnLoc, mergeStart, mergeEnd string
+	var end, start types.TS
+	var version uint64
+	if trimInfo != "" {
+		var err error
+		ckpStr := strings.Split(trimInfo, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		cnLoc = ckpStr[0]
+		mergeEnd = ckpStr[2]
+		tnLoc = ckpStr[3]
+		mergeStart = ckpStr[4]
+		end = types.StringToTS(mergeEnd)
+		start = types.StringToTS(mergeStart)
+		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+	}
+
+	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp", end)
 	if err != nil {
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
-	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc")
+	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc", end)
 	if err != nil {
 		return err
 	}
@@ -197,18 +218,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	taeFileList = append(taeFileList, sizeList...)
 	now = time.Now()
 	if trimInfo != "" {
-		ckpStr := strings.Split(trimInfo, ":")
-		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
-		}
-		cnLoc := ckpStr[0]
-		mergeEnd := ckpStr[2]
-		tnLoc := ckpStr[3]
-		mergeStart := ckpStr[4]
-		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
 			return err
@@ -217,8 +226,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		end := types.StringToTS(mergeEnd)
-		start := types.StringToTS(mergeStart)
 		var checkpointFiles []string
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start, softDeletes)
@@ -270,7 +277,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			panic("not support dir")
 		}
 		start, _ := blockio.DecodeCheckpointMetadataFileName(file.Name)
-		if start.Greater(backup) {
+		if !backup.IsEmpty() && start.Greater(backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
