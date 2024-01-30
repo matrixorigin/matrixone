@@ -606,6 +606,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (bat *batch.Batch, err error) {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
+	var release func()
 	mp := proc.Mp()
 
 	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
@@ -616,6 +617,9 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 		if vecTmp != nil {
 			vecTmp.Free(mp)
+		}
+		if release != nil {
+			release()
 		}
 		if err != nil && bat != nil {
 			bat.Clean(mp)
@@ -642,7 +646,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	tmpBat, err = objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
+	tmpBat, release, err = objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), mp)
 	if err != nil {
 		return nil, err
 	}

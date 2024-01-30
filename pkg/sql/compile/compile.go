@@ -167,6 +167,7 @@ func (c *Compile) reset() {
 	c.fuzzy = nil
 	c.needLockMeta = false
 	c.isInternal = false
+	c.lastAllocID = 0
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -378,8 +379,10 @@ func (c *Compile) run(s *Scope) error {
 }
 
 func (c *Compile) allocOperatorID() int32 {
+	c.lock.Lock()
 	defer func() {
 		c.lastAllocID++
+		c.lock.Unlock()
 	}()
 
 	return c.lastAllocID
@@ -1961,15 +1964,11 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
-	useShuffle := param.Parallel
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
-		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
-		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1987,12 +1986,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	if useShuffle {
-		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-	} else {
-		arg.FuncId = dispatch.SendToAnyLocalFunc
-	}
+	arg.FuncId = dispatch.SendToAnyLocalFunc
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,

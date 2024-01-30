@@ -3092,6 +3092,29 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if start == end {
 		return nil
 	}
+	if v.IsConstNull() {
+		w.class = CONSTANT
+		w.length = end - start
+		w.data = nil
+		return nil
+	} else if v.IsConst() {
+		if v.typ.IsVarlen() {
+			w.class = CONSTANT
+			SetConstBytes(v, v.GetBytesAt(0), end-start, mp)
+			return nil
+		} else {
+			w.class = v.class
+			w.col = v.col
+			w.data = make([]byte, len(v.data))
+			copy(w.data, v.data)
+			w.capacity = v.capacity
+			w.length = end - start
+			w.cantFreeArea = true
+			w.cantFreeData = true
+			w.sorted = v.sorted
+			return nil
+		}
+	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {

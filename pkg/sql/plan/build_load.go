@@ -156,8 +156,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	// go shuffle for loadif parallel
-	if stmt.Param.Parallel {
+	// use shuffle for load if parallel and no compress
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
 		for i := range builder.qry.Nodes {
 			node := builder.qry.Nodes[i]
 			if node.NodeType == plan.Node_INSERT {
