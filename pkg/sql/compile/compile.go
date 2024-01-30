@@ -1429,7 +1429,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
@@ -1497,7 +1498,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
