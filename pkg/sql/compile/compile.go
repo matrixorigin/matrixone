@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"runtime"
 	gotrace "runtime/trace"
 	"sort"
@@ -435,14 +434,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			query := c.pn.GetQuery()
 			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
 				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-				fmt.Fprintf(os.Stderr, "detect fk self refer. %v -> %v\n", query.StmtType, query.DetectSqls)
 				err = detectFkSelfRefer(runC, query.DetectSqls)
 			}
 			ddl := c.pn.GetDdl()
 			if err == nil && ddl != nil {
 				alterTable := ddl.GetAlterTable()
 				if len(alterTable.GetDetectSqls()) != 0 {
-					fmt.Fprintf(os.Stderr, "detect fk self refer(alter table). %v -> %v\n", ddl.DdlType, alterTable.GetDetectSqls())
 					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
 				}
 			}
@@ -508,7 +505,6 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 			vs := res.Batches[0].Vecs
 			if vs != nil && vs[0].Length() > 0 {
 				yes := vector.GetFixedAt[bool](vs[0], 0)
-				fmt.Fprintf(os.Stderr, "yes: %v sql: %v", yes, sql)
 				if !yes {
 					return moerr.NewErrFKNoReferencedRow2(c.ctx)
 				}

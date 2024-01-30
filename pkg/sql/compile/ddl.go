@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
-	"os"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -262,7 +261,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		So, we can not use ForeignKeyDef.Name as the key of this map.
 	*/
 	oldFks := make(map[*plan.ForeignKeyDef]bool)
-	fksHasEmptyName := make([]*plan.ForeignKeyDef, 0)
 	newAddedFkNames := make(map[string]bool)
 	oldFkNames := make(map[string]bool)
 	for _, ct := range oldCt.Cts {
@@ -270,9 +268,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *engine.ForeignKeyDef:
 			for _, fkey := range t.Fkeys {
 				oldFks[fkey] = true
-				if len(fkey.Name) == 0 {
-					fksHasEmptyName = append(fksHasEmptyName, fkey)
-				} else {
+				if len(fkey.Name) != 0 {
 					oldFkNames[fkey.Name] = true
 				}
 			}
@@ -896,12 +892,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 				oldCt = ct
 			}
 		}
-		fmt.Fprintf(os.Stderr, "childTable colNameToId : %v\n", colNameToId)
 		colId2Name := make(map[uint64]string)
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
 		}
-		fmt.Fprintf(os.Stderr, "childTable colIdToName : %v\n", colId2Name)
 		//1. update fk info in child table.
 		//column ids of column names in child table have changed after
 		//the table is created by engine.Database.Create.
