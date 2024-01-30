@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // AST for the expression
@@ -1728,7 +1729,7 @@ const (
 	SampleUsingRow   sampleLevel = 1
 )
 
-func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs, usingBlock bool) (*SampleExpr, error) {
+func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs, sampleUnit string) (*SampleExpr, error) {
 	e := &SampleExpr{
 		typ:     SampleRows,
 		n:       number,
@@ -1736,12 +1737,15 @@ func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs, usingBl
 		isStar:  isStar,
 		columns: columns,
 	}
-	if usingBlock {
+	if len(sampleUnit) == 5 && strings.ToLower(sampleUnit) == "block" {
 		e.level = SampleUsingBlock
-	} else {
-		e.level = SampleUsingRow
+		return e, nil
 	}
-	return e, nil
+	if len(sampleUnit) == 3 && strings.ToLower(sampleUnit) == "row" {
+		e.level = SampleUsingRow
+		return e, nil
+	}
+	return e, moerr.NewInternalErrorNoCtx("sample(expr, N rows, unit) only support unit 'block' or 'row'")
 }
 
 func NewSamplePercentFuncExpression1(percent int64, isStar bool, columns Exprs) (*SampleExpr, error) {
