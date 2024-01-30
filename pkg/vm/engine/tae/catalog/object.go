@@ -265,6 +265,10 @@ func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*Objec
 		}
 	}
 	stat := lastNode.BaseNode.ObjectStats
+	if lastNode.BaseNode.IsEmpty() {
+		fmt.Printf("catalog %v",entry.GetTable().GetCatalog().SimplePPString(3))
+		panic(fmt.Sprintf("logic error: last node of %v is empty", entry.ID.String()))
+	}
 	for _, n := range nodes {
 		if n.BaseNode.IsEmpty() {
 			n.BaseNode.ObjectStats = *stat.Clone()
