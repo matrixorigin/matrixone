@@ -287,11 +287,15 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	s := opr.GetSampleFunc()
 	g := opr.GetAgg()
+	needOutputRowSeen := g.PreAllocSize == 1
+
 	if s.SampleType == pipeline.SampleFunc_Rows {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, g.PreAllocSize == 1)
-	} else if s.SampleType == pipeline.SampleFunc_Percent {
-		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
-	} else {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, g.PreAllocSize == 1)
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
 	}
+	if s.SampleType == pipeline.SampleFunc_Percent {
+		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
+	}
+	arg := NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
+	arg.Type = mergeSampleByRow
+	return arg
 }
