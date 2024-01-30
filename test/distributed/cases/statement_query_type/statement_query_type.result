@@ -693,7 +693,7 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 show collation like '%';
 Collation    Charset    Id    Compiled    Sortlen
 utf8mb4_bin    utf8mb4    46    Yes    1
-load data infile '$resources/load_data/test.csv' into table test_table;
+load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
