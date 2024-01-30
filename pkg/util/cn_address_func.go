@@ -33,8 +33,6 @@ type HAKeeperClient interface {
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 }
 
-const LOGGING_CN_LABEL = "logging_cn"
-
 func AddressFunc(getClient func() HAKeeperClient) func(context.Context, bool) (string, error) {
 	return func(ctx context.Context, random bool) (string, error) {
 		if getClient == nil || getClient() == nil {
