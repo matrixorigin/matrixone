@@ -1715,6 +1715,7 @@ func (tbl *txnTable) newBlockReader(
 			panic("ordered scan must run in only one parallel")
 		}
 		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, fs, proc)
+		rd.dontPrefetch = true
 		return []engine.Reader{rd}, nil
 	}
 

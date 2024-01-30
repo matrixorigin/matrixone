@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -311,6 +313,45 @@ func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.OrderBy = orderby
 }
 
+func (r *blockReader) needReadBlkByZM(desc bool, zm objectio.ZoneMap) bool {
+	if !r.filterZM.IsInited() || zm.IsInited() {
+		return true
+	}
+	if desc {
+		return compute.Compare(r.filterZM.GetMaxBuf(), zm.GetMaxBuf(), zm.GetType(), r.filterZM.GetScale(), zm.GetScale()) <= 0
+	} else {
+		return compute.Compare(r.filterZM.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), r.filterZM.GetScale(), zm.GetScale()) >= 0
+	}
+}
+
+func (r *blockReader) sortBlockList(desc bool) {
+	if desc {
+		sort.Slice(r.blks, func(i, j int) bool {
+			zm1 := r.blks[i].ZmForSort
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := r.blks[j].ZmForSort
+			if !zm2.IsInited() {
+				return false
+			}
+			return compute.Compare(zm1.GetMaxBuf(), zm2.GetMaxBuf(), zm1.GetType(), zm1.GetScale(), zm1.GetScale()) > 0
+		})
+	} else {
+		sort.Slice(r.blks, func(i, j int) bool {
+			zm1 := r.blks[i].ZmForSort
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := r.blks[j].ZmForSort
+			if !zm2.IsInited() {
+				return false
+			}
+			return compute.Compare(zm1.GetMinBuf(), zm2.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm1.GetScale()) < 0
+		})
+	}
+}
+
 func (r *blockReader) Read(
 	ctx context.Context,
 	cols []string,
@@ -326,6 +367,18 @@ func (r *blockReader) Read(
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
+	}
+
+	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
+	if r.OrderBy != nil {
+		desc := r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+		if !r.sorted {
+			r.sortBlockList(desc)
+			r.sorted = true
+		}
+		for {
+
+		}
 	}
 
 	// move to the next block at the end of this call
@@ -350,19 +403,21 @@ func (r *blockReader) Read(
 		return nil, nil
 	}
 
-	//prefetch some objects
-	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
-		if filter != nil && blockInfo.Sorted {
-			err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
-		} else {
-			err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+	if !r.dontPrefetch {
+		//prefetch some objects
+		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+			prefetchFile := r.scanType == SMALL || r.scanType == LARGE
+			if filter != nil && blockInfo.Sorted {
+				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			} else {
+				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			}
+			if err != nil {
+				return nil, err
+			}
+			r.infos = r.infos[1:]
+			r.steps = r.steps[1:]
 		}
-		if err != nil {
-			return nil, err
-		}
-		r.infos = r.infos[1:]
-		r.steps = r.steps[1:]
 	}
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)

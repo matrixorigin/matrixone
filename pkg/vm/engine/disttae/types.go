@@ -615,8 +615,10 @@ type blockReader struct {
 	//buffer for block's deletes
 	buffer []int64
 
-	OrderBy []*plan.OrderBySpec // for ordered scan
-	sorted  bool                //for ordered scan
+	// for ordered scan
+	OrderBy  []*plan.OrderBySpec
+	sorted   bool // blks need to be sorted by zonemap
+	filterZM objectio.ZoneMap
 }
 
 type blockMergeReader struct {
