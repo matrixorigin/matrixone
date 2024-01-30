@@ -496,3 +496,12 @@ insert into t1 select * from t2;
 Data truncation: data out of range: data type uint64, value '-1'
 drop table t1;
 drop table t2;
+drop table if exists t3;
+create table t3 (`maxvalue` int);
+insert into t3 values(1);
+insert into t3 values(2);
+insert into t3 values(100);
+insert into t3 values(-1000);
+select maxvalue from t1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " maxvalue from t1;";
+drop table t3;
