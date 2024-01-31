@@ -3511,7 +3511,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList, -1)
+	// for ordered scan, record zonemap of orderby column in blockinfos
+	var sortIDX int32 = -1
+	if len(n.OrderBy) > 0 {
+		orderByCol, ok := n.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
+		if ok {
+			sortIDX = orderByCol.Col.ColPos
+		}
+	}
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList, sortIDX)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -3525,7 +3533,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, -1)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, sortIDX)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -3547,7 +3555,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, -1)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, sortIDX)
 				if err != nil {
 					return nil, nil, nil, err
 				}
