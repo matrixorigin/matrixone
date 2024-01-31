@@ -469,7 +469,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 					lastNodeId, err = appendDeleteMasterTablePlan(builder, bindCtx, masterObjRef, masterTableDef, lastNodeId, delCtx.tableDef, indexdef, typMap, posMap)
 					masterDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
-					masterTblPkPos = masterDeleteIdx + 1
+					masterTblPkPos = masterDeleteIdx //TODO: verify
 					masterTblPkTyp = masterTableDef.Cols[0].Typ
 				}
 
@@ -495,30 +495,34 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 					// insert master sk plan
 					{
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-						projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
-						for j, uCols := range delCtx.tableDef.Cols {
-							if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
-								projectProjection[j] = lastProject[nIdx]
-							} else {
-								if uCols.Name == catalog.Row_ID {
-									// replace the origin table's row_id with entry table's row_id
-									// it is the 2nd last column in the entry table join
-									projectProjection[j] = lastProject[len(lastProject)-2]
+						genLastNodeIdFn := func() int32 {
+							//TODO: verify if this will cause memory leak.
+							// accept as arguments.
+							newLastNodeId := appendSinkScanNode(builder, bindCtx, newSourceStep)
+							lastProject := builder.qry.Nodes[newLastNodeId].ProjectList
+							projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
+							for j, uCols := range delCtx.tableDef.Cols {
+								if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
+									projectProjection[j] = lastProject[nIdx]
 								} else {
-									projectProjection[j] = lastProject[j]
+									if uCols.Name == catalog.Row_ID {
+										// replace the origin table's row_id with entry table's row_id
+										// it is the 2nd last column in the entry table join
+										projectProjection[j] = lastProject[len(lastProject)-2]
+									} else {
+										projectProjection[j] = lastProject[j]
+									}
 								}
 							}
+							projectNode := &Node{
+								NodeType:    plan.Node_PROJECT,
+								Children:    []int32{newLastNodeId},
+								ProjectList: projectProjection,
+							}
+							return builder.appendNode(projectNode, bindCtx)
 						}
-						projectNode := &Node{
-							NodeType:    plan.Node_PROJECT,
-							Children:    []int32{lastNodeId},
-							ProjectList: projectProjection,
-						}
-						lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, masterTableDef, false)
+						preUKStep, err := appendPreInsertSkMasterPlan(builder, bindCtx, delCtx.tableDef, idx, true, masterTableDef, genLastNodeIdFn)
 						if err != nil {
 							return err
 						}
@@ -1261,6 +1265,34 @@ func makeInsertPlan(
 					}
 				}
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
+			} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
+
+				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
+				// remove row_id
+				for i, colVal := range idxTableDef.Cols {
+					if colVal.Name == catalog.Row_ID {
+						idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
+						break
+					}
+				}
+				genLastNodeIdFn := func() int32 {
+					return appendSinkScanNode(builder, bindCtx, sourceStep)
+				}
+				newSourceStep, err := appendPreInsertSkMasterPlan(builder, bindCtx, tableDef, idx, false, idxTableDef, genLastNodeIdFn)
+				if err != nil {
+					return err
+				}
+
+				//TODO: verify with zengyan1 if colType should read from original table.
+				// It is mainly used for retaining decimal datatype precision in error messages.
+				colTypes := make([]*plan.Type, len(tableDef.Cols))
+				for i := range tableDef.Cols {
+					colTypes[i] = tableDef.Cols[i].Typ
+				}
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes, fuzzymessage)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2098,6 +2130,8 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
 						delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
 					}
+				} else if catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
+					delNodeInfo.indexTableNames = append(delNodeInfo.indexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}
@@ -2568,6 +2602,139 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	return lastNodeId
+}
+
+// appendPreInsertSkMasterPlan  append preinsert node
+func appendPreInsertSkMasterPlan(builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	indexIdx int,
+	isUpdate bool,
+	indexTableDef *TableDef,
+	genLastNodeIdFn func() int32) (int32, error) {
+
+	// 1.a init details
+	idxDef := tableDef.Indexes[indexIdx]
+	originPkPos, originPkType := getPkPos(tableDef, false)
+	var rowIdPos int
+	var rowIdType *Type
+
+	colsPos := make(map[string]int)
+	colsType := make(map[string]*Type)
+	for i, colVal := range tableDef.Cols {
+		if colVal.Name == catalog.Row_ID {
+			rowIdPos = i
+			rowIdType = colVal.Typ
+		}
+		colsPos[colVal.Name] = i
+		colsType[colVal.Name] = tableDef.Cols[i].Typ
+	}
+
+	var unionChildren []int32
+	var err error
+	for _, part := range idxDef.Parts {
+		var currLastNodeId = genLastNodeIdFn()
+		// 2.a recompute CP PK.
+		currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
+
+		//2.a add a new project for < serial_full(a, "a", pk), pk >
+		projectProjection := make([]*Expr, 2)
+
+		//2.b.i build serial_full(a, "a", pk)
+		serialArgs := make([]*plan.Expr, 3)
+		serialArgs[0] = &Expr{
+			Typ: colsType[part],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(colsPos[part]),
+					Name:   part,
+				},
+			},
+		}
+		serialArgs[1] = makePlan2StringConstExprWithType(part)
+		serialArgs[2] = &Expr{
+			Typ: originPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(originPkPos),
+					Name:   tableDef.Cols[originPkPos].Name,
+				},
+			},
+		}
+		projectProjection[0], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", serialArgs)
+		if err != nil {
+			return -1, err
+		}
+
+		//2.b.ii build pk
+		projectProjection[1] = &Expr{
+			Typ: originPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(originPkPos),
+					Name:   tableDef.Cols[originPkPos].Name,
+				},
+			},
+		}
+
+		if isUpdate {
+			// 2.c add row_id if Update
+			projectProjection = append(projectProjection, &plan.Expr{
+				Typ: rowIdType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(rowIdPos),
+						Name:   catalog.Row_ID,
+					},
+				},
+			})
+		}
+
+		projectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{currLastNodeId},
+			ProjectList: projectProjection,
+		}
+		currLastNodeId = builder.appendNode(projectNode, bindCtx)
+
+		// 2.d add to union's list
+		unionChildren = append(unionChildren, builder.appendNode(projectNode, bindCtx))
+	}
+
+	// 3. build union
+	unionProjection := getProjectionByLastNode(builder, unionChildren[0])
+	unionNode := &plan.Node{
+		NodeType:    plan.Node_UNION,
+		Children:    unionChildren,
+		ProjectList: unionProjection,
+	}
+
+	unionId := builder.appendNode(unionNode, bindCtx)
+
+	// 4. add lock
+	lastNodeId := unionId
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		indexTableDef,
+		false,
+		false,
+		-1,
+		nil,
+		isUpdate,
+	); ok {
+		lastNodeId = lockNodeId
+	}
+
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	newSourceStep := builder.appendStep(lastNodeId)
+
+	return newSourceStep, nil
 }
 
 func appendPreInsertSkVectorPlan(
