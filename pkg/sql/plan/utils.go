@@ -1872,3 +1872,20 @@ func HasMoCtrl(expr *plan.Expr) bool {
 		return false
 	}
 }
+
+// IsFkSelfRefer checks the foreign key referencing itself
+func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
+	return fkDbName == curDbName && fkTableName == curTableName
+}
+
+// HasFkSelfReferOnly checks the foreign key referencing itself only.
+// If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
+			return false
+		}
+	}
+	return true
+}

@@ -153,6 +153,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 	query := builder.qry
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+		objRef.SchemaName, newTableDef.Name, newTableDef.Cols, newTableDef.Fkeys)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 

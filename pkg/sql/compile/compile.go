@@ -422,6 +422,21 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
 				err = runC.fuzzy.backgroundSQLCheck(runC)
 			}
+
+			//detect fk self refer
+			//update, insert
+			query := c.pn.GetQuery()
+			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
+				err = detectFkSelfRefer(runC, query.DetectSqls)
+			}
+			//alter table ... add/drop foreign key
+			if err == nil && c.pn.GetDdl() != nil {
+				alterTable := c.pn.GetDdl().GetAlterTable()
+				if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
+					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
+				}
+			}
 		}
 
 		// c.release()
@@ -4246,4 +4261,40 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+// detectFkSelfRefer checks if foreign key self refer confirmed
+func detectFkSelfRefer(c *Compile, detectSqls []string) error {
+	if len(detectSqls) == 0 {
+		return nil
+	}
+	for _, sql := range detectSqls {
+		err := runDetectSql(c, sql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// runDetectSql runs the fk detecting sql
+func runDetectSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if !yes {
+				return moerr.NewErrFKNoReferencedRow2(c.ctx)
+			}
+		}
+	}
+	return nil
 }
