@@ -8,3 +8,70 @@ commit;
 select * from t;
 a    b
 drop database test;
+create database if not exists ry_flowable;
+use ry_flowable;
+SET autocommit=0;
+create table ACT_RU_IDENTITYLINK (
+ID_ varchar(64),
+REV_ integer,
+GROUP_ID_ varchar(255),
+TYPE_ varchar(255),
+USER_ID_ varchar(255),
+TASK_ID_ varchar(64),
+PROC_INST_ID_ varchar(64),
+PROC_DEF_ID_ varchar(64),
+SCOPE_ID_ varchar(255),
+SUB_SCOPE_ID_ varchar(255),
+SCOPE_TYPE_ varchar(255),
+SCOPE_DEFINITION_ID_ varchar(255),
+primary key (ID_)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE utf8_bin;
+create index ACT_IDX_IDENT_LNK_USER on ACT_RU_IDENTITYLINK(USER_ID_);
+create index ACT_IDX_IDENT_LNK_GROUP on ACT_RU_IDENTITYLINK(GROUP_ID_);
+create index ACT_IDX_IDENT_LNK_SCOPE on ACT_RU_IDENTITYLINK(SCOPE_ID_, SCOPE_TYPE_);
+create index ACT_IDX_IDENT_LNK_SUB_SCOPE on ACT_RU_IDENTITYLINK(SUB_SCOPE_ID_, SCOPE_TYPE_);
+desc ACT_RU_IDENTITYLINK;
+Field    Type    Null    Key    Default    Extra    Comment
+id_    VARCHAR(64)    YES    PRI    null        
+rev_    INT(32)    YES        null        
+group_id_    VARCHAR(255)    YES    MUL    null        
+type_    VARCHAR(255)    YES        null        
+user_id_    VARCHAR(255)    YES    MUL    null        
+task_id_    VARCHAR(64)    YES        null        
+proc_inst_id_    VARCHAR(64)    YES        null        
+proc_def_id_    VARCHAR(64)    YES        null        
+scope_id_    VARCHAR(255)    YES    MUL    null        
+sub_scope_id_    VARCHAR(255)    YES    MUL    null        
+scope_type_    VARCHAR(255)    YES    MUL    null        
+scope_definition_id_    VARCHAR(255)    YES        null        
+SELECT @@session.transaction_read_only;
+@@transaction_read_only
+0
+SELECT TABLE_SCHEMA AS TABLE_CAT,
+NULL AS TABLE_SCHEM,
+TABLE_NAME,
+CASE
+WHEN TABLE_TYPE = 'BASE TABLE' THEN
+CASE
+WHEN TABLE_SCHEMA = 'mysql'
+OR TABLE_SCHEMA = 'mo_catalog' THEN 'SYSTEM TABLE'
+ELSE 'TABLE'
+END
+WHEN TABLE_TYPE = 'TEMPORARY' THEN 'LOCAL_TEMPORARY'
+ELSE TABLE_TYPE
+END AS TABLE_TYPE,
+TABLE_COMMENT AS REMARKS,
+NULL AS TYPE_CAT,
+NULL AS TYPE_SCHEM,
+NULL AS TYPE_NAME,
+NULL AS SELF_REFERENCING_COL_NAME,
+NULL AS REF_GENERATION
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'ry_flowable' AND TABLE_NAME LIKE 'act_ru_identitylink';
+TABLE_CAT    TABLE_SCHEM    table_name    TABLE_TYPE    REMARKS    TYPE_CAT    TYPE_SCHEM    TYPE_NAME    SELF_REFERENCING_COL_NAME    REF_GENERATION
+ry_flowable    null    act_ru_identitylink    TABLE        null    null    null    null    null
+commit;
+show tables;
+Tables_in_ry_flowable
+act_ru_identitylink
+drop database ry_flowable;
