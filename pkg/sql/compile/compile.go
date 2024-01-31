@@ -2774,7 +2774,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructSample(n),
+			Arg:     constructSample(n, len(ss) != 1),
 		})
 	}
 	c.anal.isFirst = false
@@ -2790,7 +2790,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     sample.NewMergeSample(constructSample(n)),
+			Arg:     sample.NewMergeSample(constructSample(n, true), false),
 		})
 	}
 	return []*Scope{rs}

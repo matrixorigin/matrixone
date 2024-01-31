@@ -86,9 +86,9 @@ func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row
 	return nil
 }
 
-// output1 returns the result of poolData and set the source pointer to be nil.
+// flush returns the result of poolData and set the source pointer to be nil.
 // priority: validBatch > invalidBatch.
-func (pd *poolData) output() (bat *batch.Batch) {
+func (pd *poolData) flush() (bat *batch.Batch) {
 	if pd.validBatch != nil {
 		bat = pd.validBatch
 		pd.validBatch = nil
