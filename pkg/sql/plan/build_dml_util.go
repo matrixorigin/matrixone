@@ -2274,6 +2274,17 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId := baseNodeId
 	for _, fk := range tableDef.Fkeys {
+		if !fk.IsReady {
+
+			if len(fk.ParentTblName) == 0 {
+				fk.ParentDbName = builder.compCtx.DefaultDatabase()
+			}
+
+			if len(fk.ParentTblName) == 0 {
+				return -1, moerr.NewInternalError(builder.GetContext(), "fk parent table is empty")
+			}
+			//TODO: rebuild fk def
+		}
 		fkeyId2Idx := make(map[uint64]int)
 		for i, colId := range fk.ForeignCols {
 			fkeyId2Idx[colId] = i
