@@ -27,21 +27,25 @@ type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 	typ    types.Type
 	res    *vector.Vector
 	values []T // for quick get/set
+
+	groupToSet int // operating row for aggSet()
 }
 
 type aggFuncBytesResult struct {
-	proc *process.Process
-	mp   *mpool.MPool
-	typ  types.Type
-	res  *vector.Vector
+	proc       *process.Process
+	mp         *mpool.MPool
+	typ        types.Type
+	res        *vector.Vector
+	groupToSet int
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](proc *process.Process, typ types.Type) aggFuncResult[T] {
 	return aggFuncResult[T]{
-		proc: proc,
-		mp:   proc.Mp(),
-		typ:  typ,
-		res:  proc.GetVector(typ),
+		proc:       proc,
+		mp:         proc.Mp(),
+		typ:        typ,
+		res:        proc.GetVector(typ),
+		groupToSet: 0,
 	}
 }
 
@@ -61,6 +65,11 @@ func (r *aggFuncResult[T]) set(i int, v T) {
 	r.values[i] = v
 }
 
+// for agg private structure's fill.
+func (r *aggFuncResult[T]) aggSet(v T) {
+	r.values[r.groupToSet] = v
+}
+
 func (r *aggFuncResult[T]) flush() *vector.Vector {
 	result := r.res
 	r.res = nil
@@ -76,10 +85,11 @@ func (r *aggFuncResult[T]) free() {
 
 func initBytesAggFuncResult(proc *process.Process, typ types.Type) aggFuncBytesResult {
 	return aggFuncBytesResult{
-		proc: proc,
-		mp:   proc.Mp(),
-		typ:  typ,
-		res:  proc.GetVector(typ),
+		proc:       proc,
+		mp:         proc.Mp(),
+		typ:        typ,
+		res:        proc.GetVector(typ),
+		groupToSet: 0,
 	}
 }
 
@@ -96,6 +106,10 @@ func (r *aggFuncBytesResult) get(i int) []byte {
 
 func (r *aggFuncBytesResult) set(i int, v []byte) error {
 	return vector.SetBytesAt(r.res, i, v, r.mp)
+}
+
+func (r *aggFuncBytesResult) aggSet(v []byte) error {
+	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 
 func (r *aggFuncBytesResult) flush() *vector.Vector {

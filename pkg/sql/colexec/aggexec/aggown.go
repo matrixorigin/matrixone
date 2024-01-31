@@ -16,41 +16,41 @@ package aggexec
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-// todo: the flush function should be changed to deliver a set function.
-//  or return the value and need to be set directly.
+type aggSetter[T types.FixedSizeTExceptStrType] func(value T)
+type aggBytesSetter func(value []byte) error
 
 type singleAggPrivateStructure1[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	init()
-	fill(from)
-	fillNull()
-	fills(value from, isNull bool, count int)
+	fill(from, aggSetter[to])
+	fillNull(aggSetter[to])
+	fills(value from, isNull bool, count int, setter aggSetter[to])
 	flush() to
 }
 
 type singleAggPrivateStructure2[
 	from types.FixedSizeTExceptStrType] interface {
 	init()
-	fill(from)
-	fillNull()
-	fills(value from, isNull bool, count int)
+	fill(from, aggBytesSetter)
+	fillNull(aggBytesSetter)
+	fills(value from, isNull bool, count int, setter aggBytesSetter)
 	flush() []byte
 }
 
 type singleAggPrivateStructure3[
 	to types.FixedSizeTExceptStrType] interface {
 	init()
-	fillBytes([]byte)
-	fillNull()
-	fills(value []byte, isNull bool, count int)
+	fillBytes([]byte, aggSetter[to])
+	fillNull(aggSetter[to])
+	fills(value []byte, isNull bool, count int, setter aggSetter[to])
 	flush() to
 }
 
 type singleAggPrivateStructure4 interface {
 	init()
-	fillBytes([]byte)
-	fillNull()
-	fills(value []byte, isNull bool, count int)
+	fillBytes([]byte, aggBytesSetter)
+	fillNull(aggBytesSetter)
+	fills(value []byte, isNull bool, count int, setter aggBytesSetter)
 	flush() []byte
 }
 
