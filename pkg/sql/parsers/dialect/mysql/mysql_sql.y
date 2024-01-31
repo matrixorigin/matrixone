@@ -3102,6 +3102,13 @@ alter_table_drop:
         $$ = tree.NewAlterOptionDrop(dropType, name);
 
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
