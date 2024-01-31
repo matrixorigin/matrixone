@@ -2361,37 +2361,68 @@ begin_stmt:
 use_stmt:
     USE ident
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-            Name: $2,
-        }
+        name := $2
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-        }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE ROLE role_spec
     {
-    $$ = &tree.Use{
-        SecondaryRole: false,
-        Role: $3,
-    }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        role := $3
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE ALL
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeAll,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeAll
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE NONE
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeNone,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeNone
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 
 update_stmt:
@@ -2576,11 +2607,11 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-            explainStmt := tree.NewExplainAnalyze($3, "text")
-            optionElem := tree.MakeOptionElem("analyze", "NULL")
+        explainStmt := tree.NewExplainAnalyze($3, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
-    explainStmt.Options = options
-    $$ = explainStmt
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
@@ -2595,13 +2626,13 @@ explain_stmt:
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
         if tree.IsContainAnalyze($3) {
-             explainStmt := tree.NewExplainAnalyze($5, "text")
-         explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainAnalyze($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         } else {
-             explainStmt := tree.NewExplainStmt($5, "text")
-             explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainStmt($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         }
     }
 
@@ -2680,43 +2711,50 @@ alter_stmt:
 alter_sequence_stmt:
     ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
     {
-        $$ = &tree.AlterSequence{
-            IfExists: $3,
-            Name: $4,
-            Type: $5,
-            IncrementBy: $6,
-            MinValue: $7,
-            MaxValue: $8,
-            StartWith: $9,
-            Cycle: $10,
-        }
+        var ifExists = $3
+        var name = $4
+        var typ = $5
+        var incrementBy = $6
+        var minValue = $7
+        var maxValue = $8
+        var startWith = $9
+        var cycle = $10
+        $$ = tree.NewAlterSequence(
+            ifExists,
+            name,
+            typ,
+            incrementBy,
+            minValue,
+            maxValue,
+            startWith,
+            cycle,
+        )
     }
 
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
-        $$ = &tree.AlterView{
-            Name: $4,
-            ColNames: $5,
-            AsSource: $7,
-            IfExists: $3,
-        }
+        var ifExists = $3
+        var name = $4
+        var colNames = $5
+        var asSource = $7
+        $$ = tree.NewAlterView(ifExists, name, colNames, asSource)
     }
 
 alter_table_stmt:
     ALTER TABLE table_name alter_option_list
     {
-        $$ = &tree.AlterTable{
-            Table: $3,
-            Options: $4,
-        }
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.Options = $4
+        $$ = alterTable
     }
 |   ALTER TABLE table_name alter_partition_option
     {
-         $$ = &tree.AlterTable{
-             Table: $3,
-	     PartitionOptions: $4,
-         }
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.PartitionOption = $4
+        $$ = alterTable
     }
 
 alter_option_list:
@@ -2730,59 +2768,71 @@ alter_option_list:
     }
 
 alter_partition_option:
-     partition_option
-     {
-	  $$ = $1
-     }
-|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
-     {
-     	  $3.Num = uint64($4)
-     	  partitionDef := &tree.PartitionOption{
-	       PartBy:    *$3,
-	       SubPartBy:  $5,
-	       Partitions: $6,
-          }
-	  opt := &tree.AlterPartitionRedefinePartitionClause{
-	       PartitionOption: partitionDef,
-	  }
-	  $$ = tree.AlterPartitionOption(opt)
-     }
+    partition_option
+    {
+	    $$ = $1
+    }
+|   PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
+    {
+     	$3.Num = uint64($4)
+     	partitionDef := &tree.PartitionOption{
+	        PartBy:    *$3,
+	        SubPartBy:  $5,
+	        Partitions: $6,
+        }
+        var typ tree.AlterPartitionOptionType
+
+	    opt := tree.NewAlterPartitionRedefinePartitionClause(
+            typ,
+	        partitionDef,
+	    )
+
+	    $$ = tree.AlterPartitionOption(opt)
+    }
 
 partition_option:
-      ADD PARTITION partition_list_opt
-      {
-	   opt := &tree.AlterPartitionAddPartitionClause{
-                Typ:        tree.AlterPartitionAddPartition,
-                Partitions: $3,
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
-|     DROP PARTITION AllOrPartitionNameList
-      {
-	   opt := &tree.AlterPartitionDropPartitionClause{
-                Typ:            tree.AlterPartitionDropPartition,
-                PartitionNames: $3,
-           }
-           if $3 == nil {
-                opt.OnAllPartitions = true
-           } else {
-                opt.PartitionNames = $3
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
+    ADD PARTITION partition_list_opt
+    {
+        var typ = tree.AlterPartitionAddPartition
+        var partitions = $3
+	    opt := tree.NewAlterPartitionAddPartitionClause(
+            typ,
+	        partitions,
+	    )
+        $$ = tree.AlterPartitionOption(opt)
+    }
+|    DROP PARTITION AllOrPartitionNameList
+    {
+        var typ = tree.AlterPartitionDropPartition
+        var partitionNames = $3
+        opt := tree.NewAlterPartitionDropPartitionClause(
+            typ,
+            partitionNames,
+        )
+
+        if $3 == nil {
+            opt.OnAllPartitions = true
+        } else {
+            opt.PartitionNames = $3
+        }
+        $$ = tree.AlterPartitionOption(opt)
+    }
 |     TRUNCATE PARTITION AllOrPartitionNameList
-      {
-	   opt := &tree.AlterPartitionTruncatePartitionClause{
-                Typ:            tree.AlterPartitionTruncatePartition,
-                PartitionNames: $3,
-           }
-           if $3 == nil {
-           	opt.OnAllPartitions = true
-           } else {
-           	opt.PartitionNames = $3
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
+    {
+        var typ = tree.AlterPartitionTruncatePartition
+        var partitionNames = $3
+        opt := tree.NewAlterPartitionTruncatePartitionClause(
+            typ,
+            partitionNames,
+        )
+
+        if $3 == nil {
+            opt.OnAllPartitions = true
+        } else {
+            opt.PartitionNames = $3
+        }
+        $$ = tree.AlterPartitionOption(opt)
+    }
 
 AllOrPartitionNameList:
 	ALL
@@ -2790,14 +2840,14 @@ AllOrPartitionNameList:
 		$$ = nil
 	}
 |	PartitionNameList %prec LOWER_THAN_COMMA
-        {
-                $$ = $1
-        }
+    {
+        $$ = $1
+    }
 
 PartitionNameList:
 	ident
 	{
-	        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
 	}
 |	PartitionNameList ',' ident
 	{
@@ -2807,75 +2857,72 @@ PartitionNameList:
 alter_option:
     ADD table_elem_2
     {
-        opt := &tree.AlterOptionAdd{
-            Def:  $2,
-        }
+        var def = $2
+        opt := tree.NewAlterOptionAdd(def)
         $$ = tree.AlterTableOption(opt)
     }
 |    MODIFY column_keyword_opt column_def column_position
     {
-	opt := &tree.AlterTableModifyColumnClause{
-             Typ:           tree.AlterTableModifyColumn,
-             NewColumn:    $3,
-             Position:      $4,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ  = tree.AlterTableModifyColumn
+        var newColumn  = $3
+        var position = $4
+        opt := tree.NewAlterTableModifyColumnClause(typ, newColumn, position)
+	    $$ = tree.AlterTableOption(opt)
     }
 |   CHANGE column_keyword_opt column_name column_def column_position
     {
-	opt := &tree.AlterTableChangeColumnClause{
-		Typ:          tree.AlterTableChangeColumn,
-		OldColumnName: $3,
-		NewColumn:    $4,
-		Position:      $5,
-	}
-	$$ = tree.AlterTableOption(opt)
+        // Type OldColumnName NewColumn Position
+        var typ = tree.AlterTableChangeColumn
+        var oldColumnName = $3
+        var newColumn = $4
+        var position = $5
+        opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
+    	$$ = tree.AlterTableOption(opt)
     }
 |  RENAME COLUMN column_name TO column_name
     {
-    	opt := &tree.AlterTableRenameColumnClause{
-    		Typ:            tree.AlterTableRenameColumn,
-		OldColumnName: $3,
-		NewColumnName: $5,
-    	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableRenameColumn
+        var oldColumnName = $3
+        var newColumnName = $5
+        opt := tree.NewAlterTableRenameColumnClause(typ, oldColumnName, newColumnName)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:            tree.AlterTableAlterColumn,
-		ColumnName:    $3,
-		DefalutExpr:   tree.NewAttributeDefault($6),
-		OptionType:    tree.AlterColumnOptionSetDefault,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr = tree.NewAttributeDefault($6)
+        var visibility tree.VisibleType
+        var optionType = tree.AlterColumnOptionSetDefault
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name SET visibility
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:         tree.AlterTableAlterColumn,
-		ColumnName:  $3,
-		Visibility:  $5,
-		OptionType: tree.AlterColumnOptionSetVisibility,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr *tree.AttributeDefault
+        var visibility = $5
+        var optionType = tree.AlterColumnOptionSetVisibility
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name DROP DEFAULT
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:         	tree.AlterTableAlterColumn,
-		ColumnName:     $3,
-		OptionType:     tree.AlterColumnOptionDropDefault,
-        }
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr *tree.AttributeDefault
+        var visibility tree.VisibleType
+        var optionType = tree.AlterColumnOptionDropDefault
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ORDER BY alter_column_order_list %prec LOWER_THAN_ORDER
     {
-    	opt := &tree.AlterTableOrderByColumnClause{
-                Typ:         	  tree.AlterTableOrderByColumn,
-        	AlterOrderByList: $3,
-        }
-	$$ = tree.AlterTableOption(opt)
+        var orderByClauseType = tree.AlterTableOrderByColumn
+        var orderByColumnList = $3
+        opt := tree.NewAlterTableOrderByColumnClause(orderByClauseType, orderByColumnList)
+	    $$ = tree.AlterTableOption(opt)
     }
 |   DROP alter_table_drop
     {
@@ -2895,18 +2942,16 @@ alter_option:
     }
 |   ADD column_keyword_opt column_def column_position
     {
-        $$ = tree.AlterTableOption(
-            &tree.AlterAddCol{
-                Column: $3,
-                Position: $4,
-            },
-        )
+        var column = $3
+        var position = $4
+        opt := tree.NewAlterAddCol(column, position)
+        $$ = tree.AlterTableOption(opt)
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-        }
+        var checkType = $1
+        var enforce bool
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -2983,121 +3028,112 @@ column_keyword_opt:
 
 column_position:
     {
-	$$ = &tree.ColumnPosition{
-	    Typ: tree.ColumnPositionNone,
-	}
+        var typ = tree.ColumnPositionNone;
+        var relativeColumn *tree.UnresolvedName
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 |   FIRST
     {
-	$$ = &tree.ColumnPosition{
-	    Typ: tree.ColumnPositionFirst,
-	}
+        var typ = tree.ColumnPositionFirst;
+        var relativeColumn *tree.UnresolvedName
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 |   AFTER column_name
     {
-	$$ = &tree.ColumnPosition{
-            Typ:            tree.ColumnPositionAfter,
-            RelativeColumn: $2,
-	}
+        var typ = tree.ColumnPositionAfter;
+        var relativeColumn = $2
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 
 alter_column_order_list:
      alter_column_order
      {
-	 $$ = []*tree.AlterColumnOrder{$1}
+	    $$ = []*tree.AlterColumnOrder{$1}
      }
 |   alter_column_order_list ',' alter_column_order
     {
-	 $$ = append($1, $3)
+	    $$ = append($1, $3)
     }
 
 alter_column_order:
     column_name asc_desc_opt
     {
-	$$ = &tree.AlterColumnOrder{Column: $1, Direction: $2}
+        var column = $1
+        var direction = $2
+	    $$ = tree.NewAlterColumnOrder(column, direction)
     }
-
 
 alter_table_rename:
     table_name_unresolved
     {
-        $$ = &tree.AlterTableName{
-            Name: $1,
-        }
+        var name = $1
+        $$ = tree.NewAlterTableName(name)
     }
 
 alter_table_drop:
     INDEX ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropIndex,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropIndex;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   KEY ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropKey,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropKey;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropColumn,
-            Name: tree.Identifier($1.Compare()),
-        }
+        var dropType = tree.AlterTableDropColumn;
+        var name = tree.Identifier($1.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   COLUMN ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropColumn,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropColumn;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   FOREIGN KEY ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropForeignKey,
-            Name: tree.Identifier($3.Compare()),
-        }
+        var dropType = tree.AlterTableDropForeignKey;
+        var name = tree.Identifier($3.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
+
     }
 |   PRIMARY KEY
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropPrimaryKey,
-        }
+        var dropType = tree.AlterTableDropPrimaryKey;
+        var name = tree.Identifier("");
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 
 alter_table_alter:
     INDEX ident visibility
     {
-        $$ = &tree.AlterOptionAlterIndex{
-            Visibility:  $3,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var indexName = tree.Identifier($2.Compare())
+        var visibility = $3
+        $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
 | REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
-      {
-          $$ = &tree.AlterOptionAlterReIndex{
-	      KeyType : tree.INDEX_TYPE_IVFFLAT,
-              AlgoParamList: int64($6.(int64)),
-              Name: tree.Identifier($2.Compare()),
-          }
-      }
+    {
+        var keyType = tree.INDEX_TYPE_IVFFLAT
+        var algoParamList = int64($6.(int64))
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+    }
 |   CHECK ident enforce
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-            Enforce: $3,
-        }
+        var checkType = $1
+        var enforce = $3
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 |   CONSTRAINT ident enforce
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-            Enforce: $3,
-        }
+        var checkType = $1
+        var enforce = $3
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 
 visibility:
@@ -3114,31 +3150,49 @@ visibility:
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
     {
-        $$ = &tree.AlterAccount{
-            IfExists:$3,
-            Name:$4,
-            AuthOption:$5,
-            StatusOption:$6,
-            Comment:$7,
-        }
+        var ifExists = $3
+        var name = $4
+        var authOption = $5
+        var statusOption = $6
+        var comment = $7
+
+        $$ = tree.NewAlterAccount(
+            ifExists,
+            name,
+            authOption,
+            statusOption,
+            comment,
+        )
     }
 
 alter_database_config_stmt:
     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
-        $$ = &tree.AlterDataBaseConfig{
-            DbName:$3,
-            UpdateConfig: $7,
-            IsAccountLevel: false,
-        }
+        var accountName = ""
+        var dbName = $3
+        var isAccountLevel = false
+        var updateConfig = $7
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            updateConfig,
+        )
     }
 |   ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
-        $$ = &tree.AlterDataBaseConfig{
-            AccountName:$4,
-            UpdateConfig: $8,
-            IsAccountLevel: true,
-        }
+        var accountName = $4
+        var dbName = ""
+        var isAccountLevel = true
+        var updateConfig = $8
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            updateConfig,
+        )
     }
 |   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
     {
@@ -3172,8 +3226,15 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        // ifExists Users Role MiscOpt CommentOrAttribute
-        $$ = tree.NewAlterUser($3, $4, $5, $6, $7)
+        // Create temporary variables with meaningful names
+        ifExists := $3
+        users := $4
+        role := $5
+        miscOpt := $6
+        commentOrAttribute := $7
+
+        // Use the temporary variables to call the function
+        $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
 
 default_role_opt:
@@ -3755,7 +3816,7 @@ truncate_table_stmt:
     }
 |   TRUNCATE TABLE table_name
     {
-	$$ = tree.NewTruncateTable($3)
+	    $$ = tree.NewTruncateTable($3)
     }
 
 drop_stmt:
@@ -3780,28 +3841,25 @@ drop_ddl_stmt:
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
     {
-        $$ = &tree.DropSequence{
-            IfExists: $3,
-            Names:   $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropSequence(ifExists, name)
     }
 
 drop_account_stmt:
     DROP ACCOUNT exists_opt account_name
     {
-        $$ = &tree.DropAccount{
-            IfExists: $3,
-            Name: $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropAccount(ifExists, name)
     }
 
 drop_user_stmt:
     DROP USER exists_opt drop_user_spec_list
     {
-        $$ = &tree.DropUser{
-            IfExists: $3,
-            Users: $4,
-        }
+        var ifExists = $3
+        var users = $4
+        $$ = tree.NewDropUser(ifExists, users)
     }
 
 drop_user_spec_list:
@@ -3826,52 +3884,62 @@ drop_user_spec:
 drop_role_stmt:
     DROP ROLE exists_opt role_spec_list
     {
-        $$ = &tree.DropRole{
-            IfExists: $3,
-            Roles: $4,
-        }
+        var ifExists = $3
+        var roles = $4
+        $$ = tree.NewDropRole(ifExists, roles)
     }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
-        $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.Compare()),
-            TableName: $6,
-            IfExists: $3,
-        }
+        var name = tree.Identifier($4.Compare())
+        var tableName = $6
+        var ifExists = $3
+        $$ = tree.NewDropIndex(name, tableName, ifExists)
     }
 
 drop_table_stmt:
     DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
-        $$ = &tree.DropTable{IfExists: $4, Names: $5}
+        var ifExists = $4
+        var names = $5
+        $$ = tree.NewDropTable(ifExists, names)
     }
 |   DROP SOURCE exists_opt table_name_list
     {
-        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropTable(ifExists, names)
     }
 
 drop_connector_stmt:
     DROP CONNECTOR exists_opt table_name_list
     {
-	$$ = &tree.DropConnector{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropConnector(ifExists, names)
     }
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
     {
-        $$ = &tree.DropView{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropView(ifExists, names)
     }
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 |   DROP SCHEMA exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 
 drop_prepare_stmt:
@@ -3883,26 +3951,23 @@ drop_prepare_stmt:
 drop_function_stmt:
     DROP FUNCTION func_name '(' func_args_list_opt ')'
     {
-        $$ = &tree.DropFunction{
-            Name: $3,
-            Args: $5,
-        }
+        var name = $3
+        var args = $5
+        $$ = tree.NewDropFunction(name, args)
     }
 
 drop_procedure_stmt:
     DROP PROCEDURE proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $3,
-            IfExists: false,
-        }
+        var name = $3
+        var ifExists = false
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 |    DROP PROCEDURE IF EXISTS proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $5,
-            IfExists: true,
-        }
+        var name = $5
+        var ifExists = true
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 
 delete_stmt:
@@ -5887,26 +5952,24 @@ comment_opt:
 alter_stage_stmt:
     ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
     {
-        $$ = &tree.AlterStage{
-            	IfNotExists: $3,
-	            Name: tree.Identifier($4.Compare()),
-	            UrlOption: $6,
-	            CredentialsOption: $7,
-	            StatusOption: $8,
-	            Comment: $9,
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        var urlOption = $6
+        var credentialsOption = $7
+        var statusOption = $8
+        var comment = $9
+        $$ = tree.NewAlterStage(ifNotExists, name, urlOption, credentialsOption, statusOption, comment)
     }
 
 
 alter_publication_stmt:
     ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
     {
-	    $$ = &tree.AlterPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	        AccountsSet: $5,
-	        Comment: $6,
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountsSet = $5
+        var comment = $6
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, comment)
     }
 
 alter_publication_accounts_opt:
@@ -5942,19 +6005,17 @@ alter_publication_accounts_opt:
 drop_publication_stmt:
 DROP PUBLICATION exists_opt ident
     {
-	    $$ = &tree.DropPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropPublication(ifExists, name)
     }
 
 drop_stage_stmt:
 DROP STAGE exists_opt ident
     {
-        $$ = &tree.DropStage{
-            IfNotExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropStage(ifNotExists, name)
     }
 
 account_role_name:
