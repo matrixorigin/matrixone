@@ -546,6 +546,7 @@ message WindowSpec {
 message SampleFuncSpec {
 	int32 Rows = 1;
 	double Percent = 2;
+	bool UsingRow = 3;
 }
 
 message FrameClause {
