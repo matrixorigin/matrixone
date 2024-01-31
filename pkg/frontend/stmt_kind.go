@@ -182,6 +182,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 			return false, err
 		}
 		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql, v.(int64))
+		defer func() {
+			preStmt.Free()
+		}()
 		if err != nil {
 			return false, err
 		}

@@ -645,7 +645,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
 	}
 
-	if stmt.PartitionOptions != nil {
+	if stmt.PartitionOption != nil {
 		if stmt.Options != nil {
 			return nil, moerr.NewParseError(ctx.GetContext(), "Unsupported multi schema change")
 		}
