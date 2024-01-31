@@ -783,3 +783,59 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 	}
 	return bb.String()
 }
+
+func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
+	if mr == nil {
+		return nil
+	}
+
+	resultCols := make([]*plan.ColDef, len(mr.Columns))
+	for i, col := range mr.Columns {
+		resultCols[i] = &plan.ColDef{
+			Name: col.Name(),
+		}
+		switch col.ColumnType() {
+		case defines.MYSQL_TYPE_VAR_STRING:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_varchar),
+			}
+		case defines.MYSQL_TYPE_LONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int32),
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int64),
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float64),
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float32),
+			}
+		case defines.MYSQL_TYPE_DATE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_date),
+			}
+		case defines.MYSQL_TYPE_TIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_time),
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_datetime),
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_timestamp),
+			}
+		default:
+			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+		}
+	}
+	return &plan.ResultColDef{
+		ResultCols: resultCols,
+	}
+}
