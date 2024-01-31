@@ -514,10 +514,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										// in the index table will be same value (ie that from the original table).
 										// So, when we do UNION it automatically removes the duplicate values.
 										// ie
-										//  <"arjun_a_1", 1, 1> -->  (select serial_full(a,"a",c), __mo_pk_col, __mo_row_id)
-										//  <"arjun_a_1", 1, 1>
-										//  <"sunil_b_1", 1, 1> -->  (select serial_full(b,"b",c), __mo_pk_col, __mo_row_id)
-										//  <"sunil_b_1", 1, 1>
+										//  <"a_arjun_1", 1> -->  (select serial_full("a", a, c), __mo_row_id)
+										//  <"a_arjun_1", 1>
+										//  <"b_sunil_1", 1> -->  (select serial_full("b", b,c), __mo_row_id)
+										//  <"b_sunil_1", 1>
 										//  when we use UNION, we remove the duplicate values
 										// 3. RowID is added here: https://github.com/arjunsk/matrixone/blob/d7db178e1c7298e2a3e4f99e7292425a7ef0ef06/pkg/vm/engine/disttae/txn.go#L95
 										// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
@@ -2635,17 +2635,17 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	colsPos := make(map[string]int)
 	colsType := make(map[string]*Type)
 	for i, colVal := range tableDef.Cols {
-		if colVal.Name == catalog.Row_ID {
-			//rowIdPos = i
-			//rowIdType = colVal.Typ
-		}
+		//if colVal.Name == catalog.Row_ID {
+		//	rowIdPos = i
+		//	rowIdType = colVal.Typ
+		//}
 		colsPos[colVal.Name] = i
 		colsType[colVal.Name] = tableDef.Cols[i].Typ
 	}
 
-	var unionChildren []int32
+	var unionChildren = make([]int32, 0, len(idxDef.Parts))
 	var err error
-	for _, part := range idxDef.Parts {
+	for i, part := range idxDef.Parts {
 		var currLastNodeId = genLastNodeIdFn()
 		// 2.a recompute CP PK.
 		currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
@@ -2655,7 +2655,8 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 
 		//2.b.i build serial_full(a, "a", pk)
 		serialArgs := make([]*plan.Expr, 3)
-		serialArgs[0] = &Expr{
+		serialArgs[0] = makePlan2StringConstExprWithType(part)
+		serialArgs[1] = &Expr{
 			Typ: colsType[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -2665,7 +2666,6 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 				},
 			},
 		}
-		serialArgs[1] = makePlan2StringConstExprWithType(part)
 		serialArgs[2] = &Expr{
 			Typ: originPkType,
 			Expr: &plan.Expr_Col{
@@ -2693,30 +2693,29 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 			},
 		}
 
-		if isUpdate {
-			// 2.c add row_id if Update
-			//projectProjection = append(projectProjection, &plan.Expr{
-			//	Typ: rowIdType,
-			//	Expr: &plan.Expr_Col{
-			//		Col: &plan.ColRef{
-			//			RelPos: 0,
-			//			ColPos: int32(rowIdPos),
-			//			Name:   catalog.Row_ID,
-			//		},
-			//	},
-			//})
-			// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
-		}
+		// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
+		//if isUpdate {
+		//	// 2.c add row_id if Update
+		//	projectProjection = append(projectProjection, &plan.Expr{
+		//		Typ: rowIdType,
+		//		Expr: &plan.Expr_Col{
+		//			Col: &plan.ColRef{
+		//				RelPos: 0,
+		//				ColPos: int32(rowIdPos),
+		//				Name:   catalog.Row_ID,
+		//			},
+		//		},
+		//	})
+		//}
 
 		projectNode := &Node{
 			NodeType:    plan.Node_PROJECT,
 			Children:    []int32{currLastNodeId},
 			ProjectList: projectProjection,
 		}
-		currLastNodeId = builder.appendNode(projectNode, bindCtx)
 
 		// 2.d add to union's list
-		unionChildren = append(unionChildren, builder.appendNode(projectNode, bindCtx))
+		unionChildren[i] = builder.appendNode(projectNode, bindCtx)
 	}
 
 	// 3. build union
@@ -3273,7 +3272,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 		if colVal.Name == catalog.Row_ID {
 			rightRowIdPos = int32(colIdx)
-		} else if colVal.Name == catalog.IndexTableIndexColName {
+		} else if colVal.Name == catalog.MasterIndexTableIndexColName {
 			rightPkPos = int32(colIdx)
 		}
 
@@ -3298,13 +3297,14 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	// join conditions
 	// Example :-
-	//  ( (serial_full(a, 'a', c) = __mo_index_idx_col) or (serial_full(b, 'b', c) = __mo_index_idx_col) )
+	//  ( (serial_full('a', a, c) = __mo_index_idx_col) or (serial_full('b', b, c) = __mo_index_idx_col) )
 	var joinConds *Expr
 	for idx, part := range indexDef.Parts {
-		// serial_full(col1, "col1", pk)
+		// serial_full("col1", col1, pk)
 		var leftExpr *Expr
 		leftExprArgs := make([]*Expr, 3)
-		leftExprArgs[0] = &Expr{
+		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
+		leftExprArgs[1] = &Expr{
 			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -3314,7 +3314,6 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 				},
 			},
 		}
-		leftExprArgs[1] = makePlan2StringConstExprWithType(part)
 		leftExprArgs[2] = &Expr{
 			Typ: originPkType,
 			Expr: &plan.Expr_Col{
@@ -3336,7 +3335,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 				Col: &plan.ColRef{
 					RelPos: 1,
 					ColPos: rightPkPos,
-					Name:   catalog.IndexTableIndexColName,
+					Name:   catalog.MasterIndexTableIndexColName,
 				},
 			},
 		}
@@ -3348,6 +3347,9 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			joinConds = currCond
 		} else {
 			joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{joinConds, currCond})
+			if err != nil {
+				return -1, err
+			}
 		}
 	}
 
@@ -3366,7 +3368,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			Col: &plan.ColRef{
 				RelPos: 1,
 				ColPos: rightPkPos,
-				Name:   catalog.IndexTableIndexColName,
+				Name:   catalog.MasterIndexTableIndexColName,
 			},
 		},
 	})

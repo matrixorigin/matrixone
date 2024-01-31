@@ -1462,7 +1462,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		indexParts = append(indexParts, name)
 	}
 
-	var keyName = catalog.IndexTableIndexColName
+	var keyName = catalog.MasterIndexTableIndexColName
 	colDef := &ColDef{
 		Name: keyName,
 		Alg:  plan.CompressType_Lz4,
@@ -1480,20 +1480,6 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	tableDef.Pkey = &PrimaryKeyDef{
 		Names:       []string{keyName},
 		PkeyColName: keyName,
-	}
-
-	if pkeyName != "" {
-		colDef := &ColDef{
-			Name: catalog.IndexTablePrimaryColName,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
 	}
 
 	if indexInfo.Name == "" {
