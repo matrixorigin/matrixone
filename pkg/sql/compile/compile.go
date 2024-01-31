@@ -1391,7 +1391,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				if c.anal.qry.LoadTag {
+				if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
 					arg.FuncId = dispatch.ShuffleToAllFunc
 					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -1884,9 +1884,6 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
-		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
-		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1904,10 +1901,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	//arg.FuncId = dispatch.SendToAnyLocalFunc
-	//use shuffle instead of SendToAnyLocalFunc
-	arg.FuncId = dispatch.ShuffleToAllFunc
-	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+	arg.FuncId = dispatch.SendToAnyLocalFunc
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,

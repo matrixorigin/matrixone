@@ -162,6 +162,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	// use shuffle for load if parallel and no compress
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
+		for i := range builder.qry.Nodes {
+			node := builder.qry.Nodes[i]
+			if node.NodeType == plan.Node_INSERT {
+				if node.Stats.HashmapStats == nil {
+					node.Stats.HashmapStats = &plan.HashMapStats{}
+				}
+				node.Stats.HashmapStats.Shuffle = true
+			}
+		}
+	}
+
 	query := builder.qry
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
@@ -203,7 +216,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 	if err := StatFile(param); err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrFileNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
 		}
 		return "", err
