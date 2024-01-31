@@ -43,6 +43,11 @@ type compilerContext struct {
 	mu                   sync.Mutex
 }
 
+func (c *compilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*plan.FkData) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
 	panic("not supported in internal sql executor")
 }

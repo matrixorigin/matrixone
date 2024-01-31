@@ -256,16 +256,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if enabled {
-		for _, fkey := range tableDef.Fkeys {
-			if fkey.IsReady {
-				continue
-			}
-			if !isNewCodeReadOldData(fkey) {
-				err := rebuildFkey(ctx, tableDef, fkey)
-				if err != nil {
-					return err
-				}
-			}
+
+		err := rebuildFkey(ctx, dbName, tableDef)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -355,16 +349,38 @@ func isNewCodeReadOldData(fkey *plan.ForeignKeyDef) bool {
 	return false
 }
 
-func rebuildFkey(ctx CompilerContext, tableDef *plan.TableDef, fkey *plan.ForeignKeyDef) error {
-	if fkey.IsReady {
+func rebuildFkey(ctx CompilerContext, dbName string, tableDef *plan.TableDef) error {
+	needRebuild := make([]*plan.ForeignKeyDef, 0)
+	for _, fkey := range tableDef.Fkeys {
+		if fkey.IsReady {
+			continue
+		}
+		if !isNewCodeReadOldData(fkey) {
+			needRebuild = append(needRebuild, fkey)
+		}
+	}
+	if len(needRebuild) == 0 {
 		return nil
 	}
+
 	//1. yield fk data &  check fk col valid
-	fkData, err := getForeignKeyData2(ctx, tableDef, fkey)
+	fkDataArr := make([]*FkData, 0)
+	for _, fkey := range needRebuild {
+		fkData, err := getForeignKeyData2(ctx, tableDef, fkey)
+		if err != nil {
+			return err
+		}
+		if !fkData.Def.IsReady {
+			return moerr.NewInternalError(ctx.GetContext(), "foreign key is not ready")
+		}
+		fkDataArr = append(fkDataArr, fkData)
+	}
+
+	//2. update constraint
+	err := ctx.UpdateFKConstraint(dbName, tableDef.Name, fkDataArr)
 	if err != nil {
 		return err
 	}
-	//2. update constraint
 	return nil
 }
 

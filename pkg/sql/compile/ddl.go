@@ -642,7 +642,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = s.addRefChildTbl(c, fkRelation, tblId)
+		err = AddRefChildTbl(c.ctx, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -846,15 +846,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 				IsReady:       fkey.IsReady,
 				ParentDbName:  fkey.ParentDbName,
 				ParentTblName: fkey.ParentTblName,
+				ParentCols: make([]string, len(fkey.ParentCols)),
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
+			copy(newDef.ParentCols, fkey.ParentCols)
 			for idx, colName := range qry.GetFkCols()[i].Cols {
 				newDef.Cols[idx] = colNameToId[colName]
 			}
 			newFkeys[i] = newDef
 		}
 		// remove old fk settings
-		newCt, err := makeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
+		newCt, err := MakeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
 			Fkeys: newFkeys,
 		})
 		if err != nil {
@@ -896,7 +898,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
-			err = s.addRefChildTbl(c, fkRelation, tblId)
+			err = AddRefChildTbl(c.ctx, fkRelation, tblId)
 			if err != nil {
 				getLogger().Info("createTable",
 					zap.String("databaseName", c.db),
@@ -1203,7 +1205,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			break
 		}
 	}
-	newCt, err := makeNewCreateConstraint(oldCt, ct.Cts[0])
+	newCt, err := MakeNewCreateConstraint(oldCt, ct.Cts[0])
 	if err != nil {
 		return err
 	}
@@ -1360,7 +1362,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 	return oldCt, nil
 }
 
-func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {
+func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {
 	// duplication has checked in plan
 	if oldCt == nil {
 		return &engine.ConstraintDef{
@@ -1413,8 +1415,8 @@ func makeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 	return oldCt, nil
 }
 
-func (s *Scope) addRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
-	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+func AddRefChildTbl(ctx context.Context, fkRelation engine.Relation, tblId uint64) error {
+	fkTableDef, err := fkRelation.TableDefs(ctx)
 	if err != nil {
 		return err
 	}
@@ -1435,11 +1437,11 @@ func (s *Scope) addRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uin
 		oldRefChildDef = &engine.RefChildTableDef{}
 	}
 	oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
-	newCt, err := makeNewCreateConstraint(oldCt, oldRefChildDef)
+	newCt, err := MakeNewCreateConstraint(oldCt, oldRefChildDef)
 	if err != nil {
 		return err
 	}
-	return fkRelation.UpdateConstraint(c.ctx, newCt)
+	return fkRelation.UpdateConstraint(ctx, newCt)
 }
 
 func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) error {

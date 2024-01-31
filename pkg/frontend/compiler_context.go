@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,79 @@ type TxnCompilerContext struct {
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+
+func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
+	fkDatas []*plan2.FkData) error {
+	txnCtx, relation, err := tcc.getRelation(dbName, tblName, nil)
+	if err != nil {
+		return err
+	}
+	tblId := relation.GetTableID(txnCtx)
+
+	newTableDef, err := relation.TableDefs(txnCtx)
+	if err != nil {
+		return err
+	}
+
+	var colNameToId = make(map[string]uint64)
+	var oldCt *engine.ConstraintDef
+	for _, def := range newTableDef {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			colNameToId[attr.Attr.Name] = attr.Attr.ID
+		}
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+		}
+	}
+	newFkeys := make([]*plan.ForeignKeyDef, len(fkDatas))
+	for i, fkData := range fkDatas {
+		fkey := fkData.Def
+		newDef := &plan.ForeignKeyDef{
+			Name:          fkey.Name,
+			Cols:          make([]uint64, len(fkey.Cols)),
+			ForeignTbl:    fkey.ForeignTbl,
+			ForeignCols:   make([]uint64, len(fkey.ForeignCols)),
+			OnDelete:      fkey.OnDelete,
+			OnUpdate:      fkey.OnUpdate,
+			IsReady:       fkey.IsReady,
+			ParentDbName:  fkey.ParentDbName,
+			ParentTblName: fkey.ParentTblName,
+			ParentCols:    make([]string, len(fkey.ParentCols)),
+		}
+		copy(newDef.ForeignCols, fkey.ForeignCols)
+		copy(newDef.ParentCols, fkey.ParentCols)
+		for idx, colName := range fkData.Cols.Cols {
+			newDef.Cols[idx] = colNameToId[colName]
+		}
+		newFkeys[i] = newDef
+	}
+	// remove old fk settings
+	newCt, err := compile.MakeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
+		Fkeys: newFkeys,
+	})
+	if err != nil {
+		return err
+	}
+	err = relation.UpdateConstraint(txnCtx, newCt)
+	if err != nil {
+		return err
+	}
+
+	// need to append TableId to parent's TableDef.RefChildTbls
+	for _, fkData := range fkDatas {
+		fkDbName := fkData.DbName
+		fkTableName := fkData.TableName
+		txnCtx2, fkRelation, err := tcc.getRelation(fkDbName, fkTableName, nil)
+		if err != nil {
+			return err
+		}
+		err = compile.AddRefChildTbl(txnCtx2, fkRelation, tblId)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 	tcc.mu.Lock()

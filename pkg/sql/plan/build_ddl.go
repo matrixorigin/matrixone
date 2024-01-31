@@ -2895,16 +2895,16 @@ func buildUnLockTables(stmt *tree.UnLockTableStmt, ctx CompilerContext) (*Plan, 
 	}, nil
 }
 
-type fkData struct {
+type FkData struct {
 	DbName    string
 	TableName string
 	Cols      *plan.FkColName
 	Def       *plan.ForeignKeyDef
 }
 
-func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.ForeignKey) (*fkData, error) {
+func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.ForeignKey) (*FkData, error) {
 	refer := def.Refer
-	fkData := fkData{
+	fkData := FkData{
 		Def: &plan.ForeignKeyDef{
 			Name:        def.ConstraintSymbol,
 			Cols:        make([]uint64, len(def.KeyParts)),
@@ -3047,8 +3047,8 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	return &fkData, nil
 }
 
-func getForeignKeyData2(ctx CompilerContext, tableDef *TableDef, fkey *plan.ForeignKeyDef) (*fkData, error) {
-	fkData := fkData{
+func getForeignKeyData2(ctx CompilerContext, tableDef *TableDef, fkey *plan.ForeignKeyDef) (*FkData, error) {
+	fkData := FkData{
 		Def: &plan.ForeignKeyDef{
 			Name:        fkey.Name,
 			Cols:        make([]uint64, len(fkey.Cols)),

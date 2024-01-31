@@ -42,6 +42,11 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*FkData) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
 	//TODO implement me
 	panic("implement me")

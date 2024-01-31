@@ -112,6 +112,7 @@ type CompilerContext interface {
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
+	UpdateFKConstraint(dbName, tblName string, fkData []*FkData) error
 }
 
 type Optimizer interface {
