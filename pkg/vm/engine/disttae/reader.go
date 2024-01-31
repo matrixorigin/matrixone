@@ -391,6 +391,13 @@ func (r *blockReader) sortBlockList() {
 	}
 }
 
+func (r *blockReader) deleteFirstNBlocks(n int) {
+	r.blks = r.blks[n:]
+	if r.OrderBy != nil {
+		r.blockZMS = r.blockZMS[n:]
+	}
+}
+
 func (r *blockReader) Read(
 	ctx context.Context,
 	cols []string,
@@ -405,8 +412,8 @@ func (r *blockReader) Read(
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	if r.OrderBy != nil {
-		r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 		if !r.sorted {
+			r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			r.getBlockZMs()
 			r.sortBlockList()
 			r.sorted = true
@@ -414,7 +421,7 @@ func (r *blockReader) Read(
 		i := 0
 		for i < len(r.blks) {
 			if r.needReadBlkByZM(i) {
-				r.blks = r.blks[i:]
+				r.deleteFirstNBlocks(i)
 				break
 			}
 			i++
@@ -428,7 +435,7 @@ func (r *blockReader) Read(
 
 	// move to the next block at the end of this call
 	defer func() {
-		r.blks = r.blks[1:]
+		r.deleteFirstNBlocks(1)
 		r.buffer = r.buffer[:0]
 		r.currentStep++
 	}()
