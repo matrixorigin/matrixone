@@ -3396,7 +3396,10 @@ show_stmt:
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}
+        $$ = &tree.ShowCollation{
+            Like: $3,
+            Where: $4,
+        }
     }
 
 show_stages_stmt:
