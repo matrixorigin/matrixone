@@ -74,29 +74,33 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = Probe
 			}
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			if ap.bat == nil {
+				bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+				if err != nil {
+					return result, err
+				}
+				if bat == nil {
+					ctr.state = End
+					continue
+				}
+				if bat.Last() {
+					result.Batch = bat
+					return result, nil
+				}
+				if bat.IsEmpty() {
+					proc.PutBatch(bat)
+					continue
+				}
+				if ctr.mp == nil {
+					proc.PutBatch(bat)
+					continue
+				}
+				ap.bat = bat
+				ap.lastpos = 0
 			}
 
-			if bat == nil {
-				ctr.state = End
-				continue
-			}
-			if bat.Last() {
-				result.Batch = bat
-				return result, nil
-			}
-			if bat.IsEmpty() {
-				proc.PutBatch(bat)
-				continue
-			}
-			if ctr.mp == nil {
-				proc.PutBatch(bat)
-				continue
-			}
-			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
-				return result, err
+			if err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+				proc.PutBatch(ap.bat)
 			}
 			return result, nil
 
@@ -127,10 +131,11 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(bat)
-
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+	bat := ap.bat
+	if ap.lastpos == 0 {
+		anal.Input(bat, isFirst)
+	}
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -160,7 +165,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.RowCount()
 	itr := ctr.mp.NewIterator()
 	rowCount := 0
-	for i := 0; i < count; i += hashmap.UnitLimit {
+	for i := ap.lastpos; i < count; i += hashmap.UnitLimit {
+		if ctr.rbat.RowCount() >= 8192 {
+			anal.Output(ctr.rbat, isLast)
+			result.Batch = ctr.rbat
+			ap.lastpos = i
+			return nil
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -225,6 +236,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	ctr.rbat.AddRowCount(rowCount)
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
+	proc.PutBatch(bat)
+	ap.bat = nil
 	return nil
 }
 

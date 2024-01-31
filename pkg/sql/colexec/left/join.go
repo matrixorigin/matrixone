@@ -71,29 +71,31 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = Probe
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
-			if err != nil {
-				return result, err
+			if ap.bat == nil {
+				bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+				if err != nil {
+					return result, err
+				}
+
+				if bat == nil {
+					ctr.state = End
+					continue
+				}
+				if bat.IsEmpty() {
+					continue
+				}
+
+				ap.bat = bat
+				ap.lastpos = 0
 			}
 
-			if bat == nil {
-				ctr.state = End
-				continue
-			}
-			if bat.IsEmpty() {
-				proc.PutBatch(bat)
-				continue
-			}
-			if ctr.bat.RowCount() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
-					return result, err
-				}
+			if ctr.mp == nil {
+				err := ctr.emptyProbe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				return result, err
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
-					return result, err
-				}
+				err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				return result, err
 			}
-			return result, nil
 
 		default:
 			result.Batch = nil
@@ -122,7 +124,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+	bat := ap.bat
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
@@ -152,9 +155,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
-	defer proc.PutBatch(bat)
-	anal.Input(bat, isFirst)
+func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+	bat := ap.bat
+	if ap.lastpos == 0 {
+		anal.Input(bat, isFirst)
+	}
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
@@ -184,7 +189,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.NewIterator()
-	for i := 0; i < count; i += hashmap.UnitLimit {
+	for i := ap.lastpos; i < count; i += hashmap.UnitLimit {
+		if ctr.rbat.RowCount() >= 8192 {
+			anal.Output(ctr.rbat, isLast)
+			result.Batch = ctr.rbat
+			ap.lastpos = i
+			return nil
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -341,6 +352,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
+	proc.PutBatch(bat)
+	ap.bat = nil
 	return nil
 }
 

@@ -17,7 +17,6 @@ package rightanti
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,8 +47,9 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat  *batch.Batch
-	rbat *batch.Batch
+	batches       []*batch.Batch
+	batchRowCount int
+	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -79,6 +79,8 @@ type Argument struct {
 	RightTypes []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	rbat       []*batch.Batch
+	lastpos    int
 
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap
@@ -115,8 +117,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 			}
 			ctr.handledLast = true
 		}
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
@@ -131,21 +132,21 @@ func (ctr *container) cleanExprExecutor() {
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) cleanBatch(proc *process.Process) {
+	for i := range ctr.batches {
+		proc.PutBatch(ctr.batches[i])
 	}
+	ctr.batches = nil
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
+		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(mp)
+		proc.PutBatch(ctr.joinBat1)
 		ctr.joinBat1 = nil
 	}
 	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(mp)
+		proc.PutBatch(ctr.joinBat2)
 		ctr.joinBat2 = nil
 	}
 }

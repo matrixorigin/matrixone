@@ -71,6 +71,8 @@ type Argument struct {
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	bat        *batch.Batch
+	lastpos    int
 
 	HashOnPK           bool
 	IsShuffle          bool

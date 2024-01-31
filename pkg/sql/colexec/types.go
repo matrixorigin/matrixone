@@ -15,9 +15,10 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"reflect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -95,3 +96,7 @@ type RuntimeFilterChan struct {
 	Spec *plan.RuntimeFilterSpec
 	Chan chan *pipeline.RuntimeFilter
 }
+
+const (
+	DefaultBatchSize = 8192
+)
