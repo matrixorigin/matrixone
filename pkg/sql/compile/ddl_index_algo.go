@@ -176,13 +176,11 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 
 	// 2. Sampling SQL Logic
-	//sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
-	//TODO: this change will be reverted once m-schen implements sample( ,d rows normal) in the query engine.
-	samplePercent := catalog.CalcSamplePercent(int64(centroidParamsLists), totalCnt)
+	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %f percent) as `%s` from `%s`.`%s`)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
 		indexColumnName,
-		samplePercent,
+		sampleCnt,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
