@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -64,42 +63,21 @@ func (builder *QueryBuilder) handleMessgaeFromTopToScan(nodeID int32) {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
+	if len(scanNode.OrderBy) != 0 {
+		panic("orderby in scannode should be nil!")
+	}
 	if orderByCol.Col.RelPos != scanNode.BindingTags[0] {
 		return
 	}
-	var signed bool
-	// for now, only support numeric value
-	switch types.T(node.OrderBy[0].Expr.Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
-		signed = true
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8:
-		signed = false
-	default:
-		return
-	}
-
-	var msgType process.MsgType
-	if node.OrderBy[0].Flag == plan.OrderBySpec_INTERNAL || node.OrderBy[0].Flag == plan.OrderBySpec_ASC {
-		if signed {
-			msgType = process.MsgMaxValueSigned
-		} else {
-			msgType = process.MsgMaxValueUnsigned
-		}
-	} else if node.OrderBy[0].Flag == plan.OrderBySpec_DESC {
-		if signed {
-			msgType = process.MsgMinValueSigned
-		} else {
-			msgType = process.MsgMinValueUnsigned
-		}
-	} else {
+	if scanNode.Stats.BlockNum < 100 {
 		return
 	}
 
 	msgTag := builder.genNewMsgTag()
-	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(msgType)}
+	msgHeader := &plan.MsgHeader{MsgTag: msgTag, MsgType: int32(process.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
-
+	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
 }
 
 func (builder *QueryBuilder) handleMessgaes(nodeID int32) {

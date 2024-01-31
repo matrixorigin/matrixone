@@ -72,9 +72,7 @@ Project
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 10
-                    Send Message: [tag 1 , type MsgMaxValueSigned]
                     ->  Table Scan on d1.t1
-                          Recv Message: [tag 1 , type MsgMaxValueSigned]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
 c1    c1    c2    c3
 1    1    1    1
@@ -100,9 +98,7 @@ Project
               ->  Sort
                     Sort Key: t1.c1 INTERNAL
                     Limit: 30
-                    Send Message: [tag 1 , type MsgMaxValueSigned]
                     ->  Table Scan on d1.t1
-                          Recv Message: [tag 1 , type MsgMaxValueSigned]
 select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
 c1    c1    c2    c3
 21    21    21    21

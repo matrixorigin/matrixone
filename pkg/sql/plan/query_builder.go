@@ -3691,7 +3691,7 @@ func (builder *QueryBuilder) genNewTag() int32 {
 	return builder.nextTag
 }
 
-func (builder *QueryBuilder) genNewMsgTag() int32 {
+func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
 	builder.nextMsgTag++
 	return builder.nextMsgTag
 }
