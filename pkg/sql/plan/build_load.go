@@ -35,6 +35,11 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
+	tblName := string(stmt.Table.ObjectName)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
 	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
 	}
@@ -48,11 +53,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
-		return nil, err
-	}
-	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
 		return nil, err
 	}
 	tableDef := tblInfo.tableDefs[0]
@@ -216,7 +216,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 	if err := StatFile(param); err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrFileNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
 		}
 		return "", err

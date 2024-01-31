@@ -251,7 +251,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-ssb Repo
         if: ${{ always() && !cancelled() }}
@@ -552,7 +552,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}
