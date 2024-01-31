@@ -51,11 +51,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	collationBatchLen = 1
-	collationCols     = 7
-)
-
 type CloseFlag struct {
 	//closed flag
 	closed uint32
