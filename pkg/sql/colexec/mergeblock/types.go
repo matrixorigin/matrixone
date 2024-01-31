@@ -45,6 +45,7 @@ type Argument struct {
 	Tbl engine.Relation
 	// 2. partition sub tables
 	PartitionSources []engine.Relation
+	AddAffectedRows  bool
 	affectedRows     uint64
 	container        *Container
 
@@ -80,6 +81,11 @@ func (arg *Argument) WithTbl(tbl engine.Relation) *Argument {
 
 func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
 	arg.PartitionSources = partitionSources
+	return arg
+}
+
+func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
+	arg.AddAffectedRows = addAffectedRows
 	return arg
 }
 
@@ -219,8 +225,10 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-			arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+			if arg.AddAffectedRows {
+				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+				arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
 				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
 			hasObject = true
@@ -231,7 +239,9 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			newBat.Cnt = 1
-			arg.affectedRows += uint64(newBat.RowCount())
+			if arg.AddAffectedRows {
+				arg.affectedRows += uint64(newBat.RowCount())
+			}
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}

@@ -96,6 +96,13 @@ func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
 	return sampleCnt
 }
 
+// CalcSamplePercent is used to calculate the sample percent for Kmeans index.
+// TODO: This will be removed once m-schen implements sample( ,d rows normal) in the query engine.
+func CalcSamplePercent(lists, totalCnt int64) (samplePercent float64) {
+	sampleCnt := CalcSampleCount(lists, totalCnt)
+	return (float64(sampleCnt) / float64(totalCnt)) * 100
+}
+
 /* 1. ToString Functions */
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL

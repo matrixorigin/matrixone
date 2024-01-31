@@ -721,26 +721,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 			arg.Release()
 		// case vm.Order:
-		//	flg = true
-		//	arg := in.Arg.(*order.Argument)
-		//	s.Instructions = s.Instructions[i:]
-		//	s.Instructions[0] = vm.Instruction{
-		//		Op:  vm.MergeOrder,
-		//		Idx: in.Idx,
-		//		Arg: &mergeorder.Argument{
-		//			OrderBySpecs: arg.OrderBySpec,
-		//		},
-		//	}
-		//	for j := range ss {
-		//		ss[j].appendInstruction(vm.Instruction{
-		//			Op:      vm.Order,
-		//			Idx:     in.Idx,
-		//			IsFirst: in.IsFirst,
-		//			Arg: &order.Argument{
-		//				OrderBySpec: arg.OrderBySpec,
-		//			},
-		//		})
-		//	}
+		// there is no need to do special merge for order, because the behavior of order is just sort for each batch.
 		case vm.Limit:
 			flg = true
 			idx = i
@@ -820,7 +801,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 						Op:      vm.Sample,
 						Idx:     in.Idx,
 						IsFirst: false,
-						Arg:     sample.NewMergeSample(arg),
+						Arg:     sample.NewMergeSample(arg, arg.NeedOutputRowSeen),
 
 						CnAddr:      in.CnAddr,
 						OperatorID:  c.allocOperatorID(),
@@ -999,6 +980,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+					s.Proc.TxnOperator.Txn().DebugString(), errStream)
 				closeWithError(errStream)
 				return
 			}
