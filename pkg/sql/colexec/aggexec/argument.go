@@ -31,6 +31,8 @@ type aggFuncArg[T types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[T]
 
 	// optimized for multi column agg.
+	// todo: should be moved to other place.
+	//  because we need record the return type here.
 	fill     func(T)
 	fillNull func()
 	fills    func(T, bool, int)

@@ -57,16 +57,16 @@ type singleAggPrivateStructure4 interface {
 type multiAggPrivateStructure1[
 	to types.FixedSizeTExceptStrType] interface {
 	init()
-	getFillWhich(idx int) any     // return func fill(value)
-	getFillNullWhich(idx int) any // return func fillNull()
-	getFillsWhich(idx int) any    // return func fills(value, isNull, count)
+	getFillWhich(idx int) any     // return func fill(value，setter for to)
+	getFillNullWhich(idx int) any // return func fillNull(setter for to)
+	getFillsWhich(idx int) any    // return func fills(value, isNull, count, setter for to)
 	flush() to
 }
 
 type multiAggPrivateStructure2 interface {
 	init()
-	getFillWhich(idx int) any     // return func fill(value)
-	getFillNullWhich(idx int) any // return func fillNull()
-	getFillsWhich(idx int) any    // return func fills(value, isNull, count)
+	getFillWhich(idx int) any     // return func fill(value, setter for bytes)
+	getFillNullWhich(idx int) any // return func fillNull(setter for bytes)
+	getFillsWhich(idx int) any    // return func fills(value, isNull, count, setter for bytes)
 	flush() []byte
 }
