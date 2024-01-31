@@ -1064,7 +1064,7 @@ col1    col2    col3
 1    1    1
 2    2    2
 alter table foreign01 modify col1 decimal;
-Cannot change column 'col1': used in a foreign key constraint 'c1' of table 'db1.foreign02'
+Cannot change column 'col1': used in a foreign key constraint 'c1' of table 'test.foreign02'
 alter table foreign02 modify col1 float after col3;
 Cannot change column 'col1': used in a foreign key constraint 'c1'
 show create table foreign01;
