@@ -1579,15 +1579,15 @@ func (mce *MysqlCmdExecutor) handleShowCollation(sc *tree.ShowCollation, proc *p
 func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation) error {
 	var err error
 	var bat *batch.Batch
-	//var outputBatches []*batch.Batch
+	// var outputBatches []*batch.Batch
 
 	// Construct the columns.
 	col1 := new(MysqlColumn)
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName("Collation")
 
 	col2 := new(MysqlColumn)
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col2.SetName("Charset")
 
 	col3 := new(MysqlColumn)
@@ -1595,11 +1595,11 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 	col3.SetName("Id")
 
 	col4 := new(MysqlColumn)
-	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col4.SetName("Default")
 
 	col5 := new(MysqlColumn)
-	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col5.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col5.SetName("Compiled")
 
 	col6 := new(MysqlColumn)
@@ -1607,7 +1607,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 	col6.SetName("Sortlen")
 
 	col7 := new(MysqlColumn)
-	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col7.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col7.SetName("Pad_attribute")
 
 	mrs := ses.GetMysqlResultSet()
@@ -1715,13 +1715,23 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		mrs.AddRow(row)
 	}
 
-	// save query result
-	// outputBatches = make([]*batch.Batch, collationBatchLen)
-	// outputBatches[0] = batch.NewWithSize(collationCols)
-
-	// if openSaveQueryResult(ses) {
-	// 	err = saveResult(ses, []*batch.Batch{bat})
+	// oq := newFakeOutputQueue(mrs)
+	// if err = fillResultSet(oq, bat, ses); err != nil {
+	// 	return err
 	// }
+
+	ses.SetMysqlResultSet(mrs)
+	ses.rs = mysqlColDef2PlanResultColDef(mrs)
+
+	// save query result
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
+		if err := saveQueryResultMeta(ses); err != nil {
+			return err
+		}
+	}
 
 	return err
 }
