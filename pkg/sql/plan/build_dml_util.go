@@ -495,6 +495,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 					// insert master sk plan
 					{
+						// This function creates new SinkScanNode for each of Union's inside appendPreInsertSkMasterPlan
 						genLastNodeIdFn := func() int32 {
 							//TODO: verify if this will cause memory leak.
 							newLastNodeId := appendSinkScanNode(builder, bindCtx, newSourceStep)
