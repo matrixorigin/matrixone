@@ -668,10 +668,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef,             // table definition (schema)
-	exprs []*plan.Expr,                  // filter expression
-	blocks *objectio.BlockInfoSlice,     // output marshaled block list after filtering
-	proc *process.Process,               // process of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	exprs []*plan.Expr, // filter expression
+	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	proc *process.Process, // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
@@ -731,10 +731,6 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	for _, entry := range tbl.writes {
-		//if entry.typ == INSERT || entry.typ == INSERT_TXN {
-		//	continue
-		//}
-
 		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 		// TODO Adjustments will be made here in the future
 		if entry.typ == DELETE {
