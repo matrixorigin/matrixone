@@ -65,7 +65,7 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
-	GCCfg         *GCCfg
+	GCCfg         *GCCfg         `toml:"gc-cfg"`
 	LogtailCfg    *LogtailCfg
 	CatalogCfg    *CatalogCfg
 

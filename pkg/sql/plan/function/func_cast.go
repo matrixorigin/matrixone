@@ -18,13 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -4646,7 +4647,7 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 }
 
 func floatToBytes(v float64, bitSize int) []byte {
-	if v >= float64(1e15) || v < float64(1e-13) {
+	if v >= float64(1e15) || (v < float64(1e-13) && v > 0) || (v < 0 && v > -1e-13) || v <= -1e15 {
 		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
 	} else {
 		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
