@@ -716,19 +716,19 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	for _, entry := range tbl.writes {
-		if entry.typ == INSERT {
-			continue
-		}
-		// entry.typ == DELETE
-		if entry.isGeneratedByTruncate() {
-			continue
-		}
-		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-		if entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, _ := v.Decode()
-				dirtyBlks[id] = struct{}{}
+		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
+		// TODO Adjustments will be made here in the future
+		if entry.typ == DELETE {
+			if entry.isGeneratedByTruncate() {
+				continue
+			}
+			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
+			if entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, _ := v.Decode()
+					dirtyBlks[id] = struct{}{}
+				}
 			}
 		}
 	}
