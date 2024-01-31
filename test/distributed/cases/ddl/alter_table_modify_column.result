@@ -567,10 +567,10 @@ col1    col2
 1    73ujf34f
 1    cdsdsa
 drop table t1;
-drop database if exists db2;
+drop database if exists db1;
 drop database if exists test;
+create database test;
 use test;
-invalid database test
 drop table if exists bool01;
 create table bool01 (col1 int, col2 char);
 insert into bool01 values (1, 'q');
@@ -715,17 +715,17 @@ drop table if exists text01;
 create table text01 (col1 text primary key , col2 mediumtext unique index, col3 longtext);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 73 near " index, col3 longtext);";
 insert into text01 values ('37268434','32718hcuwh432fr234f34g4f34e4','&*&YHRE%^&*YUIHGT^&Y*UIJK');
-no such table db1.text01
+no such table test.text01
 insert into text01 values ('jefwyq3uih2r321fr3', '38eu4jfc3w4e3dcewcevewcve', null);
-no such table db1.text01
+no such table test.text01
 insert into text01 values (null, '2789378u2uifj4234r23', '32r43frecdrfedwq');
-no such table db1.text01
+no such table test.text01
 select * from text01;
 SQL parser error: table "text01" does not exist
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 drop table text01;
-no such table db1.text01
+no such table test.text01
 drop table if exists alter03;
 create table alter03 (col1 int, col2 binary, col3 decimal);
 insert into alter03 values (1, 'e', 324214.2134123);
@@ -1703,4 +1703,3 @@ col1
 100.0
 drop table table01;
 drop database test;
-Can't drop database 'test'; database doesn't exist
