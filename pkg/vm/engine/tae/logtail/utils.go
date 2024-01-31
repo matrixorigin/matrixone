@@ -785,8 +785,8 @@ type BaseCollector struct {
 	Usage struct {
 		// db, tbl deletes
 		Deletes        []interface{}
-		SegInserts     []*catalog.ObjectEntry
-		SegDeletes     []*catalog.ObjectEntry
+		ObjInserts     []*catalog.ObjectEntry
+		ObjDeletes     []*catalog.ObjectEntry
 		ReservedAccIds map[uint64]struct{}
 	}
 
@@ -929,7 +929,7 @@ func (data *CNCheckpointData) InitMetaIdx(
 ) error {
 	if data.bats[MetaIDX] == nil {
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
-		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
+		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
 		if err != nil {
 			return err
 		}
@@ -2043,12 +2043,21 @@ func LoadBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
+	var releases []func()
+	defer func() {
+		for i := range releases {
+			if releases[i] != nil {
+				releases[i]()
+			}
+		}
+	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		releases = make([]func(), 1)
+		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -2062,7 +2071,9 @@ func LoadBlkColumnsByMeta(
 			if pkgVec.Length() == 0 {
 				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				vec = containers.ToTNVector(pkgVec, mp)
+				srcVec := containers.ToTNVector(pkgVec, mp)
+				defer srcVec.Close()
+				vec = srcVec.CloneWindow(0, srcVec.Length(), mp)
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec
@@ -2088,12 +2099,22 @@ func LoadCNSubBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
+	var releases []func()
+	bats := make([]*batch.Batch, 0)
+	defer func() {
+		for i := range releases {
+			if releases[i] != nil {
+				releases[i]()
+			}
+		}
+	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		releases = make([]func(), 1)
+		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
+		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	}
 	if err != nil {
 		return nil, err
@@ -2101,8 +2122,14 @@ func LoadCNSubBlkColumnsByMeta(
 	for i := range ioResults {
 		ioResults[i].Attrs = make([]string, len(colNames))
 		copy(ioResults[i].Attrs, colNames)
+		var bat *batch.Batch
+		bat, err = ioResults[i].Dup(m)
+		if err != nil {
+			return nil, err
+		}
+		bats = append(bats, bat)
 	}
-	return ioResults, nil
+	return bats, nil
 }
 
 func LoadCNSubBlkColumnsByMetaWithId(
@@ -2114,23 +2141,30 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	version uint32,
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
-) (ioResult *batch.Batch, err error) {
+) (bat *batch.Batch, err error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
+	var ioResult *batch.Batch
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	if version <= CheckpointVersion3 {
-		ioResult, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioResult, release, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResult, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
+		ioResult, release, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
 	}
 	if err != nil {
 		return nil, err
 	}
 	ioResult.Attrs = make([]string, len(colNames))
 	copy(ioResult.Attrs, colNames)
-	return ioResult, nil
+	return ioResult.Dup(m)
 }
 func (data *CheckpointData) ReadTNMetaBatch(
 	ctx context.Context,
@@ -3032,12 +3066,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if objNode.HasDropCommitted() {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 			}
 		} else {
 			// create and non-append, record into the usage ins bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegInserts = append(collector.Usage.SegInserts, entry)
+				collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
 			}
 		}
 
@@ -3064,7 +3098,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+		collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {

@@ -167,6 +167,7 @@ func (c *Compile) reset() {
 	c.fuzzy = nil
 	c.needLockMeta = false
 	c.isInternal = false
+	c.lastAllocID = 0
 
 	for k := range c.metaTables {
 		delete(c.metaTables, k)
@@ -378,8 +379,10 @@ func (c *Compile) run(s *Scope) error {
 }
 
 func (c *Compile) allocOperatorID() int32 {
+	c.lock.Lock()
 	defer func() {
 		c.lastAllocID++
+		c.lock.Unlock()
 	}()
 
 	return c.lastAllocID
@@ -427,6 +430,21 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		if runC != nil {
 			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
 				err = runC.fuzzy.backgroundSQLCheck(runC)
+			}
+
+			//detect fk self refer
+			//update, insert
+			query := c.pn.GetQuery()
+			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
+				err = detectFkSelfRefer(runC, query.DetectSqls)
+			}
+			//alter table ... add/drop foreign key
+			if err == nil && c.pn.GetDdl() != nil {
+				alterTable := c.pn.GetDdl().GetAlterTable()
+				if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
+					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
+				}
 			}
 		}
 
@@ -1426,7 +1444,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
@@ -1494,7 +1513,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Op: vm.MergeBlock,
 					Arg: mergeblock.NewArgument().
 						WithTbl(insertArg.InsertCtx.Rel).
-						WithPartitionSources(insertArg.InsertCtx.PartitionSources),
+						WithPartitionSources(insertArg.InsertCtx.PartitionSources).
+						WithAddAffectedRows(insertArg.InsertCtx.AddAffectedRows),
 				})
 				ss = []*Scope{rs}
 				insertArg.Release()
@@ -1806,8 +1826,12 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		param.Tail = new(tree.TailParameter)
 		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
 		param.Tail.Fields = &tree.Fields{
-			Terminated: n.ExternScan.Terminated,
-			EnclosedBy: n.ExternScan.EnclosedBy[0],
+			Terminated: &tree.Terminated{
+				Value: n.ExternScan.Terminated,
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: n.ExternScan.EnclosedBy[0],
+			},
 		}
 		param.JsonData = n.ExternScan.JsonType
 	}
@@ -1957,15 +1981,11 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) 
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
-	useShuffle := param.Parallel
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
-		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
-		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1983,12 +2003,7 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	if useShuffle {
-		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
-	} else {
-		arg.FuncId = dispatch.SendToAnyLocalFunc
-	}
+	arg.FuncId = dispatch.SendToAnyLocalFunc
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
@@ -2774,7 +2789,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructSample(n),
+			Arg:     constructSample(n, len(ss) != 1),
 		})
 	}
 	c.anal.isFirst = false
@@ -2790,7 +2805,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     sample.NewMergeSample(constructSample(n)),
+			Arg:     sample.NewMergeSample(constructSample(n, true), false),
 		})
 	}
 	return []*Scope{rs}
@@ -4360,4 +4375,40 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
+}
+
+// detectFkSelfRefer checks if foreign key self refer confirmed
+func detectFkSelfRefer(c *Compile, detectSqls []string) error {
+	if len(detectSqls) == 0 {
+		return nil
+	}
+	for _, sql := range detectSqls {
+		err := runDetectSql(c, sql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// runDetectSql runs the fk detecting sql
+func runDetectSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if !yes {
+				return moerr.NewErrFKNoReferencedRow2(c.ctx)
+			}
+		}
+	}
+	return nil
 }

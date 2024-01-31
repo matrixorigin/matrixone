@@ -1826,6 +1826,8 @@ func setCharacter(column *MysqlColumn) {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
 		column.SetCharset(charsetVarchar)
+	case defines.MYSQL_TYPE_VAR_STRING:
+		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
 	}
