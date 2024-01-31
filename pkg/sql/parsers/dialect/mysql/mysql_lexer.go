@@ -29,6 +29,9 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) == 0 {
@@ -50,6 +53,9 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {

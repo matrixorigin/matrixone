@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,8 +43,10 @@ import (
 	"github.com/mohae/deepcopy"
 )
 
-var _ ComputationWrapper = &TxnComputationWrapper{}
-var _ ComputationWrapper = &NullComputationWrapper{}
+var (
+	_ ComputationWrapper = &TxnComputationWrapper{}
+	_ ComputationWrapper = &NullComputationWrapper{}
+)
 
 type NullComputationWrapper struct {
 	*TxnComputationWrapper
@@ -109,15 +112,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 }
 
 func (cwft *TxnComputationWrapper) Free() {
+	if cwft.stmt != nil {
+		if !strings.HasPrefix(cwft.ses.sql, "execute ") {
+			cwft.stmt.Free()
+			cwft.stmt = nil
+		}
+	}
 	cwft.plan = nil
 	cwft.proc = nil
 	cwft.ses = nil
 	cwft.compile = nil
 	cwft.runResult = nil
-	if cwft.stmt != nil {
-		cwft.stmt.Free()
-	}
-	cwft.stmt = nil
 }
 
 func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
@@ -281,12 +286,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
 		//  Convenient to reuse memory next time
 		if prepareStmt.InsertBat != nil {
-			prepareStmt.InsertBat.SetCnt(1000) //we will make sure :  when retry in lock error, we will not clean up this batch
+			prepareStmt.InsertBat.SetCnt(1000) // we will make sure :  when retry in lock error, we will not clean up this batch
 			cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
 			cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 		}
 		numParams := len(preparePlan.ParamTypes)
-		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { //use binary protocol
+		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 			if prepareStmt.params.Length() != numParams {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}

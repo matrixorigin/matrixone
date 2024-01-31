@@ -2836,8 +2836,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		}
 	}
 
-	if stmt.PartitionOptions != nil {
-		alterPartitionOption := stmt.PartitionOptions
+	if stmt.PartitionOption != nil {
+		alterPartitionOption := stmt.PartitionOption
 		switch partitionOption := alterPartitionOption.(type) {
 		case *tree.AlterPartitionAddPartitionClause:
 			alterTableAddPartition, err := AddTablePartitions(ctx, alterTable, partitionOption)
