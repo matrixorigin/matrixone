@@ -28,7 +28,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/fagongzi/goetty/v2"
@@ -42,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -2727,28 +2725,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
-
-	// per statement profiler
-	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
-	if endStmtProfile != nil {
-		defer endStmtProfile(func() string {
-			// use sql string as file name suffix
-			formatCtx := tree.NewFmtCtx(dialect.MYSQL)
-			stmt.Format(formatCtx)
-			sql := formatCtx.String()
-			if len(sql) > 128 {
-				sql = sql[:128]
-			}
-			sql = strings.TrimSpace(sql)
-			sql = strings.Map(func(r rune) rune {
-				if unicode.IsSpace(r) {
-					return '-'
-				}
-				return r
-			}, sql)
-			return sql
-		})
-	}
 
 	// record goroutine info when ddl stmt run timeout
 	switch stmt.(type) {
