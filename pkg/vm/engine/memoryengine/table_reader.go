@@ -176,14 +176,14 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 
 }
 
-func (r *TableReader) SetFilterZM(objectio.ZoneMap) {
+func (t *TableReader) SetFilterZM(objectio.ZoneMap) {
 }
 
-func (r *TableReader) GetOrderBy() []*plan.OrderBySpec {
+func (t *TableReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }
 
-func (r *TableReader) SetOrderBy([]*plan.OrderBySpec) {
+func (t *TableReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (t *TableReader) Close() error {

@@ -46,14 +46,14 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
-func (r *PartitionReader) SetFilterZM(objectio.ZoneMap) {
+func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
 }
 
-func (r *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
+func (p *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }
 
-func (r *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
+func (p *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (p *PartitionReader) Close() error {
