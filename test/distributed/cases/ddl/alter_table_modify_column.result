@@ -569,8 +569,8 @@ col1    col2
 drop table t1;
 drop database if exists db1;
 drop database if exists test;
+create database test;
 use test;
-invalid database test
 drop table if exists bool01;
 create table bool01 (col1 int, col2 char);
 insert into bool01 values (1, 'q');

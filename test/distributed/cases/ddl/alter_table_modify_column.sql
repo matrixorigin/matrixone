@@ -298,6 +298,7 @@ drop database if exists db1;
 -- @label:bvt
 
 drop database if exists test;
+create database test;
 use test;
 
 -- abnormal test: modify column to bool
