@@ -25,7 +25,7 @@ import (
 
 var expiredTick = uint64(hakeeper.DefaultCNStoreTimeout / time.Second * hakeeper.DefaultTickPerSecond)
 
-func TestParseCNStores(t *testing.T) {
+func TestSelectWorkingCNs(t *testing.T) {
 	cases := []struct {
 		infos           pb.CNState
 		currentTick     uint64
@@ -53,7 +53,7 @@ func TestParseCNStores(t *testing.T) {
 	for _, c := range cases {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working := getWorkingCNs(cfg, c.infos, c.currentTick)
+		working := selectCNs(c.infos, notExpired(cfg, c.currentTick))
 		assert.Equal(t, c.expectedWorking, working)
 	}
 }
