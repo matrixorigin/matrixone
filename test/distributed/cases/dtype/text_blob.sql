@@ -18,7 +18,7 @@ insert into text_01 select '123','7834','commmmmmment';
 insert into text_01 values ('789',' 23:50:00','20');
 select * from text_01;
 create table text_02(t1 text,t2 tinytext,t3 mediumtext,t4 longtext,t5 text);
-load data infile '$resources/blob_file/blob1.csv' into table text_02;
+load data infile '$resources/blob_file/blob1.csv' into table text_02 fields terminated by ',';
 select * from text_02;
 insert into text_02 values ("123木头人","zt@126.com","1000-01-01","9999-12-31 23:59:59.999999","2038-01-19 03:14:07.999999");
 select * from text_02;
