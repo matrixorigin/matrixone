@@ -477,7 +477,7 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL  
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_user_sql
 show index from test_table    Other    cloud_user_sql
 show collation like 'utf8mb4_general_ci%'    Other    cloud_user_sql
-show collation like 'utf8mb4_general_ci%'    Other    cloud_user_sql
+show collation like 'utf8mb4_general_ci'    Other    cloud_user_sql
 show tables    Other    cloud_user_sql
 show privileges    Other    cloud_user_sql
 show profiles    Other    cloud_user_sql
