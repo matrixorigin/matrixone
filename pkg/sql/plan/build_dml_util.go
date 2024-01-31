@@ -497,7 +497,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					{
 						genLastNodeIdFn := func() int32 {
 							//TODO: verify if this will cause memory leak.
-							// accept as arguments.
 							newLastNodeId := appendSinkScanNode(builder, bindCtx, newSourceStep)
 							lastProject := builder.qry.Nodes[newLastNodeId].ProjectList
 							projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
@@ -506,9 +505,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									projectProjection[j] = lastProject[nIdx]
 								} else {
 									if uCols.Name == catalog.Row_ID {
-										// replace the origin table's row_id with entry table's row_id
-										// it is the 2nd last column in the entry table join
-										projectProjection[j] = lastProject[len(lastProject)-2]
+										// NOTE:
+										// 1. In the case of secondary index, we are reusing the row_id values
+										// that were deleted.
+										// 2. But in the master index case, we are using the row_id values from
+										// the original table. Row_id associated with say 2 rows (one row for each column)
+										// in the index table will be same value (ie that from the original table).
+										// So, when we do UNION it automatically removes the duplicate values.
+										// ie
+										//  <"arjun_a_1", 1, 1> -->  (select serial_full(a,"a",c), __mo_pk_col, __mo_row_id)
+										//  <"arjun_a_1", 1, 1>
+										//  <"sunil_b_1", 1, 1> -->  (select serial_full(b,"b",c), __mo_pk_col, __mo_row_id)
+										//  <"sunil_b_1", 1, 1>
+										//  when we use UNION, we remove the duplicate values
+										// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
+										projectProjection[j] = lastProject[j]
 									} else {
 										projectProjection[j] = lastProject[j]
 									}
@@ -2616,15 +2627,15 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	// 1.a init details
 	idxDef := tableDef.Indexes[indexIdx]
 	originPkPos, originPkType := getPkPos(tableDef, false)
-	var rowIdPos int
-	var rowIdType *Type
+	//var rowIdPos int
+	//var rowIdType *Type
 
 	colsPos := make(map[string]int)
 	colsType := make(map[string]*Type)
 	for i, colVal := range tableDef.Cols {
 		if colVal.Name == catalog.Row_ID {
-			rowIdPos = i
-			rowIdType = colVal.Typ
+			//rowIdPos = i
+			//rowIdType = colVal.Typ
 		}
 		colsPos[colVal.Name] = i
 		colsType[colVal.Name] = tableDef.Cols[i].Typ
@@ -2682,16 +2693,17 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 
 		if isUpdate {
 			// 2.c add row_id if Update
-			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: rowIdType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(rowIdPos),
-						Name:   catalog.Row_ID,
-					},
-				},
-			})
+			//projectProjection = append(projectProjection, &plan.Expr{
+			//	Typ: rowIdType,
+			//	Expr: &plan.Expr_Col{
+			//		Col: &plan.ColRef{
+			//			RelPos: 0,
+			//			ColPos: int32(rowIdPos),
+			//			Name:   catalog.Row_ID,
+			//		},
+			//	},
+			//})
+			// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
 		}
 
 		projectNode := &Node{
