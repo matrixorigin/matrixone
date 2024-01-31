@@ -2925,6 +2925,9 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 	if len(mvccNodes) == 0 {
 		return nil
 	}
+	if len(mvccNodes) > 2 {
+		panic(fmt.Sprintf("logic err: object has %d nodes, object %v", len(mvccNodes), entry.PPString(3, 0, "")))
+	}
 
 	var needPrefetch bool
 	if !collector.skipLoadObjectStats {
