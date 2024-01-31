@@ -342,7 +342,7 @@ create view test_view as select * from test_table;
 show create view test_view;
 show collation;
 show collation like '%';
-load data infile '$resources/load_data/test.csv' into table test_table;
+load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;

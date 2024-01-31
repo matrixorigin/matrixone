@@ -17,6 +17,7 @@ package elkans
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"gonum.org/v1/gonum/mat"
+	"math"
 	"math/rand"
 )
 
@@ -66,26 +67,30 @@ func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
 }
 
 func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
+	numSamples := len(vectors)
 	centroids = make([]*mat.VecDense, k)
 
 	// 1. start with a random center
-	centroids[0] = vectors[kpp.rand.Intn(len(vectors))]
+	centroids[0] = vectors[kpp.rand.Intn(numSamples)]
 
-	distances := make([]float64, len(vectors))
+	distances := make([]float64, numSamples)
+	for j := range distances {
+		distances[j] = math.MaxFloat64
+	}
+
 	for nextCentroidIdx := 1; nextCentroidIdx < k; nextCentroidIdx++ {
 
 		// 2. for each data point, compute the min distance to the existing centers
 		var totalDistToExistingCenters float64
 		for vecIdx := range vectors {
-			minDist := kpp.distFn(vectors[vecIdx], centroids[0])
-			for currKnownCentroidIdx := 1; currKnownCentroidIdx < nextCentroidIdx; currKnownCentroidIdx++ {
-				dist := kpp.distFn(vectors[vecIdx], centroids[currKnownCentroidIdx])
-				if dist < minDist {
-					minDist = dist
-				}
+			// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
+			// This code was very slow: https://github.com/matrixorigin/matrixone/blob/77ff1452bd56cd93a10e3327632adebdbaf279cb/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans/initializer.go#L81-L86
+			// but instead we are using the distance to the last center that was chosen.
+			distance := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
+			distance *= distance
+			if distance < distances[vecIdx] {
+				distances[vecIdx] = distance
 			}
-
-			distances[vecIdx] = minDist * minDist
 			totalDistToExistingCenters += distances[vecIdx]
 		}
 
@@ -93,11 +98,13 @@ func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centro
 		// where it is chosen with probability proportional to D(x)^2
 		// Ref: https://en.wikipedia.org/wiki/K-means%2B%2B#Improved_initialization_algorithm
 		target := kpp.rand.Float64() * totalDistToExistingCenters
-		idx := 0
-		for currSum := distances[0]; currSum < target; currSum += distances[idx] {
-			idx++
+		for idx, distance := range distances {
+			target -= distance
+			if target <= 0 {
+				centroids[nextCentroidIdx] = vectors[idx]
+				break
+			}
 		}
-		centroids[nextCentroidIdx] = vectors[idx]
 	}
 	return centroids
 }

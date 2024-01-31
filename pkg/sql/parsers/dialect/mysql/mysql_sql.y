@@ -1362,14 +1362,18 @@ load_lines:
     {
         $$ = &tree.Lines{
             StartingBy: $2,
-            TerminatedBy: $3,
+            TerminatedBy: &tree.Terminated{
+                Value : $3,
+            },
         }
     }
 |   LINES lines_terminated starting_opt
     {
         $$ = &tree.Lines{
             StartingBy: $3,
-            TerminatedBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value : $2,
+	        },
         }
     }
 
@@ -1404,20 +1408,24 @@ load_fields:
 |   fields_or_columns field_item_list
     {
         res := &tree.Fields{
-            Terminated: "\t",
-            EscapedBy:    0,
+            Terminated: &tree.Terminated{
+                Value: "\t",
+            },
+            EnclosedBy: &tree.EnclosedBy{
+                Value: byte(0),
+            },
         }
         for _, f := range $2 {
-            if f.Terminated != "" {
+            if f.Terminated != nil {
                 res.Terminated = f.Terminated
             }
             if f.Optionally {
                 res.Optionally = f.Optionally
             }
-            if f.EnclosedBy != 0 {
+            if f.EnclosedBy != nil {
                 res.EnclosedBy = f.EnclosedBy
             }
-            if f.EscapedBy != 0 {
+            if f.EscapedBy != nil {
                 res.EscapedBy = f.EscapedBy
             }
         }
@@ -1438,7 +1446,9 @@ field_item:
     TERMINATED BY field_terminator
     {
         $$ = &tree.Fields{
-            Terminated: $3,
+            Terminated: &tree.Terminated{
+                Value: $3,
+            },
         }
     }
 |   OPTIONALLY ENCLOSED BY field_terminator
@@ -1456,7 +1466,9 @@ field_item:
         }
         $$ = &tree.Fields{
             Optionally: true,
-            EnclosedBy: b,
+            EnclosedBy: &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   ENCLOSED BY field_terminator
@@ -1473,7 +1485,9 @@ field_item:
            b = 0
         }
         $$ = &tree.Fields{
-            EnclosedBy: b,
+            EnclosedBy: &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   ESCAPED BY field_terminator
@@ -1490,7 +1504,9 @@ field_item:
            b = 0
         }
         $$ = &tree.Fields{
-            EscapedBy: b,
+            EscapedBy: &tree.EscapedBy{
+                Value: b,
+            },
         }
     }
 
@@ -4281,15 +4297,23 @@ export_data_param_opt:
 export_fields:
     {
         $$ = &tree.Fields{
-            Terminated: ",",
-            EnclosedBy: '"',
+            Terminated: &tree.Terminated{
+                Value: ",",
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: '"',
+            },
         }
     }
 |   FIELDS TERMINATED BY STRING
     {
         $$ = &tree.Fields{
-            Terminated: $4,
-            EnclosedBy: '"',
+            Terminated: &tree.Terminated{
+                Value: $4,
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: '"',
+            },
         }
     }
 |   FIELDS TERMINATED BY STRING ENCLOSED BY field_terminator
@@ -4306,8 +4330,12 @@ export_fields:
            b = 0
         }
         $$ = &tree.Fields{
-            Terminated: $4,
-            EnclosedBy: b,
+            Terminated: &tree.Terminated{
+                Value: $4,
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   FIELDS ENCLOSED BY field_terminator
@@ -4324,21 +4352,29 @@ export_fields:
            b = 0
         }
         $$ = &tree.Fields{
-            Terminated: ",",
-            EnclosedBy: b,
+            Terminated: &tree.Terminated{
+                Value: ",",
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 
 export_lines_opt:
     {
         $$ = &tree.Lines{
-            TerminatedBy: "\n",
+            TerminatedBy: &tree.Terminated{
+                Value: "\n",
+            },
         }
     }
 |   LINES lines_terminated_opt
     {
         $$ = &tree.Lines{
-            TerminatedBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value: $2,
+            },
         }
     }
 
