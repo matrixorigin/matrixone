@@ -598,6 +598,9 @@ type Relation interface {
 
 	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
 
+	// Support renaming tables within explicit transactions (CN worspace)
+	TableRenameInTxn(ctx context.Context, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
 
 	// GetTableName returns the name of the table.
