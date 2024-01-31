@@ -1208,13 +1208,7 @@ func makeInsertPlan(
 		}
 	}
 
-	// if table have fk. then append join node & filter node
-	// sink_scan -> join -> filter
-	enabled, err := isForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
-	}
-	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
+	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 
 		lastNodeId, err = appendJoinNodeForParentFkCheck(builder, bindCtx, tableDef, lastNodeId)
@@ -2274,17 +2268,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId := baseNodeId
 	for _, fk := range tableDef.Fkeys {
-		if !fk.IsReady {
-
-			if len(fk.ParentTblName) == 0 {
-				fk.ParentDbName = builder.compCtx.DefaultDatabase()
-			}
-
-			if len(fk.ParentTblName) == 0 {
-				return -1, moerr.NewInternalError(builder.GetContext(), "fk parent table is empty")
-			}
-			//TODO: rebuild fk def
-		}
 		fkeyId2Idx := make(map[uint64]int)
 		for i, colId := range fk.ForeignCols {
 			fkeyId2Idx[colId] = i
