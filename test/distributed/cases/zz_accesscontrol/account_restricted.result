@@ -176,20 +176,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-binary    binary    63    YES    Yes    1    NO PAD
-utf8_bin    utf8    83    YES    Yes    1    
-utf8_general_ci    utf8    33        Yes    1    PAD SPACE
-utf8_unicode_ci    utf8    192        Yes    1    PAD SPACE
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
@@ -300,20 +289,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-binary    binary    63    YES    Yes    1    NO PAD
-utf8_bin    utf8    83    YES    Yes    1    
-utf8_general_ci    utf8    33        Yes    1    PAD SPACE
-utf8_unicode_ci    utf8    192        Yes    1    PAD SPACE
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE

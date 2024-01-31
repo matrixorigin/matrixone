@@ -41,12 +41,12 @@ show tables;
 Tables_in_test_db
 test_table
 test_view
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -358,12 +358,12 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 Tables_in_test_db
 test_table
 test_view
-/* cloud_user */ show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-/* cloud_user */ show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_user */ show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_user */ show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_user */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -538,12 +538,12 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 Tables_in_test_db
 test_table
 test_view
-/* cloud_nonuser */ show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-/* cloud_nonuser */ show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_nonuser */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -687,12 +687,12 @@ create view test_view as select * from test_table;
 show create view test_view;
 View    Create View
 test_view    create view test_view as select * from test_table;
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
