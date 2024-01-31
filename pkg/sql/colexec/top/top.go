@@ -260,12 +260,12 @@ func (ctr *container) sort() {
 	heap.Init(ctr)
 }
 
-func (ap *Argument) updateTopValueZM() bool {
-	v, ok := ap.getTopValue()
+func (arg *Argument) updateTopValueZM() bool {
+	v, ok := arg.getTopValue()
 	if !ok {
 		return false
 	}
-	zm := ap.ctr.topValueZM
+	zm := arg.ctr.topValueZM
 	if zm.IsInited() {
 		index.UpdateZM(zm, v)
 		return true
@@ -274,7 +274,7 @@ func (ap *Argument) updateTopValueZM() bool {
 	index.UpdateZM(newZM, v)
 
 	res := false
-	if ap.Fs[0].Flag&plan.OrderBySpec_DESC != 0 {
+	if arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0 {
 		res, _ = newZM.AnyGT(zm)
 	} else {
 		res, _ = newZM.AnyLT(zm)
@@ -282,10 +282,10 @@ func (ap *Argument) updateTopValueZM() bool {
 	return res
 }
 
-func (ap *Argument) getTopValue() ([]byte, bool) {
-	ctr := ap.ctr
+func (arg *Argument) getTopValue() ([]byte, bool) {
+	ctr := arg.ctr
 	// not enough items in the heap.
-	if int64(len(ctr.sels)) < ap.Limit {
+	if int64(len(ctr.sels)) < arg.Limit {
 		return nil, false
 	}
 	x := int(ctr.sels[0])
