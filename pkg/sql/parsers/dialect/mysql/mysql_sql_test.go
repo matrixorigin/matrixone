@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select ownership from t1",
-		output: "select ownership from t1",
+		input:  "alter table tbl1 drop constraint fk_name",
+		output: "alter table tbl1 drop foreign key fk_name",
 	}
 )
 
@@ -2729,6 +2729,10 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "alter table tbl1 drop constraint fk_name",
+			output: "alter table tbl1 drop foreign key fk_name",
 		},
 	}
 )
