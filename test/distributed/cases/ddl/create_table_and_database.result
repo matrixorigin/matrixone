@@ -12,8 +12,11 @@ show databases;
 Database
 create_table_and_database
 information_schema
+mo_catalog
+mo_task
 mysql
-performance_schema
+system
+system_metrics
 test01
 test02
 test03
