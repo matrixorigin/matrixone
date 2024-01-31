@@ -411,6 +411,11 @@ func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constra
 	return nil
 }
 
+func (t *Table) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(

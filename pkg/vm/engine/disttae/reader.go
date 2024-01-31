@@ -550,7 +550,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		if entry.isGeneratedByTruncate() {
 			continue
 		}
-		if entry.typ == DELETE && entry.fileName == "" {
+		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
 				id, offset := v.Decode()

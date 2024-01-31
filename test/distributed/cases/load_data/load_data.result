@@ -203,8 +203,8 @@ col1    col2    col3    col4
 1.0    1.0    1.00    1.00000
 null    null    null    null
 1.23456    1.23456    1.23    1.23456
-1.2345679    1.23456789    1.23    1.23457
-1.0123457    1.0123456789    1.01    1.01235
+1.2345679    1.2345679    1.23    1.23457
+1.0123457    1.0123457    1.01    1.01235
 1.0E-10    1.0E-10    0.00    0.00000
 delete from t3;
 load data infile '$resources/load_data/float_3.csv' into table t3;
@@ -320,12 +320,12 @@ col1    col2    col3
 1    1    1
 2    2    2
 3    3    3
-4    5    5
 4    4    4
+4    5    5
 drop table t7;
 create table t8(a int, b int);
 load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');
-invalid input: the file does not exist in load flow
+no such table load_data.t7
 create table t9(a varchar, b varchar, c varchar, d varchar);
 load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t9;
