@@ -60,7 +60,7 @@ show table_values from r_test;
 show column_number from r_test;
 show TRIGGERS;
 show TRIGGERS like '*%';
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from res_test;;
 
@@ -116,7 +116,7 @@ show table_values from r_test;
 show column_number from r_test;
 show TRIGGERS;
 show TRIGGERS like '*%';
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from account_res;
 
