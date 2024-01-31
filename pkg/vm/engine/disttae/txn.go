@@ -611,8 +611,10 @@ func (txn *Transaction) getInsertedObjectListForTable(
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
-		statsList = append(statsList, stats)
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			statsList = append(statsList, stats)
+		}
 
 	}
 	return statsList, nil
