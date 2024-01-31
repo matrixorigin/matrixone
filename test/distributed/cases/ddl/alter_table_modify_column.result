@@ -567,7 +567,7 @@ col1    col2
 1    73ujf34f
 1    cdsdsa
 drop table t1;
-drop database if exists db2;
+drop database if exists db1;
 drop database if exists test;
 use test;
 invalid database test

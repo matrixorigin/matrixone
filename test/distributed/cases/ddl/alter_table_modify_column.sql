@@ -290,7 +290,7 @@ desc t1;
 insert into t1 values (1, 'cdsdsa');
 select * from t1;
 drop table t1;
-drop database if exists db2;
+drop database if exists db1;
 
 -- @suit
 -- @case
