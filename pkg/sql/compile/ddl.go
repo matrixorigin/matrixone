@@ -843,6 +843,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
 				OnDelete:    fkey.OnDelete,
 				OnUpdate:    fkey.OnUpdate,
+				IsReady:       fkey.IsReady,
+				ParentDbName:  fkey.ParentDbName,
+				ParentTblName: fkey.ParentTblName,
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
 			for idx, colName := range qry.GetFkCols()[i].Cols {

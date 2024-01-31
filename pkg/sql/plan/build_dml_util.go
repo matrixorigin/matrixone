@@ -1210,7 +1210,11 @@ func makeInsertPlan(
 
 	// if table have fk. then append join node & filter node
 	// sink_scan -> join -> filter
-	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
+	enabled, err := isForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 
 		lastNodeId, err = appendJoinNodeForParentFkCheck(builder, bindCtx, tableDef, lastNodeId)

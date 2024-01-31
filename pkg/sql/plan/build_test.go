@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"go/constant"
+	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -1174,4 +1176,76 @@ func Test_mergeContexts(t *testing.T) {
 	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+}
+
+func Test_fk_oldVersion(t *testing.T) {
+	fkd := plan.ForeignKeyDef{
+		Name:        "c1",
+		Cols:        []uint64{0, 1},
+		ForeignTbl:  10,
+		ForeignCols: []uint64{0, 1},
+		OnDelete:    plan.ForeignKeyDef_SET_NULL,
+		OnUpdate:    plan.ForeignKeyDef_SET_NULL,
+	}
+	dbytes, err := fkd.Marshal()
+	assert.NoError(t, err)
+
+	file, err := os.OpenFile("./fk1", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0777)
+	assert.NoError(t, err)
+	defer file.Close()
+	var read, write int
+	write, err = file.Write(dbytes)
+	assert.NoError(t, err)
+
+	newbytes := make([]byte, len(dbytes))
+	_, err = file.Seek(0, io.SeekStart)
+	assert.NoError(t, err)
+	read, err = file.Read(newbytes)
+	assert.NoError(t, err)
+	assert.True(t, read == write)
+}
+
+func Test_fk_newVersion(t *testing.T) {
+	fkd := plan.ForeignKeyDef{
+		Name:          "c1",
+		Cols:          []uint64{0, 1},
+		ForeignTbl:    10,
+		ForeignCols:   []uint64{0, 1},
+		OnDelete:      plan.ForeignKeyDef_SET_NULL,
+		OnUpdate:      plan.ForeignKeyDef_SET_NULL,
+		IsReady:       false,
+		ParentDbName:  "db",
+		ParentTblName: "t1",
+	}
+	dbytes, err := fkd.Marshal()
+	assert.NoError(t, err)
+
+	file, err := os.OpenFile("./fk_new", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0777)
+	assert.NoError(t, err)
+	defer file.Close()
+	var read, write int
+	write, err = file.Write(dbytes)
+	assert.NoError(t, err)
+
+	newbytes := make([]byte, len(dbytes))
+	_, err = file.Seek(0, io.SeekStart)
+	assert.NoError(t, err)
+	read, err = file.Read(newbytes)
+	assert.NoError(t, err)
+	assert.True(t, read == write)
+}
+
+func Test_fk2(t *testing.T) {
+	file, err := os.OpenFile("./fk1", os.O_CREATE|os.O_RDONLY, 0777)
+	assert.NoError(t, err)
+	defer file.Close()
+
+	fbytes, err := ioutil.ReadAll(file)
+	assert.NoError(t, err)
+	fkd := plan.ForeignKeyDef{}
+	err = fkd.Unmarshal(fbytes)
+	assert.NoError(t, err)
+	assert.False(t, fkd.GetIsReady())
+	assert.Empty(t, fkd.GetParentDbName())
+	assert.Empty(t, fkd.GetParentTblName())
 }

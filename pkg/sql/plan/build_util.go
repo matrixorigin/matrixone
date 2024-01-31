@@ -489,3 +489,11 @@ func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	}
 	return false
 }
+
+func isForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
+	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
+	if err != nil {
+		return false, err
+	}
+	return value != nil && value.(int64) == 0, nil
+}

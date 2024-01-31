@@ -326,6 +326,9 @@ message ForeignKeyDef {
 	repeated uint64 foreign_cols	= 4;
 	RefAction on_delete				= 5;
 	RefAction on_update				= 6;
+	bool isReady = 7;
+	string parentDbName = 8;
+	string parentTblName = 9;
 }
 
 message CheckDef {

@@ -2948,6 +2948,18 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 
 	_, tableRef := ctx.Resolve(fkDbName, fkTableName)
 	if tableRef == nil {
+		//check foreign_key_checks
+		enabled, err := isForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			//foreign_key_checks == 0. does not check foreign key currently
+			fkData.Def.IsReady = false
+			fkData.Def.ParentDbName = fkDbName
+			fkData.Def.ParentTblName = fkTableName
+		}
+
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 	}
 
@@ -3017,6 +3029,9 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	} else {
 		fkData.Def.ForeignCols = matchCol
 	}
+
+	//to denote the foreign key is ready
+	fkData.Def.IsReady = true
 
 	return &fkData, nil
 }
