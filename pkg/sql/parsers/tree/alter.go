@@ -176,7 +176,7 @@ func init() {
 		func(a *AccountsSetOption) { a.reset() },
 		reuse.DefaultOptions[AccountsSetOption]().
 			WithEnableChecker())
-	
+
 }
 
 type AlterUser struct {
