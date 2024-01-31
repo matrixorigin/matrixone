@@ -2926,8 +2926,7 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 		return nil
 	}
 	if len(mvccNodes) > 2 {
-		fmt.Printf(entry.GetTable().GetDB().GetCatalog().SimplePPString(3))
-		panic(fmt.Sprintf("logic err: %v has %d nodes", entry.ID.String(), len(mvccNodes)))
+		panic(fmt.Sprintf("logic err: object has %d nodes, object %v", len(mvccNodes), entry.PPString(3, 0, "")))
 	}
 
 	var needPrefetch bool
