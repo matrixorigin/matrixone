@@ -596,7 +596,7 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, sortIDX int32) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
@@ -639,7 +639,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, sortIDX int
 		tbl.GetTableDef(ctx),
 		newExprs,
 		&blocks,
-		sortIDX,
 		tbl.proc.Load(),
 	); err != nil {
 		return
@@ -672,7 +671,6 @@ func (tbl *txnTable) rangesOnePart(
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
 	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
-	sortIDX int32, //for ordered scan, the idx of orderby column
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
@@ -847,10 +845,6 @@ func (tbl *txnTable) rangesOnePart(
 				blk.Sorted = obj.Sorted
 				blk.EntryState = obj.EntryState
 				blk.CommitTs = obj.CommitTS
-				if sortIDX != -1 {
-					zm := blkMeta.MustGetColumn(uint16(sortIDX)).ZoneMap()
-					blk.ZmForSort = zm.Clone()
-				}
 				if obj.HasDeltaLoc {
 					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blk.BlockID)
 					if ok {

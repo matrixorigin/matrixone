@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -603,6 +604,11 @@ type withFilterMixin struct {
 	sels []int32
 }
 
+type blockSortHelper struct {
+	blk *objectio.BlockInfo
+	zm  index.ZM
+}
+
 type blockReader struct {
 	withFilterMixin
 
@@ -619,6 +625,8 @@ type blockReader struct {
 	buffer []int64
 
 	// for ordered scan
+	desc     bool
+	blockZMS []index.ZM
 	OrderBy  []*plan.OrderBySpec
 	sorted   bool // blks need to be sorted by zonemap
 	filterZM objectio.ZoneMap
