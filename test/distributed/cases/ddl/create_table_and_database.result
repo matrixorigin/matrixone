@@ -10,7 +10,7 @@ drop database if exists test05;
 create database test05;
 show databases;
 Database
-create
+create_table_and_database
 information_schema
 mysql
 performance_schema
