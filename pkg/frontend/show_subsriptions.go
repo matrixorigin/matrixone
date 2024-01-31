@@ -196,6 +196,11 @@ func getSubInfoFromSql(ctx context.Context, ses *Session, sql string) (subName, 
 	if ast, err = mysql.Parse(ctx, sql, lowerAny.(int64)); err != nil {
 		return
 	}
+	defer func() {
+		for _, s := range ast {
+			s.Free()
+		}
+	}()
 
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 	pubAccountName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
