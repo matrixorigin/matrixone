@@ -329,6 +329,7 @@ message ForeignKeyDef {
 	bool isReady = 7;
 	string parentDbName = 8;
 	string parentTblName = 9;
+	repeated string parentCols =10;
 }
 
 message CheckDef {

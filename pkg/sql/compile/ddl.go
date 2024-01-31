@@ -837,12 +837,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
 			newDef := &plan.ForeignKeyDef{
-				Name:        fkey.Name,
-				Cols:        make([]uint64, len(fkey.Cols)),
-				ForeignTbl:  fkey.ForeignTbl,
-				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-				OnDelete:    fkey.OnDelete,
-				OnUpdate:    fkey.OnUpdate,
+				Name:          fkey.Name,
+				Cols:          make([]uint64, len(fkey.Cols)),
+				ForeignTbl:    fkey.ForeignTbl,
+				ForeignCols:   make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:      fkey.OnDelete,
+				OnUpdate:      fkey.OnUpdate,
 				IsReady:       fkey.IsReady,
 				ParentDbName:  fkey.ParentDbName,
 				ParentTblName: fkey.ParentTblName,

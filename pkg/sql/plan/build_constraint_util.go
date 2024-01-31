@@ -250,6 +250,25 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
+	enabled, err := isForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return err
+	}
+
+	if enabled {
+		for _, fkey := range tableDef.Fkeys {
+			if fkey.IsReady {
+				continue
+			}
+			if !isNewCodeReadOldData(fkey) {
+				err := rebuildFkey(ctx, tableDef, fkey)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
@@ -323,6 +342,29 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	tblInfo.alias[alias] = nowIdx
 
+	return nil
+}
+
+func isNewCodeReadOldData(fkey *plan.ForeignKeyDef) bool {
+	if !fkey.IsReady &&
+		len(fkey.ParentDbName) == 0 &&
+		len(fkey.ParentTblName) == 0 &&
+		len(fkey.ParentCols) == 0 {
+		return true
+	}
+	return false
+}
+
+func rebuildFkey(ctx CompilerContext, tableDef *plan.TableDef, fkey *plan.ForeignKeyDef) error {
+	if fkey.IsReady {
+		return nil
+	}
+	//1. yield fk data &  check fk col valid
+	fkData, err := getForeignKeyData2(ctx, tableDef, fkey)
+	if err != nil {
+		return err
+	}
+	//2. update constraint
 	return nil
 }
 
