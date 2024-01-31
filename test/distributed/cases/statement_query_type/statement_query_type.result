@@ -297,7 +297,7 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show collation like 'utf8mb4_general_ci%'    Other    external_sql
-show collation    Other    external_sql
+show collation like 'utf8mb4_general_ci'    Other    external_sql
 show tables    Other    external_sql
 show privileges    Other    external_sql
 show profiles    Other    external_sql
@@ -477,7 +477,7 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL  
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_user_sql
 show index from test_table    Other    cloud_user_sql
 show collation like 'utf8mb4_general_ci%'    Other    cloud_user_sql
-show collation    Other    cloud_user_sql
+show collation like 'utf8mb4_general_ci%'    Other    cloud_user_sql
 show tables    Other    cloud_user_sql
 show privileges    Other    cloud_user_sql
 show profiles    Other    cloud_user_sql
@@ -657,7 +657,7 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL  
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_nonuser_sql
 show index from test_table    Other    cloud_nonuser_sql
 show collation like 'utf8mb4_general_ci%'    Other    cloud_nonuser_sql
-show collation    Other    cloud_nonuser_sql
+show collation like 'utf8mb4_general_ci'    Other    cloud_nonuser_sql
 show tables    Other    cloud_nonuser_sql
 show privileges    Other    cloud_nonuser_sql
 show profiles    Other    cloud_nonuser_sql
