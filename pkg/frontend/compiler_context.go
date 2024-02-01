@@ -191,7 +191,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
+	//for system_metrics.metric and system.statement_info,
+	//it is special under the no sys account, should switch into the sys account first.
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
+	}
+	if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
@@ -680,13 +685,18 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	idxs[0] = catalog.COLUMNS_IDX
 	idxs[1] = catalog.RESULT_PATH_IDX
 	// read meta's data
-	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
+	bats, release, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
 		}
 		return nil, "", err
 	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	// cols
 	vec := bats[0].Vecs[0]
 	def := vec.GetStringAt(0)

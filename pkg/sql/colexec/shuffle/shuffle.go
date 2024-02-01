@@ -52,7 +52,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -82,7 +82,7 @@ SENDLAST:
 
 	for len(ap.ctr.sendPool) == 0 {
 		// do input
-		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
 			return result, err
 		}
@@ -785,6 +785,7 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [
 			}
 			for vecIndex := range bat.Vecs {
 				v := bat.Vecs[vecIndex]
+				v.SetSorted(false)
 				err = v.Union(srcBatch.Vecs[vecIndex], newSels[:length], proc.Mp())
 				if err != nil {
 					return err

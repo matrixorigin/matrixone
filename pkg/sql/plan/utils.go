@@ -1101,7 +1101,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if err != nil {
 		return nil, err
 	}
-	if fn.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
+	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
 	for i := range fn.Args {
@@ -1202,11 +1202,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
 		case types.T_char, types.T_varchar:
-			if constT.Width <= columnT.Width {
-				return true
-			} else {
-				return false
-			}
+			return constT.Width <= columnT.Width
 		case types.T_text:
 			return true
 		default:
@@ -1252,8 +1248,6 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 			return constVal <= math.MaxUint32 && constVal >= 0
 		case types.T_uint64:
 			return constVal >= 0
-		case types.T_varchar:
-			return true
 		case types.T_float32:
 			//float32 has 6 significant digits.
 			return constVal <= 100000 && constVal >= -100000
@@ -1873,4 +1867,21 @@ func HasMoCtrl(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+// IsFkSelfRefer checks the foreign key referencing itself
+func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
+	return fkDbName == curDbName && fkTableName == curTableName
+}
+
+// HasFkSelfReferOnly checks the foreign key referencing itself only.
+// If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
+			return false
+		}
+	}
+	return true
 }

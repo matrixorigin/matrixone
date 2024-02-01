@@ -60,10 +60,12 @@ func init() {
 						},
 					},
 				},
-				info: &vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		},
@@ -99,7 +101,7 @@ func TestProjection(t *testing.T) {
 
 		tc.proc.FreeVectors()
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -110,15 +112,10 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
 }

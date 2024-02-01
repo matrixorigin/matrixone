@@ -260,8 +260,7 @@ id    order_number    status
 select * from insert01 where status=4;
 invalid argument cast to int, bad value Pending
 select * from insert01 where status in ('Pending',4);
-id    order_number    status
-1    111    Pending
+invalid argument cast to int, bad value Pending
 drop table insert01;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');

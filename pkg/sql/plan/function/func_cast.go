@@ -4950,7 +4950,7 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 }
 
 func floatToBytes(v float64, bitSize int) []byte {
-	if v >= float64(1e15) || v < float64(1e-13) {
+	if v >= float64(1e15) || (v < float64(1e-13) && v > 0) || (v < 0 && v > -1e-13) || v <= -1e15 {
 		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
 	} else {
 		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
