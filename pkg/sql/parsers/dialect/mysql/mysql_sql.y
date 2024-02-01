@@ -7567,6 +7567,8 @@ index_def:
             	keyTyp = tree.INDEX_TYPE_BTREE
 	    case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	    case "master":
+	    	keyTyp = tree.INDEX_TYPE_MASTER
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
