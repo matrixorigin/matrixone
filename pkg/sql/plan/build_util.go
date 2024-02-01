@@ -495,6 +495,18 @@ func isForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	//TODO: if null, it mean
+	if value == nil {
+		return true, nil
+	}
+	if v, ok := value.(int64); ok {
+		return v == 1, nil
+	} else if v1, ok := value.(int8); ok {
+		return v1 == 1, nil
+	} else {
+		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
+	}
+
 	return value != nil && value.(int64) == 0, nil
 }
 
@@ -622,6 +634,9 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
 	ret := make([]string, 0)
 	for _, fkey := range fkeys {
+		if !fkey.IsReady {
+			continue
+		}
 		if fkey.ForeignTbl != 0 {
 			continue
 		}

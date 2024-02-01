@@ -3067,6 +3067,22 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
 	if parentTableDef == nil {
+		enabled, err := isForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !enabled {
+			//TODO:
+			fkData.Def.IsReady = false
+			fkData.Def.ParentDbName = parentDbName
+			fkData.Def.ParentTblName = parentTableName
+			fkData.Def.ParentCols = make([]string, len(refer.KeyParts))
+			for i, part := range refer.KeyParts {
+				colName := part.ColName.Parts[0]
+				fkData.Def.ParentCols[i] = colName
+			}
+			return &fkData, nil
+		}
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), parentTableName)
 	}
 
@@ -3087,6 +3103,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		return nil, err
 	}
 
+	fkData.Def.IsReady = true
 	return &fkData, nil
 }
 
@@ -3215,6 +3232,11 @@ func getForeignKeyData2(ctx CompilerContext, tableDef *TableDef, fkey *plan.Fore
 		},
 	}
 
+	copy(fkData.Def.Cols, fkey.Cols)
+
+	fkCols := &plan.FkColName{
+		Cols: make([]string, len(fkey.Cols)),
+	}
 	fkColTyp := make(map[int]*plan.Type)
 	fkColName := make(map[int]string)
 	allColDef := make(map[uint64]*ColDef)
@@ -3225,14 +3247,18 @@ func getForeignKeyData2(ctx CompilerContext, tableDef *TableDef, fkey *plan.Fore
 		if colDef, has := allColDef[colId]; has {
 			fkColTyp[i] = colDef.Typ
 			fkColName[i] = colDef.Name
+			//column name from tableDef
+			fkCols.Cols[i] = colDef.Name
 		} else {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colId, tableDef.Name)
 		}
 	}
+	fkData.Cols = fkCols
+	fkData.ColTyps = fkColTyp
 
 	// get foreign table & their columns
-	fkTableName := fkey.ParentDbName
-	fkDbName := fkey.ParentTblName
+	fkTableName := fkey.ParentTblName
+	fkDbName := fkey.ParentDbName
 	if fkDbName == "" {
 		fkDbName = ctx.DefaultDatabase()
 	}

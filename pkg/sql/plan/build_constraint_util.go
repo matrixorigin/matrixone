@@ -256,10 +256,14 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if enabled {
-
 		err := rebuildFkey(ctx, dbName, tableDef)
 		if err != nil {
 			return err
+		}
+		//retrieve the tableDef again
+		obj, tableDef = ctx.Resolve(dbName, tblName)
+		if tableDef == nil {
+			return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
 	}
 

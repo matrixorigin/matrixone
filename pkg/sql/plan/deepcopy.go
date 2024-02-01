@@ -815,9 +815,14 @@ func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
 		OnDelete:    fkey.OnDelete,
 		OnUpdate:    fkey.OnUpdate,
+		IsReady:       fkey.IsReady,
+		ParentDbName:  fkey.ParentDbName,
+		ParentTblName: fkey.ParentTblName,
+		ParentCols:    make([]string, len(fkey.ParentCols)),
 	}
 	copy(def.Cols, fkey.Cols)
 	copy(def.ForeignCols, fkey.ForeignCols)
+	copy(def.ParentCols, fkey.ParentCols)
 	return def
 }
 

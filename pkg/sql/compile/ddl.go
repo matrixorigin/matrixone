@@ -919,17 +919,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
 			copy(newDef.ParentCols, fkey.ParentCols)
-			//if it is fk self, the parent table is same as the child table.
-			//refresh the ForeignCols also.
-			if fkey.ForeignTbl == 0 {
-				for j, colId := range fkey.ForeignCols {
-					//old colId -> colName
-					colName := colId2Name[colId]
-					//colName -> new colId
-					newDef.ForeignCols[j] = colNameToId[colName]
+			if fkey.IsReady {
+				//if it is fk self, the parent table is same as the child table.
+				//refresh the ForeignCols also.
+				if fkey.ForeignTbl == 0 {
+					for j, colId := range fkey.ForeignCols {
+						//old colId -> colName
+						colName := colId2Name[colId]
+						//colName -> new colId
+						newDef.ForeignCols[j] = colNameToId[colName]
+					}
+				} else {
+					copy(newDef.ForeignCols, fkey.ForeignCols)
 				}
-			} else {
-				copy(newDef.ForeignCols, fkey.ForeignCols)
 			}
 
 			//refresh child table column id
@@ -964,6 +966,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
 			fkey := qry.GetTableDef().Fkeys[i]
+			if !fkey.IsReady {
+				continue
+			}
 			if fkey.ForeignTbl == 0 {
 				//fk self refer
 				//add current table to parent's children table
