@@ -16,6 +16,7 @@ package single
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,7 +59,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -91,13 +92,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.mp == nil {
-				if err := ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+				if err := ctr.emptyProbe(bat, ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+				if err := ctr.probe(bat, ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
