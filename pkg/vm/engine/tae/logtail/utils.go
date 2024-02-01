@@ -2957,7 +2957,9 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 			}
 			collector.Objects = append(collector.Objects, entry)
 		} else {
-			entry.SetObjectStatsForPreviousNode(mvccNodes)
+			if !collector.skipLoadObjectStats {
+				entry.SetObjectStatsForPreviousNode(mvccNodes)
+			}
 			err := collector.fillObjectInfoBatch(entry, mvccNodes)
 			if err != nil {
 				return err
