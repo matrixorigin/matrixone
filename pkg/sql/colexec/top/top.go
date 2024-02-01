@@ -72,7 +72,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -86,7 +86,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+			result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}

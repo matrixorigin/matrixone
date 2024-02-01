@@ -108,8 +108,11 @@ type Argument struct {
 	WStart bool
 	WEnd   bool
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -142,30 +145,6 @@ func (arg *Argument) Release() {
 type Interval struct {
 	Typ types.IntervalType
 	Val int64
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
