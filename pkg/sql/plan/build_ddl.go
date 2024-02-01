@@ -1481,7 +1481,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
 		}
 		if colMap[name].Typ.Id != int32(types.T_varchar) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("column '%s' is not varchar type. it is type %d", name, colMap[name].Typ.Id))
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("column '%s' is not varchar type.", name))
 		}
 		indexParts = append(indexParts, name)
 	}

@@ -2672,7 +2672,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	indexTableDef *TableDef,
 	genLastNodeIdFn func() int32) (int32, error) {
 
-	// 1.a init details
+	// 1. init details
 	idxDef := tableDef.Indexes[indexIdx]
 	originPkPos, originPkType := getPkPos(tableDef, false)
 	//var rowIdPos int
@@ -2689,93 +2689,42 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		colsType[colVal.Name] = tableDef.Cols[i].Typ
 	}
 
-	var unionChildren = make([]int32, len(idxDef.Parts))
-	var err error
-	for i, part := range idxDef.Parts {
-		var currLastNodeId = genLastNodeIdFn()
-		// 2.a recompute CP PK.
-		currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
+	var lastNodeId int32
 
-		//2.a add a new project for < serial_full(a, "a", pk), pk >
-		projectProjection := make([]*Expr, 2)
-
-		//2.b.i build serial_full(a, "a", pk)
-		serialArgs := make([]*plan.Expr, 3)
-		serialArgs[0] = makePlan2StringConstExprWithType(part)
-		serialArgs[1] = &Expr{
-			Typ: colsType[part],
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(colsPos[part]),
-					Name:   part,
-				},
-			},
-		}
-		serialArgs[2] = &Expr{
-			Typ: originPkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(originPkPos),
-					Name:   tableDef.Cols[originPkPos].Name,
-				},
-			},
-		}
-		projectProjection[0], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", serialArgs)
+	// 2. build single project or union based on the number of index parts.
+	// NOTE: Union with single child will cause panic.
+	if len(idxDef.Parts) == 1 {
+		// 2.a build single project
+		projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, idxDef.Parts[0], colsType, colsPos, originPkType)
 		if err != nil {
 			return -1, err
 		}
-
-		//2.b.ii build pk
-		projectProjection[1] = &Expr{
-			Typ: originPkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(originPkPos),
-					Name:   tableDef.Cols[originPkPos].Name,
-				},
-			},
+		lastNodeId = builder.appendNode(projectNode, bindCtx)
+	} else {
+		// 2.b build union
+		var unionChildren = make([]int32, len(idxDef.Parts))
+		for i, part := range idxDef.Parts {
+			// 2.b.i build project
+			projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, part, colsType, colsPos, originPkType)
+			if err != nil {
+				return -1, err
+			}
+			// 2.b.ii add to union's list
+			unionChildren[i] = builder.appendNode(projectNode, bindCtx)
 		}
 
-		// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
-		//if isUpdate {
-		//	// 2.c add row_id if Update
-		//	projectProjection = append(projectProjection, &plan.Expr{
-		//		Typ: rowIdType,
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: 0,
-		//				ColPos: int32(rowIdPos),
-		//				Name:   catalog.Row_ID,
-		//			},
-		//		},
-		//	})
-		//}
-
-		projectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{currLastNodeId},
-			ProjectList: projectProjection,
+		// 2.b iii build union
+		unionProjection := getProjectionByLastNode(builder, unionChildren[0])
+		unionNode := &plan.Node{
+			NodeType:    plan.Node_UNION,
+			Children:    unionChildren,
+			ProjectList: unionProjection,
 		}
 
-		// 2.d add to union's list
-		unionChildren[i] = builder.appendNode(projectNode, bindCtx)
+		lastNodeId = builder.appendNode(unionNode, bindCtx)
 	}
 
-	// 3. build union
-	unionProjection := getProjectionByLastNode(builder, unionChildren[0])
-	unionNode := &plan.Node{
-		NodeType:    plan.Node_UNION,
-		Children:    unionChildren,
-		ProjectList: unionProjection,
-	}
-
-	unionId := builder.appendNode(unionNode, bindCtx)
-
-	// 4. add lock
-	lastNodeId := unionId
+	// 3. add lock
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
@@ -2794,6 +2743,80 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 	newSourceStep := builder.appendStep(lastNodeId)
 
 	return newSourceStep, nil
+}
+
+func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, genLastNodeIdFn func() int32, originPkPos int, part string, colsType map[string]*Type, colsPos map[string]int, originPkType *Type) (*Node, error) {
+	var err error
+	// 1. get new source sink
+	var currLastNodeId = genLastNodeIdFn()
+
+	//2. recompute CP PK.
+	currLastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, currLastNodeId, originPkPos)
+
+	//3. add a new project for < serial_full(a, "a", pk), pk >
+	projectProjection := make([]*Expr, 2)
+
+	//3.i build serial_full("a", a, pk)
+	serialArgs := make([]*plan.Expr, 3)
+	serialArgs[0] = makePlan2StringConstExprWithType(part)
+	serialArgs[1] = &Expr{
+		Typ: colsType[part],
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(colsPos[part]),
+				Name:   part,
+			},
+		},
+	}
+	serialArgs[2] = &Expr{
+		Typ: originPkType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(originPkPos),
+				Name:   tableDef.Cols[originPkPos].Name,
+			},
+		},
+	}
+	projectProjection[0], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", serialArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	//3.ii build pk
+	projectProjection[1] = &Expr{
+		Typ: originPkType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(originPkPos),
+				Name:   tableDef.Cols[originPkPos].Name,
+			},
+		},
+	}
+
+	// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
+	//if isUpdate {
+	//	// 2.iii add row_id if Update
+	//	projectProjection = append(projectProjection, &plan.Expr{
+	//		Typ: rowIdType,
+	//		Expr: &plan.Expr_Col{
+	//			Col: &plan.ColRef{
+	//				RelPos: 0,
+	//				ColPos: int32(rowIdPos),
+	//				Name:   catalog.Row_ID,
+	//			},
+	//		},
+	//	})
+	//}
+
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{currLastNodeId},
+		ProjectList: projectProjection,
+	}
+	return projectNode, nil
 }
 
 func appendPreInsertSkVectorPlan(
