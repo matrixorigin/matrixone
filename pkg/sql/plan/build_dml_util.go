@@ -2693,7 +2693,9 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 
 	// 2. build single project or union based on the number of index parts.
 	// NOTE: Union with single child will cause panic.
-	if len(idxDef.Parts) == 1 {
+	if len(idxDef.Parts) == 0 {
+		return -1, moerr.NewInternalErrorNoCtx("index parts is empty. file a bug")
+	} else if len(idxDef.Parts) == 1 {
 		// 2.a build single project
 		projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, idxDef.Parts[0], colsType, colsPos, originPkType)
 		if err != nil {
@@ -2701,27 +2703,35 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	} else {
-		// 2.b build union
-		var unionChildren = make([]int32, len(idxDef.Parts))
-		for i, part := range idxDef.Parts {
+		// 2.b build union in pair. ie union(c, union(b,a))
+
+		// a) build all the projects
+		var unionChildren []int32
+		for _, part := range idxDef.Parts {
 			// 2.b.i build project
 			projectNode, err := buildSerialFullAndPKColsProj(builder, bindCtx, tableDef, genLastNodeIdFn, originPkPos, part, colsType, colsPos, originPkType)
 			if err != nil {
 				return -1, err
 			}
 			// 2.b.ii add to union's list
-			unionChildren[i] = builder.appendNode(projectNode, bindCtx)
+			unionChildren = append(unionChildren, builder.appendNode(projectNode, bindCtx))
 		}
 
-		// 2.b iii build union
-		unionProjection := getProjectionByLastNode(builder, unionChildren[0])
-		unionNode := &plan.Node{
-			NodeType:    plan.Node_UNION,
-			Children:    unionChildren,
-			ProjectList: unionProjection,
+		// b) get projectList
+		outputProj := getProjectionByLastNode(builder, unionChildren[0])
+
+		// c) build union in pairs
+		lastNodeId = unionChildren[0]
+		for _, nextProjectId := range unionChildren[1:] { // NOTE: we start from the 2nd item
+			lastNodeId = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_UNION,
+				Children:    []int32{nextProjectId, lastNodeId},
+				ProjectList: outputProj,
+			}, bindCtx)
 		}
 
-		lastNodeId = builder.appendNode(unionNode, bindCtx)
+		// NOTE: we could merge the len==1 and len>1 cases, but keeping it separate to make help understand how the
+		// union works (ie it works in pairs)
 	}
 
 	// 3. add lock
