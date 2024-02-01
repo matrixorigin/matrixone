@@ -15,6 +15,7 @@
 package task
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"testing"
 	"time"
 
@@ -27,26 +28,26 @@ var expiredTick = uint64(hakeeper.DefaultCNStoreTimeout / time.Second * hakeeper
 
 func TestSelectWorkingCNs(t *testing.T) {
 	cases := []struct {
-		infos           pb.CNState
-		currentTick     uint64
-		expectedWorking []string
+		infos       pb.CNState
+		currentTick uint64
+		expectedCN  map[string]struct{}
 	}{
 		{
-			infos:           pb.CNState{},
-			currentTick:     0,
-			expectedWorking: []string(nil),
+			infos:       pb.CNState{},
+			currentTick: 0,
+			expectedCN:  map[string]struct{}(nil),
 		},
 		{
-			infos:           pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {Tick: 0}}},
-			currentTick:     0,
-			expectedWorking: []string{"a"},
+			infos:       pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {Tick: 0}}},
+			currentTick: 0,
+			expectedCN:  map[string]struct{}{"a": {}},
 		},
 		{
 			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
 				"a": {Tick: 0},
 				"b": {Tick: expiredTick}}},
-			currentTick:     expiredTick + 1,
-			expectedWorking: []string{"b"},
+			currentTick: expiredTick + 1,
+			expectedCN:  map[string]struct{}{"b": {}},
 		},
 	}
 
@@ -54,18 +55,142 @@ func TestSelectWorkingCNs(t *testing.T) {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
 		working := selectCNs(c.infos, notExpired(cfg, c.currentTick))
-		var uuids []string
-		if len(working.Stores) != 0 {
-			uuids = make([]string, 0, len(working.Stores))
-			for uuid := range working.Stores {
-				uuids = append(uuids, uuid)
-			}
-		}
-		assert.Equal(t, c.expectedWorking, uuids)
+		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
+	}
+}
+
+func TestContainsLabel(t *testing.T) {
+	cases := []struct {
+		infos      pb.CNState
+		key, value string
+		expectedCN map[string]struct{}
+	}{
+		{
+			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}},
+			key:   "k1", value: "v1",
+			expectedCN: map[string]struct{}(nil),
+		},
+		{
+			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
+				"a": {Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}}},
+			}},
+			key: "k1", value: "v1",
+			expectedCN: map[string]struct{}{"a": {}},
+		},
+		{
+			infos: pb.CNState{
+				Stores: map[string]pb.CNStoreInfo{
+					"a": {
+						Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1", "v2"}}},
+					},
+					"b": {
+						Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}},
+					},
+				},
+			},
+			key: "k1", value: "v1",
+			expectedCN: map[string]struct{}{"a": {}, "b": {}},
+		},
+		{
+			infos: pb.CNState{
+				Stores: map[string]pb.CNStoreInfo{
+					"a": {
+						Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1", "v2"}}},
+					},
+					"b": {
+						Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}},
+					},
+				},
+			},
+			key: "k1", value: "v2",
+			expectedCN: map[string]struct{}{"a": {}},
+		},
+		{
+			infos: pb.CNState{
+				Stores: map[string]pb.CNStoreInfo{
+					"a": {
+						Labels: map[string]metadata.LabelList{
+							"k1": {Labels: []string{"v1"}},
+						},
+					},
+				},
+			},
+			key: "k2", value: "v1",
+			expectedCN: map[string]struct{}(nil),
+		},
+	}
+
+	for _, c := range cases {
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		working := selectCNs(c.infos, containsLabel(c.key, c.value))
+		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
+	}
+}
+
+func TestWithResource(t *testing.T) {
+	cases := []struct {
+		infos      pb.CNState
+		cpu, mem   uint64
+		expectedCN map[string]struct{}
+	}{
+		{
+			infos:      pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}},
+			cpu:        1,
+			expectedCN: map[string]struct{}(nil),
+		},
+		{
+			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
+				"a": {Resource: pb.Resource{
+					CPUTotal: 1,
+					MemTotal: 100,
+				}},
+			}},
+			cpu: 1, mem: 100,
+			expectedCN: map[string]struct{}{"a": {}},
+		},
+		{
+			infos: pb.CNState{
+				Stores: map[string]pb.CNStoreInfo{
+					"a": {Resource: pb.Resource{
+						CPUTotal: 1,
+						MemTotal: 100,
+					}},
+					"b": {
+						Resource: pb.Resource{
+							CPUTotal: 2,
+							MemTotal: 200,
+						},
+					},
+				},
+			},
+			cpu: 2, mem: 150,
+			expectedCN: map[string]struct{}{"b": {}},
+		},
+	}
+
+	for _, c := range cases {
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		working := selectCNs(c.infos, withCPU(c.cpu), withMemory(c.mem))
+		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
 	}
 }
 
 func TestContains(t *testing.T) {
 	assert.True(t, contains([]string{"a"}, "a"))
 	assert.False(t, contains([]string{"a"}, "b"))
+}
+
+func getUUIDs(t *testing.T, cnState pb.CNState) map[string]struct{} {
+	var uuids map[string]struct{}
+	if len(cnState.Stores) != 0 {
+		uuids = make(map[string]struct{}, len(cnState.Stores))
+		for uuid := range cnState.Stores {
+			uuids[uuid] = struct{}{}
+		}
+	} else {
+		assert.Equal(t, map[string]pb.CNStoreInfo{}, cnState.Stores)
+	}
+	return uuids
 }
