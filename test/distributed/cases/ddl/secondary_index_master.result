@@ -1,0 +1,38 @@
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1;
+a    b    c
+Congress    Lane    1
+Juniper    Way    2
+Nightingale    Lane    3
+create index idx1 using master on t1(a,b);
+insert into t1 values("Changing","Expanse", "4");
+update t1 set a = "Altering" where c = "4";
+delete from t1 where c = "2";
+create table t2(a varchar(30), b bigint, c varchar(30) primary key);
+insert into t2 values("Congress",1, "1");
+insert into t2 values("Juniper",2, "2");
+insert into t2 values("Nightingale",3, "3");
+create index idx2 using master on t2(a,b);
+not supported: column 'b' is not varchar type.
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+create index idx1 using master on t1(a,b);
+insert into t1 values("Alberta","Blvd", "4");
+insert into t1 values("Nightingale","Lane", "5");
+insert into t1 values(NULL,"Lane", "6");
+drop table if exists t2;
+create table t2(a varchar(30), b varchar(30), c varchar(30));
+insert into t2 values("arjun", "sk", "7");
+insert into t2 values("albin", "john", "8");
+insert into t1 select * from t2;
+update t1 set a="albin" ,b="john" where c="7";
+update t1 set a=NULL ,b="john" where c="7";
+delete from t1 where c="7";
+truncate table t1;
