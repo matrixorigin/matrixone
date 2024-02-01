@@ -16,12 +16,10 @@ package function
 
 import (
 	"bytes"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -305,34 +303,5 @@ func opBetweenBytes(
 		v0, _ := p0.GetStrValue(i)
 		rss[i] = bytes.Compare(v0, lb) >= 0 && bytes.Compare(v0, ub) <= 0
 	}
-	return nil
-}
-
-func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	ivec := parameters[0]
-	lval := parameters[1].GetBytesAt(0)
-	rval := parameters[2].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	icol, iarea := vector.MustVarlenaRawData(ivec)
-	lowerBound := sort.Search(len(icol), func(i int) bool {
-		return index.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0
-	})
-
-	upperBound := lowerBound
-	for upperBound < len(icol) && index.PrefixCompare(icol[upperBound].GetByteSlice(iarea), rval) <= 0 {
-		upperBound++
-	}
-
-	for i := 0; i < lowerBound; i++ {
-		res[i] = false
-	}
-	for i := lowerBound; i < upperBound; i++ {
-		res[i] = true
-	}
-	for i := upperBound; i < len(res); i++ {
-		res[i] = false
-	}
-
 	return nil
 }

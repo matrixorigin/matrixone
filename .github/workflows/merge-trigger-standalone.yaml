@@ -113,6 +113,7 @@ jobs:
   multi-cn-bvt-race-linux-x86:
     if: ${{ github.event.pull_request.merged == true && always() }}
     runs-on: amd64-mo-guangzhou-2xlarge32
+    needs: [pessimistic-bvt-darwin-arm64]
     name: Multi-CN e2e BVT(Race) Test on Linux/x64
     env:
       mo_reuse_enable_checker_verbose: true
