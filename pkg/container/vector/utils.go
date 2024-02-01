@@ -354,7 +354,7 @@ func typeCompatible[T any](typ types.Type) bool {
 	case uint32:
 		return typ.Oid == types.T_uint32
 	case uint64:
-		return typ.Oid == types.T_uint64
+		return typ.Oid == types.T_uint64 || typ.Oid == types.T_bit
 	case float32:
 		return typ.Oid == types.T_float32
 	case float64:

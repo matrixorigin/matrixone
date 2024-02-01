@@ -9,30 +9,27 @@ create table t1 (a int, b bit(10));
 show create table t1;
 desc t1;
 
--- insert, support type cast from int, hex/bit literal, char
-insert into t1 values (0, 0x00);
-insert into t1 values (1, 1);
+-- insert, support type cast from bool, hex/bit literal, char, float, and int
+insert into t1 values (0, false);
+insert into t1 values (1, true);
 insert into t1 values (2, 0x2);
 insert into t1 values (3, 0b11);
 insert into t1 values (4, x'04');
 insert into t1 values (5, b'101');
 insert into t1 values (6, 'a');
 insert into t1 values (6, 'ab');  -- error, data too long, bit_len('ab') = 16 > 10
+insert into t1 values (7, 7.4999);  -- round(7.4999) = 7
+insert into t1 values (8, 7.5);  -- round(7.5) = 8
+insert into t1 values (9, 9);
+insert into t1 values (10, 10);
+insert into t1 values (10, 10);
 insert into t1 values (1023, 0x3ff);
 insert into t1 values (1024, 0x4ff);  -- error, data too long, bit_len(0x4ff) = 11 > 10
+
 select * from t1;
 
 -- update
 update t1 set b = 6 where b = cast('a' as bit(10));
-select * from t1;
-
--- support type cast from float
-insert into t1 values (7, 7.4999);  -- round(7.4999) = 7
-insert into t1 values (8, 7.5);  -- round(7.5) = 8
-select * from t1;
-
--- delete
-delete from t1 where b >= 7 and b <= 8;
 select * from t1;
 
 -- filter
@@ -40,6 +37,10 @@ select * from t1 where b > 3 order by b desc;
 
 -- aggregation
 select sum(a), cast(b as unsigned) from t1 group by b having b > 3;
+
+-- delete
+delete from t1 where b >= 7 and b <= 10;
+select * from t1;
 
 -- functions
 select cast(b as int) from t1;

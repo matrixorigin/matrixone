@@ -18,8 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
