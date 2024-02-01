@@ -167,6 +167,12 @@ func (a *AliyunSDK) Stat(
 	err error,
 ) {
 
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}

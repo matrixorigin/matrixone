@@ -126,9 +126,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	constraint := make([][]byte, 0)
 	constraint = append(constraint, tmp)
-	newRel.TableRenameInTxn(c.ctx, constraint)
+	err = newRel.TableRenameInTxn(c.ctx, constraint)
+	if err != nil {
+		return err
+	}
 	//--------------------------------------------------------------------------------------------------------------
-
 	{
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)

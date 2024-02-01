@@ -75,7 +75,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var end bool
 	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -98,7 +98,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.bat = bat
 					continue
 				}
-				anal.Input(bat, arg.info.IsFirst)
+				anal.Input(bat, arg.GetIsFirst())
 				for i := range bat.Vecs {
 					n := bat.Vecs[i].Length()
 					err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
@@ -157,7 +157,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.cleanOrderVectors(proc.Mp())
 			}
 
-			anal.Output(ctr.bat, arg.info.IsLast)
+			anal.Output(ctr.bat, arg.GetIsLast())
 			if len(ap.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
 				ctr.status = done
 			} else {

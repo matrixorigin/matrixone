@@ -34,6 +34,7 @@ const (
 )
 
 // add unit tests for cases
+
 type groupTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
@@ -181,12 +182,16 @@ func newTestCase(flgs []bool, needEval bool, ts []types.Type) groupTestCase {
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &Argument{NeedEval: needEval,
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			}},
+		arg: &Argument{
+			NeedEval: needEval,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+		},
 	}
 }
 
