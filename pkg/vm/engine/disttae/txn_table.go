@@ -733,7 +733,7 @@ func (tbl *txnTable) rangesOnePart(
 	for _, entry := range tbl.writes {
 		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 		// TODO Adjustments will be made here in the future
-		if entry.typ == DELETE {
+		if entry.typ == DELETE || entry.typ == DELETE_TXN {
 			if entry.isGeneratedByTruncate() {
 				continue
 			}
