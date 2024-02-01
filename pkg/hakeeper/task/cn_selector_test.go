@@ -54,7 +54,14 @@ func TestSelectWorkingCNs(t *testing.T) {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
 		working := selectCNs(c.infos, notExpired(cfg, c.currentTick))
-		assert.Equal(t, c.expectedWorking, working)
+		var uuids []string
+		if len(working.Stores) != 0 {
+			uuids = make([]string, 0, len(working.Stores))
+			for uuid := range working.Stores {
+				uuids = append(uuids, uuid)
+			}
+		}
+		assert.Equal(t, c.expectedWorking, uuids)
 	}
 }
 

@@ -60,13 +60,16 @@ func matchAllRules(cn pb.CNStoreInfo, rules ...rule) bool {
 	return true
 }
 
-func selectCNs(cnState pb.CNState, rules ...rule) (uuids []string) {
+func selectCNs(cnState pb.CNState, rules ...rule) pb.CNState {
+	cns := pb.CNState{
+		Stores: make(map[string]pb.CNStoreInfo),
+	}
 	for uuid, cn := range cnState.Stores {
 		if matchAllRules(cn, rules...) {
-			uuids = append(uuids, uuid)
+			cns.Stores[uuid] = cn
 		}
 	}
-	return uuids
+	return cns
 }
 
 func contains(slice []string, val string) bool {
