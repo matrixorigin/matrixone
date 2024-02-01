@@ -18,6 +18,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"io"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,10 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"os"
-	"path"
-	"strconv"
-	"strings"
 )
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
@@ -202,40 +204,54 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 
 // CopyFile copy file from srcFs to dstFs and return checksum of the written file.
 func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) ([]byte, error) {
+
 	name := dentry.Name
 	if dstDir != "" {
 		name = path.Join(dstDir, name)
 	}
+	logutil.Infof("copy file %v", dentry)
+
+	// get reader
+	var reader io.ReadCloser
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
 		Policy:   fileservice.SkipAllCache,
-	}
-	logutil.Infof("copy file %v", dentry)
-	ioVec.Entries[0] = fileservice.IOEntry{
-		Offset: 0,
-		Size:   dentry.Size,
+		Entries: []fileservice.IOEntry{
+			{
+				ReadCloserForRead: &reader,
+				Offset:            0,
+				Size:              -1,
+			},
+		},
 	}
 	err := srcFs.Read(ctx, ioVec)
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
+
+	// hash
+	hasher := sha256.New()
+	hashingReader := io.TeeReader(reader, hasher)
+
+	// write
 	dstIoVec := fileservice.IOVector{
 		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
 		Policy:   fileservice.SkipAllCache,
-	}
-	dstIoVec.Entries[0] = fileservice.IOEntry{
-		Offset: 0,
-		Data:   ioVec.Entries[0].Data,
-		Size:   dentry.Size,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: hashingReader,
+				Offset:         0,
+				Size:           -1,
+			},
+		},
 	}
 	err = dstFs.Write(ctx, dstIoVec)
 	if err != nil {
 		return nil, err
 	}
-	checksum := sha256.Sum256(ioVec.Entries[0].Data)
-	return checksum[:], err
+
+	return hasher.Sum(nil), nil
 }
 
 func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {
