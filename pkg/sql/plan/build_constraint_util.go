@@ -661,7 +661,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					updateExprs[col.Name] = defExpr
 				}
 				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: col.Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: rightTag,
@@ -680,7 +680,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				for _, colIdx := range uniqueColMap {
 					col := rightTableDef.Cols[colIdx]
 					leftExpr := &Expr{
-						Typ: col.Typ,
+						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: baseNodeTag,
@@ -689,7 +689,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						},
 					}
 					rightExpr := &plan.Expr{
-						Typ: col.Typ,
+						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: rightTag,
@@ -900,7 +900,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 		return nil, err
 	}
 	t := &plan.Expr{
-		Typ: targetType,
+		Typ: *targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{
 				Typ: targetType,
@@ -914,7 +914,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 				Args: []*Expr{expr, t},
 			},
 		},
-		Typ: targetType,
+		Typ: *targetType,
 	}, nil
 }
 
@@ -954,7 +954,7 @@ func buildValueScan(
 		vec := proc.GetVector(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{
 					Typ: col.Typ,
@@ -1016,7 +1016,7 @@ func buildValueScan(
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
 						Expr: &plan.Expr{
-							Typ: constTextType,
+							Typ: *constTextType,
 							Expr: &plan.Expr_P{
 								P: &plan.ParamRef{
 									Pos: int32(nv.Offset),
@@ -1069,7 +1069,7 @@ func buildValueScan(
 			Typ:   col.Typ,
 		}
 		expr := &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: lastTag,
@@ -1087,7 +1087,7 @@ func buildValueScan(
 			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
 				updateExpr = &plan.Expr{
-					Typ: constTextType,
+					Typ: *constTextType,
 					Expr: &plan.Expr_P{
 						P: &plan.ParamRef{
 							Pos: int32(nv.Offset),

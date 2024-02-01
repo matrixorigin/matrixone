@@ -155,7 +155,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
 			Tag: rfTag,
 			Expr: &plan.Expr{
-				Typ: DeepCopyType(buildExprs[0].Typ),
+				Typ: buildExprs[0].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -1,
@@ -215,7 +215,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
 		Tag: rfTag,
 		Expr: &plan.Expr{
-			Typ: DeepCopyType(tableDef.Cols[pkIdx].Typ),
+			Typ: *tableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftChild.BindingTags[0],
@@ -229,7 +229,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	for i := range probeExprs {
 		pos := col2Probe[i]
 		buildArgs[i] = &plan.Expr{
-			Typ: DeepCopyType(buildExprs[pos].Typ),
+			Typ: buildExprs[pos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,

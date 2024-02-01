@@ -717,7 +717,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 
 	mologdateConst := func(idx int) *plan.Expr {
 		return &plan.Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id: int32(types.T_date),
 			},
 			Expr: &plan.Expr_Lit{
@@ -732,7 +732,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	}
 	mologdateFunc := func() *plan.Expr {
 		return &plan.Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id: int32(types.T_date),
 			},
 			Expr: &plan.Expr_F{
@@ -740,7 +740,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 					Func: &plan.ObjectRef{Obj: mologdateFid, ObjName: "mo_log_date"},
 					Args: []*plan.Expr{
 						{
-							Typ: &plan.Type{
+							Typ: plan.Type{
 								Id: int32(types.T_varchar),
 							},
 							Expr: &plan.Expr_Col{
@@ -779,7 +779,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 			},
 			FilterList: []*plan.Expr{
 				{
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id: int32(types.T_bool),
 					},
 					Expr: expr,

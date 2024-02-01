@@ -30,7 +30,7 @@ var (
 				},
 			},
 		},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		},
@@ -44,7 +44,7 @@ var (
 				},
 			},
 		},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		},
@@ -191,7 +191,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 						Args: []*Expr{retExpr},
 					},
 				},
-				Typ: makePlan2Type(&returnType),
+				Typ: *makePlan2Type(&returnType),
 			}
 			zeroExpr := makePlan2Int64ConstExprWithType(0)
 			argsType = make([]types.Type, 3)
@@ -210,7 +210,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 						Args: []*Expr{isNullExpr, zeroExpr, DeepCopyExpr(retExpr)},
 					},
 				},
-				Typ: makePlan2Type(&returnType),
+				Typ: *makePlan2Type(&returnType),
 			}
 		}
 		return nodeID, retExpr, nil
@@ -301,7 +301,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	}, ctx)
 
 	markExpr = &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: notNull,
 		},

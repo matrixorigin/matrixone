@@ -55,7 +55,7 @@ func init() {
 				Es: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id: int32(types.T_int8),
 						},
 					},

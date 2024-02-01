@@ -134,7 +134,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
@@ -145,7 +145,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 		},
 	})
 	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
@@ -156,7 +156,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 		},
 	})
 	cond := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{

@@ -170,7 +170,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 	rightPos := rightBinding.colIdByName[col]
 	expr, err := BindFuncExprImplByPlanExpr(bc.binder.GetContext(), "=", []*plan.Expr{
 		{
-			Typ: DeepCopyType(leftBinding.types[leftPos]),
+			Typ: *leftBinding.types[leftPos],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftBinding.tag,
@@ -179,7 +179,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 			},
 		},
 		{
-			Typ: DeepCopyType(rightBinding.types[rightPos]),
+			Typ: *rightBinding.types[rightPos],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: rightBinding.tag,

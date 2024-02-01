@@ -348,7 +348,7 @@ func GetVarValue(
 		return nil, err
 	}
 	if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-		expr, err = appendCastBeforeExpr(ctx, expr, e.Typ)
+		expr, err = appendCastBeforeExpr(ctx, expr, &e.Typ)
 	}
 	if err != nil {
 		return nil, err
@@ -362,7 +362,7 @@ func GetVarValue(
 		}
 		constValue := rule.GetConstantValue(vec, true, 0)
 		constValue.Src = e
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+		expr.Typ = plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 		expr.Expr = &plan.Expr_Lit{
 			Lit: constValue,
 		}

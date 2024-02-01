@@ -214,7 +214,7 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 			// not N range
 			break
 		}
-		typ = w.OrderBy[0].Expr.Typ
+		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
 		if !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type")
@@ -287,7 +287,7 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 	c := rule.GetConstantValue(vec, false, 0)
 
 	return &plan.Expr{
-		Typ:  typ,
+		Typ:  *typ,
 		Expr: &plan.Expr_Lit{Lit: c},
 	}, nil
 }
@@ -331,7 +331,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 
-	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: typ, Expr: &plan.Expr_Lit{Lit: c}}
+	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: *typ, Expr: &plan.Expr_Lit{Lit: c}}
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 
 	return e, nil

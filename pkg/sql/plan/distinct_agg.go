@@ -53,7 +53,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)
 		for i := range node.GroupBy {
 			node.GroupBy[i] = &plan.Expr{
-				Typ: DeepCopyType(oldGroupBy[i].Typ),
+				Typ: oldGroupBy[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: newGroupTag,
@@ -65,7 +65,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 
 		aggFunc.Func.Obj &= function.DistinctMask
 		aggFunc.Args[0] = &plan.Expr{
-			Typ: DeepCopyType(toCount.Typ),
+			Typ: toCount.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: newGroupTag,

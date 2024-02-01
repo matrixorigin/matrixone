@@ -547,7 +547,7 @@ func makeVarcharList(start, end, step string) []*plan.Expr {
 
 func makeInt64Expr(val int64) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int64),
 		},
 		Expr: &plan2.Expr_Lit{
@@ -561,7 +561,7 @@ func makeInt64Expr(val int64) *plan.Expr {
 }
 func makeVarcharExpr(val string) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_varchar),
 		},
 		Expr: &plan2.Expr_Lit{
@@ -577,7 +577,7 @@ func makeVarcharExpr(val string) *plan.Expr {
 func makeDatetimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseDatetime(s, p)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_datetime),
 			Scale: p,
 		},

@@ -58,7 +58,7 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 		return
 	}
 	expr = &plan.Expr{
-		Typ: b.typ,
+		Typ: *b.typ,
 	}
 	expr.Expr = &plan.Expr_Col{
 		Col: &plan.ColRef{

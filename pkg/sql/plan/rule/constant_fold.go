@@ -158,7 +158,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          expr.Typ.Id,
 				NotNullable: expr.Typ.NotNullable,
 				Width:       expr.Typ.Width,
@@ -194,7 +194,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		}
 		if existRealTimeFunc {
 			c.Src = &plan.Expr{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          expr.Typ.Id,
 					NotNullable: expr.Typ.NotNullable,
 					Width:       expr.Typ.Width,
@@ -212,7 +212,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	expr.Typ = plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	expr.Expr = ec
 
 	return expr

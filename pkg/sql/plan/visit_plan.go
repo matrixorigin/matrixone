@@ -122,7 +122,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	typ := types.New(types.T_varchar, 65000, 0)
 	toTyp := makePlan2Type(&typ)
 	targetTyp := &plan.Expr{
-		Typ: toTyp,
+		Typ: *toTyp,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{
 				Typ: toTyp,
@@ -131,7 +131,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
-		oldType := DeepCopyType(e.Typ)
+		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
@@ -142,7 +142,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return nil, err
 			}
 		}
-		return forceCastExpr(ctx, e, oldType)
+		return forceCastExpr(ctx, e, &oldType)
 	}
 
 	if node.RowsetData != nil {

@@ -325,7 +325,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 					case pbpipeline.RuntimeFilter_IN:
 						inExpr := &plan.Expr{
-							Typ: &plan.Type{
+							Typ: plan.Type{
 								Id:          int32(types.T_bool),
 								NotNullable: spec.Expr.Typ.NotNullable,
 							},
@@ -338,7 +338,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 									Args: []*plan.Expr{
 										spec.Expr,
 										{
-											Typ: &plan.Type{
+											Typ: plan.Type{
 												Id: int32(types.T_tuple),
 											},
 											Expr: &plan.Expr_Vec{
@@ -357,7 +357,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 							s.DataSource.Expr = inExpr
 						} else {
 							s.DataSource.Expr = &plan.Expr{
-								Typ: &plan.Type{
+								Typ: plan.Type{
 									Id:          int32(types.T_bool),
 									NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
 								},

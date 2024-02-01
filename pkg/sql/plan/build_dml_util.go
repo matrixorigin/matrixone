@@ -626,7 +626,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				childTypMap[col.Name] = col.Typ
 				childId2name[col.ColId] = col.Name
 				childProjectList[idx] = &Expr{
-					Typ: col.Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(idx),
@@ -635,7 +635,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					},
 				}
 				childForJoinProject[idx] = &Expr{
-					Typ: col.Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 1,
@@ -692,7 +692,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								originColumnName := idNameMap[fk.ForeignCols[i]]
 
 								leftExpr := &Expr{
-									Typ: nameTypMap[originColumnName],
+									Typ: *nameTypMap[originColumnName],
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 0,
@@ -716,7 +716,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									updateChildColExpr[i] = leftExpr
 								}
 								rightExpr := &plan.Expr{
-									Typ: childTypMap[childColumnName],
+									Typ: *childTypMap[childColumnName],
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 1,
@@ -768,7 +768,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for updateName, newIdx := range updateRefColumn {
 							oldIdx := nameIdxMap[updateName]
 							tmpExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
-								Typ: nameTypMap[updateName],
+								Typ: *nameTypMap[updateName],
 								Expr: &plan.Expr_Col{
 									Col: &ColRef{
 										ColPos: oldIdx,
@@ -776,7 +776,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									},
 								},
 							}, {
-								Typ: nameTypMap[updateName],
+								Typ: *nameTypMap[updateName],
 								Expr: &plan.Expr_Col{
 									Col: &ColRef{
 										ColPos: newIdx,
@@ -1261,7 +1261,7 @@ func makeInsertPlan(
 			errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
 			for i := range tableDef.Fkeys {
 				colExpr := &plan.Expr{
-					Typ: makePlan2Type(&rowIdTyp),
+					Typ: *makePlan2Type(&rowIdTyp),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(beginIdx + i),
@@ -1318,7 +1318,7 @@ func makeInsertPlan(
 		if needCheck && !useFuzzyFilter {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
-				Typ: pkTyp,
+				Typ: *pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(pkPos),
@@ -1333,7 +1333,7 @@ func makeInsertPlan(
 
 			countType := types.T_int64.ToType()
 			countColExpr := &plan.Expr{
-				Typ: makePlan2Type(&countType),
+				Typ: *makePlan2Type(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						Name: tableDef.Pkey.PkeyColName,
@@ -1347,7 +1347,7 @@ func makeInsertPlan(
 			}
 			varcharType := types.T_varchar.ToType()
 			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
+				Typ: *tableDef.Cols[pkPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 				},
@@ -1387,7 +1387,7 @@ func makeInsertPlan(
 				SourceStep: []int32{sourceStep},
 				ProjectList: []*Expr{
 					&plan.Expr{
-						Typ: pkTyp,
+						Typ: *pkTyp,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								ColPos: int32(pkPos),
@@ -1428,7 +1428,7 @@ func makeInsertPlan(
 				ObjRef:   objRef,
 				TableDef: scanTableDef,
 				ProjectList: []*Expr{{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(len(scanTableDef.Cols) - 1),
@@ -1440,7 +1440,7 @@ func makeInsertPlan(
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
-							Typ: DeepCopyType(pkTyp),
+							Typ: *DeepCopyType(pkTyp),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									Name: tableDef.Pkey.PkeyColName,
@@ -1492,7 +1492,7 @@ func makeInsertPlan(
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
-							Typ: DeepCopyType(pkTyp),
+							Typ: *DeepCopyType(pkTyp),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
@@ -1527,7 +1527,7 @@ func makeInsertPlan(
 				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
 
 				scanPkExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1535,7 +1535,7 @@ func makeInsertPlan(
 					},
 				}
 				scanRowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1553,7 +1553,7 @@ func makeInsertPlan(
 						{
 							Tag: rfTag,
 							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
+								Typ: *pkTyp,
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
 										Name: tableDef.Pkey.PkeyColName,
@@ -1566,7 +1566,7 @@ func makeInsertPlan(
 				rightId := builder.appendNode(scanNode, bindCtx)
 
 				pkColExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1576,7 +1576,7 @@ func makeInsertPlan(
 					},
 				}
 				rightExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1588,7 +1588,7 @@ func makeInsertPlan(
 					return err
 				}
 				rightRowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1597,7 +1597,7 @@ func makeInsertPlan(
 					},
 				}
 				rowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1617,7 +1617,7 @@ func makeInsertPlan(
 						{
 							Tag: rfTag,
 							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
+								Typ: *pkTyp,
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
 										RelPos: 0,
@@ -1713,7 +1713,7 @@ func makeInsertPlan(
 					return err
 				}
 				colExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: rowIdDef.Name,
@@ -1728,7 +1728,7 @@ func makeInsertPlan(
 					ProjectList: []*Expr{
 						colExpr,
 						{
-							Typ: tableDef.Cols[pkPos].Typ,
+							Typ: *tableDef.Cols[pkPos].Typ,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{ColPos: 2, Name: tableDef.Cols[pkPos].Name},
 							},
@@ -1744,7 +1744,7 @@ func makeInsertPlan(
 
 				varcharType := types.T_varchar.ToType()
 				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-					Typ: tableDef.Cols[pkPos].Typ,
+					Typ: *tableDef.Cols[pkPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 					},
@@ -1793,7 +1793,7 @@ func makeOneDeletePlan(
 		// append filter
 		rowIdTyp := types.T_Rowid.ToType()
 		rowIdColExpr := &plan.Expr{
-			Typ: makePlan2Type(&rowIdTyp),
+			Typ: *makePlan2Type(&rowIdTyp),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(delNodeInfo.deleteIndex),
@@ -2177,7 +2177,7 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 		AggList:  []*Expr{aggExpr},
 		ProjectList: []*Expr{
 			{
-				Typ: makePlan2Type(&countType),
+				Typ: *makePlan2Type(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -2,
@@ -2280,7 +2280,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			for fIdx, col := range tableDef.Cols {
 				if col.ColId == colId {
 					colExpr := &Expr{
-						Typ: col.Typ,
+						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								ColPos: int32(fIdx),
@@ -2328,7 +2328,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 				childColumnName := id2name[fk.Cols[fkIdx]]
 
 				leftExpr := &Expr{
-					Typ: typMap[childColumnName],
+					Typ: *typMap[childColumnName],
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -2338,7 +2338,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 					},
 				}
 				rightExpr := &plan.Expr{
-					Typ: DeepCopyType(col.Typ),
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 1,
@@ -2361,7 +2361,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		scanNodeProject := make([]*Expr, len(parentTableDef.Cols))
 		for colIdx, col := range parentTableDef.Cols {
 			scanNodeProject[colIdx] = &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colIdx),
@@ -2382,7 +2382,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		// append project
 		projectList = append(projectList, &Expr{
-			Typ: DeepCopyType(parentTableDef.Cols[0].Typ),
+			Typ: *parentTableDef.Cols[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -2433,7 +2433,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 			preInsertProjection = preInsertProjection[:len(preInsertProjection)-1]
 			for i, typ := range hiddenColumnTyp {
 				preInsertProjection = append(preInsertProjection, &plan.Expr{
-					Typ: typ,
+					Typ: *typ,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{
 						RelPos: -1,
 						ColPos: int32(i),
@@ -2445,7 +2445,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		} else {
 			for i, typ := range hiddenColumnTyp {
 				preInsertProjection = append(preInsertProjection, &plan.Expr{
-					Typ: typ,
+					Typ: *typ,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{
 						RelPos: -1,
 						ColPos: int32(i),
@@ -2788,7 +2788,7 @@ func appendPreInsertUkPlan(
 	}
 	var preinsertUkProjection []*Expr
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
-		Typ: ukType,
+		Typ: *ukType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: -1,
@@ -2798,7 +2798,7 @@ func appendPreInsertUkPlan(
 		},
 	})
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
-		Typ: originPkType,
+		Typ: *originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: -1,
@@ -2906,7 +2906,7 @@ func appendDeleteUniqueTablePlan(
 			rightPkPos = int32(colIdx)
 		}
 		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -2925,7 +2925,7 @@ func appendDeleteUniqueTablePlan(
 
 	// append projection
 	projectList = append(projectList, &plan.Expr{
-		Typ: uniqueTableDef.Cols[rightRowIdPos].Typ,
+		Typ: *uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -2934,7 +2934,7 @@ func appendDeleteUniqueTablePlan(
 			},
 		},
 	}, &plan.Expr{
-		Typ: uniqueTableDef.Cols[rightPkPos].Typ,
+		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -2945,7 +2945,7 @@ func appendDeleteUniqueTablePlan(
 	})
 
 	rightExpr := &plan.Expr{
-		Typ: uniqueTableDef.Cols[rightPkPos].Typ,
+		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -2963,7 +2963,7 @@ func appendDeleteUniqueTablePlan(
 		orginIndexColumnName := indexdef.Parts[0]
 		typ := typMap[orginIndexColumnName]
 		leftExpr = &Expr{
-			Typ: typ,
+			Typ: *typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -2978,7 +2978,7 @@ func appendDeleteUniqueTablePlan(
 			column = catalog.ResolveAlias(column)
 			typ := typMap[column]
 			args[i] = &plan.Expr{
-				Typ: typ,
+				Typ: *typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -3043,7 +3043,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			entriesCpPkColPos = int32(colIdx)
 		}
 		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -3063,7 +3063,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	// append projection
 	projectList = append(projectList,
 		&plan.Expr{
-			Typ: entriesTableDef.Cols[entriesRowIdPos].Typ,
+			Typ: *entriesTableDef.Cols[entriesRowIdPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -3073,7 +3073,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		},
 		&plan.Expr{
-			Typ: makePlan2Type(&cpPkType),
+			Typ: *makePlan2Type(&cpPkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -3085,7 +3085,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	)
 
 	rightExpr := &plan.Expr{
-		Typ: entriesTableDef.Cols[entriesFkPkColPos].Typ,
+		Typ: *entriesTableDef.Cols[entriesFkPkColPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -3098,7 +3098,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	// append join node
 	var joinConds []*Expr
 	var leftExpr = &plan.Expr{
-		Typ: originPkType,
+		Typ: *originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -3133,7 +3133,7 @@ func appendDeleteUniqueTablePlanWithoutFilters(
 	scanNodeProject := make([]*Expr, len(uniqueTableDef.Cols))
 	for colIdx, col := range uniqueTableDef.Cols {
 		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -3169,7 +3169,7 @@ func makePreUpdateDeletePlan(
 	projectProjection := make([]*Expr, len(delCtx.tableDef.Cols)+delCtx.updateColLength)
 	for i, col := range delCtx.tableDef.Cols {
 		projectProjection[i] = &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -3357,7 +3357,7 @@ func makePreUpdateDeletePlan(
 				var colTyp *Type
 				if idx, exists := delCtx.updateColPosMap[colName]; exists {
 					colIdx = idx
-					colTyp = lastProjectList[idx].Typ
+					colTyp = &lastProjectList[idx].Typ
 				} else {
 					for idx, col := range delCtx.tableDef.Cols {
 						if col.Name == colName {
@@ -3368,7 +3368,7 @@ func makePreUpdateDeletePlan(
 					}
 				}
 				pkColExpr[i] = &Expr{
-					Typ:  colTyp,
+					Typ:  *colTyp,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(colIdx)}},
 				}
 			}

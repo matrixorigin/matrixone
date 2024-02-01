@@ -135,7 +135,7 @@ func newExpression(pos int32) *plan.Expr {
 				ColPos: pos,
 			},
 		},
-		Typ: &plan.Type{},
+		Typ: plan.Type{},
 	}
 }
 

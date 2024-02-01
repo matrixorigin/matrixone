@@ -30,7 +30,7 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
 	for colIdx, column := range indexTableDefs[0].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: column.Typ,
+			Typ: *column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -80,7 +80,7 @@ func makeCentroidsTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTabl
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
 	for colIdx, column := range indexTableDefs[1].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: column.Typ,
+			Typ: *column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -108,7 +108,7 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	// 3: meta.value i.e, current version
 	joinProjections := getProjectionByLastNode(builder, centroidsScanId)[:3]
 	joinProjections = append(joinProjections, &plan.Expr{
-		Typ: makePlan2Type(&bigIntType),
+		Typ: *makePlan2Type(&bigIntType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -153,7 +153,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 		ProjectList: []*Expr{
 			{
 				// centroids.version
-				Typ: makePlan2Type(&bigIntType),
+				Typ: *makePlan2Type(&bigIntType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -163,7 +163,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // centroids.centroid_id
-				Typ: makePlan2Type(&bigIntType),
+				Typ: *makePlan2Type(&bigIntType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -173,7 +173,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // tbl.pk
-				Typ: typeOriginPk,
+				Typ: *typeOriginPk,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -183,7 +183,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // centroids.centroid
-				Typ: typeOriginVecColumn,
+				Typ: *typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -193,7 +193,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				},
 			},
 			{ // tbl.embedding
-				Typ: typeOriginVecColumn,
+				Typ: *typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -239,7 +239,7 @@ func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindCont
 		return -1, err
 	}
 	winSpec := &plan.Expr{
-		Typ: makePlan2Type(&bigIntType),
+		Typ: *makePlan2Type(&bigIntType),
 		Expr: &plan.Expr_W{
 			W: &plan.WindowSpec{
 				WindowFunc:  rowNumber,
@@ -266,7 +266,7 @@ func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindCont
 		},
 	}
 	rowNumberCol := &Expr{
-		Typ: makePlan2Type(&bigIntType),
+		Typ: *makePlan2Type(&bigIntType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				// For WindowNode：
