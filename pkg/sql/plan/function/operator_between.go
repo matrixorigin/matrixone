@@ -32,7 +32,8 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBetweenBool(parameters, rs, proc, length)
-
+	case types.T_bit:
+		return opBetweenFixed[uint64](parameters, rs, proc, length)
 	case types.T_int8:
 		return opBetweenFixed[int8](parameters, rs, proc, length)
 	case types.T_int16:

@@ -17,9 +17,8 @@ package vector
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s

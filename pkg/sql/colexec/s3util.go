@@ -446,6 +446,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+		case types.T_bit:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:

@@ -987,6 +987,19 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			if err := vector.SetFixedAt(vec, rowIdx, b); err != nil {
 				return err
 			}
+		case types.T_bit:
+			width := param.Cols[colIdx].Typ.Width
+			var val uint64
+			for i := range field {
+				val = (val << 8) | uint64(field[i])
+			}
+			if val > uint64(1<<width-1) {
+				return moerr.NewInternalError(param.Ctx, "data too long, type width = %d, val = %b", width, val)
+			}
+			if err := vector.SetFixedAt(vec, rowIdx, val); err != nil {
+				return err
+			}
+			buf.Reset()
 		case types.T_int8:
 			d, err := strconv.ParseInt(field, 10, 8)
 			if err == nil {

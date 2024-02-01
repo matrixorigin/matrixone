@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"io"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
@@ -636,6 +637,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_json,
 			types.T_array_float32,
 			types.T_array_float64,
+			types.T_bit,
 		}
 
 		type kase struct {
@@ -661,6 +663,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_BIT},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))

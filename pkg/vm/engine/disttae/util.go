@@ -266,6 +266,8 @@ func getNonCompositePKSearchFuncByExpr(
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
 
 		switch vec.GetType().Oid {
+		case types.T_bit:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
 		case types.T_int8:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
 		case types.T_int16:

@@ -1003,6 +1003,19 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeBool(b)
 			}
 		}
+	case types.T_bit:
+		s := vector.ExpandFixedCol[uint64](v)
+		for i, b := range s {
+			if v.IsNull(uint64(i)) {
+				if isFull {
+					ps[i].EncodeNull()
+				} else {
+					nulls.Add(bitMap, uint64(i))
+				}
+			} else {
+				ps[i].EncodeUint64(b)
+			}
+		}
 	case types.T_int8:
 		s := vector.ExpandFixedCol[int8](v)
 		for i, b := range s {
@@ -1252,6 +1265,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	resTyp := parameters[2].GetType()
 
 	switch resTyp.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length)

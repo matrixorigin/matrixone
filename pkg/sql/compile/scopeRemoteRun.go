@@ -1776,6 +1776,10 @@ func EncodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 			result := merge.PartialResults[i].(bool)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
 			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_bit:
+			result := merge.PartialResults[i].(uint64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
 		case types.T_int8:
 			result := merge.PartialResults[i].(int8)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
@@ -1875,6 +1879,10 @@ func DecodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 		switch merge.PartialResultTypes[i] {
 		case types.T_bool:
 			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_bit:
+			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
 			merge.PartialResults = append(merge.PartialResults, result)
 			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
 		case types.T_int8:

@@ -408,6 +408,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.MustFixedCol[bool](vec)[0], nil
+	case types.T_bit:
+		return vector.MustFixedCol[uint64](vec)[0], nil
 	case types.T_int8:
 		return vector.MustFixedCol[int8](vec)[0], nil
 	case types.T_int16:

@@ -728,6 +728,7 @@ func (tcc *TxnCompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMe
 	defer tcc.mu.Unlock()
 	tcc.sub = meta
 }
+
 func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()

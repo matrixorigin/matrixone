@@ -143,6 +143,15 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 					ps[i].EncodeBool(b)
 				}
 			}
+		case types.T_bit:
+			s := vector.MustFixedCol[uint64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint64(b)
+				}
+			}
 		case types.T_int8:
 			s := vector.MustFixedCol[int8](v)
 			for i, b := range s {
@@ -362,6 +371,15 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 			}
 		}
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_bit:
+		s := vector.MustFixedCol[uint64](v)
+		ns := make([]uint64, 0, len(s)-nulls.Size(nsp))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](v)
 		ns := make([]int8, 0, len(s)-nulls.Size(nsp))
@@ -539,6 +557,15 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 	case types.T_bool:
 		s := vector.MustFixedCol[bool](v)
 		ns := make([]bool, 0, length)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_bit:
+		s := vector.MustFixedCol[uint64](v)
+		ns := make([]uint64, 0)
 		for i, b := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
 				ns = append(ns, b)
