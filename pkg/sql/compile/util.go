@@ -69,7 +69,7 @@ var (
 	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_full(%s), %s from %s.%s;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	insertIntoMasterIndexTableFormat            = "insert into  %s.`%s` select serial_full('%s', %s, %s) from %s.`%s`;"
+	insertIntoMasterIndexTableFormat            = "insert into  %s.`%s` select serial_full('%s', %s, %s), %s from %s.`%s`;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
 )
 
@@ -234,7 +234,7 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 	for i, part := range indexDef.Parts {
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			part, part, pKeyMsg, DBName, originTableDef.Name)
+			part, part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs

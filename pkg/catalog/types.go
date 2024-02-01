@@ -248,7 +248,8 @@ const (
 
 	/************ 1. Master Index  ************/
 
-	MasterIndexTableIndexColName = IndexTableIndexColName
+	MasterIndexTableIndexColName   = IndexTableIndexColName
+	MasterIndexTablePrimaryColName = IndexTablePrimaryColName
 
 	/************ 2. IVF_FLAT Secondary Index ************/
 

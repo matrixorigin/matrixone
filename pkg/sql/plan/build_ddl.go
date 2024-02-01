@@ -1505,7 +1505,19 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		Names:       []string{keyName},
 		PkeyColName: keyName,
 	}
-
+	if pkeyName != "" {
+		colDef := &ColDef{
+			Name: catalog.MasterIndexTablePrimaryColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ:  colMap[pkeyName].Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+	}
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 		nameCount[firstPart]++
