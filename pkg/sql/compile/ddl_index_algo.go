@@ -306,9 +306,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	)
 
 	// 5. original table with normalized SK
-	originalTableWithNormalizedSkSql := fmt.Sprintf("select `%s`.`%s` as `%s`, "+
-		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`",
-		originalTableDef.Name,
+	originalTableWithNormalizedSkSql := fmt.Sprintf("(select %s as `%s`, "+
+		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`) as `%s`",
 		originalTblPkColMaySerial,
 		originalTblPkColMaySerialColNameAlias,
 
@@ -316,6 +315,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		indexColumnName,
 		indexColumnName,
 		qryDatabase,
+		originalTableDef.Name,
 		originalTableDef.Name,
 	)
 
@@ -351,7 +351,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
-		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
 	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
