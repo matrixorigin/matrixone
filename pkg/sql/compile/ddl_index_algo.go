@@ -267,6 +267,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	// 2. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string
+	var originalTblPkColMaySerialColNameAlias = "__mo_org_tbl_pk_may_serial_col"
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
@@ -304,6 +305,20 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
+	// 5. original table with normalized SK
+	originalTableWithNormalizedSkSql := fmt.Sprintf("select `%s`.`%s` as `%s`, "+
+		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`",
+		originalTableDef.Name,
+		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
+
+		originalTableDef.Name,
+		indexColumnName,
+		indexColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+	)
+
 	/*
 		Sample SQL:
 		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
@@ -314,10 +329,10 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		GROUP BY   `tbl`.`id`;
 
 	*/
-	// 5. final SQL
+	// 6. final SQL
 	mappingSQL := fmt.Sprintf("%s "+
 		"select `%s`.`__mo_index_centroid_version`, "+
-		"serial_extract( min( serial_full( %s(`%s`.`%s`, normalize_l2(`%s`.%s)), `%s`.`%s`)), 1 as bigint), "+
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.%s), `%s`.`%s`)), 1 as bigint), "+
 		"%s "+
 		"from %s CROSS JOIN %s group by %s;",
 		insertSQL,
@@ -332,9 +347,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 
-		originalTblPkColMaySerial, // NOTE: no need to add tableName here, because it could be serial()
+		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
 
-		originalTableDef.Name,
+		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
 		originalTblPkColMaySerial,
 	)
