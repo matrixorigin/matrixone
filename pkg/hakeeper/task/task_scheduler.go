@@ -50,12 +50,12 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
-	for _, task := range tasks {
-		if task.IsInitTask() {
+	for _, t := range tasks {
+		if t.IsInitTask() {
 			runtime.ProcessLevelRuntime().
 				SubLogger(runtime.SystemInit).Debug(
 				"task schedule query init task",
-				zap.String("task", task.Metadata.String()))
+				zap.String("task", t.Metadata.String()))
 		}
 	}
 
@@ -65,7 +65,12 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if len(tasks) == 0 {
 		return
 	}
-	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, selectCNs(cnState, notExpired(s.cfg, currentTick)))
+	workingCNs := selectCNs(cnState, notExpired(s.cfg, currentTick))
+	workingCNUuids := make([]string, 0, len(workingCNs.Stores))
+	for uuid := range workingCNs.Stores {
+		workingCNUuids = append(workingCNUuids, uuid)
+	}
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCNUuids)
 	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
