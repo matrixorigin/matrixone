@@ -213,7 +213,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 // genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
 func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) []string {
 	// insert data into index table
-	var insertSQLs = make([]string, 0, len(indexDef.Parts))
+	var insertSQLs = make([]string, len(indexDef.Parts))
 
 	pkeyName := originTableDef.Pkey.PkeyColName
 	var pKeyMsg string

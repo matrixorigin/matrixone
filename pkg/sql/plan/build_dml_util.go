@@ -2689,7 +2689,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		colsType[colVal.Name] = tableDef.Cols[i].Typ
 	}
 
-	var unionChildren = make([]int32, 0, len(idxDef.Parts))
+	var unionChildren = make([]int32, len(idxDef.Parts))
 	var err error
 	for i, part := range idxDef.Parts {
 		var currLastNodeId = genLastNodeIdFn()
