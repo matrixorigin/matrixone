@@ -37,11 +37,13 @@ func notContainsLabel(key, label string) func(info pb.CNStoreInfo) bool {
 
 func withMemory(requirement uint64) func(info pb.CNStoreInfo) bool {
 	return func(info pb.CNStoreInfo) bool {
-		memTotal := info.Resource.MemTotal
-		if memTotal > requirement {
-			return true
-		}
-		return false
+		return info.Resource.MemTotal > requirement
+	}
+}
+
+func withCPU(requirement uint64) func(info pb.CNStoreInfo) bool {
+	return func(info pb.CNStoreInfo) bool {
+		return info.Resource.CPUTotal > requirement
 	}
 }
 
