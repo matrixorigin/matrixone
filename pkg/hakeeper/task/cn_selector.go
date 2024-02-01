@@ -29,21 +29,15 @@ func containsLabel(key, label string) func(info pb.CNStoreInfo) bool {
 	}
 }
 
-func notContainsLabel(key, label string) func(info pb.CNStoreInfo) bool {
-	return func(info pb.CNStoreInfo) bool {
-		return !contains(info.Labels[key].Labels, label)
-	}
-}
-
 func withMemory(requirement uint64) func(info pb.CNStoreInfo) bool {
 	return func(info pb.CNStoreInfo) bool {
-		return info.Resource.MemTotal > requirement
+		return info.Resource.MemTotal >= requirement
 	}
 }
 
 func withCPU(requirement uint64) func(info pb.CNStoreInfo) bool {
 	return func(info pb.CNStoreInfo) bool {
-		return info.Resource.CPUTotal > requirement
+		return info.Resource.CPUTotal >= requirement
 	}
 }
 
