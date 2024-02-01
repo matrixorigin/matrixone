@@ -403,7 +403,7 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 
 func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch, fs fileservice.FileService) {
 
-	var numDeleted,blockDeleted,scanCnt int64
+	var numDeleted, blockDeleted, scanCnt int64
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
