@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -29,7 +28,7 @@ func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
-type multiAggOptimizedInfo struct {
+type multiAggExecOptimized struct {
 }
 
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
@@ -37,7 +36,7 @@ type multiAggOptimizedInfo struct {
 // 2's return type is bytes.
 type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	multiAggTypeInfo
-	multiAggOptimizedInfo
+	multiAggExecOptimized
 
 	args   []aggArg
 	ret    aggFuncResult[T]
@@ -45,7 +44,7 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 }
 type multiAggFuncExec2 struct {
 	multiAggTypeInfo
-	multiAggOptimizedInfo
+	multiAggExecOptimized
 
 	args   []aggArg
 	ret    aggFuncBytesResult
@@ -53,46 +52,14 @@ type multiAggFuncExec2 struct {
 }
 
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	for i := range vectors {
-		exec.args[i].Prepare(vectors[i])
-		if err := exec.fill(groupIndex, i, row, 1); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	for i := range vectors {
-		exec.args[i].Prepare(vectors[i])
-		if err := exec.fill(groupIndex, i, 0, vectors[i].Length()); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	for i := range vectors {
-		exec.args[i].Prepare(vectors[i])
-	}
-
-	var groupIdx int
-	var err error
-	var i = 0
-	for rowIdx, end := offset, offset+len(groups); rowIdx < end; rowIdx++ {
-		if groups[i] != GroupNotMatched {
-			groupIdx = int(groups[i] - 1)
-
-			for colIdx := range vectors {
-				if err = exec.fill(groupIdx, colIdx, rowIdx, 1); err != nil {
-					return err
-				}
-			}
-		}
-		i++
-	}
-
 	return nil
 }
 
@@ -101,8 +68,10 @@ func (exec *multiAggFuncExec1[T]) SetPreparedResult(_ any, _ int) {
 }
 
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
+	setter := exec.ret.aggSet
 	for i, group := range exec.groups {
-		exec.ret.set(i, group.flush())
+		exec.ret.groupToSet = i
+		group.flush(setter)
 	}
 	return exec.ret.flush(), nil
 }
@@ -112,46 +81,14 @@ func (exec *multiAggFuncExec1[T]) Free() {
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	for i := range vectors {
-		exec.args[i].Prepare(vectors[i])
-		if err := exec.fill(groupIndex, i, row, 1); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	for i := range vectors {
-		exec.args[i].Prepare(vectors[i])
-		if err := exec.fill(groupIndex, i, 0, vectors[i].Length()); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vector []*vector.Vector) error {
-	for i := range vector {
-		exec.args[i].Prepare(vector[i])
-	}
-
-	var groupIdx int
-	var err error
-	var i = 0
-	for rowIdx, end := offset, offset+len(groups); rowIdx < end; rowIdx++ {
-		if groups[i] != GroupNotMatched {
-			groupIdx = int(groups[i] - 1)
-
-			for colIdx := range vector {
-				if err = exec.fill(groupIdx, colIdx, rowIdx, 1); err != nil {
-					return err
-				}
-			}
-		}
-		i++
-	}
-
 	return nil
 }
 
@@ -161,8 +98,11 @@ func (exec *multiAggFuncExec2) SetPreparedResult(_ any, _ int) {
 
 func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {
 	var err error
+	setter := exec.ret.aggSet
+
 	for i, group := range exec.groups {
-		if err = exec.ret.set(i, group.flush()); err != nil {
+		exec.ret.groupToSet = i
+		if err = group.flush(setter); err != nil {
 			return nil, err
 		}
 	}
@@ -173,102 +113,41 @@ func (exec *multiAggFuncExec2) Free() {
 	exec.ret.free()
 }
 
-// should prepare the aggArg before calling this function.
-// we will get values from the aggArg directly.
-func (exec *multiAggFuncExec1[T]) fill(groupIndex int, columnIdx int, offset int, length int) error {
-	if !exec.args[columnIdx].Cached() {
-		exec.args[columnIdx].CacheFill(
-			exec.groups[groupIndex].getFillWhich(columnIdx),
-			exec.groups[groupIndex].getFillNullWhich(columnIdx),
-			exec.groups[groupIndex].getFillsWhich(columnIdx),
-		)
-	}
-
-	f, ok := multiFill[exec.argTypes[columnIdx].Oid]
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("unsupported argument type %s for multi agg", exec.argTypes[columnIdx].String())
-	}
-	return f(exec.args[columnIdx], offset, length)
-}
-
-func (exec *multiAggFuncExec2) fill(groupIndex int, columnIdx int, offset int, length int) error {
-	if !exec.args[columnIdx].Cached() {
-		exec.args[columnIdx].CacheFill(
-			exec.groups[groupIndex].getFillWhich(columnIdx),
-			exec.groups[groupIndex].getFillNullWhich(columnIdx),
-			exec.groups[groupIndex].getFillsWhich(columnIdx),
-		)
-	}
-
-	f, ok := multiFill[exec.argTypes[columnIdx].Oid]
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("unsupported argument type %s for multi agg", exec.argTypes[columnIdx].String())
-	}
-
-	return f(exec.args[columnIdx], offset, length)
+func (exec *multiAggFuncExec1[T]) fills(groupIndex int, row uint64) error {
+	return nil
 }
 
 func ff1[T types.FixedSizeTExceptStrType](
-	source aggArg, offset int, length int) error {
+	source aggArg, row uint64) error {
 
-	// todo: if we set the _fill, _fillNull as the field of the aggArg, we can avoid the type assertion.
 	_arg := source.(*aggFuncArg[T])
-	_fill := _arg.fill
-	_fillNull := _arg.fillNull
-	//_fills := fills.(func(T, bool, int))
 
-	// todo: check the const here and we can call the fills.
-	// if source.w.IsConst() {
-
-	if _arg.w.WithAnyNullValue() {
-		for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-			v, null := _arg.w.GetValue(i)
-			if null {
-				_fillNull()
-			} else {
-				_fill(v)
-			}
-		}
-		return nil
-	}
-
-	for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-		v, _ := _arg.w.GetValue(i)
-		_fill(v)
+	v, null := _arg.w.GetValue(row)
+	if null {
+		_arg.fillNull()
+	} else {
+		_arg.fill(v)
 	}
 
 	return nil
 }
 
 func ff2(
-	source aggArg, offset int, length int) error {
+	source aggArg, row uint64) error {
 
 	_arg := source.(*aggFuncBytesArg)
-	_fill := _arg.fill
-	_fillNull := _arg.fillNull
-	//_fills := fills.(func([]byte, bool, int))
 
-	if _arg.w.WithAnyNullValue() {
-		for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-			v, null := _arg.w.GetStrValue(i)
-			if null {
-				_fillNull()
-			} else {
-				_fill(v)
-			}
-		}
-		return nil
-	}
-
-	for i, j := uint64(offset), uint64(offset+length); i < j; i++ {
-		v, _ := _arg.w.GetStrValue(i)
-		_fill(v)
+	v, null := _arg.w.GetStrValue(row)
+	if null {
+		_arg.fillNull()
+	} else {
+		_arg.fill(v)
 	}
 
 	return nil
 }
 
-var multiFill = map[types.T]func(arg aggArg, offset int, length int) error{
+var multiFill = map[types.T]func(arg aggArg, row uint64) error{
 	types.T_bool: ff1[bool],
 
 	types.T_int8:    ff1[int8],

@@ -25,6 +25,7 @@ type singleAggPrivateStructure1[
 	fill(from, aggSetter[to])
 	fillNull(aggSetter[to])
 	fills(value from, isNull bool, count int, setter aggSetter[to])
+	// todo: change `flush() to` to be `flush(setter aggSetter[to])`
 	flush() to
 }
 
@@ -57,16 +58,14 @@ type singleAggPrivateStructure4 interface {
 type multiAggPrivateStructure1[
 	to types.FixedSizeTExceptStrType] interface {
 	init()
-	getFillWhich(idx int) any     // return func fill(value，setter for to)
-	getFillNullWhich(idx int) any // return func fillNull(setter for to)
-	getFillsWhich(idx int) any    // return func fills(value, isNull, count, setter for to)
-	flush() to
+	getFillWhich(idx int) any     // return func fill(value)
+	getFillNullWhich(idx int) any // return func fillNull()
+	flush(setter aggSetter[to])
 }
 
 type multiAggPrivateStructure2 interface {
 	init()
-	getFillWhich(idx int) any     // return func fill(value, setter for bytes)
-	getFillNullWhich(idx int) any // return func fillNull(setter for bytes)
-	getFillsWhich(idx int) any    // return func fills(value, isNull, count, setter for bytes)
-	flush() []byte
+	getFillWhich(idx int) any     // return func fill(value)
+	getFillNullWhich(idx int) any // return func fillNull()
+	flush(setter aggBytesSetter) error
 }

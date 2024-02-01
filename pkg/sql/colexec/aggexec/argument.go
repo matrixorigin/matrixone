@@ -22,7 +22,7 @@ import (
 type aggArg interface {
 	Prepare(*vector.Vector)
 	Cached() bool
-	CacheFill(fill any, fillNull any, batchFill any)
+	CacheFill(fill any, fillNull any)
 	Reset()
 }
 
@@ -31,11 +31,8 @@ type aggFuncArg[T types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[T]
 
 	// optimized for multi column agg.
-	// todo: should be moved to other place.
-	//  because we need record the return type here.
 	fill     func(T)
 	fillNull func()
-	fills    func(T, bool, int)
 }
 type aggFuncBytesArg struct {
 	w vector.FunctionParameterWrapper[types.Varlena]
@@ -43,7 +40,6 @@ type aggFuncBytesArg struct {
 	// optimized for multi column agg.
 	fill     func([]byte)
 	fillNull func()
-	fills    func([]byte, bool, int)
 }
 
 func (arg *aggFuncArg[T]) Prepare(v *vector.Vector) {
@@ -52,10 +48,9 @@ func (arg *aggFuncArg[T]) Prepare(v *vector.Vector) {
 func (arg *aggFuncArg[T]) Cached() bool {
 	return arg.fill != nil
 }
-func (arg *aggFuncArg[T]) CacheFill(fill any, fillNull any, fills any) {
+func (arg *aggFuncArg[T]) CacheFill(fill any, fillNull any) {
 	arg.fill = fill.(func(T))
 	arg.fillNull = fillNull.(func())
-	arg.fills = fills.(func(T, bool, int))
 }
 func (arg *aggFuncArg[T]) Reset() {}
 
@@ -65,9 +60,8 @@ func (arg *aggFuncBytesArg) Prepare(v *vector.Vector) {
 func (arg *aggFuncBytesArg) Cached() bool {
 	return arg.fill != nil
 }
-func (arg *aggFuncBytesArg) CacheFill(fill any, fillNull any, fills any) {
+func (arg *aggFuncBytesArg) CacheFill(fill any, fillNull any) {
 	arg.fill = fill.(func([]byte))
 	arg.fillNull = fillNull.(func())
-	arg.fills = fills.(func([]byte, bool, int))
 }
 func (arg *aggFuncBytesArg) Reset() {}
