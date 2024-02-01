@@ -88,7 +88,8 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 	} else {
 		for i := 0; i < length; i++ {
-			res[i] = index.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0 && index.PrefixCompare(icol[i].GetByteSlice(iarea), rval) <= 0
+			val := icol[i].GetByteSlice(iarea)
+			res[i] = index.PrefixCompare(val, lval) >= 0 && index.PrefixCompare(val, rval) <= 0
 		}
 	}
 
