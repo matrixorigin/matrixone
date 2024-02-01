@@ -32,7 +32,7 @@ func TestHexToInt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(81985529216486895), val)
 
-	val, err = HexToInt("0xg")
+	_, err = HexToInt("0xg")
 	require.Error(t, err)
 }
 
@@ -48,7 +48,7 @@ func TestBinaryToInt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(2729), val)
 
-	val, err = BinaryToInt("0x2")
+	_, err = BinaryToInt("0x2")
 	require.Error(t, err)
 }
 
@@ -64,7 +64,7 @@ func TestScoreBinaryToInt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(825373492), val)
 
-	val, err = ScoreBinaryToInt("123456789")
+	_, err = ScoreBinaryToInt("123456789")
 	require.Error(t, err)
 
 	val, err = ScoreBinaryToInt("阿斯")
