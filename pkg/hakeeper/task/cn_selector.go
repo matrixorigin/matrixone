@@ -76,3 +76,11 @@ func contains(slice []string, val string) bool {
 	}
 	return false
 }
+
+func getUUIDs(cnState pb.CNState) map[string]struct{} {
+	uuids := make(map[string]struct{}, len(cnState.Stores))
+	for uuid := range cnState.Stores {
+		uuids[uuid] = struct{}{}
+	}
+	return uuids
+}

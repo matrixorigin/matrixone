@@ -66,11 +66,7 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		return
 	}
 	workingCNs := selectCNs(cnState, notExpired(s.cfg, currentTick))
-	workingCNUuids := make([]string, 0, len(workingCNs.Stores))
-	for uuid := range workingCNs.Stores {
-		workingCNUuids = append(workingCNUuids, uuid)
-	}
-	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCNUuids)
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, getUUIDs(workingCNs))
 	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
@@ -117,11 +113,11 @@ func (s *scheduler) allocateTasks(tasks []task.AsyncTask, orderedCN *cnMap) {
 	}
 
 	for _, t := range tasks {
-		s.allocateTask(ts, t, orderedCN)
+		allocateTask(ts, t, orderedCN)
 	}
 }
 
-func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
+func allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
 	runner := orderedCN.min()
 	if runner == "" {
 		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
@@ -145,11 +141,11 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, o
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*cnMap, []task.AsyncTask) {
+func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN map[string]struct{}) (*cnMap, []task.AsyncTask) {
 	orderedMap := newOrderedMap(workingCN)
 	n := 0
 	for _, t := range tasks {
-		if contains(workingCN, t.TaskRunner) {
+		if _, ok := workingCN[t.TaskRunner]; ok {
 			orderedMap.inc(t.TaskRunner)
 		} else {
 			n++
@@ -160,7 +156,7 @@ func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*c
 	}
 	expired := make([]task.AsyncTask, 0, n)
 	for _, t := range tasks {
-		if !contains(workingCN, t.TaskRunner) {
+		if _, ok := workingCN[t.TaskRunner]; !ok {
 			expired = append(expired, t)
 		}
 	}

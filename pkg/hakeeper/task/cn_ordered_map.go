@@ -23,13 +23,13 @@ type cnMap struct {
 	orderedKeys []string
 }
 
-func newOrderedMap(keys []string) *cnMap {
+func newOrderedMap(keys map[string]struct{}) *cnMap {
 	orderedMap := &cnMap{
 		m:           make(map[string]uint32, len(keys)),
 		orderedKeys: make([]string, 0, len(keys)),
 	}
 
-	for _, key := range keys {
+	for key := range keys {
 		orderedMap.m[key] = 0
 		orderedMap.orderedKeys = append(orderedMap.orderedKeys, key)
 	}

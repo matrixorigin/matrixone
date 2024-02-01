@@ -35,7 +35,7 @@ func TestSelectWorkingCNs(t *testing.T) {
 		{
 			infos:       pb.CNState{},
 			currentTick: 0,
-			expectedCN:  map[string]struct{}(nil),
+			expectedCN:  map[string]struct{}{},
 		},
 		{
 			infos:       pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {Tick: 0}}},
@@ -55,7 +55,7 @@ func TestSelectWorkingCNs(t *testing.T) {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
 		working := selectCNs(c.infos, notExpired(cfg, c.currentTick))
-		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
+		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
 
@@ -68,7 +68,7 @@ func TestContainsLabel(t *testing.T) {
 		{
 			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}},
 			key:   "k1", value: "v1",
-			expectedCN: map[string]struct{}(nil),
+			expectedCN: map[string]struct{}{},
 		},
 		{
 			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
@@ -116,7 +116,7 @@ func TestContainsLabel(t *testing.T) {
 				},
 			},
 			key: "k2", value: "v1",
-			expectedCN: map[string]struct{}(nil),
+			expectedCN: map[string]struct{}{},
 		},
 	}
 
@@ -124,7 +124,7 @@ func TestContainsLabel(t *testing.T) {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
 		working := selectCNs(c.infos, containsLabel(c.key, c.value))
-		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
+		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
 
@@ -137,7 +137,7 @@ func TestWithResource(t *testing.T) {
 		{
 			infos:      pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}},
 			cpu:        1,
-			expectedCN: map[string]struct{}(nil),
+			expectedCN: map[string]struct{}{},
 		},
 		{
 			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
@@ -173,24 +173,11 @@ func TestWithResource(t *testing.T) {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
 		working := selectCNs(c.infos, withCPU(c.cpu), withMemory(c.mem))
-		assert.Equal(t, c.expectedCN, getUUIDs(t, working))
+		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
 
 func TestContains(t *testing.T) {
 	assert.True(t, contains([]string{"a"}, "a"))
 	assert.False(t, contains([]string{"a"}, "b"))
-}
-
-func getUUIDs(t *testing.T, cnState pb.CNState) map[string]struct{} {
-	var uuids map[string]struct{}
-	if len(cnState.Stores) != 0 {
-		uuids = make(map[string]struct{}, len(cnState.Stores))
-		for uuid := range cnState.Stores {
-			uuids[uuid] = struct{}{}
-		}
-	} else {
-		assert.Equal(t, map[string]pb.CNStoreInfo{}, cnState.Stores)
-	}
-	return uuids
 }
