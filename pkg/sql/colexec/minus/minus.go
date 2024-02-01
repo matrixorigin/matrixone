@@ -55,7 +55,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	analyze := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	analyze.Start()
 	defer analyze.Stop()
 	result := vm.NewCallResult()
@@ -64,7 +64,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		switch arg.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
-			if err = arg.ctr.buildHashTable(proc, analyze, 1, arg.info.IsFirst); err != nil {
+			if err = arg.ctr.buildHashTable(proc, analyze, 1, arg.GetIsFirst()); err != nil {
 				return result, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -78,7 +78,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			// only one batch is processed during each loop, and the batch will be sent to
 			// next operator immediately after successful processing.
 			last := false
-			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast, &result)
+			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.GetIsFirst(), arg.GetIsLast(), &result)
 			if err != nil {
 				return result, err
 			}
