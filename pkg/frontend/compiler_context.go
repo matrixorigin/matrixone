@@ -114,8 +114,8 @@ func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
 
 	// need to append TableId to parent's TableDef.RefChildTbls
 	for _, fkData := range fkDatas {
-		fkDbName := fkData.DbName
-		fkTableName := fkData.TableName
+		fkDbName := fkData.ParentDbName
+		fkTableName := fkData.ParentTableName
 		txnCtx2, fkRelation, err := tcc.getRelation(fkDbName, fkTableName, nil)
 		if err != nil {
 			return err

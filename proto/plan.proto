@@ -550,6 +550,7 @@ message WindowSpec {
 message SampleFuncSpec {
 	int32 Rows = 1;
 	double Percent = 2;
+	bool UsingRow = 3;
 }
 
 message FrameClause {
@@ -925,6 +926,9 @@ message Query {
 
 	// load Tag
 	bool loadTag = 6;
+
+	//detectSqls are sqls detect fk self refer constraint
+	repeated string detectSqls= 7;
 }
 
 message TransationControl {
@@ -1217,6 +1221,8 @@ message AlterTable {
 	string create_table_sql = 9;
 	string insert_data_sql = 10;
 	map<uint64, ColDef> change_tbl_colId_map = 11;
+	//detect fk self refer constraint
+	repeated string detectSqls= 12;
 }
 
 message DropTable {

@@ -438,6 +438,13 @@ func getPkExpr(
 				}
 				return exprImpl.F.Args[1]
 			}
+		case "prefix_eq":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(leftExpr.Col.Name, pkName) {
+					return nil
+				}
+				return expr
+			}
 		}
 	}
 
@@ -500,6 +507,13 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Jsonval)})
 		case *plan.Literal_EnumVal:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
+		}
+
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "prefix_eq" {
+			expr := exprImpl.F.Args[1].Expr.(*plan.Expr_Lit)
+			val := util.UnsafeStringToBytes(expr.Lit.Value.(*plan.Literal_Sval).Sval)
+			searchPKFunc = vector.CollectOffsetsByOnePrefixFactory(val)
 		}
 
 	case *plan.Expr_Vec:
