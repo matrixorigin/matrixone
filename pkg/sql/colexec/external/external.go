@@ -135,7 +135,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -143,7 +143,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
-	anal.Input(nil, arg.info.IsFirst)
+	anal.Input(nil, arg.GetIsFirst())
 
 	var err error
 	result := vm.NewCallResult()
@@ -171,7 +171,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if arg.buf != nil {
-		anal.Output(arg.buf, arg.info.IsLast)
+		anal.Output(arg.buf, arg.GetIsLast())
 		anal.Alloc(int64(arg.buf.Size()))
 	}
 	result.Batch = arg.buf

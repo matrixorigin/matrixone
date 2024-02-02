@@ -228,7 +228,7 @@ func getExportFilePath(filename string, fileCnt uint) string {
 
 var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte, flag bool) error {
 	var err error
-	if flag {
+	if flag && enclosed != 0 {
 		if err = writeToCSVFile(oq, []byte{enclosed}); err != nil {
 			return err
 		}
@@ -236,7 +236,7 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	if err = writeToCSVFile(oq, tmp); err != nil {
 		return err
 	}
-	if flag {
+	if flag && enclosed != 0 {
 		if err = writeToCSVFile(oq, []byte{enclosed}); err != nil {
 			return err
 		}
@@ -377,11 +377,11 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 }
 
 func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte {
-	if flag {
+	if flag && enclosed != 0 {
 		writeByte = append(writeByte, enclosed)
 	}
 	writeByte = append(writeByte, tmp...)
-	if flag {
+	if flag && enclosed != 0 {
 		writeByte = append(writeByte, enclosed)
 	}
 	writeByte = append(writeByte, symbol...)
