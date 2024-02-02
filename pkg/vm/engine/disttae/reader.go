@@ -15,8 +15,8 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sort"
 	"time"
@@ -327,9 +327,9 @@ func (r *blockReader) needReadBlkByZM(i int) bool {
 		return true
 	}
 	if r.desc {
-		return compute.Compare(r.filterZM.GetMaxBuf(), zm.GetMaxBuf(), zm.GetType(), r.filterZM.GetScale(), zm.GetScale()) <= 0
+		return r.filterZM.CompareMax(zm) <= 0
 	} else {
-		return compute.Compare(r.filterZM.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), r.filterZM.GetScale(), zm.GetScale()) >= 0
+		return r.filterZM.CompareMin(zm) >= 0
 	}
 }
 
@@ -339,12 +339,15 @@ func (r *blockReader) getBlockZMs() {
 
 	r.blockZMS = make([]index.ZM, len(r.blks))
 	var objMeta objectio.ObjectMeta
+	var location objectio.Location
 	var err error
 	for i := range r.blks {
-		location := r.blks[i].MetaLocation()
-		objMeta, err = objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
-		if err != nil {
-			panic("load object meta error when ordered scan!")
+		if !bytes.Equal(location, r.blks[i].MetaLocation()) {
+			location = r.blks[i].MetaLocation()
+			objMeta, err = objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
+			if err != nil {
+				panic("load object meta error when ordered scan!")
+			}
 		}
 		objDataMeta := objMeta.MustDataMeta()
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
@@ -369,7 +372,7 @@ func (r *blockReader) sortBlockList() {
 			if !zm2.IsInited() {
 				return false
 			}
-			return compute.Compare(zm1.GetMaxBuf(), zm2.GetMaxBuf(), zm1.GetType(), zm1.GetScale(), zm1.GetScale()) > 0
+			return zm1.CompareMax(zm2) > 0
 		})
 	} else {
 		sort.Slice(helper, func(i, j int) bool {
@@ -381,7 +384,7 @@ func (r *blockReader) sortBlockList() {
 			if !zm2.IsInited() {
 				return false
 			}
-			return compute.Compare(zm1.GetMinBuf(), zm2.GetMinBuf(), zm1.GetType(), zm1.GetScale(), zm1.GetScale()) < 0
+			return zm1.CompareMin(zm2) < 0
 		})
 	}
 

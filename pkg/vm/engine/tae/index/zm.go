@@ -453,6 +453,15 @@ func (zm ZM) compareCheck(o ZM) (ok bool) {
 	return zm.GetType() == o.GetType() || (zm.IsString() && o.IsString())
 }
 
+// caller need to do compareCheck
+func (zm ZM) CompareMax(o ZM) int {
+	return compute.Compare(zm.GetMaxBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
+}
+
+func (zm ZM) CompareMin(o ZM) int {
+	return compute.Compare(zm.GetMinBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
+}
+
 func (zm ZM) AnyGT(o ZM) (res bool, ok bool) {
 	if !zm.compareCheck(o) {
 		ok = false
