@@ -3102,6 +3102,13 @@ alter_table_drop:
         $$ = tree.NewAlterOptionDrop(dropType, name);
 
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
@@ -3389,7 +3396,10 @@ show_stmt:
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}
+        $$ = &tree.ShowCollation{
+            Like: $3,
+            Where: $4,
+        }
     }
 
 show_stages_stmt:

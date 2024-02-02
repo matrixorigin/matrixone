@@ -354,7 +354,25 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-
+	if offset > 0 {
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				continue
+			}
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				continue
+			}
+			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+				size += uint64(txn.writes[i].bat.Size())
+			}
+		}
+		if size < WorkspaceThreshold {
+			return nil
+		}
+		size = 0
+	}
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 
