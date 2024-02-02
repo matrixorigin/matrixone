@@ -473,7 +473,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 					lastNodeId, err = appendDeleteMasterTablePlan(builder, bindCtx, masterObjRef, masterTableDef, lastNodeId, delCtx.tableDef, indexdef, typMap, posMap)
 					masterDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
-					masterTblPkPos = masterDeleteIdx //TODO: verify
+					masterTblPkPos = masterDeleteIdx + 1
 					masterTblPkTyp = masterTableDef.Cols[0].Typ
 				}
 
