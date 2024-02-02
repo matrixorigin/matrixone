@@ -15,8 +15,11 @@
 package dbutils
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"runtime"
+	"runtime/pprof"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -87,8 +90,7 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 }
 func FormatMemStats(memstats runtime.MemStats) string {
 	return fmt.Sprintf(
-		"Alloc:%dMB TotalAlloc:%dMB Sys:%dMB HeapAlloc:%dMB HeapSys:%dMB HeapIdle:%dMB HeapReleased:%dMB HeapInuse:%dMB",
-		memstats.Alloc/mpool.MB,
+		"TotalAlloc:%dMB Sys:%dMB HeapAlloc:%dMB HeapSys:%dMB HeapIdle:%dMB HeapReleased:%dMB HeapInuse:%dMB NextGC:%dMB NumGC:%d PauseNs:%d",
 		memstats.TotalAlloc/mpool.MB,
 		memstats.Sys/mpool.MB,
 		memstats.HeapAlloc/mpool.MB,
@@ -96,13 +98,27 @@ func FormatMemStats(memstats runtime.MemStats) string {
 		memstats.HeapIdle/mpool.MB,
 		memstats.HeapReleased/mpool.MB,
 		memstats.HeapInuse/mpool.MB,
+		memstats.NextGC/mpool.MB,
+		memstats.NumGC,
+		memstats.PauseTotalNs,
 	)
 }
+
+var prevHeapInuse uint64
 
 func PrintMemStats() {
 	var memstats runtime.MemStats
 	runtime.ReadMemStats(&memstats)
+
+	// found a spike in heapInuse
+	if prevHeapInuse > 0 && memstats.HeapInuse > prevHeapInuse &&
+		memstats.HeapInuse-prevHeapInuse > common.Const1GBytes*10 {
+		heapp := pprof.Lookup("heap")
+		buf := &bytes.Buffer{}
+		heapp.WriteTo(buf, 0)
+		logutil.Info(base64.RawStdEncoding.EncodeToString(buf.Bytes()))
+	}
+
+	prevHeapInuse = memstats.HeapInuse
 	logutil.Infof("HeapInfo:%s", FormatMemStats(memstats))
-	// stats, _ := mem.VirtualMemory()
-	// logutil.Infof("osMemInfo:%s", stats)
 }
