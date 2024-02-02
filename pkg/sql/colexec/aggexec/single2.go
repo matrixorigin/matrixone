@@ -55,7 +55,7 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
@@ -113,7 +113,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
@@ -217,7 +217,7 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
@@ -275,7 +275,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
@@ -375,7 +375,7 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
@@ -433,7 +433,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
