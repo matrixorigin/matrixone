@@ -54,7 +54,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 	indexes := node.TableDef.Indexes
 	sort.Slice(indexes, func(i, j int) bool {
-		return (indexes[i].Unique && !indexes[j].Unique) || (indexes[i].Unique == indexes[j].Unique && len(indexes[i].Parts) > len(indexes[j].Parts))
+		return indexes[i].Unique && !indexes[j].Unique
 	})
 
 	// Apply unique/secondary indices if only indexed column is referenced
@@ -206,9 +206,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		}
 
 	}
-
 END0:
-	if node.Stats.Selectivity > 0.05 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
+
+	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
 		return nodeID
 	}
 
@@ -258,18 +258,15 @@ END0:
 		}
 
 		numParts := len(idxDef.Parts)
-		numKeyParts := numParts
 		if !idxDef.Unique {
-			numKeyParts--
+			numParts--
 		}
-		if numKeyParts == 0 {
+		if numParts == 0 || numParts > len(col2filter) {
 			continue
 		}
 
-		usePartialIndex := false
-
 		filterIdx = filterIdx[:0]
-		for i := 0; i < numKeyParts; i++ {
+		for i := 0; i < numParts; i++ {
 			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
 			idx, ok := col2filter[colIdx]
 			if !ok {
@@ -277,14 +274,9 @@ END0:
 			}
 
 			filterIdx = append(filterIdx, idx)
-
-			filter := node.FilterList[idx]
-			if filter.Selectivity <= 0.05 && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimit()) {
-				usePartialIndex = true
-			}
 		}
 
-		if len(filterIdx) < numParts && (idxDef.Unique || !usePartialIndex) {
+		if len(filterIdx) < numParts {
 			continue
 		}
 
@@ -304,17 +296,24 @@ END0:
 			col.ColPos = 0
 			col.Name = idxTableDef.Cols[0].Name
 
-			idxFilter = node.FilterList[idx]
+			if idxDef.Unique {
+				idxFilter = node.FilterList[idx]
+			} else {
+				args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+				args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{args[1]})
+				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", args)
+			}
+
 			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
 		} else {
-			serialArgs := make([]*plan.Expr, len(filterIdx))
+			serialArgs := make([]*plan.Expr, numParts)
 			for i := range filterIdx {
 				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
 			funcName := "="
-			if len(filterIdx) < numParts {
+			if !idxDef.Unique {
 				funcName = "prefix_eq"
 			}
 			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
@@ -335,7 +334,7 @@ END0:
 				hitFilterSet[filterIdx[i]] = emptyStruct
 			}
 
-			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
+			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-numParts)
 			for i, filter := range node.FilterList {
 				if _, ok := hitFilterSet[i]; !ok {
 					newFilterList = append(newFilterList, filter)
@@ -391,7 +390,7 @@ END0:
 		return joinNodeID
 	}
 
-	// Apply single-column unique/secondary indices for non-equi expression
+	// Apply single-column unique/secondary indices for IN-expression
 
 	colPos2Idx := make(map[int32]int)
 
@@ -425,10 +424,7 @@ END0:
 			return nodeID
 		}
 
-		switch fn.Func.ObjName {
-		case "between", "in":
-
-		default:
+		if fn.Func.ObjName != "in" {
 			continue
 		}
 
@@ -453,17 +449,99 @@ END0:
 			idxFilter = expr
 		} else {
 			fn.Args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", fn.Args)
+		}
 
-			switch fn.Func.ObjName {
-			case "in":
-				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", fn.Args)
+		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 
-			case "between":
-				fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
-				fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
-				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
-			}
+		idxTableNodeID := builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
+		}, builder.ctxByNode[nodeID])
+
+		node.Limit, node.Offset = nil, nil
+
+		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+		pkExpr := &plan.Expr{
+			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: node.BindingTags[0],
+					ColPos: pkIdx,
+				},
+			},
+		}
+
+		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			DeepCopyExpr(pkExpr),
+			{
+				Typ: DeepCopyType(pkExpr.Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag,
+						ColPos: 1,
+					},
+				},
+			},
+		})
+		joinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeID, idxTableNodeID},
+			JoinType: plan.Node_SEMI,
+			OnList:   []*plan.Expr{joinCond},
+		}, builder.ctxByNode[nodeID])
+
+		return joinNodeID
+	}
+
+	// Apply single-column unique/secondary indices for BETWEEN-expression
+
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			continue
+		}
+
+		if fn.Func.ObjName != "between" {
+			continue
+		}
+
+		idxPos, ok := colPos2Idx[col.ColPos]
+		if !ok {
+			continue
+		}
+
+		idxTag := builder.genNewTag()
+		idxDef := node.TableDef.Indexes[idxPos]
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+
+		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
+		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
+
+		col.RelPos = idxTag
+		col.ColPos = 0
+		col.Name = idxTableDef.Cols[0].Name
+
+		var idxFilter *plan.Expr
+		if idxDef.Unique {
+			idxFilter = expr
+		} else {
+			fn.Args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
+			idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
 		}
 
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
