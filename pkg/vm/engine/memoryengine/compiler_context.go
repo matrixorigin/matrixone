@@ -36,6 +36,11 @@ type CompilerContext struct {
 	txnOp     client.TxnOperator
 }
 
+func (c *CompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*plan.FkData) error {
 	//TODO implement me
 	panic("implement me")

@@ -859,6 +859,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
+	//update mo_foreign_keys
+	for _, sql := range qry.UpdateSqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
+	}
+
 	fkDbs := qry.GetFkDbs()
 	if len(fkDbs) > 0 {
 		fkTables := qry.GetFkTables()

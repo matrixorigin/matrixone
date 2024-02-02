@@ -42,6 +42,11 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
+func (m *MockCompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *MockCompilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*FkData) error {
 	//TODO implement me
 	panic("implement me")

@@ -809,12 +809,12 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	def := &ForeignKeyDef{
-		Name:        fkey.Name,
-		Cols:        make([]uint64, len(fkey.Cols)),
-		ForeignTbl:  fkey.ForeignTbl,
-		ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-		OnDelete:    fkey.OnDelete,
-		OnUpdate:    fkey.OnUpdate,
+		Name:          fkey.Name,
+		Cols:          make([]uint64, len(fkey.Cols)),
+		ForeignTbl:    fkey.ForeignTbl,
+		ForeignCols:   make([]uint64, len(fkey.ForeignCols)),
+		OnDelete:      fkey.OnDelete,
+		OnUpdate:      fkey.OnUpdate,
 		IsReady:       fkey.IsReady,
 		ParentDbName:  fkey.ParentDbName,
 		ParentTblName: fkey.ParentTblName,

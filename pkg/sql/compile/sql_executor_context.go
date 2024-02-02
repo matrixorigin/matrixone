@@ -43,6 +43,11 @@ type compilerContext struct {
 	mu                   sync.Mutex
 }
 
+func (c *compilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *compilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*plan.FkData) error {
 	//TODO implement me
 	panic("implement me")

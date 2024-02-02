@@ -1040,6 +1040,15 @@ var (
 				comment text,
 				primary key(stage_id)
 			);`,
+		`create table mo_foreign_keys(
+				constraint_name varchar(5000) not null,
+				db_name varchar(5000) not null,
+				table_name varchar(5000) not null,
+				column_name varchar(256) not null,
+				refer_db_name varchar(5000) not null,
+				refer_table_name varchar(5000) not null,
+				refer_column_name varchar(256) not null
+			);`,
 		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
@@ -1058,6 +1067,7 @@ var (
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_stages;`,
+		`drop table if exists mo_catalog.mo_foreign_keys;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
 		`drop view if exists mo_catalog.mo_locks;`,

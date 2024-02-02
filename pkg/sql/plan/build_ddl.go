@@ -1072,6 +1072,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.FkTables = append(createTable.FkTables, fkData.ParentTableName)
 			createTable.FkCols = append(createTable.FkCols, fkData.Cols)
 			createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkData.Def)
+			createTable.UpdateSqls = append(createTable.UpdateSqls, fkData.UpdateSql)
 
 			//save self reference foreign keys
 			if fkData.IsSelfRefer {
@@ -2980,6 +2981,8 @@ type FkData struct {
 	ColTyps map[int]*plan.Type
 	//the referred parent table info
 	Refer *tree.AttributeReference
+	// update foreign keys relations
+	UpdateSql string
 }
 
 // getForeignKeyData prepares the foreign key data.
@@ -3062,6 +3065,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		fkData.ParentDbName = parentDbName
 		fkData.ParentTableName = parentTableName
 		fkData.Def.ForeignTbl = 0
+		fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
 		return &fkData, nil
 	}
 
@@ -3104,7 +3108,43 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	}
 
 	fkData.Def.IsReady = true
+
+	//make insert mo_foreign_keys
+	fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
 	return &fkData, nil
+}
+
+func makeInsertSqlForFk(db, table string, data *FkData) string {
+	row := make([]string, 7)
+	rows := 0
+	sb := strings.Builder{}
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` values ")
+	for childIdx, childCol := range data.Cols.Cols {
+		row[0] = data.Def.Name
+		row[1] = db
+		row[2] = table
+		row[3] = childCol
+		row[4] = data.ParentDbName
+		row[5] = data.ParentTableName
+		row[6] = data.Refer.KeyParts[childIdx].ColName.Parts[0]
+		{
+			if rows > 0 {
+				sb.WriteByte(',')
+			}
+			rows++
+			sb.WriteByte('(')
+			for j, col := range row {
+				if j > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteByte('\'')
+				sb.WriteString(col)
+				sb.WriteByte('\'')
+			}
+			sb.WriteByte(')')
+		}
+	}
+	return sb.String()
 }
 
 /*

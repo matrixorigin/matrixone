@@ -55,6 +55,11 @@ type TxnCompilerContext struct {
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
+func (tcc *TxnCompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+	
+	return nil, nil
+}
+
 func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
 	fkDatas []*plan2.FkData) error {
 	txnCtx, relation, err := tcc.getRelation(dbName, tblName, nil)

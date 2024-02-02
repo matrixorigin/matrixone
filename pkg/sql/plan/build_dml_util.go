@@ -16,8 +16,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"github.com/google/uuid"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -1242,7 +1247,7 @@ func makeInsertPlan(
 	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 
-		lastNodeId, err = appendJoinNodeForParentFkCheck(builder, bindCtx, objRef, tableDef, lastNodeId)
+		lastNodeId, err = appendJoinNodeForParentFkCheck(ctx, builder, bindCtx, objRef, tableDef, lastNodeId)
 		if err != nil {
 			return err
 		}
@@ -2253,7 +2258,8 @@ func appendPreDeleteNode(builder *QueryBuilder, bindCtx *BindContext, objRef *Ob
 	return builder.appendNode(preDeleteNode, bindCtx)
 }
 
-func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
+func appendJoinNodeForParentFkCheck(ctx CompilerContext,
+	builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 	name2pos := make(map[string]int)
@@ -2303,6 +2309,11 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	}, bindCtx)
 
 	lastNodeId := baseNodeId
+	fks, err := getAllFKs(ctx, objRef.SchemaName, tableDef.Name)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Fprintf(os.Stderr, "fks: %v\n", fks)
 	for _, fk := range tableDef.Fkeys {
 		if fk.ForeignTbl == 0 {
 			//skip fk self refer
@@ -3665,4 +3676,65 @@ func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 		}
 	}
 	return nil
+}
+
+func getAllFKs(ctx CompilerContext, db, table string) ([][]string, error) {
+	sql := fmt.Sprintf(
+		"select "+
+			"constraint_name,"+
+			"column_name,"+
+			"refer_db_name,"+
+			"refer_table_name,"+
+			"refer_column_name "+
+			"from "+
+			"`mo_catalog`.`mo_foreign_keys` "+
+			"where db_name ='%s' and table_name = '%s' "+
+			"order by constraint_name;",
+		db, table)
+	res, err := runSql(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	const colCnt = 5
+	fks := make([][]string, 0)
+	if res.Batches != nil {
+		for _, batch := range res.Batches {
+			if batch != nil &&
+				batch.Vecs[0] != nil &&
+				batch.Vecs[0].Length() > 0 {
+				continue
+			}
+			for i := 0; i < batch.Vecs[0].Length(); i++ {
+				fks = append(fks, make([]string, colCnt))
+				row := fks[len(fks)-1]
+				vec := batch.Vecs[i]
+				for j := 0; j < colCnt; j++ {
+					row[j] = string(vec.GetBytesAt(i))
+				}
+			}
+		}
+	}
+	sort.Slice(fks, func(i, j int) bool {
+		return fks[i][0] < fks[j][0]
+	})
+	return fks, nil
+}
+
+func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
+	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	proc := ctx.GetProcess()
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(proc.TxnOperator).
+		WithDatabase(proc.SessionInfo.Database).
+		WithTimeZone(proc.SessionInfo.TimeZone).
+		WithAccountID(proc.SessionInfo.AccountId)
+	return exec.Exec(proc.Ctx, sql, opts)
 }
