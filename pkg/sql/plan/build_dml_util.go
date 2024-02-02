@@ -2703,7 +2703,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	} else {
-		// 2.b build union in pair. ie union(c, union(b,a))
+		// 2.b build union in pairs. ie union(c, union(b,a))
 
 		// a) build all the projects
 		var unionChildren []int32
