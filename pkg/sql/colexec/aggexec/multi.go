@@ -28,38 +28,80 @@ func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
-type multiAggExecOptimized struct {
-}
-
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
 // 1's return type is a fixed length type.
 // 2's return type is bytes.
 type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	multiAggTypeInfo
-	multiAggExecOptimized
 
-	args   []aggArg
+	args   []mArg1[T]
 	ret    aggFuncResult[T]
 	groups []multiAggPrivateStructure1[T]
 }
 type multiAggFuncExec2 struct {
 	multiAggTypeInfo
-	multiAggExecOptimized
 
-	args   []aggArg
+	args   []mArg2
 	ret    aggFuncBytesResult
 	groups []multiAggPrivateStructure2
 }
 
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	var err error
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+		if err = arg.doRowFill(exec.groups[groupIndex], uint64(row)); err != nil {
+			return err
+		}
+	}
+	exec.ret.groupToSet = groupIndex
+	exec.groups[groupIndex].eval(exec.ret.aggSet)
+
 	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	var err error
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+	}
+
+	setter := exec.ret.aggSet
+	exec.ret.groupToSet = groupIndex
+	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
+		for _, arg := range exec.args {
+			if err = arg.doRowFill(exec.groups[groupIndex], i); err != nil {
+				return err
+			}
+		}
+		exec.groups[groupIndex].eval(setter)
+	}
+
 	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	setter := exec.ret.aggSet
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+	}
+
+	for idx, i, j := 0, uint64(offset), uint64(offset+len(groups)); i < j; i++ {
+		if groups[idx] != GroupNotMatched {
+			groupIdx := int(groups[idx] - 1)
+			for _, arg := range exec.args {
+				if err = arg.doRowFill(exec.groups[groupIdx], i); err != nil {
+					return err
+				}
+			}
+			exec.ret.groupToSet = groupIdx
+			exec.groups[groupIdx].eval(setter)
+
+		}
+		idx++
+	}
+
 	return nil
 }
 
@@ -81,14 +123,61 @@ func (exec *multiAggFuncExec1[T]) Free() {
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	var err error
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+		if err = arg.doRowFill(exec.groups[groupIndex], uint64(row)); err != nil {
+			return err
+		}
+	}
+	exec.ret.groupToSet = groupIndex
+	exec.groups[groupIndex].eval(exec.ret.aggSet)
+
 	return nil
 }
 
 func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	var err error
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+	}
+
+	setter := exec.ret.aggSet
+	exec.ret.groupToSet = groupIndex
+	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
+		for _, arg := range exec.args {
+			if err = arg.doRowFill(exec.groups[groupIndex], i); err != nil {
+				return err
+			}
+		}
+		exec.groups[groupIndex].eval(setter)
+	}
+
 	return nil
 }
 
-func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vector []*vector.Vector) error {
+func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	setter := exec.ret.aggSet
+	for i, arg := range exec.args {
+		arg.prepare(vectors[i])
+	}
+
+	for idx, i, j := 0, uint64(offset), uint64(offset+len(groups)); i < j; i++ {
+		if groups[idx] != GroupNotMatched {
+			groupIdx := int(groups[idx] - 1)
+			for _, arg := range exec.args {
+				if err = arg.doRowFill(exec.groups[groupIdx], i); err != nil {
+					return err
+				}
+			}
+			exec.ret.groupToSet = groupIdx
+			exec.groups[groupIdx].eval(setter)
+
+		}
+		idx++
+	}
+
 	return nil
 }
 
@@ -115,75 +204,4 @@ func (exec *multiAggFuncExec2) Free() {
 
 func (exec *multiAggFuncExec1[T]) fills(groupIndex int, row uint64) error {
 	return nil
-}
-
-func ff1[T types.FixedSizeTExceptStrType](
-	source aggArg, row uint64) error {
-
-	_arg := source.(*aggFuncArg[T])
-
-	v, null := _arg.w.GetValue(row)
-	if null {
-		_arg.fillNull()
-	} else {
-		_arg.fill(v)
-	}
-
-	return nil
-}
-
-func ff2(
-	source aggArg, row uint64) error {
-
-	_arg := source.(*aggFuncBytesArg)
-
-	v, null := _arg.w.GetStrValue(row)
-	if null {
-		_arg.fillNull()
-	} else {
-		_arg.fill(v)
-	}
-
-	return nil
-}
-
-var multiFill = map[types.T]func(arg aggArg, row uint64) error{
-	types.T_bool: ff1[bool],
-
-	types.T_int8:    ff1[int8],
-	types.T_int16:   ff1[int16],
-	types.T_int32:   ff1[int32],
-	types.T_int64:   ff1[int64],
-	types.T_uint8:   ff1[uint8],
-	types.T_uint16:  ff1[uint16],
-	types.T_uint32:  ff1[uint32],
-	types.T_uint64:  ff1[uint64],
-	types.T_float32: ff1[float32],
-	types.T_float64: ff1[float64],
-	types.T_uuid:    ff1[types.Uuid],
-
-	types.T_date:      ff1[int32],
-	types.T_datetime:  ff1[int64],
-	types.T_time:      ff1[types.Time],
-	types.T_timestamp: ff1[types.Timestamp],
-	types.T_interval:  ff1[types.IntervalType],
-
-	types.T_decimal64:  ff1[types.Decimal64],
-	types.T_decimal128: ff1[types.Decimal128],
-	types.T_decimal256: ff1[types.Decimal256],
-
-	types.T_char:      ff2,
-	types.T_varchar:   ff2,
-	types.T_text:      ff2,
-	types.T_json:      ff2,
-	types.T_blob:      ff2,
-	types.T_binary:    ff2,
-	types.T_varbinary: ff2,
-
-	types.T_enum:    ff1[types.Enum],
-	types.T_Rowid:   ff1[types.Rowid],
-	types.T_Blockid: ff1[types.Blockid],
-
-	types.T_array_float32: ff2,
-	types.T_array_float64: ff2,
 }

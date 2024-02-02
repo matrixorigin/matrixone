@@ -54,7 +54,7 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
-	arg    aggFuncArg[from]
+	arg    sFixedArg[from]
 	ret    aggFuncResult[to]
 	groups []singleAggPrivateStructure1[from, to]
 }
@@ -63,7 +63,7 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
-	arg    aggFuncArg[from]
+	arg    sFixedArg[from]
 	ret    aggFuncBytesResult
 	groups []singleAggPrivateStructure2[from]
 }
@@ -72,7 +72,7 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
-	arg    aggFuncBytesArg
+	arg    sBytesArg
 	ret    aggFuncResult[to]
 	groups []singleAggPrivateStructure3[to]
 }
@@ -81,7 +81,7 @@ type singleAggFuncExec4 struct {
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
-	arg    aggFuncBytesArg
+	arg    sBytesArg
 	ret    aggFuncBytesResult
 	groups []singleAggPrivateStructure4
 }
@@ -124,7 +124,7 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j := uint64(0), uint64(length); i < j; i++ {
@@ -182,7 +182,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 		return nil
 	}
 
-	exec.arg.Prepare(vec)
+	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
 			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
