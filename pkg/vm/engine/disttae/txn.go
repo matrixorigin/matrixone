@@ -633,6 +633,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
+	//Delete rows belongs to uncommitted raw data batch in txn's workspace.
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 	sels = sels[:0]
 	for k, rowid := range rowids {
@@ -640,6 +641,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			sels = append(sels, int64(k))
 		}
 	}
+	//Shrink the batch to retain sels.
 	bat.Shrink(sels)
 	txn.proc.Mp().PutSels(sels)
 	return bat
