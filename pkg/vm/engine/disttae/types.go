@@ -57,6 +57,8 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+	INSERT_TXN // Only for CN workspace consumption, not sent to DN
+	DELETE_TXN // Only for CN workspace consumption, not sent to DN
 )
 
 const (

@@ -79,7 +79,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
-	if typ == INSERT {
+	if typ == INSERT || typ == INSERT_TXN {
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.RowCount()
@@ -570,6 +570,11 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
 		if entry.typ != INSERT ||
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
@@ -596,12 +601,20 @@ func (txn *Transaction) getInsertedObjectListForTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
-		statsList = append(statsList, stats)
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			statsList = append(statsList, stats)
+		}
 
 	}
 	return statsList, nil
