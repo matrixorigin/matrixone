@@ -631,23 +631,27 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		// update workspace
 	}
 	// cn rowId antiShrink
-	bat.AntiShrink(cnRowIdOffsets)
+	bat.Shrink(cnRowIdOffsets, true)
 	if bat.RowCount() == 0 {
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
+
 	sels = sels[:0]
+	rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for k, rowid := range rowids {
-		if mp[rowid] == 0 {
+		// put rowid to be deleted into sels.
+		if mp[rowid] != 0 {
 			sels = append(sels, int64(k))
 		}
 	}
-	bat.Shrink(sels)
+	bat.Shrink(sels, true)
 	txn.proc.Mp().PutSels(sels)
 	return bat
 }
 
+// Delete rows belongs to uncommitted raw data batch in txn's workspace.
 func (txn *Transaction) deleteTableWrites(
 	databaseId uint64,
 	tableId uint64,
@@ -675,6 +679,9 @@ func (txn *Transaction) deleteTableWrites(
 		}
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
+			//FIXME:: if e.typ is DELETE, then e.bat.Vecs[0] is rowid.
+			//        if e.type is update or alter, e.bat.Vecs[0] is not rowid?
+			//        need to skip this entry type?
 			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
 			if len(vs) == 0 {
 				continue
@@ -683,7 +690,8 @@ func (txn *Transaction) deleteTableWrites(
 			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
-			// current batch is not be deleted
+			// Now, e.bat is uncommitted raw data batch which belongs to one block allocated by CN.
+			// if e.bat is not to be deleted,skip it.
 			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
 			}
@@ -694,6 +702,7 @@ func (txn *Transaction) deleteTableWrites(
 			}
 			for k, v := range vs {
 				if _, ok := mp[v]; !ok {
+					// if the v is not to be deleted, then add its index into the sels.
 					sels = append(sels, int64(k))
 				} else {
 					mp[v]++
@@ -730,7 +739,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				e.bat.Shrink(sels)
+				e.bat.Shrink(sels, false)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}
@@ -838,7 +847,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
 		}
-		entry.bat.AntiShrink(compactedEntries[entry.bat])
+		entry.bat.Shrink(compactedEntries[entry.bat], true)
 		if entry.bat.RowCount() == 0 {
 			txn.writes[i].bat.Clean(txn.proc.GetMPool())
 			txn.writes[i].bat = nil
