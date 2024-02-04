@@ -54,7 +54,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 	indexes := node.TableDef.Indexes
 	sort.Slice(indexes, func(i, j int) bool {
-		return indexes[i].Unique && !indexes[j].Unique
+		return (indexes[i].Unique && !indexes[j].Unique) || (indexes[i].Unique == indexes[j].Unique && len(indexes[i].Parts) > len(indexes[j].Parts))
 	})
 
 	// Apply unique/secondary indices if only indexed column is referenced
@@ -284,7 +284,7 @@ END0:
 			}
 		}
 
-		if len(filterIdx) < numParts && !usePartialIndex {
+		if len(filterIdx) < numParts && (idxDef.Unique || !usePartialIndex) {
 			continue
 		}
 
