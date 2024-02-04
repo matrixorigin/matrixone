@@ -183,7 +183,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
-	if errs := u.UpgradeNewTableColumn(ctx); len(errs) > 0 {
+	if errs := u.UpgradeNewTableColumn(ctx, allTenants); len(errs) > 0 {
 		logutil.Errorf("upgrade new table column failed")
 		errors = append(errors, errs...)
 	}
@@ -272,47 +272,20 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 }
 
 // UpgradeNewTableColumn the newly added columns in the system table
-func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
+func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
-	errors := []error{}
+	var errors []error
 	for _, tbl := range registeredTable {
-		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
-		if err != nil {
-			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
-			continue
-			//return err
-		}
-
-		if currentSchema == nil {
-			continue
-		}
-
-		diff, err := u.GenerateDiff(currentSchema, tbl)
-		if err != nil {
-			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
-			continue
-			//return err
-		} else if len(diff.AddedColumns) == 0 {
-			continue
-		}
-
-		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
-		if err != nil {
-			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
-			continue
-			//return err
-		}
-		logutil.Info("upgradeSQL: " + upgradeSQL)
-
-		// Execute upgrade SQL
-		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
-			continue
-			//return err
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				errors = append(errors, u.upgradeNewTableColumnForTenant(ctx, tbl, tenant)...)
+			}
+		} else {
+			errors = append(errors, u.upgradeNewTableColumnForTenant(ctx, tbl, nil)...)
 		}
 	}
 	if len(errors) > 0 {
@@ -706,4 +679,45 @@ func (u *Upgrader) upgradeWithPreDropFunc(ctx context.Context, tbl *table.Table,
 
 	}
 	return nil
+}
+
+func (u *Upgrader) upgradeNewTableColumnForTenant(ctx context.Context, tbl *table.Table, tenant *frontend.TenantInfo) (errors []error) {
+	exec := u.IEFactory()
+
+	if tenant != nil {
+		ctx = attachAccount(ctx, tenant)
+	}
+
+	currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+	if err != nil {
+		errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+		return
+	}
+
+	if currentSchema == nil {
+		return
+	}
+
+	diff, err := u.GenerateDiff(currentSchema, tbl)
+	if err != nil {
+		errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+		return
+	} else if len(diff.AddedColumns) == 0 {
+		return
+	}
+
+	upgradeSQL, err := u.GenerateUpgradeSQL(diff)
+	if err != nil {
+		errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+		return
+	}
+	logutil.Info("upgradeSQL: " + upgradeSQL)
+
+	// Execute upgrade SQL
+	if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+		errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+		return
+	}
+
+	return
 }
