@@ -72,7 +72,7 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	return fileName, err
 }
 
-func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) error {
+func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string, count int) error {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewNotSupported(ctx, "no implement sqlExecutor")
@@ -96,10 +96,13 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	if err != nil {
 		return err
 	}
-	return execBackup(ctx, srcFs, dstFs, fileName)
+	return execBackup(ctx, srcFs, dstFs, fileName, count)
 }
 
-func getParallelCount() int {
+func getParallelCount(count int) int {
+	if count > 0 && count < 512 {
+		return count
+	}
 	cupNum := runtime2.NumCPU()
 	if cupNum < 8 {
 		return 50
@@ -222,7 +225,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	return taeFileList, nil
 }
 
-func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
+func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string, count int) error {
 	backupTime := names[0]
 	trimInfo := names[1]
 	names = names[1:]
@@ -232,12 +235,11 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	softDeletes := make(map[string]bool)
 	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []objectio.Location
-	parallelNum := getParallelCount()
+	parallelNum := getParallelCount(count)
 	logutil.Info("backup", common.OperationField("start backup"),
 		common.AnyField("backup time", backupTime),
 		common.AnyField("checkpoint num", len(names)),
-		common.AnyField("cpu num", runtime2.NumCPU()),
-		common.AnyField("num", parallelNum))
+		common.AnyField("parallel num", parallelNum))
 	defer func() {
 		logutil.Info("backup", common.OperationField("end backup"),
 			common.AnyField("load checkpoint cost", loadDuration),
