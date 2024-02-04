@@ -79,6 +79,18 @@ var (
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+
+		`create table mo_catalog.mo_foreign_keys(
+				constraint_name varchar(5000) not null,
+				db_name varchar(5000) not null,
+				table_name varchar(5000) not null,
+				column_name varchar(256) not null,
+				refer_db_name varchar(5000) not null,
+				refer_table_name varchar(5000) not null,
+				refer_column_name varchar(256) not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null
+			);`,
 	}
 
 	step2InitSQLs = []string{

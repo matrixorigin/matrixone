@@ -3114,39 +3114,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	return &fkData, nil
 }
 
-func makeInsertSqlForFk(db, table string, data *FkData) string {
-	row := make([]string, 7)
-	rows := 0
-	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` values ")
-	for childIdx, childCol := range data.Cols.Cols {
-		row[0] = data.Def.Name
-		row[1] = db
-		row[2] = table
-		row[3] = childCol
-		row[4] = data.ParentDbName
-		row[5] = data.ParentTableName
-		row[6] = data.Refer.KeyParts[childIdx].ColName.Parts[0]
-		{
-			if rows > 0 {
-				sb.WriteByte(',')
-			}
-			rows++
-			sb.WriteByte('(')
-			for j, col := range row {
-				if j > 0 {
-					sb.WriteByte(',')
-				}
-				sb.WriteByte('\'')
-				sb.WriteString(col)
-				sb.WriteByte('\'')
-			}
-			sb.WriteByte(')')
-		}
-	}
-	return sb.String()
-}
-
 /*
 checkFkColsAreValid check foreign key columns is valid or not, then it saves them.
 the columns referred by the foreign key in the children table must appear in the unique keys or primary key

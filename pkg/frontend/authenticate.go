@@ -893,6 +893,18 @@ var (
 				primary key(id, column_name)
 			);`, catalog.MO_INDEXES)
 
+	createMoForeignKeysSql = `create table mo_foreign_keys(
+				constraint_name varchar(5000) not null,
+				db_name varchar(5000) not null,
+				table_name varchar(5000) not null,
+				column_name varchar(256) not null,
+				refer_db_name varchar(5000) not null,
+				refer_table_name varchar(5000) not null,
+				refer_column_name varchar(256) not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null
+			);`
+
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
 			  table_id bigint unsigned NOT NULL,
 			  database_id bigint unsigned not null,
@@ -1040,15 +1052,6 @@ var (
 				comment text,
 				primary key(stage_id)
 			);`,
-		`create table mo_foreign_keys(
-				constraint_name varchar(5000) not null,
-				db_name varchar(5000) not null,
-				table_name varchar(5000) not null,
-				column_name varchar(256) not null,
-				refer_db_name varchar(5000) not null,
-				refer_table_name varchar(5000) not null,
-				refer_column_name varchar(256) not null
-			);`,
 		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
@@ -1067,7 +1070,6 @@ var (
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_stages;`,
-		`drop table if exists mo_catalog.mo_foreign_keys;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
 		`drop view if exists mo_catalog.mo_locks;`,
@@ -1080,6 +1082,7 @@ var (
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoForeignKeys = `drop table if exists mo_catalog.mo_foreign_keys;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -4240,6 +4243,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7873,6 +7881,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 
 		// create some tables and databases for new account
 		rtnErr = bh.Exec(newTenantCtx, createMoIndexesSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
 		if rtnErr != nil {
 			return rtnErr
 		}

@@ -1237,6 +1237,7 @@ message DropTable {
 	repeated string partition_table_names = 8;
 	bool isView = 9;
 	TableDef table_def 	= 10;
+	repeated string DropSqls = 11;
 }
 
 message AlterView {
