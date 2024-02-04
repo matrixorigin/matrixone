@@ -50,7 +50,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -70,7 +70,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if end {
 					break
 				}
-				anal.Input(bat, arg.info.IsFirst)
+				anal.Input(bat, arg.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 				if err != nil {
 					bat.Clean(proc.Mp())
@@ -82,7 +82,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, arg.info.IsLast)
+				anal.Output(ctr.rbat, arg.GetIsLast())
 			}
 			result.Batch = ctr.rbat
 			ctr.state = End

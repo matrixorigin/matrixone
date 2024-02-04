@@ -153,6 +153,9 @@ func checkPKDup(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)
@@ -354,7 +357,25 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-
+	if offset > 0 {
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				continue
+			}
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				continue
+			}
+			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+				size += uint64(txn.writes[i].bat.Size())
+			}
+		}
+		if size < WorkspaceThreshold {
+			return nil
+		}
+		size = 0
+	}
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 

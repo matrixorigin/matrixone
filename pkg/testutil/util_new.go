@@ -162,6 +162,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewBoolVector(n, typ, m, random, vs)
 		}
 		return NewBoolVector(n, typ, m, random, nil)
+	case types.T_bit:
+		if vs, ok := Values.([]uint64); ok {
+			return NewUInt64Vector(n, typ, m, random, vs)
+		}
+		return NewUInt64Vector(n, typ, m, random, nil)
 	case types.T_int8:
 		if vs, ok := Values.([]int8); ok {
 			return NewInt8Vector(n, typ, m, random, vs)

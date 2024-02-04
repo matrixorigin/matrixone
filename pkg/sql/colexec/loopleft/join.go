@@ -52,7 +52,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ctr := arg.ctr
@@ -68,7 +68,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.inBat != nil {
-				err = ctr.probe(arg, proc, anal, arg.info.IsLast, &result)
+				err = ctr.probe(arg, proc, anal, arg.GetIsLast(), &result)
 				return result, err
 			}
 			ctr.inBat, _, err = ctr.ReceiveFromSingleReg(0, anal)
@@ -85,11 +85,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = nil
 				continue
 			}
-			anal.Input(ctr.inBat, arg.info.IsFirst)
+			anal.Input(ctr.inBat, arg.GetIsFirst())
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(arg, proc, anal, arg.info.IsLast, &result)
+				err = ctr.emptyProbe(arg, proc, anal, arg.GetIsLast(), &result)
 			} else {
-				err = ctr.probe(arg, proc, anal, arg.info.IsLast, &result)
+				err = ctr.probe(arg, proc, anal, arg.GetIsLast(), &result)
 			}
 			return result, err
 
