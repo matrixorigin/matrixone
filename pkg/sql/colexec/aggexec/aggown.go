@@ -19,14 +19,17 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 type aggSetter[T types.FixedSizeTExceptStrType] func(value T)
 type aggBytesSetter func(value []byte) error
 
+// todo : it seems that need a getter for all fill methods. and for the multi aggregation's eval method.
+//
+//	getter func() from
+//	getter func() []byte
 type singleAggPrivateStructure1[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	init()
 	fill(from, aggSetter[to])
 	fillNull(aggSetter[to])
 	fills(value from, isNull bool, count int, setter aggSetter[to])
-	// todo: change `flush() to` to be `flush(setter aggSetter[to])`
-	flush() to
+	flush(setter aggSetter[to])
 }
 
 type singleAggPrivateStructure2[
@@ -35,7 +38,7 @@ type singleAggPrivateStructure2[
 	fill(from, aggBytesSetter)
 	fillNull(aggBytesSetter)
 	fills(value from, isNull bool, count int, setter aggBytesSetter)
-	flush() []byte
+	flush(aggBytesSetter)
 }
 
 type singleAggPrivateStructure3[
@@ -44,7 +47,7 @@ type singleAggPrivateStructure3[
 	fillBytes([]byte, aggSetter[to])
 	fillNull(aggSetter[to])
 	fills(value []byte, isNull bool, count int, setter aggSetter[to])
-	flush() to
+	flush(setter aggSetter[to])
 }
 
 type singleAggPrivateStructure4 interface {
@@ -52,7 +55,7 @@ type singleAggPrivateStructure4 interface {
 	fillBytes([]byte, aggBytesSetter)
 	fillNull(aggBytesSetter)
 	fills(value []byte, isNull bool, count int, setter aggBytesSetter)
-	flush() []byte
+	flush(aggBytesSetter)
 }
 
 type multiAggPrivateStructure1[

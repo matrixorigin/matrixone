@@ -164,11 +164,10 @@ func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 		exec.groups[exec.partialGroup].fill(exec.partialResult.(from), exec.ret.aggSet)
 	}
 
-	var err error
+	setter := exec.ret.aggSet
 	for i, group := range exec.groups {
-		if err = exec.ret.set(i, group.flush()); err != nil {
-			return nil, err
-		}
+		exec.ret.groupToSet = i
+		group.flush(setter)
 	}
 
 	// copy from singleAggFuncExec1's Flush()
@@ -326,8 +325,10 @@ func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 		exec.groups[exec.partialGroup].fillBytes(exec.partialResult.([]byte), exec.ret.aggSet)
 	}
 
+	setter := exec.ret.aggSet
 	for i, group := range exec.groups {
-		exec.ret.set(i, group.flush())
+		exec.ret.groupToSet = i
+		group.flush(setter)
 	}
 
 	return exec.ret.flush(), nil
@@ -484,11 +485,10 @@ func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
 		exec.groups[exec.partialGroup].fillBytes(exec.partialResult.([]byte), exec.ret.aggSet)
 	}
 
-	var err error
+	setter := exec.ret.aggSet
 	for i, group := range exec.groups {
-		if err = exec.ret.set(i, group.flush()); err != nil {
-			return nil, err
-		}
+		exec.ret.groupToSet = i
+		group.flush(setter)
 	}
 
 	return exec.ret.flush(), nil

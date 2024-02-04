@@ -233,8 +233,10 @@ func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 		exec.groups[exec.partialGroup].fill(exec.partialResult.(from), exec.ret.aggSet)
 	}
 
+	setter := exec.ret.aggSet
 	for i, group := range exec.groups {
-		exec.ret.set(i, group.flush())
+		exec.ret.groupToSet = i
+		group.flush(setter)
 	}
 
 	// if it was ordered window, should clean the nulls.

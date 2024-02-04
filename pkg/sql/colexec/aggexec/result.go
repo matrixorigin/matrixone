@@ -28,7 +28,7 @@ type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 	res    *vector.Vector
 	values []T // for quick get/set
 
-	groupToSet int // operating row for aggSet()
+	groupToSet int // row index for aggGet() and aggSet()
 }
 
 type aggFuncBytesResult struct {
@@ -36,7 +36,7 @@ type aggFuncBytesResult struct {
 	mp         *mpool.MPool
 	typ        types.Type
 	res        *vector.Vector
-	groupToSet int
+	groupToSet int // row index for aggGet() and aggSet()
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](proc *process.Process, typ types.Type) aggFuncResult[T] {
@@ -57,12 +57,8 @@ func (r *aggFuncResult[T]) grows(more int) error {
 	return nil
 }
 
-func (r *aggFuncResult[T]) get(i int) T {
-	return r.values[i]
-}
-
-func (r *aggFuncResult[T]) set(i int, v T) {
-	r.values[i] = v
+func (r *aggFuncResult[T]) aggGet() T {
+	return r.values[r.groupToSet]
 }
 
 // for agg private structure's fill.
@@ -97,15 +93,11 @@ func (r *aggFuncBytesResult) grows(more int) error {
 	return r.res.PreExtend(r.res.Length()+more, r.mp)
 }
 
-func (r *aggFuncBytesResult) get(i int) []byte {
+func (r *aggFuncBytesResult) aggGet() []byte {
 	// todo: we cannot do simple optimization here because the set method may change
 	//  the max length of the vector.
 	//  if we want, we should add a flag to indicate that the vector item's length is <= types.VarlenaInlineSize.
-	return r.res.GetBytesAt(i)
-}
-
-func (r *aggFuncBytesResult) set(i int, v []byte) error {
-	return vector.SetBytesAt(r.res, i, v, r.mp)
+	return r.res.GetBytesAt(r.groupToSet)
 }
 
 func (r *aggFuncBytesResult) aggSet(v []byte) error {
