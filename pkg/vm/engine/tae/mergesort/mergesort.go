@@ -30,6 +30,8 @@ func SortBlockColumns(
 	switch cols[pk].GetType().Oid {
 	case types.T_bool:
 		Sort(cols[pk], boolLess, sortedIdx)
+	case types.T_bit:
+		Sort(cols[pk], numericLess[uint64], sortedIdx)
 	case types.T_int8:
 		Sort(cols[pk], numericLess[int8], sortedIdx)
 	case types.T_int16:

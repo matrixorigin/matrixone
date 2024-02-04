@@ -16,18 +16,16 @@ package disttae
 
 import (
 	"context"
-	"time"
-
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -38,6 +36,8 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	switch t.Oid {
 	case types.T_bool:
 		return 2
+	case types.T_bit:
+		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
 	case types.T_int8:
 		return float64(types.DecodeFixed[int8](zm.GetMaxBuf())) - float64(types.DecodeFixed[int8](zm.GetMinBuf())) + 1
 	case types.T_int16:
@@ -87,6 +87,8 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 
 func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 	switch typ.Oid {
+	case types.T_bit:
+		return float64(types.DecodeUint64(buf))
 	case types.T_int8:
 		return float64(types.DecodeInt8(buf))
 	case types.T_int16:
@@ -155,7 +157,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
 							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
@@ -183,7 +185,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())

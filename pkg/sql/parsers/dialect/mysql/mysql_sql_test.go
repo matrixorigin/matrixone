@@ -1437,6 +1437,9 @@ var (
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
+			input:  "create index idx using master on A (a,b,c)",
+			output: "create index idx using master on a (a, b, c)",
+		}, {
 			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
 		}, {
 			input:  "create database test_db default collate 'utf8mb4_general_ci' collate utf8mb4_general_ci",

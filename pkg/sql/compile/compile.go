@@ -2117,6 +2117,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		AccountId:              n.ObjRef.GetPubInfo(),
 		Expr:                   plan2.DeepCopyExpr(filterExpr),
 		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
+		OrderBy:                n.OrderBy,
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
@@ -3674,6 +3675,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 									switch zm.GetType() {
 									case types.T_bool:
 										partialResults[i] = !partialResults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
+									case types.T_bit:
+										min := types.DecodeFixed[uint64](zm.GetMinBuf())
+										if min < partialResults[i].(uint64) {
+											partialResults[i] = min
+										}
 									case types.T_int8:
 										min := types.DecodeFixed[int8](zm.GetMinBuf())
 										if min < partialResults[i].(int8) {
@@ -3795,6 +3801,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 									switch zm.GetType() {
 									case types.T_bool:
 										partialResults[i] = partialResults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
+									case types.T_bit:
+										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
+										if max > partialResults[i].(uint64) {
+											partialResults[i] = max
+										}
 									case types.T_int8:
 										max := types.DecodeFixed[int8](zm.GetMaxBuf())
 										if max > partialResults[i].(int8) {
@@ -3957,9 +3968,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	if isPartitionTable {
 		rel = nil
 	}
-	// for multi cn in launch mode, put all payloads in current CN
-	// maybe delete this in the future
-	if isLaunchMode(c.cnList) {
+	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
+	// for an ordered scan, put all paylonds in current CN
+	if isLaunchMode(c.cnList) || n.OrderBy != nil {
 		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4141,7 +4152,7 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.No
 			switch zm.GetType() {
 			case types.T_int64, types.T_int32, types.T_int16:
 				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
 			}
 		}
