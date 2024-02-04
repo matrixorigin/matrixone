@@ -99,6 +99,8 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 		sql += planCol.Name + " "
 		typeId := types.T(planCol.Typ.Id)
 		switch typeId {
+		case types.T_bit:
+			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
 		case types.T_char:
 			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
 		case types.T_varchar:

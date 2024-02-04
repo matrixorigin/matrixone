@@ -114,6 +114,9 @@ var replaceMethods []replaceFunc
 
 func init() {
 	replaceMethods = make([]replaceFunc, 256)
+	replaceMethods[types.T_bit] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAt[uint64](toVec, row1, vector.GetFixedAt[uint64](fromVec, row2))
+	}
 	replaceMethods[types.T_int8] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 		return vector.SetFixedAt[int8](toVec, row1, vector.GetFixedAt[int8](fromVec, row2))
 	}
