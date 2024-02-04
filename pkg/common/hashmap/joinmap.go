@@ -34,6 +34,16 @@ func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMa
 	}
 }
 
+func (jm *JoinMap) GetBucketCount() uint64 {
+	if jm.shm != nil {
+		return jm.shm.GroupCount()
+	}
+	if jm.ihm != nil {
+		return jm.ihm.GroupCount()
+	}
+	return 0
+}
+
 func (jm *JoinMap) Sels() [][]int32 {
 	return jm.multiSels
 }
