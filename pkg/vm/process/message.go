@@ -25,27 +25,18 @@ const CURRENTCN = "CURRENTCN"
 type MsgType int32
 
 const (
-	MsgMinValueSigned   MsgType = 0
-	MsgMinValueUnsigned MsgType = 1
-	MsgMaxValueSigned   MsgType = 2
-	MsgMaxValueUnsigned MsgType = 3
-	MsgPipelineStart    MsgType = 4
-	MsgPipelineStop     MsgType = 5
-	MsgRuntimeFilter    MsgType = 6
-	MsgHashMap          MsgType = 7
-	MaxMessage          MsgType = 1024
+	MsgTopValue      MsgType = 0
+	MsgPipelineStart MsgType = 1
+	MsgPipelineStop  MsgType = 2
+	MsgRuntimeFilter MsgType = 3
+	MsgHashMap       MsgType = 4
+	MaxMessage       MsgType = 1024
 )
 
 func (m MsgType) MessageName() string {
 	switch m {
-	case MsgMinValueSigned:
-		return "MsgMinValueSigned"
-	case MsgMinValueUnsigned:
-		return "MsgMinValueUnsigned"
-	case MsgMaxValueSigned:
-		return "MsgMaxValueSigned"
-	case MsgMaxValueUnsigned:
-		return "MsgMaxValueUnsigned"
+	case MsgTopValue:
+		return "MsgTopValue"
 	}
 	return "unknown message type"
 }
