@@ -145,11 +145,13 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 				break
 			}
 			printMutex.Unlock()
+			fileMutex.Lock()
 			logutil.Info("backup", common.OperationField("copy file"),
 				common.AnyField("copy file size", copySize),
 				common.AnyField("copy file num", copyCount),
 				common.AnyField("skip file num", skipCount),
 				common.AnyField("total file num", len(files)))
+			fileMutex.Unlock()
 			time.Sleep(time.Second * 5)
 		}
 	}()
@@ -166,7 +168,9 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
 						isGC(gcFileMap, name) {
+						fileMutex.Lock()
 						skipCount++
+						fileMutex.Unlock()
 						return &tasks.JobResult{
 							Res: nil,
 						}
