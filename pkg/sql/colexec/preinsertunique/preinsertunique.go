@@ -95,6 +95,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
 		vec, bitMap, err = util.SerialWithCompacted(vs, proc, &arg.packers)
+		if err != nil {
+			return result, err
+		}
 	}
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())
