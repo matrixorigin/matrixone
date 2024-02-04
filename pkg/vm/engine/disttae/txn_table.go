@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"strconv"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -549,14 +550,13 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
 					tbl.db.txn.engine.fs,
 					location,
-					tbl.db.txn.proc.GetMPool(),
-					fileservice.Policy(0))
+					tbl.db.txn.proc.GetMPool())
 				if err != nil {
 					return err
 				}
@@ -603,7 +603,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	}()
 
 	tbl.writes = tbl.writes[:0]
-	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
@@ -731,19 +730,19 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	for _, entry := range tbl.writes {
-		if entry.typ == INSERT || entry.typ == INSERT_TXN {
-			continue
-		}
-		// entry.typ == DELETE
-		if entry.isGeneratedByTruncate() {
-			continue
-		}
-		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-		if entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, _ := v.Decode()
-				dirtyBlks[id] = struct{}{}
+		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
+		// TODO Adjustments will be made here in the future
+		if entry.typ == DELETE || entry.typ == DELETE_TXN {
+			if entry.isGeneratedByTruncate() {
+				continue
+			}
+			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
+			if entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, _ := v.Decode()
+					dirtyBlks[id] = struct{}{}
+				}
 			}
 		}
 	}
@@ -1625,7 +1624,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) mergeCompaction(
-	compactedBlks map[objectio.BlockInfo][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
+	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
@@ -1647,11 +1646,11 @@ func (tbl *txnTable) mergeCompaction(
 	}
 	s3writer.SetSeqnums(tbl.seqnums)
 
-	for blk, deletes := range compactedBlks {
+	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
 		bat, e := blockio.BlockCompactionRead(
 			tbl.db.txn.proc.Ctx,
-			blk.MetaLocation(),
+			blkmetaloc[:],
 			deletes,
 			tbl.seqnums,
 			tbl.typs,
@@ -1720,7 +1719,7 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }
 
-func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte) ([]engine.Reader, error) {
+func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
 	if hasNull {
@@ -1756,7 +1755,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load())
+			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load(), orderedScan)
 			if err != nil {
 				return nil, err
 			}
@@ -1774,7 +1773,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	for i := 0; i < blkArray.Len(); i++ {
 		blkInfos = append(blkInfos, blkArray.Get(i))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
+	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load(), orderedScan)
 }
 
 func (tbl *txnTable) makeEncodedPK(
@@ -1856,7 +1855,8 @@ func (tbl *txnTable) newBlockReader(
 	num int,
 	expr *plan.Expr,
 	blkInfos []*objectio.BlockInfo,
-	proc *process.Process) ([]engine.Reader, error) {
+	proc *process.Process,
+	orderedScan bool) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.op.SnapshotTS()
 	tableDef := tbl.GetTableDef(ctx)
@@ -1879,13 +1879,23 @@ func (tbl *txnTable) newBlockReader(
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(blkInfos, num)
 	fs, err := fileservice.Get[fileservice.FileService](
 		tbl.db.txn.engine.fs,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
+
+	if orderedScan {
+		if num != 1 {
+			panic("ordered scan must run in only one parallel")
+		}
+		rd := newBlockReader(ctx, tableDef, ts, blkInfos, expr, fs, proc)
+		rd.dontPrefetch = true
+		return []engine.Reader{rd}, nil
+	}
+
+	infos, steps := groupBlocksToObjects(blkInfos, num)
 	blockReaders := newBlockReaders(
 		ctx,
 		fs,
@@ -2303,4 +2313,11 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
+}
+
+// get the table's snapshot.
+func (tbl *txnTable) updateWriteOffset() {
+	if tbl.db.txn.statementID > 0 {
+		tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
+	}
 }

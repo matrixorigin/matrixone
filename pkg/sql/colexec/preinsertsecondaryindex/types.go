@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,9 +30,15 @@ type Argument struct {
 	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+	ps []*types.Packer
+
+	buf *batch.Batch
+
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -61,32 +68,13 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) GetCnAddr() string {
-	return arg.info.CnAddr
-}
-
-func (arg *Argument) GetOperatorID() int32 {
-	return arg.info.OperatorID
-}
-
-func (arg *Argument) GetParalleID() int32 {
-	return arg.info.ParallelID
-}
-
-func (arg *Argument) GetMaxParallel() int32 {
-	return arg.info.MaxParallel
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
+	}
+	for _, p := range arg.ps {
+		if p != nil {
+			p.FreeMem()
+		}
 	}
 }

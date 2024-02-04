@@ -1230,6 +1230,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 		constVal := val.I64Val
 		switch columnT.Oid {
+		case types.T_bit:
+			return constVal >= 0 && uint64(constVal) <= uint64(1<<columnT.Width-1)
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
@@ -1265,6 +1267,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 		constVal := val_u.U64Val
 		switch columnT.Oid {
+		case types.T_bit:
+			return constVal <= uint64(1<<columnT.Width-1)
 		case types.T_int8:
 			return constVal <= math.MaxInt8
 		case types.T_int16:
@@ -1863,4 +1867,21 @@ func HasMoCtrl(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+// IsFkSelfRefer checks the foreign key referencing itself
+func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
+	return fkDbName == curDbName && fkTableName == curTableName
+}
+
+// HasFkSelfReferOnly checks the foreign key referencing itself only.
+// If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
+			return false
+		}
+	}
+	return true
 }

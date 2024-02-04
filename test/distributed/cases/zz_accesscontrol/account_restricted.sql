@@ -28,7 +28,7 @@ drop database rdb;
 
 create table r1(c1 int,c2 varchar(20));
 insert into r_test values(8,'c');
-load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test;
+load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
 update r_test set c1=5 where c2='h';
 delete from r_test where c1=4;
 select * from r_test;
@@ -60,7 +60,7 @@ show table_values from r_test;
 show column_number from r_test;
 show TRIGGERS;
 show TRIGGERS like '*%';
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from res_test;;
 
@@ -116,7 +116,7 @@ show table_values from r_test;
 show column_number from r_test;
 show TRIGGERS;
 show TRIGGERS like '*%';
-show collation like '%';
+show collation like 'utf8mb4_general_ci%';
 show full tables;
 show full tables from account_res;
 

@@ -126,9 +126,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	constraint := make([][]byte, 0)
 	constraint = append(constraint, tmp)
-	newRel.TableRenameInTxn(c.ctx, constraint)
+	err = newRel.TableRenameInTxn(c.ctx, constraint)
+	if err != nil {
+		return err
+	}
 	//--------------------------------------------------------------------------------------------------------------
-
 	{
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
@@ -167,7 +169,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			return err
 		}
 
-		// update foreign key child table references
+		// update foreign key child table references to the current table
 		for _, tblId := range qry.CopyTableDef.RefChildTbls {
 			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
 				return err
@@ -196,9 +198,16 @@ func (s *Scope) AlterTable(c *Compile) error {
 
 // updateTableForeignKeyColId update foreign key colid of child table references
 func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
-	_, _, childRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
-	if err != nil {
-		return err
+	var childRelation engine.Relation
+	var err error
+	if childTblId == 0 {
+		//fk self refer does not update
+		return nil
+	} else {
+		_, _, childRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
+		if err != nil {
+			return err
+		}
 	}
 	childTableDef, err := childRelation.TableDefs(c.ctx)
 	if err != nil {

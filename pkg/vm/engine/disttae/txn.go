@@ -153,6 +153,9 @@ func checkPKDup(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)
@@ -354,7 +357,25 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-
+	if offset > 0 {
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				continue
+			}
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				continue
+			}
+			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+				size += uint64(txn.writes[i].bat.Size())
+			}
+		}
+		if size < WorkspaceThreshold {
+			return nil
+		}
+		size = 0
+	}
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 
@@ -719,7 +740,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[tableKey]map[objectio.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -732,14 +753,14 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				dbName:    pos.dbName,
 				name:      pos.tbName,
 			}]; ok {
-				v[pos.blkInfo] = offsets
+				v[pos.blkInfo.MetaLoc] = offsets
 			} else {
 				compactedBlks[tableKey{
 					accountId: pos.accountId,
 					dbName:    pos.dbName,
 					name:      pos.tbName,
 				}] =
-					map[objectio.BlockInfo][]int64{pos.blkInfo: offsets}
+					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
 			delete(txn.cnBlkId_Pos, *blkId)

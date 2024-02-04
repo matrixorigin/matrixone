@@ -35,12 +35,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
+	tblName := string(stmt.Table.ObjectName)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
 	}
-	if stmt.Param.Tail.Fields != nil && stmt.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support EscapedBy field.")
-	}
+
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
@@ -48,11 +48,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
-		return nil, err
-	}
-	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
 		return nil, err
 	}
 	tableDef := tblInfo.tableDefs[0]
@@ -97,8 +92,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	terminated := ","
 	enclosedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
-		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
-		terminated = stmt.Param.Tail.Fields.Terminated
+		if stmt.Param.Tail.Fields.EnclosedBy != nil {
+			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+		}
+		if stmt.Param.Tail.Fields.Terminated != nil {
+			terminated = stmt.Param.Tail.Fields.Terminated.Value
+		}
 	}
 
 	externalScanNode := &plan.Node{
@@ -158,8 +157,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	// go shuffle for loadif parallel
-	if stmt.Param.Parallel {
+	// use shuffle for load if parallel and no compress
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
 		for i := range builder.qry.Nodes {
 			node := builder.qry.Nodes[i]
 			if node.NodeType == plan.Node_INSERT {
@@ -172,6 +171,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	query := builder.qry
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+		objRef.SchemaName, newTableDef.Name, newTableDef.Cols, newTableDef.Fkeys)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 

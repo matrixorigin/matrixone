@@ -210,14 +210,14 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		tbl = aliasTbl.Expr
 	}
 
-	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
 		tblInfo.needAggFilter = true
-		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
+		err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
 		}
-		if jionTbl.Right != nil {
-			return setTableExprToDmlTableInfo(ctx, jionTbl.Right, tblInfo, aliasMap, withMap)
+		if joinTbl.Right != nil {
+			return setTableExprToDmlTableInfo(ctx, joinTbl.Right, tblInfo, aliasMap, withMap)
 		}
 		return nil
 	}
@@ -435,7 +435,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							if len(slt.Rows) < 20000 {
 								CanUsePkFilter = true
 							}
-						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128):
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
 							if len(slt.Rows) < 20000 {
 								CanUsePkFilter = true
 							}
