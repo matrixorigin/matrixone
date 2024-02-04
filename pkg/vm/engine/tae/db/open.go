@@ -177,7 +177,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog, opts.GCCfg.DisableGC)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {

@@ -16,9 +16,9 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -57,7 +57,7 @@ func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }
 
-func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
+func (g *GCWorker) ExecDelete(ctx context.Context, names []string, disableGC bool) error {
 	g.Lock()
 	g.objects = append(g.objects, names...)
 	if len(g.objects) == 0 {
@@ -67,8 +67,11 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 	}
 	g.Unlock()
 
-	logutil.Infof("[DB GC] files to delete: %v", g.objects)
-	err := g.fs.DelFiles(ctx, g.objects)
+	logutil.Infof("[DB GC] disableGC: %v, files to delete: %v", disableGC, g.objects)
+	var err error
+	if !disableGC {
+		err = g.fs.DelFiles(ctx, g.objects)
+	}
 	g.Lock()
 	defer g.Unlock()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
