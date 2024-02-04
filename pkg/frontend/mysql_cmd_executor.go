@@ -4614,6 +4614,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_JSON)
 	case types.T_bool:
 		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
+	case types.T_bit:
+		col.SetColumnType(defines.MYSQL_TYPE_BIT)
+		col.SetSigned(false)
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)
 	case types.T_uint8:
