@@ -78,7 +78,7 @@ func (builder *QueryBuilder) detectFilterOnCompositePrimaryKey(nodeID int32) {
 	for i := range filterIdx {
 		serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 	}
-	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+	rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := &plan.Expr{
@@ -407,7 +407,7 @@ END0:
 			for i := range filterIdx {
 				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 			}
-			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+			rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
 			funcName := "="
 			if len(filterIdx) < numParts {
