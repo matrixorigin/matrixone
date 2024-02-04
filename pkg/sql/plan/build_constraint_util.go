@@ -435,7 +435,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							if len(slt.Rows) < 20000 {
 								CanUsePkFilter = true
 							}
-						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128):
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
 							if len(slt.Rows) < 20000 {
 								CanUsePkFilter = true
 							}

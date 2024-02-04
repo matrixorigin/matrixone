@@ -208,6 +208,7 @@ const decimal128Code = 0x45
 const stringTypeCode = 0x46
 const timeCode = 0x47
 const enumCode = 0x50 // TODO: reorder the list to put timeCode next to date type code?
+const bitCode = 0x51
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -499,6 +500,11 @@ func (p *Packer) EncodeStringType(e []byte) {
 	p.encodeBytes(bytesCode, e)
 }
 
+func (p *Packer) EncodeBit(e uint64) {
+	p.putByte(bitCode)
+	p.encodeUint(e)
+}
+
 func (p *Packer) GetBuf() []byte {
 	return p.buf[:p.size]
 }
@@ -766,6 +772,10 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 		case b[i] == stringTypeCode:
 			schema = append(schema, T_varchar)
 			el, off = decodeBytes(b[i+1:])
+			off += 1
+		case b[i] == bitCode:
+			schema = append(schema, T_bit)
+			el, off = decodeUint(uint64Code, b[i+1:])
 			off += 1
 		case b[i] == enumCode:
 			schema = append(schema, T_enum)

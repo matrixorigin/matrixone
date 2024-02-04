@@ -939,6 +939,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
 				}
 			}
+			if colType.Id == int32(types.T_bit) {
+				if colType.Width == 0 {
+					colType.Width = 1
+				}
+				if colType.Width > types.MaxBitLen {
+					return moerr.NewInvalidInput(ctx.GetContext(), "bit width (%d) is too long (max = %d) ", colType.GetWidth(), types.MaxBitLen)
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
