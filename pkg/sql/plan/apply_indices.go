@@ -21,6 +21,102 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func (builder *QueryBuilder) detectFilterOnCompositePrimaryKey(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType != plan.Node_TABLE_SCAN {
+		for _, childID := range node.Children {
+			builder.detectFilterOnCompositePrimaryKey(childID)
+		}
+
+		return
+	}
+
+	if node.TableDef.Pkey == nil || len(node.TableDef.Pkey.Names) == 1 {
+		return
+	}
+
+	col2filter := make(map[int32]int)
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+
+		if fn.Func.ObjName != "=" {
+			continue
+		}
+
+		if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+		}
+
+		col := fn.Args[0].GetCol()
+		if col == nil || fn.Args[1].GetLit() == nil {
+			continue
+		}
+
+		col2filter[col.ColPos] = i
+	}
+
+	numParts := len(node.TableDef.Pkey.Names)
+	filterIdx := make([]int, 0, numParts)
+	for _, part := range node.TableDef.Pkey.Names {
+		colIdx := node.TableDef.Name2ColIndex[part]
+		idx, ok := col2filter[colIdx]
+		if !ok {
+			break
+		}
+
+		filterIdx = append(filterIdx, idx)
+	}
+
+	if len(filterIdx) == 0 {
+		return
+	}
+
+	serialArgs := make([]*plan.Expr, len(filterIdx))
+	for i := range filterIdx {
+		serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
+	}
+	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+
+	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+	pkExpr := &plan.Expr{
+		Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: node.BindingTags[0],
+				ColPos: pkIdx,
+			},
+		},
+	}
+
+	funcName := "="
+	if len(filterIdx) < numParts {
+		funcName = "prefix_eq"
+	}
+	compositePKFilter, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+		pkExpr,
+		rightArg,
+	})
+
+	hitFilterSet := make(map[int]bool)
+	for i := range filterIdx {
+		hitFilterSet[filterIdx[i]] = true
+	}
+
+	newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx)+1)
+	newFilterList = append(newFilterList, compositePKFilter)
+	for i, filter := range node.FilterList {
+		if !hitFilterSet[i] {
+			newFilterList = append(newFilterList, filter)
+		}
+	}
+
+	node.FilterList = newFilterList
+	calcScanStats(node, builder)
+}
+
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	node := builder.qry.Nodes[nodeID]
 
@@ -330,20 +426,22 @@ END0:
 				rightArg,
 			})
 
-			hitFilterSet := make(map[int]emptyType)
+			hitFilterSet := make(map[int]bool)
 			for i := range filterIdx {
-				hitFilterSet[filterIdx[i]] = emptyStruct
+				hitFilterSet[filterIdx[i]] = true
 			}
 
 			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
 			for i, filter := range node.FilterList {
-				if _, ok := hitFilterSet[i]; !ok {
+				if !hitFilterSet[i] {
 					newFilterList = append(newFilterList, filter)
 				}
 			}
 
 			node.FilterList = newFilterList
 		}
+
+		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
@@ -467,6 +565,7 @@ END0:
 		}
 
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
+		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
@@ -542,14 +641,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	col2Cond := make(map[int32]int)
@@ -677,14 +776,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				rightArg,
 			})
 
-			hitFilterSet := make(map[int]emptyType)
+			hitFilterSet := make(map[int]bool)
 			for i := range condIdx {
-				hitFilterSet[condIdx[i]] = emptyStruct
+				hitFilterSet[condIdx[i]] = true
 			}
 
 			newOnList := make([]*plan.Expr, 0, len(node.OnList)-numParts)
 			for i, filter := range node.OnList {
-				if _, ok := hitFilterSet[i]; !ok {
+				if !hitFilterSet[i] {
 					newOnList = append(newOnList, filter)
 				}
 			}

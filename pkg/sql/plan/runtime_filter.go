@@ -90,14 +90,14 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	var probeExprs, buildExprs []*plan.Expr

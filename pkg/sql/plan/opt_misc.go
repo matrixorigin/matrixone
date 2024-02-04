@@ -323,14 +323,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]emptyType)
+		leftTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
-			leftTags[tag] = emptyStruct
+			leftTags[tag] = true
 		}
 
-		rightTags := make(map[int32]emptyType)
+		rightTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
-			rightTags[tag] = emptyStruct
+			rightTags[tag] = true
 		}
 
 		var markTag int32
@@ -728,29 +728,6 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 	}
 }
 
-/*
-func getJoinCondLeftCol(cond *Expr, leftTags map[int32]emptyType) *plan.Expr_Col {
-	fun, ok := cond.Expr.(*plan.Expr_F)
-	if !ok || fun.F.Func.ObjName != "=" {
-		return nil
-	}
-	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok {
-		return nil
-	}
-	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
-	if !ok {
-		return nil
-	}
-	if _, ok := leftTags[leftCol.Col.RelPos]; ok {
-		return leftCol
-	}
-	if _, ok := leftTags[rightCol.Col.RelPos]; ok {
-		return rightCol
-	}
-	return nil
-}*/
-
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
 func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
 	node := builder.qry.Nodes[nodeID]
@@ -911,14 +888,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		return
 	}
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	exprs := make([]*plan.Expr, 0)
@@ -965,14 +942,14 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	}
 	result := getHashColsNDVRatio(builder.qry.Nodes[node.Children[1]].NodeId, builder)
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	exprs := make([]*plan.Expr, 0)
