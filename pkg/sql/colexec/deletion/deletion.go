@@ -178,7 +178,7 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 		}
 
 		arg.resBat.SetRowCount(arg.resBat.Vecs[0].Length())
-		arg.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_rows, arg.resBat.RowCount(), proc.GetMPool())
+		arg.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.resBat.RowCount(), proc.GetMPool())
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
