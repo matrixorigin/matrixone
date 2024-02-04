@@ -16,8 +16,6 @@ package semi
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,7 +76,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
-			if ctr.mp != nil && ctr.mp.GetBucketCount() <= uint64(plan.GetInFilterCardLimit()) && ap.Cond == nil {
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
 				ctr.skipProbe = true
 			}
 
