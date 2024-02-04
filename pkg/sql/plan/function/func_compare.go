@@ -17,12 +17,11 @@ package function
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,6 +31,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 	switch typ1.Oid {
 	case types.T_bool:
+	case types.T_bit:
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
@@ -56,6 +56,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 	switch typ1.Oid {
 	case types.T_bool:
+	case types.T_bit:
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
@@ -83,6 +84,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+			return a == b
+		})
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
 		})
 	case types.T_int8:
@@ -544,6 +549,10 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a > b
+		})
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x && !y
@@ -654,6 +663,10 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x || !y
 		})
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a >= b
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a >= b
@@ -758,6 +771,10 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+			return a != b
+		})
+	case types.T_bit:
+		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		})
 	case types.T_int8:
@@ -866,6 +883,10 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x && y
 		})
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a < b
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a < b
@@ -971,6 +992,10 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x || y
+		})
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a <= b
 		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {

@@ -15,18 +15,18 @@ package objectio
 
 import (
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"io"
 	"math/rand"
 	"strconv"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -281,6 +281,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewBoolVector(n, typ, m, random, vs)
 		}
 		return NewBoolVector(n, typ, m, random, nil)
+	case types.T_bit:
+		if vs, ok := Values.([]uint64); ok {
+			return NewUInt64Vector(n, typ, m, random, vs)
+		}
+		return NewUInt64Vector(n, typ, m, random, nil)
 	case types.T_int8:
 		if vs, ok := Values.([]int8); ok {
 			return NewInt8Vector(n, typ, m, random, vs)
