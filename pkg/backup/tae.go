@@ -113,83 +113,26 @@ func getParallelCount() int {
 	return 512
 }
 
-func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
-	backupTime := names[0]
-	trimInfo := names[1]
-	names = names[1:]
-	files := make(map[string]objectio.Location, 0)
-	table := gc.NewGCTable()
-	gcFileMap := make(map[string]string)
-	softDeletes := make(map[string]bool)
-	stopPrint := false
-	copyCount := 0
-	skipCount := 0
-	copySize := 0
-	var loadDuration, copyDuration, reWriteDuration time.Duration
-	var oNames []objectio.Location
+// parallelCopyData copy data from srcFs to dstFs in parallel
+func parallelCopyData(srcFs, dstFs fileservice.FileService,
+	files map[string]objectio.Location,
+	parallelCount int,
+	gcFileMap map[string]string,
+) ([]*taeFile, error) {
+	var copyCount, skipCount, copySize int64
 	var printMutex, fileMutex sync.Mutex
-	parallelNum := getParallelCount()
-	logutil.Info("backup", common.OperationField("start backup"),
-		common.AnyField("backup time", backupTime),
-		common.AnyField("checkpoint num", len(names)),
-		common.AnyField("cpu num", runtime2.NumCPU()),
-		common.AnyField("num", parallelNum))
+	stopPrint := false
 	defer func() {
 		printMutex.Lock()
 		if !stopPrint {
 			stopPrint = true
 		}
 		printMutex.Unlock()
-		logutil.Info("backup", common.OperationField("end backup"),
-			common.AnyField("load checkpoint cost", loadDuration),
-			common.AnyField("copy file cost", copyDuration),
-			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
-	now := time.Now()
-	for i, name := range names {
-		if len(name) == 0 {
-			continue
-		}
-		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i > 0 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
-		}
-		metaLoc := ckpStr[0]
-		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
-		key, err := blockio.EncodeLocationFromString(metaLoc)
-		if err != nil {
-			return err
-		}
-		var oneNames []objectio.Location
-		var data *logtail.CheckpointData
-		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
-		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
-		}
-		if err != nil {
-			return err
-		}
-		defer data.Close()
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
-		oNames = append(oNames, oneNames...)
-	}
-	loadDuration += time.Since(now)
-	now = time.Now()
-	for _, oName := range oNames {
-		if files[oName.String()] == nil {
-			files[oName.String()] = oName
-		}
-	}
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
 
-	jobScheduler := tasks.NewParallelJobScheduler(parallelNum)
+	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
 	go func() {
 		for {
@@ -233,7 +176,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				}
 				fileMutex.Lock()
 				copyCount++
-				copySize += int(size)
+				copySize += int64(size)
 				taeFileList = append(taeFileList, &taeFile{
 					path:     name,
 					size:     int64(size),
@@ -257,7 +200,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		err := jobScheduler.Schedule(backupJobs[n])
 		if err != nil {
 			logutil.Infof("schedule job failed %v", err.Error())
-			return err
+			return nil, err
 		}
 
 	}
@@ -267,7 +210,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		ret := backupJobs[n].WaitDone()
 		if ret.Err != nil {
 			logutil.Infof("wait job done failed %v", ret.Err.Error())
-			return ret.Err
+			return nil, ret.Err
 		}
 	}
 
@@ -276,10 +219,74 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		common.AnyField("copy file num", copyCount),
 		common.AnyField("skip file num", skipCount),
 		common.AnyField("total file num", len(files)))
-	printMutex.Lock()
-	stopPrint = true
-	printMutex.Unlock()
+	return taeFileList, nil
+}
 
+func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
+	backupTime := names[0]
+	trimInfo := names[1]
+	names = names[1:]
+	files := make(map[string]objectio.Location, 0)
+	table := gc.NewGCTable()
+	gcFileMap := make(map[string]string)
+	softDeletes := make(map[string]bool)
+	var loadDuration, copyDuration, reWriteDuration time.Duration
+	var oNames []objectio.Location
+	parallelNum := getParallelCount()
+	logutil.Info("backup", common.OperationField("start backup"),
+		common.AnyField("backup time", backupTime),
+		common.AnyField("checkpoint num", len(names)),
+		common.AnyField("cpu num", runtime2.NumCPU()),
+		common.AnyField("num", parallelNum))
+	defer func() {
+		logutil.Info("backup", common.OperationField("end backup"),
+			common.AnyField("load checkpoint cost", loadDuration),
+			common.AnyField("copy file cost", copyDuration),
+			common.AnyField("rewrite checkpoint cost", reWriteDuration))
+	}()
+	now := time.Now()
+	for i, name := range names {
+		if len(name) == 0 {
+			continue
+		}
+		ckpStr := strings.Split(name, ":")
+		if len(ckpStr) != 2 && i > 0 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		metaLoc := ckpStr[0]
+		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		key, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
+			return err
+		}
+		var oneNames []objectio.Location
+		var data *logtail.CheckpointData
+		if i == 0 {
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
+		} else {
+			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+		}
+		if err != nil {
+			return err
+		}
+		defer data.Close()
+		table.UpdateTable(data)
+		gcFiles := table.SoftGC()
+		mergeGCFile(gcFiles, gcFileMap)
+		oNames = append(oNames, oneNames...)
+	}
+	loadDuration += time.Since(now)
+	now = time.Now()
+	for _, oName := range oNames {
+		if files[oName.Name().String()] == nil {
+			files[oName.Name().String()] = oName
+		}
+	}
+
+	// trim checkpoint and block
 	var cnLoc, tnLoc, mergeStart, mergeEnd string
 	var end, start types.TS
 	var version uint64
@@ -301,6 +308,13 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 	}
 
+	// copy data
+	taeFileList, err := parallelCopyData(srcFs, dstFs, files, parallelNum, gcFileMap)
+	if err != nil {
+		return err
+	}
+
+	// copy checkpoint and gc meta
 	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp", start)
 	if err != nil {
 		return err
