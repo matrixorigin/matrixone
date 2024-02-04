@@ -550,14 +550,13 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
 					tbl.db.txn.engine.fs,
 					location,
-					tbl.db.txn.proc.GetMPool(),
-					fileservice.Policy(0))
+					tbl.db.txn.proc.GetMPool())
 				if err != nil {
 					return err
 				}
