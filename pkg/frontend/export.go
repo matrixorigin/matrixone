@@ -19,25 +19,24 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type ExportConfig struct {
@@ -76,7 +75,7 @@ type writeParam struct {
 	Index      int32
 	WriteIndex int32
 	ByteChan   chan *BatchByte
-	BatchMap   map[int32]([]byte)
+	BatchMap   map[int32][]byte
 }
 
 type BatchByte struct {
@@ -443,6 +442,13 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 				} else {
 					writeByte = appendBytes(writeByte, []byte("false"), symbol[j], closeby, flag[j])
 				}
+			case types.T_bit:
+				val := vector.GetFixedAt[uint64](vec, i)
+				bitLength := vec.GetType().Width
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&val)[:byteLength]
+				slices.Reverse(b)
+				writeByte = appendBytes(writeByte, b, symbol[j], closeby, flag[j])
 			case types.T_int8:
 				val := vector.GetFixedAt[int8](vec, i)
 				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
@@ -609,6 +615,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_BIT:
 			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err

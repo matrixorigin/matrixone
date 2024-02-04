@@ -617,5 +617,6 @@ func init() {
 		"handler":                    HANDLER,
 		"sample":                     SAMPLE,
 		"percent":                    PERCENT,
+		"master":                     MASTER,
 	}
 }

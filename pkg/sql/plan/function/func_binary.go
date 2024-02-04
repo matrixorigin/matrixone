@@ -1596,7 +1596,13 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+	returnType := [...]types.T{
+		types.T_varchar, types.T_char,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bit,
+	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
 			if i < 2 {
@@ -2109,7 +2115,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 		} else {
 			r = int64(v)
 		}
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		v := uint64(val)
 		if v > uint64(math.MaxInt64) {
 			r = math.MaxInt64

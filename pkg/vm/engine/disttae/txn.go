@@ -153,6 +153,9 @@ func checkPKDup(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)

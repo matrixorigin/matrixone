@@ -344,6 +344,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 	switch col.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAt[bool](col, int(row))
+	case types.T_bit:
+		return vector.GetFixedAt[uint64](col, int(row))
 	case types.T_int8:
 		return vector.GetFixedAt[int8](col, int(row))
 	case types.T_int16:

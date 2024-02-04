@@ -32,6 +32,7 @@ var (
 		types.T_timestamp, types.T_time,
 		types.T_decimal64, types.T_decimal128,
 		types.T_bool,
+		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text,
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
@@ -46,6 +47,8 @@ func NewAggAnyValue(overloadID int64, dist bool, inputTypes []types.Type, output
 	switch inputTypes[0].Oid {
 	case types.T_bool:
 		return newGenericAnyValue[bool](overloadID, inputTypes[0], outputType, dist)
+	case types.T_bit:
+		return newGenericAnyValue[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint8:
 		return newGenericAnyValue[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:
