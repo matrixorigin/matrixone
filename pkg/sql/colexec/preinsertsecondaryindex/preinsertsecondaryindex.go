@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,7 +41,6 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
-	arg.ps = types.NewPackerArray(colexec.DefaultBatchSize, proc.Mp())
 	return nil
 }
 
@@ -98,7 +96,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc, arg.ps)
+		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc, &arg.packer)
 		if err != nil {
 			return result, err
 		}
@@ -115,8 +113,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
 		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
-		err := arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
-		if err != nil {
+		if err = arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
 			return result, err
 		}
 	}
