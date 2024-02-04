@@ -176,6 +176,8 @@ func (v *Vector) setupColFromData() {
 		switch v.typ.Oid {
 		case types.T_bool:
 			v.col.setFromVector(v)
+		case types.T_bit:
+			v.col.setFromVector(v)
 		case types.T_int8:
 			v.col.setFromVector(v)
 		case types.T_int16:
@@ -296,6 +298,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 	switch t.Oid {
 	case types.T_bool:
 		return appendBytesToFixSized[bool](vec)
+	case types.T_bit:
+		return appendBytesToFixSized[uint64](vec)
 	case types.T_int8:
 		return appendBytesToFixSized[int8](vec)
 	case types.T_int16:
