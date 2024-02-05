@@ -3487,6 +3487,9 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
+	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
+		return true
+	}
 	if !plan2.NeedStats(n.TableDef) {
 		return true
 	}
