@@ -250,23 +250,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	enabled, err := isForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
-	}
-
-	if enabled {
-		err := rebuildFkey(ctx, dbName, tableDef)
-		if err != nil {
-			return err
-		}
-		//retrieve the tableDef again
-		obj, tableDef = ctx.Resolve(dbName, tblName)
-		if tableDef == nil {
-			return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
-		}
-	}
-
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {

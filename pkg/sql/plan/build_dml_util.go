@@ -286,13 +286,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		return err
 	}
 
-	fks, err := getAllRefered(ctx, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "fks refered: %v\n", fks)
 
-	if len(fks) > 0 ||
+	var fks map[ReferKey]map[string][]*ReferDef
+
+	if enabled {
+		fks, err = getAllRefered(ctx, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "fks refered: %v\n", fks)
+	}
+	if enabled && len(fks) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
 		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
@@ -607,7 +615,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	builder.appendStep(lastNodeId)
 
 	// if some table references to this table
-	if len(fks) > 0 {
+	if enabled && len(fks) > 0 {
 		nameTypMap := make(map[string]*plan.Type)
 		idNameMap := make(map[uint64]string)
 		nameIdxMap := make(map[string]int32)
@@ -1686,7 +1694,11 @@ func makeInsertPlan(
 		}
 	}
 
-	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		fks, err := getAllFKs(ctx, objRef.SchemaName, tableDef.Name)
 		if err != nil {
 			return err

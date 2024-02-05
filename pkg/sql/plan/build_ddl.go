@@ -3076,9 +3076,15 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		return &fkData, nil
 	}
 
+	fkData.ParentDbName = parentDbName
+	fkData.ParentTableName = parentTableName
+
+	//make insert mo_foreign_keys
+	fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
+
 	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
 	if parentTableDef == nil {
-		enabled, err := isForeignKeyChecksEnabled(ctx)
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -3101,9 +3107,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 	}
 
-	fkData.ParentDbName = parentDbName
-	fkData.ParentTableName = parentTableName
-
 	fkData.Def.ForeignTbl = parentTableDef.TblId
 
 	//separate the rest of the logic in previous version
@@ -3116,8 +3119,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	fkData.Def.IsReady = true
 
-	//make insert mo_foreign_keys
-	fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
 	return &fkData, nil
 }
 
