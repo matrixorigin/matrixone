@@ -2101,9 +2101,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 	}
 
-	s = newScope(Remote)
-	s.NodeInfo = node
-
 	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
 	if filterExpr != nil {
 		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
@@ -2112,6 +2109,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 	}
 
+	s = newScope(Remote)
+	s.NodeInfo = node
 	s.DataSource = &Source{
 		Timestamp:              ts,
 		Attributes:             attrs,
