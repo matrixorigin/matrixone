@@ -16,7 +16,6 @@ package semi
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -77,6 +76,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
+				ctr.skipProbe = true
+			}
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
@@ -91,6 +93,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if bat.IsEmpty() {
 				proc.PutBatch(bat)
 				continue
+			}
+			if ctr.skipProbe {
+				result.Batch = bat
+				return result, nil
 			}
 			if ctr.mp == nil {
 				proc.PutBatch(bat)
