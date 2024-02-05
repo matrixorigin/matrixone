@@ -3493,6 +3493,15 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if !plan2.InternalTable(n.TableDef) {
 		return true
 	}
+	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		return true
+	}
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		return true
+	}
+	if n.ObjRef.PubInfo != nil {
+		return true
+	}
 	if n.TableDef.Partition != nil {
 		return true
 	}
