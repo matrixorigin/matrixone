@@ -69,11 +69,11 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 			switch fn.Func.ObjName {
 			case "=":
-				if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+				if (fn.Args[0].GetLit() != nil || fn.Args[0].GetP() != nil) && fn.Args[1].GetCol() != nil {
 					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 				}
 
-				if fn.Args[1].GetLit() == nil {
+				if fn.Args[1].GetLit() == nil && fn.Args[1].GetP() == nil {
 					goto END0
 				}
 
@@ -225,12 +225,12 @@ END0:
 			continue
 		}
 
-		if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+		if (fn.Args[0].GetLit() != nil || fn.Args[0].GetP() != nil) && fn.Args[1].GetCol() != nil {
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 		}
 
 		col := fn.Args[0].GetCol()
-		if col == nil || fn.Args[1].GetLit() == nil {
+		if col == nil || (fn.Args[1].GetLit() == nil && fn.Args[1].GetP() == nil) {
 			continue
 		}
 
