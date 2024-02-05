@@ -76,7 +76,8 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	Expr                   *plan.Expr
+	FilterExpr             *plan.Expr //todo: delete this
+	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo

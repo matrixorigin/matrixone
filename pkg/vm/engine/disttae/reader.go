@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sort"
@@ -338,18 +337,17 @@ func (r *blockReader) getBlockZMs() {
 	orderByColIDX := int(r.tableDef.Cols[int(orderByCol.Col.ColPos)].Seqnum)
 
 	r.blockZMS = make([]index.ZM, len(r.blks))
-	var objMeta objectio.ObjectMeta
+	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
-	var err error
 	for i := range r.blks {
-		if !bytes.Equal(location, r.blks[i].MetaLocation()) {
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			location = r.blks[i].MetaLocation()
-			objMeta, err = objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
+			objMeta, err := objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
 			if err != nil {
 				panic("load object meta error when ordered scan!")
 			}
+			objDataMeta = objMeta.MustDataMeta()
 		}
-		objDataMeta := objMeta.MustDataMeta()
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		r.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
 	}
