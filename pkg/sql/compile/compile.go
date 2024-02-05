@@ -3490,10 +3490,13 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
 		return true
 	}
-	if !plan2.NeedStats(n.TableDef) {
+	if !plan2.InternalTable(n.TableDef) {
 		return true
 	}
 	if n.TableDef.Partition != nil {
+		return true
+	}
+	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
 		return true
 	}
 	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
