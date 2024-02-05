@@ -3493,15 +3493,6 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if !plan2.InternalTable(n.TableDef) {
 		return true
 	}
-	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		return true
-	}
-	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		return true
-	}
-	if n.ObjRef.PubInfo != nil {
-		return true
-	}
 	if n.TableDef.Partition != nil {
 		return true
 	}
@@ -3524,11 +3515,22 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
-	db, err = c.e.Database(c.ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	ctx := c.ctx
+	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if n.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	}
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(c.ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -3537,11 +3539,11 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
 			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
 				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(c.ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(c.ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, err
 				}
@@ -3559,11 +3561,11 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 			partitionTableNames := partitionInfo.PartitionTableNames
 			for i := 0; i < partitionNum; i++ {
 				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(c.ctx, partTableName, c.proc)
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(c.ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 				if err != nil {
 					return nil, err
 				}
