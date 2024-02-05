@@ -89,7 +89,7 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
+	writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, writes)
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
@@ -282,7 +282,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	}
 
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
+	writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, writes)
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
@@ -596,15 +596,19 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, stable bool) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	tbl.writes = tbl.writes[:0]
-
-	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
+	// XXX obviously the following should be using Stable get.   FUBAR.
+	if stable {
+		tbl.writes = tbl.db.txn.getTableWritesStable(tbl.db.databaseId, tbl.tableId, tbl.writes)
+	} else {
+		tbl.writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, tbl.writes)
+	}
 
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
@@ -1560,7 +1564,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.getTableWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -2309,11 +2313,4 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
-}
-
-// get the table's snapshot.
-func (tbl *txnTable) updateWriteOffset() {
-	if tbl.db.txn.statementID > 0 {
-		tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
-	}
 }

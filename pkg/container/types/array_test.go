@@ -15,9 +15,10 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestBytesToArray(t *testing.T) {
@@ -257,7 +258,8 @@ func TestStringToArray(t *testing.T) {
 				if _, gotErr := StringToArray[float32](tt.args.input); gotErr == nil {
 					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
-					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+					gotMoErr := gotErr.(*moerr.Error)
+					if *gotMoErr != *tt.wantErr.(*moerr.Error) {
 						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
@@ -267,7 +269,8 @@ func TestStringToArray(t *testing.T) {
 				if _, gotErr := StringToArray[float64](tt.args.input); gotErr == nil {
 					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
-					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+					gotMoErr := gotErr.(*moerr.Error)
+					if *gotMoErr != *tt.wantErr.(*moerr.Error) {
 						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}

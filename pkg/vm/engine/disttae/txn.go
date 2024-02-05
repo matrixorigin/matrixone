@@ -889,7 +889,9 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 
 }
 
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+// getTableWritesIncludingSelf returns all the writes for the given table, including the writes in this Statement.
+// Halloween problem!   Use getTableWritesStable to avoid the problem.
+func (txn *Transaction) getTableWritesIncludingSelf(databaseId uint64, tableId uint64, writes []Entry) []Entry {
 	txn.Lock()
 	defer txn.Unlock()
 	for _, entry := range txn.writes {
@@ -900,6 +902,21 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 			continue
 		}
 		writes = append(writes, entry)
+	}
+	return writes
+}
+
+// getTableWritesStable returns all the writes for the given table, NOT including the writes in current Statement.
+// This is used to avoid the Halloween problem.
+func (txn *Transaction) getTableWritesStable(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+	txn.Lock()
+	defer txn.Unlock()
+
+	woff := txn.getWriteOffset()
+	for i := 0; i < len(txn.writes) && i < woff; i++ {
+		if txn.writes[i].databaseId == databaseId && txn.writes[i].tableId == tableId {
+			writes = append(writes, txn.writes[i])
+		}
 	}
 	return writes
 }

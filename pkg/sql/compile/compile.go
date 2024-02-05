@@ -3529,7 +3529,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList, false)
 	if err != nil {
 		return nil, err
 	}
@@ -3542,7 +3542,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, false)
 				if err != nil {
 					return nil, err
 				}
@@ -3564,7 +3564,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 				if err != nil {
 					return nil, err
 				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList, false)
 				if err != nil {
 					return nil, err
 				}

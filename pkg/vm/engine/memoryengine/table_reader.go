@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -210,7 +211,7 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) (engine.Ranges, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ bool) (engine.Ranges, error) {
 	// return encoded shard ids
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)
