@@ -21,6 +21,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func isRuntimeConstExpr(expr *plan.Expr) bool {
+	switch expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+		return true
+
+	default:
+		return false
+	}
+}
+
 func (builder *QueryBuilder) detectFilterOnCompositePrimaryKey(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_TABLE_SCAN {
@@ -46,12 +56,12 @@ func (builder *QueryBuilder) detectFilterOnCompositePrimaryKey(nodeID int32) {
 			continue
 		}
 
-		if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 		}
 
 		col := fn.Args[0].GetCol()
-		if col == nil || fn.Args[1].GetLit() == nil {
+		if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
 			continue
 		}
 
@@ -115,16 +125,6 @@ func (builder *QueryBuilder) detectFilterOnCompositePrimaryKey(nodeID int32) {
 
 	node.FilterList = newFilterList
 	calcScanStats(node, builder)
-}
-
-func isRuntimeConstExpr(expr *plan.Expr) bool {
-	switch expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
-		return true
-
-	default:
-		return false
-	}
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -417,13 +417,13 @@ END0:
 			for i := range filterIdx {
 				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 			}
-			rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
 			funcName := "="
 			if len(filterIdx) < numParts {
 				funcName = "prefix_eq"
 			}
-			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+			idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), funcName, []*plan.Expr{
 				{
 					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
 					Expr: &plan.Expr_Col{
