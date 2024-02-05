@@ -1092,6 +1092,7 @@ message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
 	uint64 database_id	= 3;
+	string UpdateSql = 4;
 }
 
 message FkColName {
@@ -1224,6 +1225,7 @@ message AlterTable {
 	map<uint64, ColDef> change_tbl_colId_map = 11;
 	//detect fk self refer constraint
 	repeated string detectSqls= 12;
+	repeated string UpdateSqls = 13;
 }
 
 message DropTable {

@@ -862,6 +862,7 @@ var (
 		"mo_variables":                0,
 		"mo_transactions":             0,
 		"mo_cache":                    0,
+		"mo_foreign_keys":             0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1082,7 +1083,7 @@ var (
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
-	dropMoForeignKeys = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -7885,17 +7886,17 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			return rtnErr
 		}
 
-		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
 		rtnErr = bh.Exec(newTenantCtx, createMoTablePartitionsSql)
 		if rtnErr != nil {
 			return rtnErr
 		}
 
 		rtnErr = bh.Exec(newTenantCtx, createAutoTableSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
 		if rtnErr != nil {
 			return rtnErr
 		}

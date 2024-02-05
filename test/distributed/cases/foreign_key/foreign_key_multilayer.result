@@ -418,3 +418,11 @@ insert into orders_fk values(1,14,"F",354575.46,"1992-12-24","3-MEDIUM","Clerk#0
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into lineitem_fk values(1,200,10000,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
 internal error: Cannot add or update a child row: a foreign key constraint fails
+drop table if exists lineitem_fk;
+drop table if exists partsupp_fk;
+drop table if exists orders_fk;
+drop table if exists part_fk;
+drop table if exists supplier_fk;
+drop table if exists customer_fk;
+drop table if exists nation_fk;
+drop table if exists region_fk;

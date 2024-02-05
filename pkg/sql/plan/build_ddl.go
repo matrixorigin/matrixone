@@ -2053,6 +2053,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		dropTable.TableDef = tableDef
+		dropTable.DropSqls = []string{makeDeleteFkSqlForDropTable(dropTable.Database, dropTable.Table)}
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2159,6 +2160,8 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		}
 		dropDB.DatabaseId = databaseId
 	}
+
+	dropDB.UpdateSql = makeDeleteFkSqlForDropDatabase(dropDB.Database)
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2425,6 +2428,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var primaryKeys []string
 	var indexs []string
 	var detectSqls []string
+	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	for i, option := range stmt.Options {
@@ -2472,6 +2476,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				for _, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						name_not_found = false
+						updateSqls = append(updateSqls, makeDeleteFkSqlForDropConstraint(databaseName, tableName, constraintName))
 						break
 					}
 				}
@@ -2535,6 +2540,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					detectSqls = append(detectSqls, sql)
 				}
+				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
 				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 				if err != nil {
@@ -2881,6 +2887,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 	alterTable.DetectSqls = detectSqls
+	alterTable.UpdateSqls = updateSqls
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

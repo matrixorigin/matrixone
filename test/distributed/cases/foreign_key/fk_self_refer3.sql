@@ -244,4 +244,5 @@ update t1 as A set A.a = 4, A.b = 4 where A.a = A.b and A.a = 3;
 --error
 update t1 as A set A.b = 4, A.a = 4 where A.a = A.b and A.a = 3;
 
+drop table if exists t1;
 drop database if exists fk_self_refer3;

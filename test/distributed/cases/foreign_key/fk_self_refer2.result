@@ -152,4 +152,5 @@ delete from t1 where a = 1;
 select count(*) from t1;
 count(*)
 0
+drop table if exists t1;
 drop database if exists fk_self_refer2;

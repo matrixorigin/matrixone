@@ -56,7 +56,7 @@ type TxnCompilerContext struct {
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 func (tcc *TxnCompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
-	
+
 	return nil, nil
 }
 

@@ -99,6 +99,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	//3. delete fks
+	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateSql())
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -663,6 +669,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	err = rel.AlterTable(c.ctx, newCt, constraint)
 	if err != nil {
 		return err
+	}
+
+	//update foreign_key_checks
+	for _, sql := range qry.UpdateSqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 
 	// remove refChildTbls for drop foreign key clause
@@ -1845,6 +1859,14 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		if err != nil {
 			return err
+		}
+	}
+
+	if len(qry.DropSqls) > 0 {
+		for _, sql := range qry.DropSqls {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
 		}
 	}
 

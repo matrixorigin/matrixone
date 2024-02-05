@@ -82,7 +82,7 @@ type dmlPlanCtx struct {
 	insertColPos           []int
 	updateColPosMap        map[string]int
 	allDelTableIDs         map[uint64]struct{}
-	allDelTables map[ReferKey]struct{}
+	allDelTables           map[ReferKey]struct{}
 	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable              bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup       bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
@@ -285,12 +285,26 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	if err != nil {
 		return err
 	}
-	if len(delCtx.tableDef.RefChildTbls) > 0 ||
+
+	fks, err := getAllRefered(ctx, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "fks refered: %v\n", fks)
+
+	if len(fks) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
 		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
 		canTruncate = false
 	}
+
+	//if len(delCtx.tableDef.RefChildTbls) > 0 ||
+	//	delCtx.tableDef.ViewSql != nil ||
+	//	(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
+	//	delCtx.objRef.PubInfo != nil {
+	//	canTruncate = false
+	//}
 
 	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
 		typMap := make(map[string]*plan.Type)
@@ -592,12 +606,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	builder.appendStep(lastNodeId)
 
-	fks, err := getAllRefered(ctx, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "fks refered: %v\n", fks)
-
 	// if some table references to this table
 	if len(fks) > 0 {
 		nameTypMap := make(map[string]*plan.Type)
@@ -612,16 +620,20 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 		//for every child table
 		for referKey, constraints := range fks {
-			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
-			if _, existInDelTable := delCtx.allDelTables[referKey]; existInDelTable {
-				continue
+			fkSelfReferCond := IsFkSelfRefer(referKey.Db, referKey.Tbl, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
+			//fk self refer should be skipped
+			if !fkSelfReferCond {
+				// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
+				if _, existInDelTable := delCtx.allDelTables[referKey]; existInDelTable {
+					continue
+				}
 			}
 			fmt.Fprintln(os.Stderr, "+++!!! 1")
 
 			//delete data in parent table may trigger some actions in the child table
 			var childObjRef *ObjectRef
 			var childTableDef *TableDef
-			if IsFkSelfRefer(referKey.Db, referKey.Tbl, delCtx.objRef.SchemaName, delCtx.tableDef.Name) {
+			if fkSelfReferCond {
 				//fk self refer
 				childObjRef = delCtx.objRef
 				childTableDef = delCtx.tableDef
@@ -672,7 +684,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				//if the child table in the delete table list, something must be done
 				//fkSelfReferCond := fk.ForeignTbl == 0 &&
 				//	childTableDef.TblId == delCtx.tableDef.TblId
-				fkSelfReferCond := IsFkSelfRefer(referKey.Db, referKey.Tbl, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
+				//fkSelfReferCond := IsFkSelfRefer(referKey.Db, referKey.Tbl, delCtx.objRef.SchemaName, delCtx.tableDef.Name)
 				{
 					// update stmt: update the columns do not contain ref key, skip
 					updateRefColumn := make(map[string]int32)
@@ -4458,9 +4470,17 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	case "restrict":
 		return plan.ForeignKeyDef_RESTRICT
 	case "set null":
+		fallthrough
+	case "set_null":
 		return plan.ForeignKeyDef_SET_NULL
+	case "no_action":
+		fallthrough
 	case "no action":
 		return plan.ForeignKeyDef_NO_ACTION
+	case "set_default":
+		fallthrough
+	case "set default":
+		return plan.ForeignKeyDef_SET_DEFAULT
 	default:
 		return plan.ForeignKeyDef_RESTRICT
 	}
@@ -4501,6 +4521,28 @@ func makeInsertSqlForFk(db, table string, data *FkData) string {
 	return sb.String()
 }
 
-func makeDeleteSqlForFk() string {
+func makeDeleteFkSqlForDropTable(db, tbl string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf(
+		"db_name = '%s' and table_name = '%s' or"+
+			" refer_db_name = '%s' and refer_table_name = '%s'", db, tbl, db, tbl))
+	return sb.String()
+}
 
+func makeDeleteFkSqlForDropConstraint(db, tbl, constraint string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf(
+		"constraint_name = '%s' and db_name = '%s' and table_name = '%s'",
+		constraint, db, tbl))
+	return sb.String()
+}
+
+func makeDeleteFkSqlForDropDatabase(db string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf(
+		"db_name = '%s' or refer_db_name = '%s'", db, db))
+	return sb.String()
 }
