@@ -955,7 +955,7 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !needStats(node.TableDef) {
+	if !NeedStats(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
@@ -998,7 +998,7 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 	return false
 }
 
-func needStats(tableDef *TableDef) bool {
+func NeedStats(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false
