@@ -3496,7 +3496,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if n.TableDef.Partition != nil {
 		return true
 	}
-	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
+	if len(n.RuntimeFilterProbeList) == 0 {
 		return true
 	}
 	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
