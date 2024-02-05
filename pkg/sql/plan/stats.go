@@ -1003,11 +1003,13 @@ func NeedStats(tableDef *TableDef) bool {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false
 	}
-	switch tableDef.Name {
-	case "sys_async_task", "sys_cron_task":
+	if strings.HasPrefix(tableDef.Name, "sys_") {
 		return false
 	}
-	return !strings.HasPrefix(tableDef.Name, "mo_")
+	if strings.HasPrefix(tableDef.Name, "mo_") {
+		return false
+	}
+	return true
 }
 
 func DefaultHugeStats() *plan.Stats {
