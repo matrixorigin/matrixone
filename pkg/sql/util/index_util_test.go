@@ -104,16 +104,18 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		ps := types.NewPackerArray(test.vecs[0].Length(), test.proc.Mp())
+		packers := PackerList{}
 		if len(test.parts) >= 2 {
 			vec, _ := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, test.vecs, test.vecs[0].Length())
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, ps)
+			b, _, err := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, &packers)
+			require.NoError(t, err)
 			require.Equal(t, vec.UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		} else {
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, ps)
+			b, _, err := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, &packers)
+			require.NoError(t, err)
 			require.Equal(t, test.vecs[0].UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		}
-		for _, p := range ps {
+		for _, p := range packers.ps {
 			p.FreeMem()
 		}
 	}
@@ -171,17 +173,19 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 	for _, test := range tests {
 		nulls.Add(test.vecs[1].GetNulls(), 1)
 		//if JudgeIsCompositeIndexColumn(test.f) {
-		ps := types.NewPackerArray(test.vecs[0].Length(), test.proc.Mp())
+		packers := PackerList{}
 		if len(test.parts) >= 2 {
 			//b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, ps)
+			b, _, err := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, &packers)
+			require.NoError(t, err)
 			require.Equal(t, 2, b.Vecs[0].Length())
 		} else {
 			//b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.f.Parts, "", test.proc)
-			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, ps)
+			b, _, err := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc, &packers)
+			require.NoError(t, err)
 			require.Equal(t, 2, b.Vecs[0].Length())
 		}
-		for _, p := range ps {
+		for _, p := range packers.ps {
 			p.FreeMem()
 		}
 	}
