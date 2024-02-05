@@ -196,7 +196,16 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
 
-	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	var accountId uint32
+	if accountId, err = defines.GetAccountId(ctx); err != nil {
+		panic(err)
+	}
+
+	t := &TenantInfo{
+		TenantID:      accountId,
+		UserID:        defines.GetUserId(ctx),
+		DefaultRoleID: defines.GetRoleId(ctx),
+	}
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
