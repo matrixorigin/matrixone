@@ -639,14 +639,22 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
-	rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	//rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	//for k, rowid := range rowids {
+	//	// put rowid to be deleted into sels.
+	//	if mp[rowid] != 0 {
+	//		sels = append(sels, int64(k))
+	//	}
+	//}
+	//bat.Shrink(sels, true)
+
 	for k, rowid := range rowids {
-		// put rowid to be deleted into sels.
-		if mp[rowid] != 0 {
+		if mp[rowid] == 0 {
 			sels = append(sels, int64(k))
 		}
 	}
-	bat.Shrink(sels, true)
+	bat.Shrink(sels, false)
+
 	txn.proc.Mp().PutSels(sels)
 	return bat
 }
