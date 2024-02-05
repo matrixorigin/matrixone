@@ -680,6 +680,9 @@ func (txn *Transaction) deleteTableWrites(
 		if e.bat == nil {
 			continue
 		}
+		if e.typ == UPDATE || e.typ == ALTER {
+			continue
+		}
 		// for 3 and 4 above.
 		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
 			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
@@ -698,7 +701,7 @@ func (txn *Transaction) deleteTableWrites(
 			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
-			// Now, e.bat is uncommitted raw data batch which belongs to one block allocated by CN.
+			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
 			// if e.bat is not to be deleted,skip it.
 			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
