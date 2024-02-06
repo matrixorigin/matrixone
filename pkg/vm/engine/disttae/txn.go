@@ -639,22 +639,14 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
-	//rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
-	//for k, rowid := range rowids {
-	//	// put rowid to be deleted into sels.
-	//	if mp[rowid] != 0 {
-	//		sels = append(sels, int64(k))
-	//	}
-	//}
-	//bat.Shrink(sels, true)
-
+	rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for k, rowid := range rowids {
-		if mp[rowid] == 0 {
+		// put rowid to be deleted into sels.
+		if mp[rowid] != 0 {
 			sels = append(sels, int64(k))
 		}
 	}
-	bat.Shrink(sels, false)
-
+	bat.Shrink(sels, true)
 	txn.proc.Mp().PutSels(sels)
 	return bat
 }
@@ -690,9 +682,6 @@ func (txn *Transaction) deleteTableWrites(
 		}
 		sels = sels[:0]
 		if e.tableId == tableId && e.databaseId == databaseId {
-			//FIXME:: if e.typ is DELETE, then e.bat.Vecs[0] is rowid.
-			//        if e.type is update or alter, e.bat.Vecs[0] is not rowid?
-			//        need to skip this entry type?
 			vs := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
 			if len(vs) == 0 {
 				continue
@@ -702,7 +691,7 @@ func (txn *Transaction) deleteTableWrites(
 				continue
 			}
 			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
-			// if e.bat is not to be deleted,skip it.
+			// so if e.bat is not to be deleted,skip it.
 			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
 			}

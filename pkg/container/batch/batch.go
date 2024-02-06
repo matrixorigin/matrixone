@@ -122,8 +122,10 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool) {
-	if len(sels) == bat.rowCount {
-		return
+	if !negate {
+		if len(sels) == bat.rowCount {
+			return
+		}
 	}
 	for _, vec := range bat.Vecs {
 		vec.Shrink(sels, negate)
