@@ -79,7 +79,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil {
 		return
 	}
 
