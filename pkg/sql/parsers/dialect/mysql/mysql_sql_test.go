@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select ownership from t1",
-		output: "select ownership from t1",
+		input:  "alter table tbl1 drop constraint fk_name",
+		output: "alter table tbl1 drop foreign key fk_name",
 	}
 )
 
@@ -769,7 +769,7 @@ var (
 		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
-		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
+		output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
 	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set names = utf8mb4 utf8mb4_general_ci",
@@ -806,7 +806,7 @@ var (
 		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 	}, {
 		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 	}, {
 		input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
@@ -846,7 +846,7 @@ var (
 		input: "create external table t (a int) infile {'filepath'='data.txt', 'compression'='lz4'}",
 	}, {
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
-		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
+		output: "create external table t (a int) infile 'data.txt' fields terminated by '' optionally enclosed by '' lines terminated by ''",
 	}, {
 		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 		output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
@@ -855,7 +855,7 @@ var (
 		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 	}, {
 		input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 	}, {
 		input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 	}, {
@@ -1436,6 +1436,9 @@ var (
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
 		}, {
 			input: "create index idx1 on a (a)",
+		}, {
+			input:  "create index idx using master on A (a,b,c)",
+			output: "create index idx using master on a (a, b, c)",
 		}, {
 			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
 		}, {
@@ -2682,8 +2685,11 @@ var (
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (123)",
 		}, {
-			input:  "backup '123' filesystem '/home/abc'",
-			output: "backup 123 filesystem /home/abc",
+			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
+			output: "backup 123 filesystem /home/abc parallelism 1",
+		}, {
+			input:  "backup '125' filesystem '/tmp/backup' parallelism '1';",
+			output: "backup 125 filesystem /tmp/backup parallelism 1",
 		}, {
 			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'}",
 			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'}",
@@ -2729,6 +2735,10 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "alter table tbl1 drop constraint fk_name",
+			output: "alter table tbl1 drop foreign key fk_name",
 		},
 	}
 )

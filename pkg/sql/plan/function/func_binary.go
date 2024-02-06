@@ -22,6 +22,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,14 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -697,6 +696,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	var fromLoc, toLoc *time.Location
+	if ivecs[1].IsConst() && !ivecs[1].IsConstNull() {
+		fromTz, _ := fromTzs.GetStrValue(0)
+		fromLoc = convertTimezone(string(fromTz))
+	}
+	if ivecs[2].IsConst() && !ivecs[2].IsConstNull() {
+		toTz, _ := toTzs.GetStrValue(0)
+		toLoc = convertTimezone(string(toTz))
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		date, null1 := dates.GetValue(i)
 		fromTz, null2 := fromTzs.GetStrValue(i)
@@ -713,15 +722,13 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			return nil
 		} else {
-			fromLoc := convertTimezone(string(fromTz))
-			if fromLoc == nil {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				return nil
+			if !ivecs[1].IsConst() {
+				fromLoc = convertTimezone(string(fromTz))
 			}
-			toLoc := convertTimezone(string(toTz))
-			if toLoc == nil {
+			if !ivecs[2].IsConst() {
+				toLoc = convertTimezone(string(toTz))
+			}
+			if fromLoc == nil || toLoc == nil {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -1589,7 +1596,13 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+	returnType := [...]types.T{
+		types.T_varchar, types.T_char,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bit,
+	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
 			if i < 2 {
@@ -2102,7 +2115,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 		} else {
 			r = int64(v)
 		}
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		v := uint64(val)
 		if v > uint64(math.MaxInt64) {
 			r = math.MaxInt64
@@ -2151,64 +2164,6 @@ func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
-}
-
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	lowerBound := sort.Search(len(lcol), func(i int) bool {
-		return index.PrefixCompare(lcol[i].GetByteSlice(larea), rval) >= 0
-	})
-
-	upperBound := lowerBound
-	for upperBound < len(lcol) && bytes.HasPrefix(lcol[upperBound].GetByteSlice(larea), rval) {
-		upperBound++
-	}
-
-	for i := 0; i < lowerBound; i++ {
-		res[i] = false
-	}
-	for i := lowerBound; i < upperBound; i++ {
-		res[i] = true
-	}
-	for i := upperBound; i < len(res); i++ {
-		res[i] = false
-	}
-
-	return nil
-}
-
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rvec := parameters[1]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	rval := rvec.GetBytesAt(0)
-	rpos := 0
-	rlen := rvec.Length()
-
-	for i := 0; i < length; i++ {
-		lval := lcol[i].GetByteSlice(larea)
-		for index.PrefixCompare(lval, rval) > 0 {
-			rpos++
-			if rpos == rlen {
-				for j := i; j < length; j++ {
-					res[j] = false
-				}
-				return nil
-			}
-
-			rval = rvec.GetBytesAt(rpos)
-		}
-
-		res[i] = bytes.HasPrefix(lval, rval)
-	}
-
-	return nil
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2

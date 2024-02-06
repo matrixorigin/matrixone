@@ -217,7 +217,7 @@ alter table t5 drop column a;
 
 drop table t5;
 create table t5(a int primary key, b int);
-create table t6(b int, c int, foreign key(b) references t5(a));
+create table t6(b int, c int, constraint `c1` foreign key(b) references t5(a));
 alter table t5 drop column b;
 alter table t5 add column c int;
 alter table t6 drop column b;

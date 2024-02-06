@@ -815,6 +815,11 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
+		// `DELETE_TXN` and `INSERT_TXN` are only used for CN workspace consumption, not sent to DN
+		if e.typ == DELETE_TXN || e.typ == INSERT_TXN {
+			continue
+		}
+
 		//SKIP update/delete on mo_columns
 		//The TN does not counsume the update/delete on mo_columns.
 		//there are update/delete entries on mo_columns just after one on mo_tables.
@@ -829,7 +834,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 		if e.bat == nil || e.bat.IsEmpty() {
 			continue
 		}
-		if e.tableId == catalog.MO_TABLES_ID && e.typ == INSERT {
+		if e.tableId == catalog.MO_TABLES_ID && (e.typ == INSERT || e.typ == INSERT_TXN) {
 			logutil.Infof("precommit: create table: %s-%v", tid, vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
@@ -1288,6 +1293,8 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
+	case types.T_bit:
+		return true, uint64(v)
 	case types.T_int8:
 		return true, int8(v)
 	case types.T_int16:
@@ -1315,6 +1322,8 @@ func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 
 func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
 	switch oid {
+	case types.T_bit:
+		return true, uint64(v)
 	case types.T_int8:
 		return true, int8(v)
 	case types.T_int16:

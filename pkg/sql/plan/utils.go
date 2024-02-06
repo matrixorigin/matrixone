@@ -1230,6 +1230,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 		constVal := val.I64Val
 		switch columnT.Oid {
+		case types.T_bit:
+			return constVal >= 0 && uint64(constVal) <= uint64(1<<columnT.Width-1)
 		case types.T_int8:
 			return constVal <= int64(math.MaxInt8) && constVal >= int64(math.MinInt8)
 		case types.T_int16:
@@ -1246,8 +1248,6 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 			return constVal <= math.MaxUint32 && constVal >= 0
 		case types.T_uint64:
 			return constVal >= 0
-		case types.T_varchar:
-			return true
 		case types.T_float32:
 			//float32 has 6 significant digits.
 			return constVal <= 100000 && constVal >= -100000
@@ -1267,6 +1267,8 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Literal) bool {
 		}
 		constVal := val_u.U64Val
 		switch columnT.Oid {
+		case types.T_bit:
+			return constVal <= uint64(1<<columnT.Width-1)
 		case types.T_int8:
 			return constVal <= math.MaxInt8
 		case types.T_int16:
@@ -1865,4 +1867,53 @@ func HasMoCtrl(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+// IsFkSelfRefer checks the foreign key referencing itself
+func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
+	return fkDbName == curDbName && fkTableName == curTableName
+}
+
+// HasFkSelfReferOnly checks the foreign key referencing itself only.
+// If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
+	inExpr := &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: left.Typ.NotNullable,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					left,
+					{
+						Typ: &plan.Type{
+							Id: int32(types.T_tuple),
+						},
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  length,
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return inExpr
 }

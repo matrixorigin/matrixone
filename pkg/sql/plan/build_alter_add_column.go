@@ -391,6 +391,11 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					// remove 3 index records: metadata, centroids, entries
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
 				}
+			case catalog.MOIndexMasterAlgo.ToString():
+				if len(indexInfo.Parts) == 0 {
+					// TODO: verify this
+					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				}
 			}
 		}
 	}

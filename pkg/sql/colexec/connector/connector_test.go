@@ -94,7 +94,7 @@ func TestConnector(t *testing.T) {
 			bat.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.Children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -112,10 +112,12 @@ func newTestCase() connectorTestCase {
 				Ctx: ctx,
 				Ch:  make(chan *batch.Batch, 3),
 			},
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		cancel: cancel,
@@ -129,15 +131,11 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.Children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-
-	} else {
-		arg.Children = arg.Children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
+	arg.GetOperatorBase().SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
+		},
+	)
 }
