@@ -272,7 +272,7 @@ select * from dis_temp_01;
 a    b
 drop table dis_temp_01;
 start transaction;
-load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
+load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02 fields terminated by ',';
 use isolation_2;
 update dis_table_02 set b='pppp';
 select b, c from dis_table_02;
@@ -343,7 +343,7 @@ commit ;
 select * from dis_table_01;
 a    b
 begin ;
-delete from dis_table_02 where a>1;;
+delete from dis_table_02 where a>1;
 select b, c from dis_table_02;
 b    c
 pppp    2020-09-08 00:00:00
@@ -436,7 +436,7 @@ a    b    c
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
-load data infile 'fff.csv' to dis_table_05;
+load data infile 'fff.csv' to dis_table_05 fields terminated by ',';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " to dis_table_05;";
 use isolation_2;
 select * from dis_table_05;

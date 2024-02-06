@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package fuzzyfilter
 
 import (
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -59,8 +59,11 @@ Note:
     on duplicate key update
 */
 
+const argName = "fuzzy_filter"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" fuzzy check duplicate constraint")
+	buf.WriteString(argName)
+	buf.WriteString(": fuzzy check duplicate constraint")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -108,7 +111,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -351,7 +354,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
-	colexec.SortInFilter(arg.pass2RuntimeFilter)
+	arg.pass2RuntimeFilter.InplaceSort()
 	data, err := arg.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {
 		return err

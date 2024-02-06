@@ -17,17 +17,23 @@ insert into t1 values(8, "[130,40,90]", "[130,40,90,100,110]");
 
 -- 1. kmeans on vecf32 column
 select a,b,normalize_l2(b) from t1;
-select cluster_centers(b spherical_kmeans '2,vector_l2_ops') from t1;
-select cluster_centers(b spherical_kmeans '2,vector_ip_ops') from t1;
-select cluster_centers(b spherical_kmeans '2,vector_cosine_ops') from t1;
-SELECT value FROM  (SELECT cluster_centers(b spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+select cluster_centers(b kmeans '2,vector_l2_ops') from t1;
+select cluster_centers(b kmeans '2,vector_ip_ops') from t1;
+select cluster_centers(b kmeans '2,vector_cosine_ops') from t1;
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,false') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+
+-- 1.b spherical kmeans on vecf32 column
+SELECT value FROM  (SELECT cluster_centers(b kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 
 -- 2. kmeans on vecf64 column
 select a,c,normalize_l2(c) from t1;
-select cluster_centers(c spherical_kmeans '2,vector_l2_ops') from t1;
-select cluster_centers(c spherical_kmeans '2,vector_ip_ops') from t1;
-select cluster_centers(c spherical_kmeans '2,vector_cosine_ops') from t1;
-SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+select cluster_centers(c kmeans '2,vector_l2_ops') from t1;
+select cluster_centers(c kmeans '2,vector_ip_ops') from t1;
+select cluster_centers(c kmeans '2,vector_cosine_ops') from t1;
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+
+-- 2.b spherical kmeans on vecf64 column
+SELECT value FROM  (SELECT cluster_centers(c kmeans '2,vector_l2_ops,kmeansplusplus,true') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 
 -- 3. Create Secondary Index with IVFFLAT.
 drop table if exists tbl;
@@ -75,9 +81,9 @@ insert into tbl values(4, "[1,2,5]","[1,2,5]");
 create index idx3 using IVFFLAT on tbl(a) lists = 2 op_type 'vector_l2_ops';
 create index idx4 using IVFFLAT on tbl(b,c) lists = 2 op_type 'vector_l2_ops';
 create index idx5 using IVFFLAT on tbl(b) lists = -1;
-create index idx6 using IVFFLAT on tbl(b) op_type 'vector_l1_ops';
+create index idx6 using IVFFLAT on tbl(b) lists = 1 op_type 'vector_l1_ops';
 
--- 8. [Default] Create IVF index without any params
+-- 8. [Default] Create IVF index without any params -- will fail since we don't have lists argument.
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf32(3));
 insert into tbl values(1, "[1,2,3]","[1,2,3]");
@@ -85,11 +91,8 @@ insert into tbl values(2, "[1,2,4]","[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
 insert into tbl values(4, "[1,2,5]","[1,2,5]");
 create index idx7 using IVFFLAT on tbl(b);
-show index from tbl;
-show create table tbl;
-select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx7";
 
--- 9. Null & duplicate rows
+-- 9. duplicate rows
 drop table if exists tbl;
 create table tbl(a int primary key, b vecf32(3));
 insert into tbl values(1, "[1,2,3]");
@@ -97,11 +100,9 @@ insert into tbl values(2, "[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]");
 insert into tbl values(4, "[1,2,5]");
 insert into tbl values(5, "[1,3,5]");
-insert into tbl values(6, "[100,44,50]");
+insert into tbl values(6, "[100,44,50]"); -- dup
 insert into tbl values(7, "[100,44,50]");
 insert into tbl values(8, "[130,40,90]");
-insert into tbl values(9, null);
-insert into tbl values(10, null);
 create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 show create table tbl;
@@ -301,6 +302,241 @@ insert into tbl values(8, "[130,40,90]");
 create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 update tbl set embedding="[1,2,3]" where id="8";
 delete from tbl where id="8";
+
+-- 25. create table with index def
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3), key idx18 using ivfflat (embedding) lists=2 op_type "vector_l2_ops");
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+
+-- 26. Update table add new column
+alter table tbl add column id2 VARCHAR(20);
+--mysql> select * from `__mo_index_secondary_8ff07b6e-a483-11ee-b461-723e89f7b974`;
+-- alter table --> create table --> insert into select * --> reindex
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              1 |                         1 |                  1 |
+--|                              1 |                         1 |                  2 |
+--|                              1 |                         1 |                  3 |
+--|                              1 |                         1 |                  4 |
+--|                              1 |                         1 |                  5 |
+--|                              1 |                         2 |                  6 |
+--|                              1 |                         2 |                  7 |
+--|                              1 |                         2 |                  8 |
+--+--------------------------------+---------------------------+--------------------+
+
+update tbl set id2 = id;
+
+-- 27. Insert into table select (internally uses window row_number)
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(9, "[130,40,90]");
+
+drop table if exists tbl2;
+create table tbl2(id int primary key, data vecf32(3), key idx20 using ivfflat (data) lists=2 op_type "vector_l2_ops");
+insert into tbl2 select * from tbl1;
+--mysql> select * from `__mo_index_secondary_0b0c1e94-a483-11ee-b45f-723e89f7b974`;
+-- assigned all the rows to 1 giant null centroid
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              0 |                         1 |                  9 |
+--+--------------------------------+---------------------------+--------------------+
+
+
+-- 28. Create Index with no rows
+drop table if exists tbl1;
+create table tbl1(id int primary key, data vecf32(3));
+create index idx19 using ivfflat on tbl1(data) lists=2 op_type "vector_l2_ops";
+insert into tbl1 values(1, "[1,2,3]");
+insert into tbl1 values(2, "[1,2,4]");
+insert into tbl1 values(3, "[1,2.4,4]");
+insert into tbl1 values(4, "[1,2,5]");
+insert into tbl1 values(5, "[1,3,5]");
+insert into tbl1 values(6, "[100,44,50]");
+insert into tbl1 values(7, "[120,50,70]");
+insert into tbl1 values(8, "[130,40,90]");
+--mysql> select * from `__mo_index_secondary_0b0c1e94-a483-11ee-b45f-723e89f7b974`;
+-- assigned all the rows to 1 giant null centroid
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         1 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         1 |                  7 |
+--|                              0 |                         1 |                  8 |
+--|                              0 |                         1 |                  9 |
+--+--------------------------------+---------------------------+--------------------+
+--9 rows in set (0.00 sec)
+
+-- 29. Handle Null embeddings
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, NULL);
+insert into tbl values(2, NULL);
+insert into tbl values(3, NULL);
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+create index idx20 using ivfflat on tbl(data) lists=2 op_type "vector_l2_ops";
+insert into tbl values(6, NULL);
+insert into tbl values(7, "[130,40,90]");
+--mysql> select * from `__mo_index_secondary_56ab082e-a483-11ee-b461-723e89f7b974`;
+-- null are randomly assigned to clusters
+--+--------------------------------+---------------------------+--------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col |
+--+--------------------------------+---------------------------+--------------------+
+--|                              0 |                         1 |                  1 |
+--|                              0 |                         1 |                  2 |
+--|                              0 |                         1 |                  3 |
+--|                              0 |                         1 |                  4 |
+--|                              0 |                         2 |                  5 |
+--|                              0 |                         1 |                  6 |
+--|                              0 |                         2 |                  7 |
+--+--------------------------------+---------------------------+--------------------+
+
+
+-- 30. create index with totalCnt < k
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+create index idx21 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+--mysql> select * from `__mo_index_secondary_ca68dc64-a483-11ee-b461-723e89f7b974`;
+--+-----------------------------+------------------------+---------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid |
+--+-----------------------------+------------------------+---------------------+
+--|                           0 |                      1 | NULL                |
+--+-----------------------------+------------------------+---------------------+
+
+
+-- 31. create index with totalCnt = 0
+drop table if exists tbl;
+create table tbl(id int primary key, data vecf32(3));
+create index idx22 using ivfflat on tbl(data) lists=3 op_type "vector_l2_ops";
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+--mysql> select * from `__mo_index_secondary_ef84b932-a483-11ee-b462-723e89f7b974`;
+--+-----------------------------+------------------------+---------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid |
+--+-----------------------------+------------------------+---------------------+
+--|                           0 |                      1 | NULL                |
+--+-----------------------------+------------------------+---------------------+
+
+-- 32. Truncate table (does not remove centroids)
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+alter table tbl alter reindex idx23 ivfflat lists=2;
+truncate table tbl;
+--mysql> select * from `__mo_index_secondary_c18d6262-a56a-11ee-8301-723e89f7b974`;
+--+-----------------------------+------------------------+-----------------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid         |
+--+-----------------------------+------------------------+-----------------------------+
+--|                           0 |                      1 | [1, 2.28, 4.2]              |
+--|                           0 |                      2 | [116.666664, 44.666668, 70] |
+--|                           1 |                      1 | [1, 2.28, 4.2]              |
+--|                           1 |                      2 | [116.666664, 44.666668, 70] |
+--+-----------------------------+------------------------+-----------------------------+
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+
+-- 33. Delete from tbl (without condition)
+drop table if exists tbl;
+create table tbl(id int, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx23 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+alter table tbl alter reindex idx23 ivfflat lists=2;
+delete from tbl;
+--mysql> select * from `__mo_index_secondary_9aaa720c-a56a-11ee-8301-723e89f7b974`;
+--+-----------------------------+------------------------+-----------------------------+
+--| __mo_index_centroid_version | __mo_index_centroid_id | __mo_index_centroid         |
+--+-----------------------------+------------------------+-----------------------------+
+--|                           0 |                      1 | [1, 2.28, 4.2]              |
+--|                           0 |                      2 | [116.666664, 44.666668, 70] |
+--|                           1 |                      1 | [1, 2.28, 4.2]              |
+--|                           1 |                      2 | [116.666664, 44.666668, 70] |
+--+-----------------------------+------------------------+-----------------------------+
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+
+
+--- 34. 2 Vector Index on same column
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
+insert into tbl values(9, "[130,40,90]");
 
 
 -- post

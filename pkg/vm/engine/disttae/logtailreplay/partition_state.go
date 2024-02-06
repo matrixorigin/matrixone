@@ -26,7 +26,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,7 +126,7 @@ func (r RowEntry) Less(than RowEntry) bool {
 }
 
 type BlockEntry struct {
-	catalog.BlockInfo
+	objectio.BlockInfo
 
 	CreateTime types.TS
 	DeleteTime types.TS
@@ -141,7 +140,7 @@ type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
 	CommitTs types.TS
-	DeltaLoc catalog.ObjectLocation
+	DeltaLoc objectio.ObjectLocation
 }
 
 func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
@@ -190,6 +189,10 @@ func (o *ObjectEntry) Visible(ts types.TS) bool {
 
 func (o ObjectEntry) Location() objectio.Location {
 	return o.ObjectLocation()
+}
+
+func (o ObjectInfo) StatsValid() bool {
+	return o.ObjectStats.Rows() != 0
 }
 
 type ObjectIndexByCreateTSEntry struct {
@@ -354,7 +357,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObjectInsert(entry.Bat)
+			p.HandleObjectInsert(ctx, entry.Bat, fs)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -398,15 +401,23 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 	}
 }
 
-func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
+func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch, fs fileservice.FileService) {
+
+	var numDeleted, blockDeleted, scanCnt int64
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
 	createTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[7]))
 	deleteTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[8]))
+	startTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[9]))
 	commitTSCol := vector.MustFixedCol[types.TS](mustVectorFromProto(bat.Vecs[11]))
 
 	for idx := 0; idx < len(stateCol); idx++ {
+		p.shared.Lock()
+		if t := commitTSCol[idx]; t.Greater(p.shared.lastFlushTimestamp) {
+			p.shared.lastFlushTimestamp = t
+		}
+		p.shared.Unlock()
 		var objEntry ObjectEntry
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
@@ -429,6 +440,10 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 			}
 			p.objectIndexByTS.Set(e)
 		}
+		//prefetch the object meta
+		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
+			logutil.Errorf("prefetch object meta failed. %v", err)
+		}
 
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
@@ -438,7 +453,55 @@ func (p *PartitionState) HandleObjectInsert(bat *api.Batch) {
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+
+		// for appendable object, gc rows when delete object
+		if objEntry.EntryState && !objEntry.DeleteTime.IsEmpty() {
+			iter := p.rows.Copy().Iter()
+			objID := objEntry.ObjectStats.ObjectName().ObjectId()
+			blkID := objectio.NewBlockidWithObjectID(objID, 0)
+			pivot := RowEntry{
+				// aobj has only one blk
+				BlockID: *blkID,
+			}
+			trunctPoint := startTSCol[idx]
+			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+				entry := iter.Item()
+				if entry.BlockID != *blkID {
+					break
+				}
+				scanCnt++
+
+				// if the inserting block is appendable, need to delete the rows for it;
+				// if the inserting block is non-appendable and has delta location, need to delete
+				// the deletes for it.
+				if objEntry.EntryState {
+					if entry.Time.LessEq(trunctPoint) {
+						// delete the row
+						p.rows.Delete(entry)
+
+						// delete the row's primary index
+						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
+							p.primaryIndex.Delete(&PrimaryIndexEntry{
+								Bytes:      entry.PrimaryIndexBytes,
+								RowEntryID: entry.ID,
+							})
+						}
+						numDeleted++
+						blockDeleted++
+					}
+				}
+			}
+			iter.Release()
+
+			// if there are no rows for the block, delete the block from the dirty
+			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+				p.dirtyBlocks.Delete(*blkID)
+			}
+		}
 	}
+	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
+		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
+	})
 }
 
 var nextRowEntryID = int64(1)

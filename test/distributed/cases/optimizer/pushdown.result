@@ -38,26 +38,85 @@ Project
   Limit: 10
   ->  Join
         Join Type: INNER
-        Join Cond: (v3.c3 = v4.c3)
+        Join Cond: (v3.c3 = t3.c3)
         ->  Project
               Limit: 10
               ->  Join
                     Join Type: INNER
-                    Join Cond: (v1.c1 = v2.c1)
-                    ->  Project
+                    Join Cond: (t1.c1 = t2.c1)
+                    ->  Table Scan on d1.t1
+                          Filter Cond: (t1.c1 <> 0)
                           Limit: 10
-                          ->  Table Scan on d1.t1
-                                Filter Cond: (t1.c1 <> 0)
                     ->  Filter
-                          Filter Cond: (v2.c2 > 0)
-                          ->  Project
+                          Filter Cond: (t2.c2 > 0)
+                          ->  Table Scan on d1.t2
+                                Filter Cond: (t2.c1 <> 1)
                                 Limit: 10
-                                ->  Table Scan on d1.t2
-                                      Filter Cond: (t2.c1 <> 1)
         ->  Filter
-              Filter Cond: (v4.c2 > 0)
-              ->  Project
+              Filter Cond: (t3.c2 > 0)
+              ->  Table Scan on d1.t3
+                    Filter Cond: (t3.c1 <> 2)
                     Limit: 10
-                    ->  Table Scan on d1.t3
-                          Filter Cond: (t3.c1 <> 2)
+explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.c1 INTERNAL
+        Limit: 10
+        ->  Join
+              Join Type: RIGHT
+              Join Cond: (t2.c1 = t1.c1)
+              ->  Table Scan on d1.t2
+              ->  Sort
+                    Sort Key: t1.c1 INTERNAL
+                    Limit: 10
+                    ->  Table Scan on d1.t1
+select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10;
+c1    c1    c2    c3
+1    1    1    1
+2    2    2    2
+3    3    3    3
+4    4    4    4
+5    5    5    5
+6    6    6    6
+7    7    7    7
+8    8    8    8
+9    9    9    9
+10    10    10    10
+explain select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.c1 INTERNAL
+        Limit: 10, Offset: 20
+        ->  Join
+              Join Type: RIGHT
+              Join Cond: (t2.c1 = t1.c1)
+              ->  Table Scan on d1.t2
+              ->  Sort
+                    Sort Key: t1.c1 INTERNAL
+                    Limit: 30
+                    ->  Table Scan on d1.t1
+select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit 10 offset 20;
+c1    c1    c2    c3
+21    21    21    21
+22    22    22    22
+23    23    23    23
+24    24    24    24
+25    25    25    25
+26    26    26    26
+27    27    27    27
+28    28    28    28
+29    29    29    29
+30    30    30    30
+prepare s from select * from t1 left join t2 on t1.c1=t2.c1 order by t1.c1 limit ? offset ?;
+set @a_var = 5;
+set @b_var = 30;
+execute s using @a_var,@b_var;
+c1    c1    c2    c3
+31    31    31    31
+32    32    32    32
+33    33    33    33
+34    34    34    34
+35    35    35    35
 drop database if exists d1;

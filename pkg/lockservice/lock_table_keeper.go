@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -30,7 +29,7 @@ type lockTableKeeper struct {
 	stopper                   *stopper.Stopper
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
-	tables                    *sync.Map
+	groupTables               *lockTableHolders
 	canDoKeep                 bool
 }
 
@@ -42,11 +41,11 @@ func NewLockTableKeeper(
 	client Client,
 	keepLockTableBindInterval time.Duration,
 	keepRemoteLockInterval time.Duration,
-	tables *sync.Map) LockTableKeeper {
+	groupTables *lockTableHolders) LockTableKeeper {
 	s := &lockTableKeeper{
 		serviceID:                 serviceID,
 		client:                    client,
-		tables:                    tables,
+		groupTables:               groupTables,
 		keepLockTableBindInterval: keepLockTableBindInterval,
 		keepRemoteLockInterval:    keepRemoteLockInterval,
 		stopper: stopper.NewStopper("lock-table-keeper",
@@ -118,9 +117,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	binds = binds[:0]
 	futures = futures[:0]
 
-	k.tables.Range(func(key, value any) bool {
-		lb := value.(lockTable)
-		bind := lb.getBind()
+	k.groupTables.iter(func(_ uint64, v lockTable) bool {
+		bind := v.getBind()
 		if bind.ServiceID != k.serviceID {
 			services[bind.ServiceID] = bind
 		}
@@ -147,6 +145,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			continue
 		}
 		logKeepRemoteLocksFailed(bind, err)
+		if !isRetryError(err) {
+			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
+				return !v.getBind().Changed(bind)
+			})
+		}
 	}
 
 	for idx, f := range futures {
@@ -164,9 +167,8 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	if !k.canDoKeep {
-		k.tables.Range(func(key, value any) bool {
-			lb := value.(lockTable)
-			bind := lb.getBind()
+		k.groupTables.iter(func(_ uint64, v lockTable) bool {
+			bind := v.getBind()
 			if bind.ServiceID == k.serviceID {
 				k.canDoKeep = true
 			}
@@ -197,15 +199,13 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	}
 
 	n := 0
-	k.tables.Range(func(key, value any) bool {
-		lb := value.(lockTable)
-		bind := lb.getBind()
+	k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
+		bind := v.getBind()
 		if bind.ServiceID == k.serviceID {
-			k.tables.Delete(key)
-			lb.close()
+			return true
 		}
 		n++
-		return true
+		return false
 	})
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local

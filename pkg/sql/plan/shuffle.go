@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math/bits"
 	"unsafe"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const (
@@ -101,6 +101,8 @@ func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
 
 func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
 	switch zm.GetType() {
+	case types.T_bit:
+		return types.DecodeUint64(zm.GetMinBuf())/2 + types.DecodeUint64(zm.GetMaxBuf())/2
 	case types.T_uint64:
 		return types.DecodeUint64(zm.GetMinBuf())/2 + types.DecodeUint64(zm.GetMaxBuf())/2
 	case types.T_uint32:
@@ -118,7 +120,7 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 	switch zm.GetType() {
 	case types.T_int64, types.T_int32, types.T_int16:
 		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, GetCenterValueForZMSigned(zm), upplerLimit)
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), GetCenterValueForZMUnsigned(zm), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
@@ -134,7 +136,7 @@ func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint
 
 func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
 	switch zm.GetType() {
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		return GetRangeShuffleIndexUnsignedSlice(val, GetCenterValueForZMUnsigned(zm))
 	}
 	panic("wrong type!")
@@ -213,12 +215,8 @@ func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			col, typ := GetHashColumn(arg)
-			if col != nil {
-				return col, typ
-			}
-		}
+		//do not support shuffle on expr for now. will improve this in the future
+		return nil, -1
 	case *plan.Expr_Col:
 		return exprImpl.Col, expr.Typ.Id
 	}
@@ -334,13 +332,20 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	hashCol, typ := GetHashColumn(n.OnList[idx])
+	var expr *plan.Expr
+	cond := n.OnList[idx]
+	switch condImpl := cond.Expr.(type) {
+	case *plan.Expr_F:
+		expr = condImpl.F.Args[0]
+	}
+
+	hashCol, typ := GetHashColumn(expr)
 	if hashCol == nil {
 		return
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
@@ -400,7 +405,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
@@ -462,7 +467,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text, types.T_bit:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])

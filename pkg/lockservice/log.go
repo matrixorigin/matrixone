@@ -240,11 +240,10 @@ func logRemoteBindChanged(
 	serviceID string,
 	old, new pb.LockTable) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("remote bind changed",
-			zap.String("old", old.DebugString()),
-			zap.String("new", new.DebugString()))
-	}
+	logger.Info("bind changed",
+		zap.String("service", serviceID),
+		zap.String("old", old.DebugString()),
+		zap.String("new", new.DebugString()))
 }
 
 func logLockTableCreated(
@@ -252,18 +251,17 @@ func logLockTableCreated(
 	bind pb.LockTable,
 	remote bool) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock table created",
-			zap.Bool("remote", remote),
-			zap.String("bind", bind.DebugString()))
-	}
+	logger.Info("bind created",
+		zap.String("service", serviceID),
+		zap.Bool("remote", remote),
+		zap.String("bind", bind.DebugString()))
 }
 
 func logLockTableClosed(
 	bind pb.LockTable,
 	remote bool) {
 	logger := getWithSkipLogger()
-	logger.Info("lock table closed",
+	logger.Info("bind closed",
 		zap.Bool("remote", remote),
 		zap.String("bind", bind.DebugString()))
 }
@@ -343,14 +341,8 @@ func logTxnReadyToClose(
 	txn *activeTxn) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
-		var tables []uint64
-		for t := range txn.holdLocks {
-			tables = append(tables, t)
-		}
-
 		logger.Debug("ready to unlock txn",
-			txnField(txn),
-			uint64ArrayField("tables", tables))
+			txnField(txn))
 	}
 }
 
@@ -540,19 +532,6 @@ func waitTxnArrayField(name string, values []pb.WaitTxn) zap.Field {
 	buffer.WriteString("[")
 	for idx, w := range values {
 		buffer.WriteString(w.DebugString())
-		if idx != len(values)-1 {
-			buffer.WriteString(",")
-		}
-	}
-	buffer.WriteString("]")
-	return zap.String(name, buffer.String())
-}
-
-func uint64ArrayField(name string, values []uint64) zap.Field {
-	var buffer bytes.Buffer
-	buffer.WriteString("[")
-	for idx, v := range values {
-		buffer.WriteString(fmt.Sprintf("%d", v))
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}

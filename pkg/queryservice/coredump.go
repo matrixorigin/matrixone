@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 - 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package queryservice
 
 import (
-	"testing"
+	"context"
+	"strings"
 
-	"github.com/stretchr/testify/require"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
-func TestObjectLocationMarshalAndUnmarshal(t *testing.T) {
-	var loc ObjectLocation
-	for i := 0; i < len(loc); i++ {
-		loc[i] = byte(i)
+func handleCoreDumpConfig(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.CoreDumpConfig == nil {
+		return nil
 	}
-
-	data, err := loc.Marshal()
-	require.NoError(t, err)
-
-	var ret ObjectLocation
-	err = ret.Unmarshal(data)
-	require.NoError(t, err)
-	require.Equal(t, loc, ret)
+	switch strings.ToLower(req.CoreDumpConfig.Action) {
+	case "enable":
+		util.EnableCoreDump()
+	case "disable":
+		util.DisableCoreDump()
+	}
+	resp.CoreDumpConfig = &pb.CoreDumpConfigResponse{}
+	return nil
 }

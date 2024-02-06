@@ -68,6 +68,7 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
+	usageMemo any
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
@@ -103,16 +104,25 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog() (*Catalog, error) {
+func OpenCatalog(usageMemo any) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		usageMemo:  usageMemo,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
+}
+
+func (catalog *Catalog) SetUsageMemo(memo any) {
+	catalog.usageMemo = memo
+}
+
+func (catalog *Catalog) GetUsageMemo() any {
+	return catalog.usageMemo
 }
 
 func (catalog *Catalog) InitSystemDB() {
@@ -548,7 +558,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 	}
 }
 
-func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
+func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
 	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < dbidVec.Length(); i++ {
 		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -562,7 +572,7 @@ func (catalog *Catalog) OnReplayObjectBatch(objectInfo *containers.Batch) {
 		if !state {
 			entryState = ES_NotAppendable
 		}
-		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState)
+		catalog.onReplayCheckpointObject(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
 	}
 }
 
@@ -573,6 +583,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
 	state EntryState,
+	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
@@ -607,6 +618,45 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	} else {
 		node.BaseNode.Update(un.BaseNode)
 	}
+	if entryNode.DeletedAt.IsEmpty() {
+		stats := objNode.ObjectStats
+		blkCount := stats.BlkCnt()
+		// for aobj, stats is empty when create.
+		// aobj always has one blk.
+		if state == ES_Appendable {
+			blkCount = 1
+		}
+		leftRows := stats.Rows()
+		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
+		for i := 0; i < int(blkCount); i++ {
+			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
+			rows := blkMaxRow
+			if leftRows < blkMaxRow {
+				rows = leftRows
+			}
+			leftRows -= rows
+			var metaLoc objectio.Location
+			if state != ES_Appendable {
+				metaLoc = objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
+			}
+			catalog.onReplayCreateBlock(dbid, tbid, objid, blkID, state, metaLoc, nil, txnNode, dataFactory)
+		}
+	} else {
+		stats := objNode.ObjectStats
+		blkCount := stats.BlkCnt()
+		leftRows := stats.Rows()
+		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
+		for i := 0; i < int(blkCount); i++ {
+			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
+			rows := blkMaxRow
+			if leftRows < blkMaxRow {
+				rows = leftRows
+			}
+			leftRows -= rows
+			metaLoc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
+			catalog.onReplayDeleteBlock(dbid, tbid, objid, blkID, metaLoc, nil, txnNode)
+		}
+	}
 }
 
 // Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
@@ -627,10 +677,10 @@ func (catalog *Catalog) replayObjectByBlock(
 	// create
 	if create {
 		if obj == nil {
-			obj = NewObjectEntryOnReplay(
+			obj = NewObjectEntryByMetaLocation(
 				tbl,
 				ObjectID,
-				start, end, state)
+				start, end, state, metaLocation)
 			tbl.AddEntryLocked(obj)
 		}
 	}
@@ -648,6 +698,9 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.Start = start
 			node.Prepare = end
 			node.End = end
+			if node.BaseNode.IsEmpty() {
+				node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation, ObjectID)
+			}
 			obj.Insert(node)
 			node.DeletedAt = end
 		}
@@ -709,7 +762,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	}
 	blk = NewReplayBlockEntry()
 	blk.ID = cmd.ID.BlockID
-	blk.BlockNode = cmd.node
+	blk.BlockNode = *cmd.node
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.object = obj
@@ -798,7 +851,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
 		blk = NewReplayBlockEntry()
-		blk.BlockNode = &BlockNode{}
 		blk.object = obj
 		blk.ID = *blkid
 		blk.state = state
@@ -813,6 +865,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 				DeltaLoc: deltaloc,
 			},
 		}
+		blk.Insert(un)
 	} else {
 		prevUn := blk.MVCCChain.GetLatestNodeLocked()
 		un = &MVCCNode[*MetadataMVCCNode]{
@@ -827,10 +880,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 		}
 		node := blk.MVCCChain.SearchNode(un)
 		if node != nil {
-			return
+			node.IdempotentUpdate(un)
+		} else {
+			blk.Insert(un)
 		}
 	}
-	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	if blk.blkData == nil {
 		blk.blkData = dataFactory.MakeBlockFactory()(blk)
@@ -899,7 +953,12 @@ func (catalog *Catalog) onReplayDeleteBlock(
 			DeltaLoc: deltaloc,
 		},
 	}
-	blk.Insert(un)
+	node := blk.MVCCChain.SearchNode(un)
+	if node != nil {
+		node.IdempotentUpdate(un)
+	} else {
+		blk.MVCCChain.Insert(un)
+	}
 	blk.location = un.BaseNode.MetaLoc
 	blk.blkData.TryUpgrade()
 	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())

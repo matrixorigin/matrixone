@@ -15,13 +15,19 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
@@ -46,6 +52,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -102,7 +109,62 @@ func New(
 		panic(err)
 	}
 
+	// TODO(ghs)
+	// is debug for #13151, will remove later
+	e.enableDebug()
+
 	return e
+}
+
+func (e *Engine) enableDebug() {
+	function.DebugGetDatabaseExpectedEOB = func(caller string, proc *process.Process) {
+		txnState := fmt.Sprintf("account-%s, accId-%d, user-%s, role-%s, timezone-%s, txn-%s",
+			proc.SessionInfo.Account, proc.SessionInfo.AccountId,
+			proc.SessionInfo.User, proc.SessionInfo.Role,
+			proc.SessionInfo.TimeZone.String(),
+			proc.TxnOperator.Txn().DebugString(),
+		)
+		e.DebugGetDatabaseExpectedEOB(caller, txnState)
+	}
+}
+
+func (e *Engine) DebugGetDatabaseExpectedEOB(caller string, txnState string) {
+	dbs, tbls := e.catalog.TraverseDbAndTbl()
+	sort.Slice(dbs, func(i, j int) bool {
+		if dbs[i].AccountId != dbs[j].AccountId {
+			return dbs[i].AccountId < dbs[j].AccountId
+		}
+		return dbs[i].Id < dbs[j].Id
+	})
+
+	sort.Slice(tbls, func(i, j int) bool {
+		if tbls[i].AccountId != tbls[j].AccountId {
+			return tbls[i].AccountId < tbls[j].AccountId
+		}
+
+		if tbls[i].DatabaseId != tbls[j].DatabaseId {
+			return tbls[i].DatabaseId < tbls[j].DatabaseId
+		}
+
+		return tbls[i].Id < tbls[j].Id
+	})
+
+	var out bytes.Buffer
+	tIdx := 0
+	for idx := range dbs {
+		out.WriteString(fmt.Sprintf("%s\n", dbs[idx].String()))
+		for ; tIdx < len(tbls); tIdx++ {
+			if tbls[tIdx].AccountId != dbs[idx].AccountId ||
+				tbls[tIdx].DatabaseId != dbs[idx].Id {
+				break
+			}
+
+			out.WriteString(fmt.Sprintf("\t%s\n", tbls[tIdx].String()))
+		}
+	}
+
+	logutil.Infof("%s.Database got ExpectEOB, current txn state: \n%s\n%s",
+		caller, txnState, out.String())
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
@@ -112,23 +174,26 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
-	accountId, userId, roleId := getAccessInfo(ctx)
+	accountId, userId, roleId, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, typ, e.mp)
+		name, databaseId, typ, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err = txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	if err = txn.WriteBatch(INSERT, 0, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(e.mp)
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
-	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
+	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
 		txn:          txn,
 		databaseId:   databaseId,
 		databaseName: name,
@@ -136,14 +201,16 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
-func (e *Engine) Database(ctx context.Context, name string,
+func (e *Engine) DatabaseByAccountID(
+	accountID uint32,
+	name string,
 	op client.TxnOperator) (engine.Database, error) {
-	logDebugf(op.Txn(), "Engine.Database %s", name)
+	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
 	txn := e.getTransaction(op)
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
+	if v, ok := txn.databaseMap.Load(databaseKey{name: name, accountId: accountID}); ok {
 		return v.(*txnDatabase), nil
 	}
 	if name == catalog.MO_CATALOG {
@@ -156,7 +223,46 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	key := &cache.DatabaseItem{
 		Name:      name,
-		AccountId: defines.GetAccountId(ctx),
+		AccountId: accountID,
+		Ts:        txn.op.SnapshotTS(),
+	}
+	if ok := e.catalog.GetDatabase(key); !ok {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	return &txnDatabase{
+		txn:               txn,
+		databaseName:      name,
+		databaseId:        key.Id,
+		databaseType:      key.Typ,
+		databaseCreateSql: key.CreateSql,
+	}, nil
+}
+
+func (e *Engine) Database(ctx context.Context, name string,
+	op client.TxnOperator) (engine.Database, error) {
+	logDebugf(op.Txn(), "Engine.Database %s", name)
+	txn := e.getTransaction(op)
+	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
+	}
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := txn.databaseMap.Load(genDatabaseKey(accountId, name)); ok {
+		return v.(*txnDatabase), nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		return db, nil
+	}
+	key := &cache.DatabaseItem{
+		Name:      name,
+		AccountId: accountId,
 		Ts:        txn.op.SnapshotTS(),
 	}
 	if ok := e.catalog.GetDatabase(key); !ok {
@@ -178,7 +284,10 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	if txn == nil {
 		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		if key.accountId == accountId {
@@ -186,7 +295,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 		}
 		return true
 	})
-	dbs = append(dbs, e.catalog.Databases(defines.GetAccountId(ctx), txn.op.SnapshotTS())...)
+	dbs = append(dbs, e.catalog.Databases(accountId, txn.op.SnapshotTS())...)
 	return dbs, nil
 }
 
@@ -195,7 +304,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	if txn == nil {
 		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -207,7 +319,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tblName = distDb.getTableNameById(ctx, key.id)
+			tblName, err = distDb.getTableNameById(ctx, key.id)
+			if err != nil {
+				return false
+			}
 			if tblName != "" {
 				return false
 			}
@@ -223,7 +338,10 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return "", "", err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err := distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", err
+			}
 			if rel != nil {
 				tblName = tableName
 				dbName = databaseName
@@ -244,7 +362,39 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := defines.GetAccountId(ctx)
+	switch tableId {
+	case catalog.MO_DATABASE_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoDatabaseTableDefs
+		return catalog.MO_CATALOG, catalog.MO_DATABASE,
+			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
+	case catalog.MO_TABLES_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoTablesTableDefs
+		return catalog.MO_CATALOG, catalog.MO_TABLES,
+			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
+	case catalog.MO_COLUMNS_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoColumnsTableDefs
+		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
+			db.openSysTable(nil, tableId, catalog.MO_COLUMNS, defs), nil
+	}
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", "", nil, err
+	}
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -256,7 +406,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return false
+			}
 			if rel != nil {
 				return false
 			}
@@ -272,7 +425,10 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return "", "", nil, err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			if err != nil {
+				return "", "", nil, err
+			}
 			if rel != nil {
 				break
 			}
@@ -280,6 +436,12 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	}
 
 	if rel == nil {
+		if tableId == 2 {
+			logutil.Errorf("can not find table by id %d: accountId: %v", tableId, accountId)
+			tbls, tblIds := e.catalog.Tables(accountId, 1, op.SnapshotTS())
+			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
+			util.CoreDump()
+		}
 		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
 	}
 	return
@@ -296,14 +458,18 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	key := genDatabaseKey(ctx, name)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	key := genDatabaseKey(accountId, name)
 	if _, ok := txn.databaseMap.Load(key); ok {
 		txn.databaseMap.Delete(key)
 		return nil
 	} else {
 		key := &cache.DatabaseItem{
 			Name:      name,
-			AccountId: defines.GetAccountId(ctx),
+			AccountId: accountId,
 			Ts:        txn.op.SnapshotTS(),
 		}
 		if ok := e.catalog.GetDatabase(key); !ok {
@@ -324,13 +490,14 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			return err
 		}
 	}
-	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
+	bat, err := genDropDatabaseTuple(db.databaseId, name, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+	if err := txn.WriteBatch(DELETE, 0, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	return nil
@@ -381,13 +548,17 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnBlkId_Pos:                     map[types.Blockid]Pos{},
-		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
-		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
-		batchSelectList:                 make(map[*batch.Batch][]int64),
-		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
-		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
+		cnBlkId_Pos:          map[types.Blockid]Pos{},
+		batchSelectList:      make(map[*batch.Batch][]int64),
+		toFreeBatches:        make(map[tableKey][]*batch.Batch),
+		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
 	}
+
+	txn.blockId_tn_delete_metaLoc_batch = struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}{data: make(map[types.Blockid][]*batch.Batch)}
+
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
@@ -423,9 +594,9 @@ func (e *Engine) Nodes(
 		return nodes, nil
 	}
 
-	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
 	if isInternal || strings.ToLower(tenant) == "sys" {
-		SelectForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
+		route.RouteForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
 				Mcpu: runtime.NumCPU(),
 				Id:   s.ServiceID,
@@ -433,7 +604,7 @@ func (e *Engine) Nodes(
 			})
 		})
 	} else {
-		SelectForCommonTenant(selector, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(selector, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, engine.Node{
 				Mcpu: runtime.NumCPU(),
 				Id:   s.ServiceID,
@@ -450,18 +621,19 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	expr *plan.Expr, ranges []byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
+	blkSlice := objectio.BlockInfoSlice(ranges)
 	rds := make([]engine.Reader, num)
-	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
-	for _, r := range ranges {
-		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	blkInfos := make([]*objectio.BlockInfo, 0, blkSlice.Len())
+	for i := 0; i < blkSlice.Len(); i++ {
+		blkInfos = append(blkInfos, blkSlice.Get(i))
 	}
 	if len(blkInfos) < num || len(blkInfos) == 1 {
 		for i, blk := range blkInfos {
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
+				ctx, tblDef, ts, []*objectio.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {

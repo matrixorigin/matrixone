@@ -15,7 +15,7 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math/rand"
 	"strconv"
@@ -28,29 +28,30 @@ goos: darwin
 goarch: arm64
 cpu: Apple M2 Pro
 row count: 10_000
-dims: 1024
-k: 10
-Benchmark_kmeans/Spherical_Elkan_Random-10         	1000000000	         0.8271 ns/op
-Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       	 1		 1913628958 ns/op
+dims: 128
+k: 1000
+Benchmark_kmeans/Spherical_Elkan_Random-10         	       1	16735189750 ns/op
+Benchmark_kmeans/Spherical_Elkan_Kmeans++-10       	       1	17543632667 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
-	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
-		Format: "console",
-	})
+	//logutil.SetupMOLogger(&logutil.LogConfig{
+	//	Level:  "debug",
+	//	Format: "console",
+	//})
 
-	rowCnt := 10_000
-	dims := 1024
-	k := 10
+	rowCnt := 1000_000
+	k := 1000
+	sampleCnt := catalog.CalcSampleCount(int64(k), int64(rowCnt))
+	dims := 128
 
-	data := make([][]float64, rowCnt)
-	populateRandData(rowCnt, dims, data)
+	data := make([][]float64, sampleCnt)
+	populateRandData(int(sampleCnt), dims, data)
 
 	b.Run("Spherical_Elkan_Random", func(b *testing.B) {
 		b.ResetTimer()
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.Random)
+			kmeans.L2Distance, kmeans.Random, true)
 		_, err := clusterRand.Cluster()
 		if err != nil {
 			panic(err)
@@ -64,7 +65,7 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		kmeansPlusPlus, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.KmeansPlusPlus)
+			kmeans.L2Distance, kmeans.KmeansPlusPlus, true)
 		_, err := kmeansPlusPlus.Cluster()
 		if err != nil {
 			panic(err)

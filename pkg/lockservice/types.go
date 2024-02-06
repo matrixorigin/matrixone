@@ -40,6 +40,8 @@ var (
 	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
 	// ErrLockTableNotFound lock table not found on remote lock service
 	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
+	// ErrLockConflict lock option conflict
+	ErrLockConflict = moerr.NewLockConflictNoCtx()
 )
 
 // LockStorage the store that holds the locks, a storage instance is corresponding to
@@ -100,7 +102,7 @@ type LockService interface {
 	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
-	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
+	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
 
 	// Close close the lock service.
 	Close() error
@@ -112,10 +114,12 @@ type LockService interface {
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets ...uint64)
 	// GetLockTableBind returns lock table bind
-	GetLockTableBind(tableID uint64) (pb.LockTable, error)
+	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
+	// CloseRemoteLockTable close lock table
+	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
@@ -137,7 +141,7 @@ type lockTable interface {
 	// 3. Other known errors.
 	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
-	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
+	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getBind returns lock table binding
@@ -162,7 +166,7 @@ type lockTable interface {
 type LockTableAllocator interface {
 	// Get get the original LockTable data corresponding to a Table. If there is no
 	// corresponding binding, then the CN binding of the current request will be used.
-	Get(serviceID string, tableID uint64) pb.LockTable
+	Get(serviceID string, group uint32, tableID, originTableID uint64, sharding pb.Sharding) pb.LockTable
 	// KeepLockTableBind once a cn is bound to a Table, a heartbeat needs to be sent
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.
@@ -171,6 +175,9 @@ type LockTableAllocator interface {
 	Valid(binds []pb.LockTable) []uint64
 	// Close close the lock table allocator
 	Close() error
+
+	// GetLatest get latest lock table bind
+	GetLatest(groupID uint32, tableID uint64) pb.LockTable
 }
 
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the

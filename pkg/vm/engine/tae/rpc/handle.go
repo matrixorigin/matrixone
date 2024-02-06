@@ -25,6 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/exp/slices"
+
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -139,7 +141,6 @@ func (h *Handle) HandleCommit(
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
-	s := ""
 	defer func() {
 		if ok {
 			//delete the txn's context.
@@ -152,9 +153,6 @@ func (h *Handle) HandleCommit(
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
-		if s != "" {
-			logutil.Info("trace span", zap.String("lantency", s))
-		}
 	}()
 	var txn txnif.AsyncTxn
 	if ok {
@@ -169,11 +167,6 @@ func (h *Handle) HandleCommit(
 			return
 		}
 	}
-	activeDuration := time.Since(start)
-	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && activeDuration > threshold && txn.GetContext() != nil {
-		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
-	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
@@ -187,66 +180,6 @@ func (h *Handle) HandleCommit(
 
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
-
-	if enable {
-		vDuration := txn.GetContext().Value(common.ActiveHandleCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[active: %v]", s, duration.Duration)
-		}
-		vHandleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests)
-		if vHandleRequestDuration != nil {
-			handleRequestDuration := vHandleRequestDuration.(*handleRequestsTraceValue)
-			s = fmt.Sprintf("%s[handle request: %v, createDB %d, createTbl %d, dropDB %d, dropTbl %d, alterTable %d, write %d]", s,
-				handleRequestDuration.Duration,
-				handleRequestDuration.CreateDB,
-				handleRequestDuration.CreateRelation,
-				handleRequestDuration.DropDB,
-				handleRequestDuration.DropOrTruncateRelation,
-				handleRequestDuration.AlterTable,
-				handleRequestDuration.Write)
-		}
-		vDuration = txn.GetContext().Value(common.DequeuePreparing)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[dequeue preparing: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePrePrepare)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[pre prepare: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePrepareCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare commit: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StorePreApplyCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[pre apply commit: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.PrepareWAL)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare wal: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.PrepareLogtail)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[prepare logtail: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.DequeuePrepared)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[dequeue prepared: %v]", s, duration.Duration)
-		}
-		vDuration = txn.GetContext().Value(common.StoreApplyCommit)
-		if vDuration != nil {
-			duration := vDuration.(*common.DurationRecords)
-			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
-		}
-	}
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
@@ -272,41 +205,12 @@ func (h *Handle) HandleCommit(
 	return
 }
 
-type handleRequestsTraceValue struct {
-	Duration               time.Duration
-	CreateDB               int
-	CreateRelation         int
-	DropDB                 int
-	DropOrTruncateRelation int
-	AlterTable             int
-	Write                  int
-}
-
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
 ) (err error) {
-	t0 := time.Now()
 	var createDB, createRelation, dropDB, dropRelation, alterTable, write int
-	defer func() {
-		handleRequestDuration := time.Since(t0)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && handleRequestDuration > threshold && txn.GetContext() != nil {
-			txn.GetStore().SetContext(context.WithValue(
-				txn.GetContext(),
-				common.ActiveHandleRequests,
-				&handleRequestsTraceValue{
-					Duration:               handleRequestDuration,
-					CreateDB:               createDB,
-					CreateRelation:         createRelation,
-					DropDB:                 dropDB,
-					DropOrTruncateRelation: dropRelation,
-					AlterTable:             alterTable,
-					Write:                  write,
-				}))
-		}
-	}()
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *db.CreateDatabaseReq:
@@ -864,9 +768,7 @@ func (h *Handle) HandleCreateDatabase(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
 	if _, err = txn.CreateDatabaseWithCtx(
 		ctx,
@@ -918,9 +820,7 @@ func (h *Handle) HandleCreateRelation(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return
@@ -1079,7 +979,7 @@ func (h *Handle) HandleWrite(
 		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
@@ -1104,19 +1004,25 @@ func (h *Handle) HandleWrite(
 				return err
 			}
 			var ok bool
-			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			var vectors []containers.Vector
+			var closeFunc func()
+			//Extend lifetime of vectors is within the function.
+			//No NeedCopy. closeFunc is required after use.
+			//closeFunc is not nil.
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				false,
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			defer closeFunc()
+			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {
 				for blkID := range blkids {
@@ -1133,9 +1039,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
+			rowIDVec := vectors[0]
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
+			pkVec := vectors[1]
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1155,7 +1061,7 @@ func (h *Handle) HandleWrite(
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}
@@ -1218,38 +1124,110 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
-//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
-//	processor := new(catalog2.LoopProcessor)
-//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
-//
-//		return nil
-//	}
-//
-//	h.db.Catalog.RecurLoop(processor)
-//}
+func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMemo, ids []uint32) {
+	if len(ids) == 0 {
+		return
+	}
+	processor := new(catalog2.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog2.DBEntry) error {
+		if entry.HasDropCommitted() {
+			return nil
+		}
 
-func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+		accId := entry.GetTenantID()
+		if !slices.Contains(ids, accId) {
+			return nil
+		}
 
-	// get all checkpoints.
-	//var ckp *checkpoint.CheckpointEntry
-	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
-	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	for idx := range allCkp {
-		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-			Version:  allCkp[idx].GetVersion(),
-			Location: allCkp[idx].GetLocation(),
-		})
+		tblIt := entry.MakeTableIt(true)
+		for tblIt.Valid() {
+			insUsage := logtail.UsageData{
+				AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+
+			tblEntry := tblIt.Get().GetPayload()
+			if tblEntry.HasDropCommitted() {
+				tblIt.Next()
+				continue
+			}
+
+			objIt := tblEntry.MakeObjectIt(true)
+			for objIt.Valid() {
+				objEntry := objIt.Get().GetPayload()
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
+					insUsage.Size += uint64(objEntry.GetCompSize())
+				}
+				objIt.Next()
+			}
+
+			if insUsage.Size > 0 {
+				memo.UpdateNewAccCache(insUsage, false)
+			}
+
+			tblIt.Next()
+		}
+		return nil
 	}
 
-	resp.Succeed = true
+	c.RecurLoop(processor)
+}
 
-	// TODO
-	// exist a gap!
-	// collecting block entries that have been not been checkpoint yet
-	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
-	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
-	//}
+func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
+	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	memo := h.db.GetUsageMemo()
+
+	start := time.Now()
+	defer func() {
+		v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	memo.EnterProcessing()
+	defer func() {
+		resp.Magic = logtail.StorageUsageMagic
+		memo.LeaveProcessing()
+	}()
+
+	if !memo.HasUpdate() {
+		resp.Succeed = true
+		return nil, nil
+	}
+
+	usages := memo.GatherAllAccSize()
+
+	newIds := make([]uint32, 0)
+	for _, id := range req.AccIds {
+		if usages != nil {
+			if size, exist := usages[uint64(id)]; exist {
+				memo.AddReqTrace(uint64(id), size, start, "req")
+				resp.AccIds = append(resp.AccIds, int32(id))
+				resp.Sizes = append(resp.Sizes, size)
+				delete(usages, uint64(id))
+				continue
+			}
+		}
+		// new account which haven't been collect
+		newIds = append(newIds, uint32(id))
+	}
+
+	for accId, size := range usages {
+		memo.AddReqTrace(uint64(accId), size, start, "oth")
+		resp.AccIds = append(resp.AccIds, int32(accId))
+		resp.Sizes = append(resp.Sizes, size)
+	}
+
+	// new accounts
+	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
+
+	for idx := range newIds {
+		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
+			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
+			resp.Sizes = append(resp.Sizes, size)
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
+		}
+	}
+
+	memo.ClearNewAccCache()
+
+	resp.Succeed = true
 
 	return nil, nil
 }

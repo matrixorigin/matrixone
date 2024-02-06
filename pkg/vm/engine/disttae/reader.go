@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -241,7 +243,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = searchFunc
-	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
+	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
@@ -252,6 +254,16 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // -----------------------------------------------------------------
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
+
+func (r *emptyReader) SetFilterZM(objectio.ZoneMap) {
+}
+
+func (r *emptyReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (r *emptyReader) SetOrderBy([]*plan.OrderBySpec) {
+}
 
 func (r *emptyReader) Close() error {
 	return nil
@@ -270,7 +282,7 @@ func newBlockReader(
 	ctx context.Context,
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
-	blks []*catalog.BlockInfo,
+	blks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -296,17 +308,126 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
+func (r *blockReader) SetFilterZM(zm objectio.ZoneMap) {
+	r.filterZM = zm.Clone()
+}
+
+func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {
+	return r.OrderBy
+}
+
+func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+	r.OrderBy = orderby
+}
+
+func (r *blockReader) needReadBlkByZM(i int) bool {
+	zm := r.blockZMS[i]
+	if !r.filterZM.IsInited() || zm.IsInited() {
+		return true
+	}
+	if r.desc {
+		return r.filterZM.CompareMax(zm) <= 0
+	} else {
+		return r.filterZM.CompareMin(zm) >= 0
+	}
+}
+
+func (r *blockReader) getBlockZMs() {
+	orderByCol, _ := r.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
+	orderByColIDX := int(r.tableDef.Cols[int(orderByCol.Col.ColPos)].Seqnum)
+
+	r.blockZMS = make([]index.ZM, len(r.blks))
+	var objDataMeta objectio.ObjectDataMeta
+	var location objectio.Location
+	for i := range r.blks {
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			location = r.blks[i].MetaLocation()
+			objMeta, err := objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
+			if err != nil {
+				panic("load object meta error when ordered scan!")
+			}
+			objDataMeta = objMeta.MustDataMeta()
+		}
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+		r.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+	}
+}
+
+func (r *blockReader) sortBlockList() {
+	helper := make([]blockSortHelper, len(r.blks))
+	for i := range r.blks {
+		helper[i].blk = r.blks[i]
+		helper[i].zm = r.blockZMS[i]
+	}
+
+	if r.desc {
+		sort.Slice(helper, func(i, j int) bool {
+			zm1 := helper[i].zm
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := helper[j].zm
+			if !zm2.IsInited() {
+				return false
+			}
+			return zm1.CompareMax(zm2) > 0
+		})
+	} else {
+		sort.Slice(helper, func(i, j int) bool {
+			zm1 := helper[i].zm
+			if !zm1.IsInited() {
+				return true
+			}
+			zm2 := helper[i].zm
+			if !zm2.IsInited() {
+				return false
+			}
+			return zm1.CompareMin(zm2) < 0
+		})
+	}
+
+	for i := range helper {
+		r.blks[i] = helper[i].blk
+		r.blockZMS[i] = helper[i].zm
+	}
+}
+
+func (r *blockReader) deleteFirstNBlocks(n int) {
+	r.blks = r.blks[n:]
+	if r.OrderBy != nil {
+		r.blockZMS = r.blockZMS[n:]
+	}
+}
+
 func (r *blockReader) Read(
 	ctx context.Context,
 	cols []string,
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+) (bat *batch.Batch, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
+	if r.OrderBy != nil {
+		if !r.sorted {
+			r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+			r.getBlockZMs()
+			r.sortBlockList()
+			r.sorted = true
+		}
+		i := 0
+		for i < len(r.blks) {
+			if r.needReadBlkByZM(i) {
+				r.deleteFirstNBlocks(i)
+				break
+			}
+			i++
+		}
+	}
 
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
@@ -315,7 +436,7 @@ func (r *blockReader) Read(
 
 	// move to the next block at the end of this call
 	defer func() {
-		r.blks = r.blks[1:]
+		r.deleteFirstNBlocks(1)
 		r.buffer = r.buffer[:0]
 		r.currentStep++
 	}()
@@ -335,16 +456,21 @@ func (r *blockReader) Read(
 		return nil, nil
 	}
 
-	//prefetch some objects
-	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
-		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
-		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
+	if !r.dontPrefetch {
+		//prefetch some objects
+		for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+			prefetchFile := r.scanType == SMALL || r.scanType == LARGE
+			if filter != nil && blockInfo.Sorted {
+				err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			} else {
+				err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*objectio.BlockInfo{r.infos[0]}, prefetchFile)
+			}
+			if err != nil {
+				return nil, err
+			}
+			r.infos = r.infos[1:]
+			r.steps = r.steps[1:]
 		}
-		r.infos = r.infos[1:]
-		r.steps = r.steps[1:]
 	}
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
@@ -359,7 +485,7 @@ func (r *blockReader) Read(
 	if r.scanType == LARGE || r.scanType == NORMAL {
 		policy = fileservice.SkipMemoryCacheWrites
 	}
-	bat, err := blockio.BlockRead(
+	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
@@ -418,7 +544,7 @@ func newBlockMergeReader(
 	txnTable *txnTable,
 	encodedPrimaryKey []byte,
 	ts timestamp.Timestamp,
-	dirtyBlks []*catalog.BlockInfo,
+	dirtyBlks []*objectio.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 	proc *process.Process,
@@ -441,16 +567,19 @@ func newBlockMergeReader(
 }
 
 func (r *blockMergeReader) Close() error {
-	r.blockReader.Close()
 	r.table = nil
-	return nil
+	return r.blockReader.Close()
 }
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
+	r.table.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch[info.BlockID]
+			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+
 			if !ok {
 				return nil
 			}
@@ -465,8 +594,8 @@ func (r *blockMergeReader) prefetchDeletes() error {
 						append(r.deletaLocs[location.Name().String()], location)
 				}
 			}
-
 		}
+
 		// Get Single Col pk index
 		for idx, colDef := range r.tableDef.Cols {
 			if colDef.Name == r.tableDef.Pkey.PkeyColName {
@@ -549,7 +678,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 		if entry.isGeneratedByTruncate() {
 			continue
 		}
-		if entry.typ == DELETE && entry.fileName == "" {
+		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
 				id, offset := v.Decode()
@@ -595,6 +724,27 @@ func (r *blockMergeReader) Read(
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
+	}
+}
+
+func (r *mergeReader) SetFilterZM(zm objectio.ZoneMap) {
+	for i := range r.rds {
+		r.rds[i].SetFilterZM(zm)
+	}
+}
+
+func (r *mergeReader) GetOrderBy() []*plan.OrderBySpec {
+	for i := range r.rds {
+		if r.rds[i].GetOrderBy() != nil {
+			return r.rds[i].GetOrderBy()
+		}
+	}
+	return nil
+}
+
+func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
+	for i := range r.rds {
+		r.rds[i].SetOrderBy(orderby)
 	}
 }
 

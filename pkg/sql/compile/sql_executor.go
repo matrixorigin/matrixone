@@ -109,7 +109,7 @@ func (s *sqlExecutor) Exec(
 	err := s.ExecTxn(
 		ctx,
 		func(exec executor.TxnExecutor) error {
-			v, err := exec.Exec(sql)
+			v, err := exec.Exec(sql, opts.StatementOption())
 			res = v
 			return err
 		},
@@ -204,10 +204,17 @@ func newTxnExecutor(
 	return &txnExecutor{s: s, ctx: ctx, opts: opts}, nil
 }
 
-func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
+func (exec *txnExecutor) Exec(
+	sql string,
+	statementOption executor.StatementOption) (executor.Result, error) {
 	receiveAt := time.Now()
 
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -239,6 +246,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.us,
 		exec.s.aicm,
 	)
+	proc.WaitPolicy = statementOption.WaitPolicy()
 	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf

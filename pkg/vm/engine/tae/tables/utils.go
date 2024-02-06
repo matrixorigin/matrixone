@@ -16,10 +16,9 @@ package tables
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -42,17 +41,20 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vectors, _, err := blockio.LoadColumns2(
 		ctx, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
-		nil,
-		fileservice.Policy(0))
+		fileservice.Policy(0),
+		true,
+		rt.VectorPool.Transient)
 	if err != nil {
 		return
 	}
-	return containers.ToTNVector(bat.Vecs[0], mp), nil
+	return vectors[0], nil
 }
 
 func LoadPersistedColumnDatas(
@@ -85,22 +87,25 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	bat, err := blockio.LoadColumns(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vecs, _, err := blockio.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs.Service,
 		location,
-		nil,
-		fileservice.Policy(0))
+		fileservice.Policy(0),
+		true,
+		rt.VectorPool.Transient)
 	if err != nil {
 		return nil, err
 	}
-	for i, vec := range bat.Vecs {
+	for i, vec := range vecs {
 		idx := i
 		if idx >= phyAddIdx && phyAddIdx > -1 {
 			idx++
 		}
-		vectors[idx] = containers.ToTNVector(vec, mp)
+		vectors[idx] = vec
 	}
 	return vectors, nil
 }
@@ -122,12 +127,12 @@ func LoadPersistedDeletes(
 	}
 	bat = containers.NewBatch()
 	if isPersistedByCN {
-		colNames := []string{catalog.PhyAddrColumnName, pkName}
+		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrPKVal}
 		for i := 0; i < 2; i++ {
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}
 	} else {
-		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrPKVal, catalog.AttrAborted}
 		for i := 0; i < 4; i++ {
 			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i], mp))
 		}

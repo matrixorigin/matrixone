@@ -59,7 +59,6 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 }
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
-	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
 	stmt := NewStatementInfo() // Get a new statement from the pool
 	if s, ok := i.(*StatementInfo); ok {
 
@@ -94,33 +93,39 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		stmt.RequestAt = s.RequestAt
 		stmt.ResponseAt = s.ResponseAt
 		stmt.end = s.end
+		stmt.StatementTag = s.StatementTag
+		stmt.StatementFingerprint = s.StatementFingerprint
+		stmt.Error = s.Error
+		stmt.Database = s.Database
+		stmt.AggrMemoryTime = s.AggrMemoryTime
 
-		// stmt.TransactionID = NilTxnID /* try hard to keep the txn-id. more in StatementInfoUpdate() */
-
-		// modified value
-		stmt.StatementTag = ""
-		stmt.StatementFingerprint = ""
-		stmt.Error = nil
-		stmt.AggrCount = 1
-		stmt.Database = ""
-		duration := s.Duration
-		stmt.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(stmt.statsArray.GetMemorySize() * float64(duration)))
-		stmt.RequestAt = stmt.ResponseAt.Truncate(windowSize)
-		stmt.ResponseAt = stmt.RequestAt.Add(windowSize)
-
-		// mark both statement export as true
+		// initialize the AggrCount as 0 here since aggr is not started
+		stmt.AggrCount = 0
 		return stmt
 	}
 	return nil
 }
 
-func StatementInfoUpdate(existing, new Item) {
+func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
 	// nil aggregated stmt record's txn-id, if including diff transactions.
 	if e.TransactionID != n.TransactionID {
 		e.TransactionID = NilTxnID
+	}
+	if e.AggrCount == 0 {
+		// initialize the AggrCount as 1 here since aggr is started
+		windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+		e.StatementTag = ""
+		e.StatementFingerprint = ""
+		e.Error = nil
+		e.Database = ""
+		duration := e.Duration
+		e.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
+		e.RequestAt = e.ResponseAt.Truncate(windowSize)
+		e.ResponseAt = e.RequestAt.Add(windowSize)
+		e.AggrCount = 1
 	}
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {

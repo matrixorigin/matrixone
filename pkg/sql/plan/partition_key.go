@@ -85,7 +85,7 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 	if err != nil {
 		return err
 	}
-	err = kpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt, partitionDef)
+	err = kpb.buildEvalPartitionExpression(ctx, partitionBinder, stmt.PartitionOption, partitionDef)
 	if err != nil {
 		return err
 	}
@@ -103,9 +103,8 @@ func (kpb *keyPartitionBuilder) checkPartitionIntegrity(ctx context.Context, par
 	return checkPartitionIntegrity(ctx, partitionBinder, tableDef, partitionDef)
 }
 
-func (kpb *keyPartitionBuilder) buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionDef *plan.PartitionByDef) error {
-	partitionOp := stmt.PartitionOption
-	partitionType := partitionOp.PartBy.PType.(*tree.KeyType)
+func (kpb *keyPartitionBuilder) buildEvalPartitionExpression(ctx context.Context, partitionBinder *PartitionBinder, stmt *tree.PartitionOption, partitionDef *plan.PartitionByDef) error {
+	partitionType := stmt.PartBy.PType.(*tree.KeyType)
 	//For the Key partition, convert the partition information into the expression,
 	//such as : abs (hash_value (expr)) % partitionNum
 	var astExprs []tree.Expr

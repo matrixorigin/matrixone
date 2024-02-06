@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"math"
 	"net/http/httptrace"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
 )
 
@@ -63,7 +65,10 @@ func NewS3FS(
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
+	noDefaultCredential bool,
 ) (*S3FS, error) {
+
+	args.NoDefaultCredentials = noDefaultCredential
 
 	fs := &S3FS{
 		name:            args.Name,
@@ -104,19 +109,6 @@ func NewS3FS(
 	return fs, nil
 }
 
-// NewS3FSOnMinio creates S3FS on minio server
-// this is needed because the URL scheme of minio server does not compatible with AWS'
-func NewS3FSOnMinio(
-	ctx context.Context,
-	args ObjectStorageArguments,
-	cacheConfig CacheConfig,
-	perfCounterSets []*perfcounter.CounterSet,
-	noCache bool,
-) (*S3FS, error) {
-	args.IsMinio = true
-	return NewS3FS(ctx, args, cacheConfig, perfCounterSets, noCache)
-}
-
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
@@ -149,9 +141,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
-			int64(*config.DiskCapacity),
-			config.DiskMinEvictInterval.Duration,
-			*config.DiskEvictTarget,
+			int(*config.DiskCapacity),
 			s.perfCounterSets,
 		)
 		if err != nil {
@@ -258,15 +248,17 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: filePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -404,14 +396,18 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -437,6 +433,11 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
 		}()
 	}
+
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if s.diskCache != nil {
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
@@ -470,15 +471,17 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
+	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -563,7 +566,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				C: bytesCounter,
 			},
 			closeFunc: func() error {
-				metric.S3ReadIODurationHistogram.Observe(time.Since(t0).Seconds())
+				s3ReadIODuration := time.Since(t0)
+
+				metric.S3ReadIODurationHistogram.Observe(s3ReadIODuration.Seconds())
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 				return r.Close()
 			},
@@ -763,7 +768,27 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		keys = append(keys, s.pathToKey(path.File))
 	}
 
-	return s.storage.Delete(ctx, keys...)
+	return errors.Join(
+		s.storage.Delete(ctx, keys...),
+		func() error {
+			if s.memCache == nil {
+				return nil
+			}
+			return s.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.diskCache == nil {
+				return nil
+			}
+			return s.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if s.remoteCache == nil {
+				return nil
+			}
+			return s.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 var _ ETLFileService = new(S3FS)
@@ -805,7 +830,7 @@ func newTracePoint() *tracePoint {
 	return tp
 }
 
-func (tp tracePoint) Name() string {
+func (tp tracePoint) TypeName() string {
 	return "fileservice.tracePoint"
 }
 

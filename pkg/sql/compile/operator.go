@@ -99,297 +99,309 @@ func init() {
 }
 
 func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
-	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx, IsFirst: sourceIns.IsFirst, IsLast: sourceIns.IsLast}
+	res := vm.Instruction{
+		Op:          sourceIns.Op,
+		Idx:         sourceIns.Idx,
+		IsFirst:     sourceIns.IsFirst,
+		IsLast:      sourceIns.IsLast,
+		CnAddr:      sourceIns.CnAddr,
+		OperatorID:  sourceIns.OperatorID,
+		MaxParallel: sourceIns.MaxParallel,
+		ParallelID:  sourceIns.ParallelID,
+	}
 	switch sourceIns.Op {
 	case vm.Anti:
 		t := sourceIns.Arg.(*anti.Argument)
-		res.Arg = &anti.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Cond:       t.Cond,
-			Typs:       t.Typs,
-			Conditions: t.Conditions,
-			Result:     t.Result,
-			HashOnPK:   t.HashOnPK,
-			IsShuffle:  t.IsShuffle,
-		}
+		arg := anti.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.Result = t.Result
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
-		res.Arg = &group.Argument{
-			IsShuffle:    t.IsShuffle,
-			PreAllocSize: t.PreAllocSize,
-			NeedEval:     t.NeedEval,
-			Ibucket:      t.Ibucket,
-			Nbucket:      t.Nbucket,
-			Exprs:        t.Exprs,
-			Types:        t.Types,
-			Aggs:         t.Aggs,
-			MultiAggs:    t.MultiAggs,
-		}
+		arg := group.NewArgument()
+		arg.IsShuffle = t.IsShuffle
+		arg.PreAllocSize = t.PreAllocSize
+		arg.NeedEval = t.NeedEval
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Exprs = t.Exprs
+		arg.Types = t.Types
+		arg.Aggs = t.Aggs
+		arg.MultiAggs = t.MultiAggs
+		res.Arg = arg
 	case vm.Sample:
 		t := sourceIns.Arg.(*sample.Argument)
 		res.Arg = t.SimpleDup()
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
-		res.Arg = &join.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			Cond:               t.Cond,
-			Typs:               t.Typs,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := join.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
-		res.Arg = &left.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Cond,
-			Result:             t.Result,
-			Typs:               t.Typs,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := left.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Cond
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Right:
 		t := sourceIns.Arg.(*right.Argument)
-		res.Arg = &right.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Cond,
-			Result:             t.Result,
-			RightTypes:         t.RightTypes,
-			LeftTypes:          t.LeftTypes,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := right.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Cond
+		arg.Result = t.Result
+		arg.RightTypes = t.RightTypes
+		arg.LeftTypes = t.LeftTypes
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.RightSemi:
 		t := sourceIns.Arg.(*rightsemi.Argument)
-		res.Arg = &rightsemi.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Cond,
-			Result:             t.Result,
-			RightTypes:         t.RightTypes,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := rightsemi.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Cond
+		arg.Result = t.Result
+		arg.RightTypes = t.RightTypes
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.RightAnti:
 		t := sourceIns.Arg.(*rightanti.Argument)
-		res.Arg = &rightanti.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Cond:               t.Cond,
-			Result:             t.Result,
-			RightTypes:         t.RightTypes,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := rightanti.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Cond = t.Cond
+		arg.Result = t.Result
+		arg.RightTypes = t.RightTypes
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Limit:
 		t := sourceIns.Arg.(*limit.Argument)
-		res.Arg = &limit.Argument{
-			Limit: t.Limit,
-		}
+		arg := limit.NewArgument()
+		arg.Limit = t.Limit
+		res.Arg = arg
 	case vm.LoopAnti:
 		t := sourceIns.Arg.(*loopanti.Argument)
-		res.Arg = &loopanti.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-		}
+		arg := loopanti.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		res.Arg = arg
 	case vm.LoopJoin:
 		t := sourceIns.Arg.(*loopjoin.Argument)
-		res.Arg = &loopjoin.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-		}
+		arg := loopjoin.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		res.Arg = arg
 	case vm.LoopLeft:
 		t := sourceIns.Arg.(*loopleft.Argument)
-		res.Arg = &loopleft.Argument{
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-			Result: t.Result,
-		}
+		arg := loopleft.NewArgument()
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		arg.Result = t.Result
+		res.Arg = arg
 	case vm.LoopSemi:
 		t := sourceIns.Arg.(*loopsemi.Argument)
-		res.Arg = &loopsemi.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-		}
+		arg := loopsemi.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		res.Arg = arg
 	case vm.LoopSingle:
 		t := sourceIns.Arg.(*loopsingle.Argument)
-		res.Arg = &loopsingle.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-		}
+		arg := loopsingle.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		res.Arg = arg
 	case vm.LoopMark:
 		t := sourceIns.Arg.(*loopmark.Argument)
-		res.Arg = &loopmark.Argument{
-			Result: t.Result,
-			Cond:   t.Cond,
-			Typs:   t.Typs,
-		}
+		arg := loopmark.NewArgument()
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		res.Arg = arg
 	case vm.Offset:
 		t := sourceIns.Arg.(*offset.Argument)
-		res.Arg = &offset.Argument{
-			Offset: t.Offset,
-		}
+		arg := offset.NewArgument()
+		arg.Offset = t.Offset
+		res.Arg = arg
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
-		res.Arg = &order.Argument{
-			OrderBySpec: t.OrderBySpec,
-		}
+		arg := order.NewArgument()
+		arg.OrderBySpec = t.OrderBySpec
+		res.Arg = arg
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
-		res.Arg = &product.Argument{
-			Result:    t.Result,
-			Typs:      t.Typs,
-			IsShuffle: t.IsShuffle,
-		}
+		arg := product.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
-		res.Arg = &projection.Argument{
-			Es: t.Es,
-		}
+		arg := projection.NewArgument()
+		arg.Es = t.Es
+		res.Arg = arg
 	case vm.Restrict:
 		t := sourceIns.Arg.(*restrict.Argument)
-		res.Arg = &restrict.Argument{
-			E: t.E,
-		}
+		arg := restrict.NewArgument()
+		arg.E = t.E
+		res.Arg = arg
 	case vm.Semi:
 		t := sourceIns.Arg.(*semi.Argument)
-		res.Arg = &semi.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			Cond:               t.Cond,
-			Typs:               t.Typs,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-			IsShuffle:          t.IsShuffle,
-		}
+		arg := semi.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		arg.IsShuffle = t.IsShuffle
+		res.Arg = arg
 	case vm.Single:
 		t := sourceIns.Arg.(*single.Argument)
-		res.Arg = &single.Argument{
-			Ibucket:            t.Ibucket,
-			Nbucket:            t.Nbucket,
-			Result:             t.Result,
-			Cond:               t.Cond,
-			Typs:               t.Typs,
-			Conditions:         t.Conditions,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-			HashOnPK:           t.HashOnPK,
-		}
+		arg := single.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Cond = t.Cond
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		arg.HashOnPK = t.HashOnPK
+		res.Arg = arg
 	case vm.Top:
 		t := sourceIns.Arg.(*top.Argument)
-		res.Arg = &top.Argument{
-			Limit: t.Limit,
-			Fs:    t.Fs,
-		}
+		arg := top.NewArgument()
+		arg.Limit = t.Limit
+		arg.Fs = t.Fs
+		res.Arg = arg
 	case vm.Intersect:
 		t := sourceIns.Arg.(*intersect.Argument)
-		res.Arg = &intersect.Argument{
-			IBucket: t.IBucket,
-			NBucket: t.NBucket,
-		}
+		arg := intersect.NewArgument()
+		arg.IBucket = t.IBucket
+		arg.NBucket = t.NBucket
+		res.Arg = arg
 	case vm.Minus: // 2
 		t := sourceIns.Arg.(*minus.Argument)
-		res.Arg = &minus.Argument{
-			IBucket: t.IBucket,
-			NBucket: t.NBucket,
-		}
+		arg := minus.NewArgument()
+		arg.IBucket = t.IBucket
+		arg.NBucket = t.NBucket
+		res.Arg = arg
 	case vm.IntersectAll:
 		t := sourceIns.Arg.(*intersectall.Argument)
-		res.Arg = &intersectall.Argument{
-			IBucket: t.IBucket,
-			NBucket: t.NBucket,
-		}
+		arg := intersectall.NewArgument()
+		arg.IBucket = t.IBucket
+		arg.NBucket = t.NBucket
+		res.Arg = arg
 	case vm.Merge:
-		res.Arg = &merge.Argument{SinkScan: sourceIns.Arg.(*merge.Argument).SinkScan}
+		t := sourceIns.Arg.(*merge.Argument)
+		arg := merge.NewArgument()
+		arg.SinkScan = t.SinkScan
+		res.Arg = arg
 	case vm.MergeRecursive:
-		res.Arg = &mergerecursive.Argument{}
+		res.Arg = mergerecursive.NewArgument()
 	case vm.MergeCTE:
-		res.Arg = &mergecte.Argument{}
+		res.Arg = mergecte.NewArgument()
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
-		res.Arg = &mergegroup.Argument{
-			NeedEval:           t.NeedEval,
-			PartialResults:     t.PartialResults,
-			PartialResultTypes: t.PartialResultTypes,
-		}
+		arg := mergegroup.NewArgument()
+		arg.NeedEval = t.NeedEval
+		arg.PartialResults = t.PartialResults
+		arg.PartialResultTypes = t.PartialResultTypes
+		res.Arg = arg
 	case vm.MergeLimit:
 		t := sourceIns.Arg.(*mergelimit.Argument)
-		res.Arg = &mergelimit.Argument{
-			Limit: t.Limit,
-		}
+		arg := mergelimit.NewArgument()
+		arg.Limit = t.Limit
+		res.Arg = arg
 	case vm.MergeOffset:
 		t := sourceIns.Arg.(*mergeoffset.Argument)
-		res.Arg = &mergeoffset.Argument{
-			Offset: t.Offset,
-		}
+		arg := mergeoffset.NewArgument()
+		arg.Offset = t.Offset
+		res.Arg = arg
 	case vm.MergeTop:
 		t := sourceIns.Arg.(*mergetop.Argument)
-		res.Arg = &mergetop.Argument{
-			Limit: t.Limit,
-			Fs:    t.Fs,
-		}
+		arg := mergetop.NewArgument()
+		arg.Limit = t.Limit
+		arg.Fs = t.Fs
+		res.Arg = arg
 	case vm.MergeOrder:
 		t := sourceIns.Arg.(*mergeorder.Argument)
-		res.Arg = &mergeorder.Argument{
-			OrderBySpecs: t.OrderBySpecs,
-		}
+		arg := mergeorder.NewArgument()
+		arg.OrderBySpecs = t.OrderBySpecs
+		res.Arg = arg
 	case vm.Mark:
 		t := sourceIns.Arg.(*mark.Argument)
-		res.Arg = &mark.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Conditions: t.Conditions,
-			Typs:       t.Typs,
-			Cond:       t.Cond,
-			OnList:     t.OnList,
-			HashOnPK:   t.HashOnPK,
-		}
+		arg := mark.NewArgument()
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Result = t.Result
+		arg.Conditions = t.Conditions
+		arg.Typs = t.Typs
+		arg.Cond = t.Cond
+		arg.OnList = t.OnList
+		arg.HashOnPK = t.HashOnPK
+		res.Arg = arg
 	case vm.TableFunction:
 		t := sourceIns.Arg.(*table_function.Argument)
-		res.Arg = &table_function.Argument{
-			Name:   t.Name,
-			Args:   t.Args,
-			Rets:   t.Rets,
-			Attrs:  t.Attrs,
-			Params: t.Params,
-		}
-
+		arg := table_function.NewArgument()
+		arg.FuncName = t.FuncName
+		arg.Args = t.Args
+		arg.Rets = t.Rets
+		arg.Attrs = t.Attrs
+		arg.Params = t.Params
+		res.Arg = arg
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
-		res.Arg = &hashbuild.Argument{
-			NeedHashMap:     t.NeedHashMap,
-			NeedExpr:        t.NeedExpr,
-			Ibucket:         t.Ibucket,
-			Nbucket:         t.Nbucket,
-			Typs:            t.Typs,
-			Conditions:      t.Conditions,
-			HashOnPK:        t.HashOnPK,
-			NeedMergedBatch: t.NeedMergedBatch,
-		}
+		arg := hashbuild.NewArgument()
+		arg.NeedHashMap = t.NeedHashMap
+		arg.NeedExpr = t.NeedExpr
+		arg.Ibucket = t.Ibucket
+		arg.Nbucket = t.Nbucket
+		arg.Typs = t.Typs
+		arg.Conditions = t.Conditions
+		arg.HashOnPK = t.HashOnPK
+		arg.NeedMergedBatch = t.NeedMergedBatch
+		arg.NeedAllocateSels = t.NeedAllocateSels
+		res.Arg = arg
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
-		res.Arg = &external.Argument{
-			Es: &external.ExternalParam{
+		res.Arg = external.NewArgument().WithEs(
+			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
 					Attrs:           t.Es.Attrs,
 					Cols:            t.Es.Cols,
@@ -413,19 +425,19 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					},
 				},
 			},
-		}
+		)
 	case vm.Source:
 		t := sourceIns.Arg.(*source.Argument)
-		res.Arg = &source.Argument{
-			TblDef:  t.TblDef,
-			Limit:   t.Limit,
-			Offset:  t.Offset,
-			Configs: t.Configs,
-		}
+		arg := source.NewArgument()
+		arg.TblDef = t.TblDef
+		arg.Limit = t.Limit
+		arg.Offset = t.Offset
+		arg.Configs = t.Configs
+		res.Arg = arg
 	case vm.Connector:
 		ok := false
 		if regMap != nil {
-			arg := &connector.Argument{}
+			arg := connector.NewArgument()
 			sourceReg := sourceIns.Arg.(*connector.Argument).Reg
 			if arg.Reg, ok = regMap[sourceReg]; !ok {
 				panic("nonexistent wait register")
@@ -434,27 +446,25 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 	case vm.Shuffle:
 		sourceArg := sourceIns.Arg.(*shuffle.Argument)
-		arg := &shuffle.Argument{
-			ShuffleType:        sourceArg.ShuffleType,
-			ShuffleColIdx:      sourceArg.ShuffleColIdx,
-			ShuffleColMax:      sourceArg.ShuffleColMax,
-			ShuffleColMin:      sourceArg.ShuffleColMin,
-			AliveRegCnt:        sourceArg.AliveRegCnt,
-			ShuffleRangeInt64:  sourceArg.ShuffleRangeInt64,
-			ShuffleRangeUint64: sourceArg.ShuffleRangeUint64,
-		}
+		arg := shuffle.NewArgument()
+		arg.ShuffleType = sourceArg.ShuffleType
+		arg.ShuffleColIdx = sourceArg.ShuffleColIdx
+		arg.ShuffleColMax = sourceArg.ShuffleColMax
+		arg.ShuffleColMin = sourceArg.ShuffleColMin
+		arg.AliveRegCnt = sourceArg.AliveRegCnt
+		arg.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
+		arg.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
 		res.Arg = arg
 	case vm.Dispatch:
 		ok := false
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
-			arg := &dispatch.Argument{
-				IsSink:     sourceArg.IsSink,
-				RecSink:    sourceArg.RecSink,
-				FuncId:     sourceArg.FuncId,
-				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
-				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
-			}
+			arg := dispatch.NewArgument()
+			arg.IsSink = sourceArg.IsSink
+			arg.RecSink = sourceArg.RecSink
+			arg.FuncId = sourceArg.FuncId
+			arg.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
+			arg.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 			for j := range arg.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
 				if arg.LocalRegs[j], ok = regMap[sourceReg]; !ok {
@@ -468,42 +478,42 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		}
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
-		res.Arg = &insert.Argument{
-			ToWriteS3: t.ToWriteS3,
-			InsertCtx: t.InsertCtx,
-		}
+		arg := insert.NewArgument()
+		arg.InsertCtx = t.InsertCtx
+		arg.ToWriteS3 = t.ToWriteS3
+		res.Arg = arg
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
-		res.Arg = &preinsert.Argument{
-			SchemaName: t.SchemaName,
-			TableDef:   t.TableDef,
-			Attrs:      t.Attrs,
-			IsUpdate:   t.IsUpdate,
-			HasAutoCol: t.HasAutoCol,
-		}
+		arg := preinsert.NewArgument()
+		arg.SchemaName = t.SchemaName
+		arg.TableDef = t.TableDef
+		arg.Attrs = t.Attrs
+		arg.IsUpdate = t.IsUpdate
+		arg.HasAutoCol = t.HasAutoCol
+		res.Arg = arg
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
-		res.Arg = &deletion.Argument{
-			Ts:           t.Ts,
-			IBucket:      t.IBucket,
-			Nbucket:      t.Nbucket,
-			DeleteCtx:    t.DeleteCtx,
-			RemoteDelete: t.RemoteDelete,
-			SegmentMap:   t.SegmentMap,
-		}
+		arg := deletion.NewArgument()
+		arg.Ts = t.Ts
+		arg.IBucket = t.IBucket
+		arg.Nbucket = t.Nbucket
+		arg.DeleteCtx = t.DeleteCtx
+		arg.RemoteDelete = t.RemoteDelete
+		arg.SegmentMap = t.SegmentMap
+		res.Arg = arg
 	case vm.LockOp:
 		t := sourceIns.Arg.(*lockop.Argument)
-		arg := new(lockop.Argument)
+		arg := lockop.NewArgument()
 		*arg = *t
 		res.Arg = arg
 	case vm.FuzzyFilter:
 		t := sourceIns.Arg.(*fuzzyfilter.Argument)
-		res.Arg = &fuzzyfilter.Argument{
-			N:                  t.N,
-			PkName:             t.PkName,
-			PkTyp:              t.PkTyp,
-			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
-		}
+		arg := fuzzyfilter.NewArgument()
+		arg.N = t.N
+		arg.PkName = t.PkName
+		arg.PkTyp = t.PkTyp
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -511,10 +521,10 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 }
 
 func constructRestrict(n *plan.Node, filterExpr *plan2.Expr) *restrict.Argument {
-	return &restrict.Argument{
-		E:     filterExpr,
-		IsEnd: n.IsEnd,
-	}
+	arg := restrict.NewArgument()
+	arg.E = filterExpr
+	arg.IsEnd = n.IsEnd
+	return arg
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
@@ -552,20 +562,20 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		}
 	}
 
-	return &deletion.Argument{
-		DeleteCtx: delCtx,
-	}, nil
+	arg := deletion.NewArgument()
+	arg.DeleteCtx = delCtx
+	return arg, nil
 }
 
 func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Argument {
 	oldCtx := n.OnDuplicateKey
-	return &onduplicatekey.Argument{
-		Engine:          eg,
-		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
-		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
-		TableDef:        oldCtx.TableDef,
-		IsIgnore:        oldCtx.IsIgnore,
-	}
+	arg := onduplicatekey.NewArgument()
+	arg.Engine = eg
+	arg.OnDuplicateIdx = oldCtx.OnDuplicateIdx
+	arg.OnDuplicateExpr = oldCtx.OnDuplicateExpr
+	arg.TableDef = oldCtx.TableDef
+	arg.IsIgnore = oldCtx.IsIgnore
+	return arg
 }
 
 func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Argument {
@@ -582,12 +592,11 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 		}
 	}
 
-	arg := &fuzzyfilter.Argument{
-		PkName:             pkName,
-		PkTyp:              pkTyp,
-		N:                  right.Stats.Cost,
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-	}
+	arg := fuzzyfilter.NewArgument()
+	arg.PkName = pkName
+	arg.PkTyp = pkTyp
+	arg.N = right.Stats.Cost
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
@@ -617,34 +626,34 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		}
 	}
 
-	return &preinsert.Argument{
-		Ctx:        proc.Ctx,
-		HasAutoCol: preCtx.HasAutoCol,
-		SchemaName: schemaName,
-		TableDef:   preCtx.TableDef,
-		Attrs:      attrs,
-		IsUpdate:   preCtx.IsUpdate,
-	}, nil
+	arg := preinsert.NewArgument()
+	arg.Ctx = proc.Ctx
+	arg.HasAutoCol = preCtx.HasAutoCol
+	arg.SchemaName = schemaName
+	arg.TableDef = preCtx.TableDef
+	arg.Attrs = attrs
+	arg.IsUpdate = preCtx.IsUpdate
+
+	return arg, nil
 }
 
 func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
 	preCtx := n.PreInsertUkCtx
-	return &preinsertunique.Argument{
-		Ctx:          proc.Ctx,
-		PreInsertCtx: preCtx,
-	}, nil
+	arg := preinsertunique.NewArgument()
+	arg.Ctx = proc.Ctx
+	arg.PreInsertCtx = preCtx
+	return arg, nil
 }
 
 func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.Argument, error) {
-	preCtx := n.PreInsertSkCtx
-	return &preinsertsecondaryindex.Argument{
-		Ctx:          proc.Ctx,
-		PreInsertCtx: preCtx,
-	}, nil
+	arg := preinsertsecondaryindex.NewArgument()
+	arg.Ctx = proc.Ctx
+	arg.PreInsertCtx = n.PreInsertSkCtx
+	return arg, nil
 }
 
 func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
-	arg := lockop.NewArgument(eng)
+	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 		if target.IsPartitionTable {
@@ -709,15 +718,15 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		}
 	}
 
-	return &insert.Argument{
-		InsertCtx: newCtx,
-	}, nil
+	arg := insert.NewArgument()
+	arg.InsertCtx = newCtx
+	return arg, nil
 }
 
 func constructProjection(n *plan.Node) *projection.Argument {
-	return &projection.Argument{
-		Es: n.ProjectList,
-	}
+	arg := projection.NewArgument()
+	arg.Es = n.ProjectList
+	return arg
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {
@@ -725,8 +734,8 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &external.Argument{
-		Es: &external.ExternalParam{
+	return external.NewArgument().WithEs(
+		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
 				Cols:            n.TableDef.Cols,
@@ -746,15 +755,15 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				},
 			},
 		},
-	}
+	)
 }
 
 func constructStream(n *plan.Node, p [2]int64) *source.Argument {
-	return &source.Argument{
-		TblDef: n.TableDef,
-		Offset: p[0],
-		Limit:  p[1],
-	}
+	arg := source.NewArgument()
+	arg.TblDef = n.TableDef
+	arg.Offset = p[0]
+	arg.Limit = p[1]
+	return arg
 }
 
 func constructTableFunction(n *plan.Node) *table_function.Argument {
@@ -762,20 +771,20 @@ func constructTableFunction(n *plan.Node) *table_function.Argument {
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	return &table_function.Argument{
-		Attrs:  attrs,
-		Rets:   n.TableDef.Cols,
-		Args:   n.TblFuncExprList,
-		Name:   n.TableDef.TblFunc.Name,
-		Params: n.TableDef.TblFunc.Param,
-	}
+	arg := table_function.NewArgument()
+	arg.Attrs = attrs
+	arg.Rets = n.TableDef.Cols
+	arg.Args = n.TblFuncExprList
+	arg.FuncName = n.TableDef.TblFunc.Name
+	arg.Params = n.TableDef.TblFunc.Param
+	return arg
 }
 
 func constructTop(n *plan.Node, topN int64) *top.Argument {
-	return &top.Argument{
-		Fs:    n.OrderBy,
-		Limit: topN,
-	}
+	arg := top.NewArgument()
+	arg.Fs = n.OrderBy
+	arg.Limit = topN
+	return arg
 }
 
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
@@ -785,15 +794,15 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 
-	return &join.Argument{
-		Typs:               typs,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := join.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.Argument {
@@ -806,15 +815,15 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &semi.Argument{
-		Typs:               typs,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := semi.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
@@ -823,15 +832,15 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &left.Argument{
-		Typs:               typs,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := left.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *right.Argument {
@@ -840,18 +849,18 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &right.Argument{
-		LeftTypes:          left_typs,
-		RightTypes:         right_typs,
-		Nbucket:            Nbucket,
-		Ibucket:            Ibucket,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := right.NewArgument()
+	arg.LeftTypes = left_typs
+	arg.RightTypes = right_typs
+	arg.Nbucket = Nbucket
+	arg.Ibucket = Ibucket
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightsemi.Argument {
@@ -860,17 +869,18 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		_, result[i] = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &rightsemi.Argument{
-		RightTypes:         right_typs,
-		Nbucket:            Nbucket,
-		Ibucket:            Ibucket,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	// 使用NewArgument来初始化
+	arg := rightsemi.NewArgument()
+	arg.RightTypes = right_typs
+	arg.Nbucket = Nbucket
+	arg.Ibucket = Ibucket
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket uint64, proc *process.Process) *rightanti.Argument {
@@ -879,17 +889,17 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		_, result[i] = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &rightanti.Argument{
-		RightTypes:         right_typs,
-		Nbucket:            Nbucket,
-		Ibucket:            Ibucket,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := rightanti.NewArgument()
+	arg.RightTypes = right_typs
+	arg.Nbucket = Nbucket
+	arg.Ibucket = Ibucket
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
@@ -898,14 +908,14 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &single.Argument{
-		Typs:               typs,
-		Result:             result,
-		Cond:               cond,
-		Conditions:         constructJoinConditions(conds, proc),
-		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
-		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-	}
+	arg := single.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	return arg
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
@@ -913,7 +923,10 @@ func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *p
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	return &product.Argument{Typs: typs, Result: result}
+	arg := product.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	return arg
 }
 
 func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti.Argument {
@@ -926,14 +939,14 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
-	return &anti.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
-		HashOnPK:   n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
-		IsShuffle:  n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
-	}
+	arg := anti.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = cond
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	return arg
 }
 
 /*
@@ -961,9 +974,9 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 */
 
 func constructOrder(n *plan.Node) *order.Argument {
-	return &order.Argument{
-		OrderBySpec: n.OrderBy,
-	}
+	arg := order.NewArgument()
+	arg.OrderBySpec = n.OrderBy
+	return arg
 }
 
 func constructFill(n *plan.Node) *fill.Argument {
@@ -973,12 +986,12 @@ func constructFill(n *plan.Node) *fill.Argument {
 		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 		aggIdx[i], _ = function.DecodeOverloadID(obj)
 	}
-	return &fill.Argument{
-		ColLen:   len(n.AggList),
-		FillType: n.FillType,
-		FillVal:  n.FillVal,
-		AggIds:   aggIdx,
-	}
+	arg := fill.NewArgument()
+	arg.ColLen = len(n.AggList)
+	arg.FillType = n.FillType
+	arg.FillVal = n.FillVal
+	arg.AggIds = aggIdx
+	return arg
 }
 
 func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Process) *timewin.Argument {
@@ -1031,15 +1044,15 @@ func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Proces
 		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 	}
 
-	return &timewin.Argument{
-		Types:    typs,
-		Aggs:     aggs,
-		Ts:       n.OrderBy[0].Expr,
-		WStart:   wStart,
-		WEnd:     wEnd,
-		Interval: itr,
-		Sliding:  sld,
-	}
+	arg := timewin.NewArgument()
+	arg.Types = typs
+	arg.Aggs = aggs
+	arg.Ts = n.OrderBy[0].Expr
+	arg.WStart = wStart
+	arg.WEnd = wEnd
+	arg.Interval = itr
+	arg.Sliding = sld
+	return arg
 }
 
 func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *window.Argument {
@@ -1082,11 +1095,11 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 		}
 	}
-	return &window.Argument{
-		Types:       typs,
-		Aggs:        aggs,
-		WinSpecList: n.WinSpecList,
-	}
+	arg := window.NewArgument()
+	arg.Types = typs
+	arg.Aggs = aggs
+	arg.WinSpecList = n.WinSpecList
+	return arg
 }
 
 /*
@@ -1112,14 +1125,14 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 		panic(err)
 	}
 
-	return &limit.Argument{
-		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
-	}
+	arg := limit.NewArgument()
+	arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	return arg
 }
 
-func constructSample(n *plan.Node) *sample.Argument {
+func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
-		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy, n.SampleFunc.UsingRow, outputRowCount)
 	}
 	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
 		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
@@ -1176,44 +1189,44 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		}
 	}
 
-	return &group.Argument{
-		Aggs:         aggs,
-		Types:        typs,
-		NeedEval:     needEval,
-		Exprs:        n.GroupBy,
-		Ibucket:      uint64(ibucket),
-		Nbucket:      uint64(nbucket),
-		IsShuffle:    shuffle,
-		PreAllocSize: preAllocSize,
-	}
+	arg := group.NewArgument()
+	arg.Aggs = aggs
+	arg.Types = typs
+	arg.NeedEval = needEval
+	arg.Exprs = n.GroupBy
+	arg.Ibucket = uint64(ibucket)
+	arg.Nbucket = uint64(nbucket)
+	arg.IsShuffle = shuffle
+	arg.PreAllocSize = preAllocSize
+	return arg
 }
 
 // ibucket: bucket number
 // nbucket:
 // construct operator argument
 func constructIntersectAll(ibucket, nbucket int) *intersectall.Argument {
-	return &intersectall.Argument{
-		IBucket: uint64(ibucket),
-		NBucket: uint64(nbucket),
-	}
+	arg := intersectall.NewArgument()
+	arg.IBucket = uint64(ibucket)
+	arg.NBucket = uint64(nbucket)
+	return arg
 }
 
 func constructMinus(ibucket, nbucket int) *minus.Argument {
-	return &minus.Argument{
-		IBucket: uint64(ibucket),
-		NBucket: uint64(nbucket),
-	}
+	arg := minus.NewArgument()
+	arg.IBucket = uint64(ibucket)
+	arg.NBucket = uint64(nbucket)
+	return arg
 }
 
 func constructIntersect(ibucket, nbucket int) *intersect.Argument {
-	return &intersect.Argument{
-		IBucket: uint64(ibucket),
-		NBucket: uint64(nbucket),
-	}
+	arg := intersect.NewArgument()
+	arg.IBucket = uint64(ibucket)
+	arg.NBucket = uint64(nbucket)
+	return arg
 }
 
 func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister) *dispatch.Argument {
-	arg := new(dispatch.Argument)
+	arg := dispatch.NewArgument()
 	arg.LocalRegs = regs
 	arg.IsSink = isSink
 	arg.RecSink = RecSink
@@ -1234,7 +1247,7 @@ func constructDeleteDispatchAndLocal(
 	ss []*Scope,
 	uuids []uuid.UUID,
 	c *Compile) {
-	arg := new(dispatch.Argument)
+	arg := dispatch.NewArgument()
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
 	// local batch)
@@ -1299,14 +1312,14 @@ func constructDeleteDispatchAndLocal(
 	// add merge to recieve all batches
 	rs[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+		Arg: merge.NewArgument(),
 	})
 }
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
 func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string) (bool, *dispatch.Argument) {
-	arg := new(dispatch.Argument)
+	arg := dispatch.NewArgument()
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
@@ -1327,7 +1340,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
 			hasRemote = true
-			newUuid := uuid.New()
+			newUuid, _ := uuid.NewV7()
 
 			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
 				Uuid:     newUuid,
@@ -1345,7 +1358,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 }
 
 func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.Argument {
-	arg := new(shuffle.Argument)
+	arg := shuffle.NewArgument()
 	var expr *plan.Expr
 	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
 	switch condImpl := cond.Expr.(type) {
@@ -1366,14 +1379,14 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
 
 func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
-	arg := new(shuffle.Argument)
+	arg := shuffle.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
@@ -1383,7 +1396,7 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1414,16 +1427,16 @@ func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.No
 }
 
 func constructMergeGroup(needEval bool) *mergegroup.Argument {
-	return &mergegroup.Argument{
-		NeedEval: needEval,
-	}
+	arg := mergegroup.NewArgument()
+	arg.NeedEval = needEval
+	return arg
 }
 
 func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
-	return &mergetop.Argument{
-		Fs:    n.OrderBy,
-		Limit: topN,
-	}
+	arg := mergetop.NewArgument()
+	arg.Fs = n.OrderBy
+	arg.Limit = topN
+	return arg
 }
 
 func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
@@ -1437,9 +1450,9 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 		panic(err)
 	}
 
-	return &mergeoffset.Argument{
-		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
-	}
+	arg := mergeoffset.NewArgument()
+	arg.Offset = uint64(vector.MustFixedCol[int64](vec)[0])
+	return arg
 }
 
 func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
@@ -1453,21 +1466,21 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 		panic(err)
 	}
 
-	return &mergelimit.Argument{
-		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
-	}
+	arg := mergelimit.NewArgument()
+	arg.Limit = uint64(vector.MustFixedCol[int64](vec)[0])
+	return arg
 }
 
 func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
-	return &mergeorder.Argument{
-		OrderBySpecs: n.OrderBy,
-	}
+	arg := mergeorder.NewArgument()
+	arg.OrderBySpecs = n.OrderBy
+	return arg
 }
 
 func constructPartition(n *plan.Node) *partition.Argument {
-	return &partition.Argument{
-		OrderBySpecs: n.OrderBy,
-	}
+	arg := partition.NewArgument()
+	arg.OrderBySpecs = n.OrderBy
+	return arg
 }
 
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
@@ -1475,11 +1488,11 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	return &loopjoin.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopjoin.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *loopsemi.Argument {
@@ -1491,11 +1504,11 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 		}
 		result[i] = pos
 	}
-	return &loopsemi.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopsemi.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
@@ -1503,11 +1516,11 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	return &loopleft.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopleft.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
@@ -1515,11 +1528,11 @@ func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process)
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	return &loopsingle.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopsingle.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *loopanti.Argument {
@@ -1531,11 +1544,11 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 		}
 		result[i] = pos
 	}
-	return &loopanti.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopanti.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *loopmark.Argument {
@@ -1550,11 +1563,11 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 			panic(moerr.NewNYI(proc.Ctx, "loop mark result '%s'", expr))
 		}
 	}
-	return &loopmark.Argument{
-		Typs:   typs,
-		Result: result,
-		Cond:   colexec.RewriteFilterExprList(n.OnList),
-	}
+	arg := loopmark.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
+	return arg
 }
 
 func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
@@ -1592,41 +1605,43 @@ func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, spec
 func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
+	ret := hashbuild.NewArgument()
 
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     true,
-			Typs:            arg.Typs,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedMergedBatch = true
+			ret.NeedAllocateSels = true
 		}
 
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     true,
-			Typs:            arg.Typs,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
-		retArg := &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
-			HashOnPK:    arg.HashOnPK,
-		}
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
 
-		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		// to find if hashmap need to keep build batches for probe
 		var needMergedBatch bool
 		if arg.Cond != nil {
 			needMergedBatch = true
@@ -1637,174 +1652,155 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 				break
 			}
 		}
-		retArg.NeedMergedBatch = needMergedBatch
+		ret.NeedMergedBatch = needMergedBatch
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
-		retArg := &hashbuild.Argument{
-			NeedHashMap:     true,
-			Typs:            arg.Typs,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
-		retArg := &hashbuild.Argument{
-			Ibucket:         arg.Ibucket,
-			Nbucket:         arg.Nbucket,
-			NeedHashMap:     true,
-			Typs:            arg.RightTypes,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.Ibucket = arg.Ibucket
+		ret.Nbucket = arg.Nbucket
+		ret.NeedHashMap = true
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
-		retArg := &hashbuild.Argument{
-			Ibucket:         arg.Ibucket,
-			Nbucket:         arg.Nbucket,
-			NeedHashMap:     true,
-			Typs:            arg.RightTypes,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.Ibucket = arg.Ibucket
+		ret.Nbucket = arg.Nbucket
+		ret.NeedHashMap = true
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
-		retArg := &hashbuild.Argument{
-			Ibucket:         arg.Ibucket,
-			Nbucket:         arg.Nbucket,
-			NeedHashMap:     true,
-			Typs:            arg.RightTypes,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.Ibucket = arg.Ibucket
+		ret.Nbucket = arg.Nbucket
+		ret.NeedHashMap = true
+		ret.Typs = arg.RightTypes
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
-		retArg := &hashbuild.Argument{
-			NeedHashMap:     true,
-			Typs:            arg.Typs,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.HashOnPK = arg.HashOnPK
+		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
+			ret.NeedAllocateSels = false
+		} else {
+			ret.NeedMergedBatch = true
+			ret.NeedAllocateSels = true
 		}
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
-		retArg := &hashbuild.Argument{
-			NeedHashMap:     true,
-			Typs:            arg.Typs,
-			Conditions:      arg.Conditions[1],
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-			HashOnPK:        arg.HashOnPK,
-		}
+		ret.NeedHashMap = true
+		ret.Typs = arg.Typs
+		ret.Conditions = arg.Conditions[1]
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.HashOnPK = arg.HashOnPK
+		ret.NeedAllocateSels = true
 
-		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
-
-		return retArg
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
-		return &hashbuild.Argument{
-			NeedHashMap:     false,
-			Typs:            arg.Typs,
-			IsDup:           isDup,
-			NeedMergedBatch: true,
-		}
+		ret.NeedHashMap = false
+		ret.Typs = arg.Typs
+		ret.IsDup = isDup
+		ret.NeedMergedBatch = true
+		ret.NeedAllocateSels = true
 
 	default:
+		ret.Release()
 		panic(moerr.NewInternalError(proc.Ctx, "unsupport join type '%v'", in.Op))
 	}
+	return ret
 }
 
 func constructJoinResult(expr *plan.Expr, proc *process.Process) (int32, int32) {

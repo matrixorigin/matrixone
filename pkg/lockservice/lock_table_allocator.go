@@ -37,7 +37,7 @@ type lockTableAllocator struct {
 	mu struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
-		lockTables map[uint64]pb.LockTable
+		lockTables map[uint32]map[uint64]pb.LockTable
 	}
 }
 
@@ -59,7 +59,7 @@ func NewLockTableAllocator(
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
 	}
-	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
+	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
 	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
 		panic(err)
@@ -71,13 +71,15 @@ func NewLockTableAllocator(
 
 func (l *lockTableAllocator) Get(
 	serviceID string,
-	tableID uint64) pb.LockTable {
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	sharding pb.Sharding) pb.LockTable {
 	binds := l.getServiceBinds(serviceID)
 	if binds == nil {
 		binds = l.registerService(serviceID, tableID)
 	}
-	binds.active()
-	return l.registerBind(binds, tableID)
+	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
@@ -97,28 +99,12 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 			panic("BUG")
 		}
 
-		// For upgrade, we must abort all old cn version's transactions.
-		// Because the previous version does not support shared Table
-		// segregation by tenant, then during the upgrade process there will
-		// be 2 versions of CN at the same time, resulting in WW conflicts
-		// that may be missed to be detected.
-		// FIXME(fagongzi): remove this logic in next version.
-		if isSharedTable(b.Table) {
-			_, _, ok := decodeSharedTableID(b.Table)
-			if !ok {
-				invalid = append(invalid, b.Table)
-				continue
-			}
-		}
-
-		current, ok := l.mu.lockTables[b.Table]
+		current, ok := l.getLockTablesLocked(b.Group)[b.Table]
 		if !ok ||
 			current.Changed(b) {
-			if l.logger.Enabled(zap.DebugLevel) {
-				l.logger.Debug("table and service bind changed",
-					zap.String("current", current.DebugString()),
-					zap.String("received", b.DebugString()))
-			}
+			l.logger.Info("table and service bind changed",
+				zap.String("current", current.DebugString()),
+				zap.String("received", b.DebugString()))
 			invalid = append(invalid, b.Table)
 		}
 	}
@@ -133,21 +119,35 @@ func (l *lockTableAllocator) Close() error {
 	return err
 }
 
+func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	m := l.getLockTablesLocked(groupID)
+	if old, ok := m[tableID]; ok {
+		return old
+	}
+	return pb.LockTable{}
+}
+
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// we can't just delete the LockTable's effectiveness binding directly, we
 	// need to keep the binding version.
-	for table := range b.tables {
-		if old, ok := l.mu.lockTables[table]; ok &&
-			old.ServiceID == b.serviceID {
-			old.Valid = false
-			l.mu.lockTables[table] = old
+	for g, tables := range b.groupTables {
+		for table := range tables {
+			if old, ok := l.getLockTablesLocked(g)[table]; ok &&
+				old.ServiceID == b.serviceID {
+				old.Valid = false
+				l.getLockTablesLocked(g)[table] = old
+			}
 		}
 	}
+
 	// service need deleted, because this service may never restart
 	delete(l.mu.services, b.serviceID)
-	l.logger.Debug("lock service disabled",
+	l.logger.Info("service removed",
 		zap.String("service", b.serviceID))
 }
 
@@ -182,28 +182,27 @@ func (l *lockTableAllocator) registerService(
 	}
 	b = newServiceBinds(serviceID, l.logger.With(zap.String("lockservice", serviceID)))
 	l.mu.services[serviceID] = b
-
-	if l.logger.Enabled(zap.DebugLevel) {
-		l.logger.Debug("lock service registered",
-			zap.String("service", serviceID))
-	}
 	return b
 }
 
 func (l *lockTableAllocator) registerBind(
 	binds *serviceBinds,
-	tableID uint64) pb.LockTable {
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	sharding pb.Sharding) pb.LockTable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if old, ok := l.mu.lockTables[tableID]; ok {
-		return l.tryRebindLocked(binds, old, tableID)
+	if old, ok := l.getLockTablesLocked(group)[tableID]; ok {
+		return l.tryRebindLocked(binds, group, old, tableID)
 	}
-	return l.createBindLocked(binds, tableID)
+	return l.createBindLocked(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) tryRebindLocked(
 	binds *serviceBinds,
+	group uint32,
 	old pb.LockTable,
 	tableID uint64) pb.LockTable {
 	// find a valid table and service bind
@@ -214,7 +213,7 @@ func (l *lockTableAllocator) tryRebindLocked(
 	// been invalidated, and the current service has also been invalidated, so
 	// there is no need for any re-bind operation here, and the invalid bind
 	// information is directly returned to the service.
-	if !binds.bind(tableID) {
+	if !binds.bind(group, tableID) {
 		return old
 	}
 
@@ -222,26 +221,47 @@ func (l *lockTableAllocator) tryRebindLocked(
 	old.ServiceID = binds.serviceID
 	old.Version++
 	old.Valid = true
-	l.mu.lockTables[tableID] = old
+	l.getLockTablesLocked(group)[tableID] = old
+
+	l.logger.Info("bind changed",
+		zap.Uint64("table", tableID),
+		zap.Uint64("version", old.Version),
+		zap.String("service", binds.serviceID))
 	return old
 }
 
 func (l *lockTableAllocator) createBindLocked(
 	binds *serviceBinds,
-	tableID uint64) pb.LockTable {
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	sharding pb.Sharding) pb.LockTable {
 	// current service is invalid
-	if !binds.bind(tableID) {
+	if !binds.bind(group, tableID) {
 		return pb.LockTable{}
+	}
+
+	if originTableID == 0 {
+		if sharding == pb.Sharding_ByRow {
+			panic("invalid sharding origin table id")
+		}
+		originTableID = tableID
 	}
 
 	// create new table and service bind
 	b := pb.LockTable{
-		Table:     tableID,
-		ServiceID: binds.serviceID,
-		Version:   1,
-		Valid:     true,
+		Table:       tableID,
+		OriginTable: originTableID,
+		ServiceID:   binds.serviceID,
+		Version:     1,
+		Valid:       true,
+		Sharding:    sharding,
+		Group:       group,
 	}
-	l.mu.lockTables[tableID] = b
+	l.getLockTablesLocked(group)[tableID] = b
+	l.logger.Info("bind created",
+		zap.Uint64("table", tableID),
+		zap.String("service", binds.serviceID))
 	return b
 }
 
@@ -255,8 +275,11 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 			return
 		case <-timer.C:
 			timeoutBinds := l.getTimeoutBinds(time.Now())
-			l.logger.Debug("get timeout services",
-				zap.Int("count", len(timeoutBinds)))
+			if len(timeoutBinds) > 0 {
+				l.logger.Info("get timeout services",
+					zap.Duration("timeout", l.keepBindTimeout),
+					zap.Int("count", len(timeoutBinds)))
+			}
 			for _, b := range timeoutBinds {
 				b.disable()
 				l.disableTableBinds(b)
@@ -272,7 +295,7 @@ type serviceBinds struct {
 	sync.RWMutex
 	logger            *log.MOLogger
 	serviceID         string
-	tables            map[uint64]struct{}
+	groupTables       map[uint32]map[uint64]struct{}
 	lastKeepaliveTime time.Time
 	disabled          bool
 }
@@ -283,7 +306,7 @@ func newServiceBinds(
 	return &serviceBinds{
 		serviceID:         serviceID,
 		logger:            logger,
-		tables:            make(map[uint64]struct{}, 1024),
+		groupTables:       make(map[uint32]map[uint64]struct{}),
 		lastKeepaliveTime: time.Now(),
 	}
 }
@@ -295,19 +318,19 @@ func (b *serviceBinds) active() bool {
 		return false
 	}
 	b.lastKeepaliveTime = time.Now()
-	b.logger.Debug("lock service binds actived")
+	b.logger.Debug("lock service binds active")
 	return true
 }
 
-func (b *serviceBinds) bind(tableID uint64) bool {
+func (b *serviceBinds) bind(
+	group uint32,
+	tableID uint64) bool {
 	b.Lock()
 	defer b.Unlock()
 	if b.disabled {
 		return false
 	}
-	b.tables[tableID] = struct{}{}
-	b.logger.Debug("table binded",
-		zap.Uint64("table", tableID))
+	b.getTablesLocked(group)[tableID] = struct{}{}
 	return true
 }
 
@@ -324,7 +347,18 @@ func (b *serviceBinds) disable() {
 	b.Lock()
 	defer b.Unlock()
 	b.disabled = true
-	b.logger.Debug("lock service binds disabled")
+	b.logger.Info("bind disabled",
+		zap.String("service", b.serviceID))
+}
+
+func (b *serviceBinds) getTablesLocked(group uint32) map[uint64]struct{} {
+	m, ok := b.groupTables[group]
+	if ok {
+		return m
+	}
+	m = make(map[uint64]struct{}, 1024)
+	b.groupTables[group] = m
+	return m
 }
 
 func (l *lockTableAllocator) initServer(cfg morpc.Config) {
@@ -357,8 +391,12 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	resp.GetBind.LockTable = l.Get(req.GetBind.ServiceID,
-		req.GetBind.Table)
+	resp.GetBind.LockTable = l.Get(
+		req.GetBind.ServiceID,
+		req.GetBind.Group,
+		req.GetBind.Table,
+		req.GetBind.OriginTable,
+		req.GetBind.Sharding)
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
@@ -370,4 +408,14 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.LockTable {
+	m, ok := l.mu.lockTables[group]
+	if ok {
+		return m
+	}
+	m = make(map[uint64]pb.LockTable, 10240)
+	l.mu.lockTables[group] = m
+	return m
 }

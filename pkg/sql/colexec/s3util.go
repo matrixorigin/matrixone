@@ -446,6 +446,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+		case types.T_bit:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
@@ -665,7 +667,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
 			//[]byte(metaLoc),
-			catalog.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -691,13 +693,13 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, nil, err
 	}
-	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
+	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
 		location := blockio.EncodeLocation(
@@ -711,7 +713,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, [
 			return nil, nil, err
 		}
 		sid := location.Name().SegmentId()
-		blkInfo := catalog.BlockInfo{
+		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(
 				&sid,
 				location.Name().Num(),

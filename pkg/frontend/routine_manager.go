@@ -231,6 +231,7 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
+	createdStart := time.Now()
 	pu := rm.getParameterUnit()
 	connID, err := rm.getConnID()
 	if err != nil {
@@ -258,10 +259,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
 
-	ses.timestampMap[TSCreatedStart] = time.Now()
+	ses.timestampMap[TSCreatedStart] = createdStart
 	defer func() {
 		ses.timestampMap[TSCreatedEnd] = time.Now()
-		v2.CreatedDurationHistogram.Observe(float64(ses.timestampMap[TSCreatedEnd].Sub(ses.timestampMap[TSCreatedStart]).Milliseconds()))
+		v2.CreatedDurationHistogram.Observe(ses.timestampMap[TSCreatedEnd].Sub(ses.timestampMap[TSCreatedStart]).Seconds())
 	}()
 
 	routine.setSession(ses)
@@ -397,6 +398,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	ses := routine.getSession()
+	ts := ses.timestampMap
+
 	length := packet.Length
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
@@ -425,7 +428,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
-		ses.timestampMap[TSEstablishStart] = time.Now()
+		ts[TSEstablishStart] = time.Now()
 		logDebugf(protoInfo, "HANDLE HANDSHAKE")
 
 		/*
@@ -442,7 +445,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				return err
 			}
 			if isTlsHeader {
-				ses.timestampMap[TSUpgradeTLSStart] = time.Now()
+				ts[TSUpgradeTLSStart] = time.Now()
 				logDebugf(protoInfo, "upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
@@ -465,8 +468,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
-				ses.timestampMap[TSUpgradeTLSEnd] = time.Now()
-				v2.UpgradeTLSDurationHistogram.Observe(float64(ses.timestampMap[TSUpgradeTLSEnd].Sub(ses.timestampMap[TSUpgradeTLSStart]).Milliseconds()))
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
 			} else {
 				// client don't ask server to upgrade TLS
 				if err := protocol.Authenticate(ctx); err != nil {
@@ -489,8 +492,20 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 			protocol.SetEstablished()
 		}
-		ses.timestampMap[TSEstablishEnd] = time.Now()
-		v2.EstablishDurationHistogram.Observe(float64(ses.timestampMap[TSEstablishEnd].Sub(ses.timestampMap[TSEstablishStart]).Milliseconds()))
+		ts[TSEstablishEnd] = time.Now()
+		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
+		logInfof(ses.GetDebugString(), fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+			ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
+			ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
+			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
 
 		dbName := protocol.GetDatabaseName()
 		if dbName != "" {

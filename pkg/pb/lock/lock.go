@@ -103,6 +103,11 @@ func (m LockTable) Changed(v LockTable) bool {
 		m.ServiceID != v.ServiceID
 }
 
+// Equal return true means same bind
+func (m LockTable) Equal(v LockTable) bool {
+	return m.Table == v.Table && m.Version == v.Version
+}
+
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
 	return fmt.Sprintf("%d-%s-%d", m.Table, m.ServiceID, m.Version)
@@ -255,10 +260,24 @@ func (m *WaitTxn) DebugString() string {
 		m.CreatedOn)
 }
 
-func (m Request) Name() string {
+func (m Request) TypeName() string {
 	return "lockservice.request"
 }
 
-func (m Response) Name() string {
+func (m Response) TypeName() string {
 	return "lockservice.response"
+}
+
+func (m LockOptions) Validate(rows [][]byte) {
+	if m.Sharding == Sharding_None {
+		return
+	}
+
+	if m.Granularity != Granularity_Row {
+		panic("cannot lock with sharding without row granularity")
+	}
+
+	if len(rows) != 1 {
+		panic("cannot lock with sharding without single row")
+	}
 }

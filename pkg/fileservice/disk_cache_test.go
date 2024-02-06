@@ -17,9 +17,11 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"io/fs"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -36,7 +38,7 @@ func TestDiskCache(t *testing.T) {
 	})
 
 	// new
-	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1<<20, nil)
 	assert.Nil(t, err)
 
 	// update
@@ -102,6 +104,7 @@ func TestDiskCache(t *testing.T) {
 		}
 		err = cache.Read(ctx, vec)
 		assert.Nil(t, err)
+		assert.NotNil(t, r)
 		defer r.Close()
 		assert.True(t, vec.Entries[0].done)
 		assert.Equal(t, []byte("a"), vec.Entries[0].Data)
@@ -118,30 +121,33 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1<<20, nil)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	assert.Equal(t, 1, numWritten)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1<<20, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
 	assert.Equal(t, 1, numWritten)
+
+	// delete file
+	err = cache.DeletePaths(ctx, []string{"foo"})
+	assert.Nil(t, err)
 }
 
 func TestDiskCacheWriteAgain(t *testing.T) {
+
 	dir := t.TempDir()
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	evictInterval := time.Hour * 1
-	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, nil)
+	cache, err := NewDiskCache(ctx, dir, 4096, nil)
 	assert.Nil(t, err)
-	cache.noAutoEviction = true
 
 	// update
 	err = cache.Update(ctx, &IOVector{
@@ -155,6 +161,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	}, false)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.WriteFile.Load())
+	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	// update another entry
 	err = cache.Update(ctx, &IOVector{
@@ -169,8 +176,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	}, false)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.WriteFile.Load())
-
-	cache.evict(ctx)
+	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	// update again, should write cache file again
 	err = cache.Update(ctx, &IOVector{
@@ -184,6 +190,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	}, false)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.WriteFile.Load())
+	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	err = cache.Read(ctx, &IOVector{
 		FilePath: "foo",
@@ -201,7 +208,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 func TestDiskCacheFileCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1<<20, nil)
 	assert.Nil(t, err)
 
 	vector := IOVector{
@@ -250,4 +257,53 @@ func TestDiskCacheFileCache(t *testing.T) {
 	assert.Equal(t, []byte("ob"), readVector.Entries[1].Data)
 	assert.Equal(t, []byte("ar"), readVector.Entries[2].Data)
 
+}
+
+func TestDiskCacheDirSize(t *testing.T) {
+	ctx := context.Background()
+	var counter perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counter)
+
+	dir := t.TempDir()
+	capacity := 1 << 20
+	cache, err := NewDiskCache(ctx, dir, capacity, nil)
+	assert.Nil(t, err)
+
+	data := bytes.Repeat([]byte("a"), capacity/128)
+	for i := 0; i < capacity/len(data)*64; i++ {
+		err := cache.Update(ctx, &IOVector{
+			FilePath: fmt.Sprintf("%v", i),
+			Entries: []IOEntry{
+				{
+					Offset: 0,
+					Size:   int64(len(data)),
+					Data:   data,
+				},
+			},
+		}, false)
+		assert.Nil(t, err)
+		size := dirSize(dir)
+		assert.LessOrEqual(t, size, capacity)
+	}
+	assert.True(t, counter.FileService.Cache.Disk.Evict.Load() > 0)
+}
+
+func dirSize(path string) (ret int) {
+	if err := filepath.WalkDir(path, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		stat, err := d.Info()
+		if err != nil {
+			return err
+		}
+		ret += int(fileSize(stat))
+		return nil
+	}); err != nil {
+		panic(err)
+	}
+	return
 }

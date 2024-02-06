@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -166,7 +168,7 @@ func NewBootstrapper(
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
-
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
 		getLogger().Info("mo already boostrapped")
 		return nil
@@ -253,7 +255,7 @@ func (b *bootstrapper) now() timestamp.Timestamp {
 func execFunc(sql []string) func(executor.TxnExecutor) error {
 	return func(e executor.TxnExecutor) error {
 		for _, s := range sql {
-			r, err := e.Exec(s)
+			r, err := e.Exec(s, executor.StatementOption{})
 			if err != nil {
 				return err
 			}

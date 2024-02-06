@@ -14,6 +14,16 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[DropProcedure](
+		func() *DropProcedure { return &DropProcedure{} },
+		func(d *DropProcedure) { d.reset() },
+		reuse.DefaultOptions[DropProcedure]().
+			WithEnableChecker())
+}
+
 type InOutArgType int
 
 const (
@@ -128,6 +138,10 @@ type DropProcedure struct {
 	IfExists bool
 }
 
+func (node *DropProcedure) Free() {
+	reuse.Free[DropProcedure](node, nil)
+}
+
 func (node *CreateProcedure) Format(ctx *FmtCtx) {
 	ctx.WriteString("create procedure ")
 
@@ -145,6 +159,22 @@ func (node *CreateProcedure) Format(ctx *FmtCtx) {
 
 	ctx.WriteString(node.Body)
 	ctx.WriteString("'")
+}
+
+func (node DropProcedure) TypeName() string { return "tree.DropProcedure" }
+
+func (node *DropProcedure) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[ProcedureName](node.Name, nil)
+	// }
+	*node = DropProcedure{}
+}
+
+func NewDropProcedure(n *ProcedureName, i bool) *DropProcedure {
+	dropProcedure := reuse.Alloc[DropProcedure](nil)
+	dropProcedure.Name = n
+	dropProcedure.IfExists = i
+	return dropProcedure
 }
 
 func (node *DropProcedure) Format(ctx *FmtCtx) {

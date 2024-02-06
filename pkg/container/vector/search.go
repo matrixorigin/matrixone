@@ -160,3 +160,32 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 		return sels
 	}
 }
+
+func CollectOffsetsByOnePrefixFactory(prefix []byte) func(*Vector) []int32 {
+	return func(vec *Vector) []int32 {
+		n1 := vec.Length()
+		if n1 == 0 {
+			return nil
+		}
+		start, _ := sort.Find(n1, func(i int) int {
+			return bytes.Compare(prefix, vec.GetBytesAt(i))
+		})
+		if start == n1 {
+			return nil
+		}
+		if !bytes.HasPrefix(vec.GetBytesAt(start), prefix) {
+			return nil
+		}
+		var end int
+		for end = start + 1; end < n1; end++ {
+			if !bytes.HasPrefix(vec.GetBytesAt(end), prefix) {
+				break
+			}
+		}
+		sels := make([]int32, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int32(i)
+		}
+		return sels
+	}
+}

@@ -64,8 +64,8 @@ set global save_query_result = on;
 /* cloud_user */select tt.a from tt, t2;
 a
 1
-1
 2
+1
 2
 select tables from meta_scan(last_query_id()) as u;
 tables
@@ -74,8 +74,8 @@ set global query_result_maxsize = 0;
 /* cloud_user */select tt.a from tt, t2;
 a
 1
-1
 2
+1
 2
 select char_length(result_path) from meta_scan(last_query_id()) as u;
 char_length(result_path)
@@ -83,8 +83,8 @@ char_length(result_path)
 /* cloud_user */select tt.a from tt, t2;
 a
 1
-1
 2
+1
 2
 select result_size = 0 from meta_scan(last_query_id()) as u;
 result_size = 0
@@ -132,6 +132,22 @@ set global save_query_result = off;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 set global save_query_result = on;
 create database test;
+/* cloud_user */show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+test
+mo_catalog
+select * from result_scan(last_query_id()) as u;
+Database
+system
+system_metrics
+information_schema
+mysql
+test
+mo_catalog
 use test;
 drop table if exists tt;
 create table tt (a int);
@@ -151,5 +167,425 @@ a
 select count(*) from meta_scan(last_query_id()) as u;
 count(*)
 1
+/* cloud_user */show tables;
+Tables_in_test
+tt
+select * from result_scan(last_query_id()) as u;
+Tables_in_test
+tt
+/* cloud_user */show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+select * from result_scan(last_query_id()) as u;
+result file query_result_meta/abc_11a2eb7c-aa2b-11ee-8d4c-96f0c1a980fd.blk not found
+/* cloud_user */show columns from tt;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+select * from result_scan(last_query_id()) as u;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+/* cloud_user */show grants;
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+select * from result_scan(last_query_id()) as u;
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+/* cloud_user */show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n`a` INT DEFAULT NULL\n)
+select * from result_scan(last_query_id()) as u;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n`a` INT DEFAULT NULL\n)
+alter table tt add unique index id(a);
+/* cloud_user */show index from tt;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+select * from result_scan(last_query_id()) as u;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+/* cloud_user */show node list;
+1
+select * from result_scan(last_query_id()) as u;
+invalid input: empty query result
+create sequence seq_an_03  increment 10 start with 1 no cycle;
+/* cloud_user */show sequences;
+Names    Data Type
+seq_an_03    BIGINT
+select * from result_scan(last_query_id()) as u;
+Names    Data Type
+seq_an_03    BIGINT
+CREATE TABLE t1 (S1 INT);
+CREATE TABLE t2 (S1 INT);
+INSERT INTO t1 VALUES (1),(3),(4),(6);
+INSERT INTO t2 VALUES (2),(4),(5);
+/* cloud_user */SELECT * FROM t1 JOIN t2 on t1.S1=t2.S1;
+s1    s1
+4    4
+select * from result_scan(last_query_id()) as u;
+s1_0    s1_1
+4    4
+/* cloud_user */select t2.S1 from t2 left join t1 on t1.S1 =t2.S1;
+s1
+2
+4
+5
+select * from result_scan(last_query_id()) as u;
+s1
+2
+4
+5
+/* cloud_user */select t2.S1 from t2 right join t1 on t1.S1 =t2.S1;
+s1
+null
+null
+4
+null
+select * from result_scan(last_query_id()) as u;
+s1
+null
+null
+4
+null
+/* cloud_user */(select s1 from t1 union select s1 from t2) order by s1 desc;
+s1
+6
+5
+4
+3
+2
+1
+select * from result_scan(last_query_id()) as u;
+s1
+6
+5
+4
+3
+2
+1
+/* cloud_user */(select s1 from t1 union all select s1 from t2) order by s1 desc;
+s1
+6
+5
+4
+4
+3
+2
+1
+select * from result_scan(last_query_id()) as u;
+s1
+6
+5
+4
+4
+3
+2
+1
+/* cloud_user */select * from t1 where t1.s1 > (select t2.s1 from t2 where s1<3);
+s1
+3
+4
+6
+select * from result_scan(last_query_id()) as u;
+s1
+3
+4
+6
+/* cloud_user */select * from t1 where s1 <> any (select s1 from t2);
+s1
+1
+3
+4
+6
+select * from result_scan(last_query_id()) as u;
+s1
+1
+3
+4
+6
+/* cloud_user */select * from t1 where s1 = some (select s1 from t2);
+s1
+4
+select * from result_scan(last_query_id()) as u;
+s1
+4
+drop table if exists time_window01;
+create table time_window01 (ts timestamp primary key, col2 int);
+insert into time_window01 values ('2021-01-12 00:00:00.000', 12);
+insert into time_window01 values ('2020-01-12 12:00:12.000', 24);
+insert into time_window01 values ('2021-01-12 01:00:00.000', 34);
+insert into time_window01 values ('2020-01-12 12:01:12.000', 20);
+select * from time_window01;
+ts    col2
+2021-01-12 00:00:00    12
+2020-01-12 12:00:12    24
+2021-01-12 01:00:00    34
+2020-01-12 12:01:12    20
+/* cloud_user */select _wstart, _wend, max(col2), min(col2) from time_window01 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
+_wstart    _wend    max(col2)    min(col2)
+2019-12-08 00:00:00    2020-03-17 00:00:00    24    20
+2021-01-11 00:00:00    2021-04-21 00:00:00    34    12
+select * from result_scan(last_query_id()) as u;
+_wstart    _wend    max(col2)    min(col2)
+2019-12-08 00:00:00    2020-03-17 00:00:00    24    20
+2021-01-11 00:00:00    2021-04-21 00:00:00    34    12
+create view v1 as SELECT 1 IN (SELECT 1);
+/* cloud_user */select * from v1;
+1 in (select 1)
+true
+select * from result_scan(last_query_id()) as u;
+1 in (select 1)
+true
+drop table time_window01;
 set global save_query_result = off;
+drop account abc;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set global save_query_result = off;
+create database test;
+/* cloud_user */show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+test
+mo_catalog
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+use test;
+drop table if exists tt;
+create table tt (a int);
+insert into tt values(1), (2);
+/* cloud_user */select * from tt;
+a
+1
+2
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select * from tt;
+a
+1
+2
+select count(*) from meta_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show tables;
+Tables_in_test
+tt
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show variables like 'tx_isolation';
+Variable_name    Value
+tx_isolation    REPEATABLE-READ
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show columns from tt;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show grants;
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show create table tt;
+Table    Create Table
+tt    CREATE TABLE `tt` (\n`a` INT DEFAULT NULL\n)
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+alter table tt add unique index id(a);
+/* cloud_user */show index from tt;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    NULL
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */show node list;
+1
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+create sequence seq_an_03  increment 10 start with 1 no cycle;
+/* cloud_user */show sequences;
+Names    Data Type
+seq_an_03    BIGINT
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+CREATE TABLE t1 (S1 INT);
+CREATE TABLE t2 (S1 INT);
+INSERT INTO t1 VALUES (1),(3),(4),(6);
+INSERT INTO t2 VALUES (2),(4),(5);
+/* cloud_user */SELECT * FROM t1 JOIN t2 on t1.S1=t2.S1;
+s1    s1
+4    4
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select t2.S1 from t2 left join t1 on t1.S1 =t2.S1;
+s1
+2
+4
+5
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select t2.S1 from t2 right join t1 on t1.S1 =t2.S1;
+s1
+null
+null
+4
+null
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */(select s1 from t1 union select s1 from t2) order by s1 desc;
+s1
+6
+5
+4
+3
+2
+1
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */(select s1 from t1 union all select s1 from t2) order by s1 desc;
+s1
+6
+5
+4
+4
+3
+2
+1
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select * from t1 where t1.s1 > (select t2.s1 from t2 where s1<3);
+s1
+3
+4
+6
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select * from t1 where s1 <> any (select s1 from t2);
+s1
+1
+3
+4
+6
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+/* cloud_user */select * from t1 where s1 = some (select s1 from t2);
+s1
+4
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+drop table if exists time_window01;
+create table time_window01 (ts timestamp primary key, col2 int);
+insert into time_window01 values ('2021-01-12 00:00:00.000', 12);
+insert into time_window01 values ('2020-01-12 12:00:12.000', 24);
+insert into time_window01 values ('2021-01-12 01:00:00.000', 34);
+insert into time_window01 values ('2020-01-12 12:01:12.000', 20);
+select * from time_window01;
+ts    col2
+2021-01-12 00:00:00    12
+2020-01-12 12:00:12    24
+2021-01-12 01:00:00    34
+2020-01-12 12:01:12    20
+/* cloud_user */select _wstart, _wend, max(col2), min(col2) from time_window01 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
+_wstart    _wend    max(col2)    min(col2)
+2019-12-08 00:00:00    2020-03-17 00:00:00    24    20
+2021-01-11 00:00:00    2021-04-21 00:00:00    34    12
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+create view v1 as SELECT 1 IN (SELECT 1);
+/* cloud_user */select * from v1;
+1 in (select 1)
+true
+select * from result_scan(last_query_id()) as u;
+no configure: save query result
+drop table time_window01;
 drop account abc;

@@ -369,13 +369,11 @@ select rpad(col1,100,"fewqf43f3g54") from built01;
 select lpad(col2,10,"xxxxxxxxxxx") from built01;
 drop table built01;
 
--- @bvt:issue#10354
 drop table if exists t;
 create table t (c binary(3));
 insert into t set c = 'a';
 select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
--- @bvt:issue
 
 -- varbinary test
 -- error test:not defined the type of varbinary length
@@ -570,7 +568,7 @@ drop table varbinary09;
 drop table if exists varbinary10;
 drop table if exists varbinary11;
 create table varbinary10(a binary primary key,b varchar(5));
-create table varbinary11(a int,b varchar(5),c binary, foreign key(c) references varbinary10(a));
+create table varbinary11(a int,b varchar(5),c binary, constraint `c1` foreign key(c) references varbinary10(a));
 insert into varbinary10 values('1','哈哈哈');
 insert into varbinary10 values('1','abcde');
 show create table varbinary11;
@@ -652,13 +650,11 @@ drop table prepare01;
 deallocate prepare stmt1;
 deallocate prepare stmt2;
 
--- @bvt:issue#10354
 drop table if exists t;
 create table t (c varbinary(3));
 insert into t set c = 'a';
 select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
--- @bvt:issue
 
 -- select binary
 select binary(372817432918321);

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -64,7 +65,14 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
-
+func (e *MetadataMVCCNode) IdempotentUpdate(un *MetadataMVCCNode) {
+	if !un.MetaLoc.IsEmpty() {
+		e.MetaLoc = un.MetaLoc
+	}
+	if !un.DeltaLoc.IsEmpty() {
+		e.DeltaLoc = un.DeltaLoc
+	}
+}
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if sn, err = objectio.WriteBytes(e.MetaLoc, w); err != nil {
@@ -101,10 +109,21 @@ func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
 	}
 }
 
-func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
-	obj := NewEmptyObjectMVCCNode()
-	objectio.SetObjectStatsObjectName(&obj.ObjectStats, metalocation.Name())
-	return obj
+func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	if metaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+		return node
+	}
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
+	return node
+}
+
+func NewObjectInfoWithObjectID(id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+	return node
 }
 
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
@@ -132,6 +151,16 @@ func (e *ObjectMVCCNode) String() string {
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
 	e.ObjectStats = *vun.ObjectStats.Clone()
 }
+func (e *ObjectMVCCNode) IdempotentUpdate(vun *ObjectMVCCNode) {
+	if e.ObjectStats.IsZero() {
+		e.ObjectStats = *vun.ObjectStats.Clone()
+	} else {
+		if e.IsEmpty() && !vun.IsEmpty() {
+			e.ObjectStats = *vun.ObjectStats.Clone()
+
+		}
+	}
+}
 func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int
 	if sn, err = w.Write(e.ObjectStats[:]); err != nil {
@@ -150,7 +179,7 @@ func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, 
 }
 
 func (e *ObjectMVCCNode) IsEmpty() bool {
-	return e.Rows() == 0
+	return e.Size() == 0
 }
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
@@ -178,6 +207,8 @@ type ObjectNode struct {
 	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
+
+	remainingRows common.FixedSampleIII[int]
 }
 
 const (

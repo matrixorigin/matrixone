@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "fill"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("fill")
+	buf.WriteString(argName)
+	buf.WriteString(": fill")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -98,7 +101,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ctr := arg.ctr
@@ -518,6 +521,8 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		err = vector.AppendFixed[bool](v, vector.GetFixedAt[bool](w, j), false, proc.Mp())
+	case types.T_bit:
+		err = vector.AppendFixed[uint64](v, vector.GetFixedAt[uint64](w, j), false, proc.Mp())
 	case types.T_int8:
 		err = vector.AppendFixed[int8](v, vector.GetFixedAt[int8](w, j), false, proc.Mp())
 	case types.T_int16:
@@ -576,6 +581,8 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		err = vector.SetFixedAt[bool](v, i, vector.GetFixedAt[bool](w, j))
+	case types.T_bit:
+		err = vector.SetFixedAt[uint64](v, i, vector.GetFixedAt[uint64](w, j))
 	case types.T_int8:
 		err = vector.SetFixedAt[int8](v, i, vector.GetFixedAt[int8](w, j))
 	case types.T_int16:

@@ -63,6 +63,8 @@ const (
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
 	TFloat32
+	TTimestamp
+	TBit
 )
 
 func (c *ColType) ToType() types.Type {
@@ -71,6 +73,8 @@ func (c *ColType) ToType() types.Type {
 		typ := types.T_datetime.ToType()
 		typ.Scale = 6
 		return typ
+	case TTimestamp:
+		return types.T_timestamp.ToType()
 	case TUint32:
 		return types.T_uint32.ToType()
 	case TInt32:
@@ -97,6 +101,8 @@ func (c *ColType) ToType() types.Type {
 		//TODO : Need to see how T_array should be included in this class.
 	case TSkip:
 		fallthrough
+	case TBit:
+		return types.T_bit.ToType()
 	default:
 		panic("not support ColType")
 	}
@@ -106,6 +112,8 @@ func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
+	case TTimestamp:
+		return "TIMESTAMP"
 	case TUint32:
 		return "INT UNSIGNED"
 	case TInt32:
@@ -265,6 +273,15 @@ func BoolColumn(name, comment string) Column {
 		Name:    name,
 		ColType: TBool,
 		Default: "false",
+		Comment: comment,
+	}
+}
+
+func TimestampDefaultColumn(name, defaultVal, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TTimestamp,
+		Default: defaultVal,
 		Comment: comment,
 	}
 }
@@ -682,6 +699,8 @@ func (r *Row) Clone() *Row {
 func (r *Row) Reset() {
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
+		case types.T_bit:
+			r.Columns[idx] = Uint64Field(0)
 		case types.T_int64:
 			r.Columns[idx] = Int64Field(0)
 		case types.T_uint64:
@@ -736,6 +755,8 @@ func (r *Row) ToStrings() []string {
 	col := make([]string, len(r.Table.Columns))
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
+		case types.T_bit:
+			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_int64:
 			col[idx] = fmt.Sprintf("%d", r.Columns[idx].Integer)
 		case types.T_uint64:
@@ -834,6 +855,8 @@ func (r *Row) Size() (size int64) {
 	}
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
+		case types.T_bit:
+			size += 8
 		case types.T_int64:
 			size += 8
 		case types.T_uint64:

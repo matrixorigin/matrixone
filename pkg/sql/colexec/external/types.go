@@ -17,14 +17,15 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -72,7 +73,7 @@ type ExParam struct {
 	Fileparam      *ExFileparam
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
-	MoCsvLineArray [][]string
+	MoCsvLineArray [][]csvparser.Field
 }
 
 type ExFileparam struct {
@@ -89,26 +90,52 @@ type ZonemapFileparam struct {
 }
 
 type FilterParam struct {
-	exprMono    bool
-	columnMap   map[int]int
-	FilterExpr  *plan.Expr
-	blockReader *blockio.BlockReader
+	zonemappable bool
+	columnMap    map[int]int
+	FilterExpr   *plan.Expr
+	blockReader  *blockio.BlockReader
 }
 
 type Argument struct {
-	Es *ExternalParam
-
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+	Es  *ExternalParam
+	buf *batch.Batch
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithEs(es *ExternalParam) *Argument {
+	arg.Es = es
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -119,20 +146,62 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 type ParseLineHandler struct {
-	csvReader *csv.Reader
-	//batch
+	csvReader *csvparser.CSVParser
+	// batch
 	batchSize int
-	//mo csv
-	moCsvLineArray [][]string
+	// mo csv
+	moCsvLineArray [][]csvparser.Field
 }
 
-// NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
-	rCsv := csv.NewReader(bufio.NewReader(r))
-	rCsv.Comma = cma
-	rCsv.Comment = cmnt
-	rCsv.LazyQuotes = lazyQt
-	rCsv.TrimLeadingSpace = tls
-	rCsv.FieldsPerRecord = -1
-	return rCsv
+func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
+
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
+
+	if param.Extern.Tail.Fields != nil {
+		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
+		}
+		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
+		}
+	}
+
+	if param.Extern.Tail.Lines != nil {
+		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
+		}
+		if param.Extern.Tail.Lines.StartingBy != "" {
+			linesStartingBy = param.Extern.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Extern.Format == tree.JSONLINE {
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
+	}
+
+	config := csvparser.CSVConfig{
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Comment:            '#',
+	}
+
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
 }

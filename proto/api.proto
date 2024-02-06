@@ -77,8 +77,8 @@ message Vector {
 };
 
 message Batch {
-    repeated string attrs = 1;
-    repeated Vector vecs  = 2;
+    repeated string attrs = 1 [(gogoproto.nullable) = false];
+    repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
 };
 
 message TableID {
@@ -276,6 +276,8 @@ enum AlterKind {
     UpdateComment    = 4;
     UpdateConstraint = 5;
     UpdatePolicy     = 6;
+    AddPartition     = 7;
+    RenameColumn     = 8;
 }
 
 message AlterTablePolicy {
@@ -298,10 +300,20 @@ message AlterTableRenameTable {
     string new_name = 2;
 }
 
+message AlterTableRenameCol {
+    string old_name = 1;
+    string new_name = 2;
+    uint32 sequence_num = 3;  // used to double check
+}
+
 message AlterTableAddColumn {
     plan.ColDef column    = 1;
     int32 insert_position = 2;  // if the position can be found in the schema,
                                 // the column will be added to the last
+}
+
+message AlterTableAddPartition {
+    plan.PartitionByDef  partition_def  = 1;
 }
 
 message AlterTableDropColumn {
@@ -315,12 +327,14 @@ message AlterTableReq {
     AlterKind kind  = 3;
 
     oneof operation {
-        AlterTableAddColumn add_column     = 4;
-        AlterTableDropColumn drop_column   = 5;
-        AlterTableRenameTable rename_table = 6;
-        AlterTableComment update_comment   = 7;
-        AlterTableConstraint update_cstr   = 8;
-        AlterTablePolicy update_policy     = 9;
+        AlterTableAddColumn add_column       = 4;
+        AlterTableDropColumn drop_column     = 5;
+        AlterTableRenameTable rename_table   = 6;
+        AlterTableComment update_comment     = 7;
+        AlterTableConstraint update_cstr     = 8;
+        AlterTablePolicy update_policy       = 9;
+        AlterTableAddPartition add_partition = 10;
+        AlterTableRenameCol rename_col       = 11;
     }
 }
 

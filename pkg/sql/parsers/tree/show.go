@@ -22,6 +22,9 @@ type showImpl struct {
 	Show
 }
 
+func (s *showImpl) Free() {
+}
+
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
@@ -724,11 +727,15 @@ func (node *ShowPublications) GetQueryType() string     { return QueryTypeOth }
 
 type ShowSubscriptions struct {
 	showImpl
+	All  bool
 	Like *ComparisonExpr
 }
 
 func (node *ShowSubscriptions) Format(ctx *FmtCtx) {
 	ctx.WriteString("show subscriptions")
+	if node.All {
+		ctx.WriteString(" all")
+	}
 	if node.Like != nil {
 		ctx.WriteByte(' ')
 		node.Like.Format(ctx)

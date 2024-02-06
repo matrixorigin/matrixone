@@ -347,6 +347,7 @@ message HashBuild {
   repeated plan.Expr conds = 6;
   bool hash_on_pk = 7;
   bool need_merged_batch = 8;
+  bool need_allocate_sels = 9;
 }
 
 message ExternalName2ColIndex {
@@ -432,6 +433,11 @@ message Instruction{
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
   FuzzyFilter fuzzy_filter = 38;
+
+  string cn_addr = 39;
+  int32 operator_id = 40;
+  int32 parallel_id = 41;
+  int32 max_parallel = 42;
 }
 
 message AnalysisList {
@@ -455,7 +461,8 @@ message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  repeated string payload = 4;
+  string payload = 4;
+  uint32 type = 5;
 }
 
 message ProcessLimitation {

@@ -15,7 +15,7 @@ jobs:
   docker_image_build:
     runs-on: amd64-mo-guangzhou-dind
     if: ${{ github.event.pull_request.merged == true }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     name: BUILD MO DOCKER IMAGE
     outputs:
        version: ${{ steps.prep.outputs.version }}
@@ -46,8 +46,8 @@ jobs:
 
           # add tencentyun docker image mirror and tencentyun apt mirror
           sed -i 's#^RUN apt-get update#RUN sed -i "s?http.*ubuntu\.com?http://mirrors\.tencentyun\.com?g" /etc/apt/sources.list  \&\& apt-get clean all \&\& apt-get update#g' optools/images/Dockerfile
-          sed -i 's#FROM golang:1.20.7-bookworm as builder#FROM ccr.ccs.tencentyun.com/cicd-runner/golang:1.20.7-bookworm as builder#g' optools/images/Dockerfile
-          sed -i 's#FROM ubuntu:latest#FROM ccr.ccs.tencentyun.com/cicd-runner/ubuntu:latest#g' optools/images/Dockerfile
+          sed -i 's#FROM golang:1.21.5-bookworm as builder#FROM ccr.ccs.tencentyun.com/cicd-runner/golang:1.21.5-bookworm as builder#g' optools/images/Dockerfile
+          sed -i 's#FROM ubuntu:22.04#FROM ccr.ccs.tencentyun.com/cicd-runner/ubuntu:22.04#g' optools/images/Dockerfile
 
           docker build -t $TAGS -f optools/images/Dockerfile . --build-arg GOPROXY='https://goproxy.cn,direct'
           docker push $TAGS
@@ -56,7 +56,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
     runs-on: amd64-mo-guangzhou-medium8
-    timeout-minutes: 90
+    timeout-minutes: 40
     name: SETUP MO TEST ENV
     outputs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
@@ -103,12 +103,12 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
           sleep 100s
           while true; do
-            if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep -c "mo-checkin-regression-*")" -eq 6 ]; then
-              break;
-            else
-              echo "wait mo cluster init finish..."
+           if [ "$(kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep ${{ needs.docker_image_build.outputs.version }} | grep -iv NotReady | grep -ic Ready )" -eq 0 ]; then
+              kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }};
               sleep 15s;
               continue;
+            else
+              break;
             fi
           done
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
@@ -251,7 +251,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-ssb Repo
         if: ${{ always() && !cancelled() }}
@@ -472,8 +472,7 @@ jobs:
         timeout-minutes: 2
         id: account_for_sysbench
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
-          echo "sysbench_account=sysbench_test:admin" >> $GITHUB_OUTPUT
+          echo "sysbench_account=dump" >> $GITHUB_OUTPUT
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
@@ -553,7 +552,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}

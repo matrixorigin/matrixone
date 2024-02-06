@@ -105,6 +105,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	_ = ses.SetGlobalVar("save_query_result", int8(1))
 	defer ses.Close()
+	ses.SetConnectContext(context.Background())
+
 	const blockCnt int = 3
 
 	tenant := &TenantInfo{
@@ -190,11 +192,17 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		QueryId:  testUUID.String(),
 		FilePath: exportFilePath,
 		Fields: &tree.Fields{
-			Terminated: ",",
-			EnclosedBy: '"',
+			Terminated: &tree.Terminated{
+				Value: ",",
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: '"',
+			},
 		},
 		Lines: &tree.Lines{
-			TerminatedBy: "\n",
+			TerminatedBy: &tree.Terminated{
+				Value: "\n",
+			},
 		},
 		MaxFileSize: 0,
 		Header:      false,

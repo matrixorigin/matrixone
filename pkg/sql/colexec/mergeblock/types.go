@@ -15,6 +15,7 @@ package mergeblock
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,19 +45,57 @@ type Argument struct {
 	Tbl engine.Relation
 	// 2. partition sub tables
 	PartitionSources []engine.Relation
+	AddAffectedRows  bool
 	affectedRows     uint64
 	container        *Container
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithTbl(tbl engine.Relation) *Argument {
+	arg.Tbl = tbl
+	return arg
+}
+
+func (arg *Argument) WithPartitionSources(partitionSources []engine.Relation) *Argument {
+	arg.PartitionSources = partitionSources
+	return arg
+}
+
+func (arg *Argument) WithAddAffectedRows(addAffectedRows bool) *Argument {
+	arg.AddAffectedRows = addAffectedRows
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -105,7 +144,8 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 }
 
 func splitObjectStats(arg *Argument, proc *process.Process,
-	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16) error {
+	bat *batch.Batch, blkVec *vector.Vector, tblIdx []int16,
+) error {
 	// bat comes from old CN, no object stats vec in it.
 	// to ensure all bats the TN received contain the object stats column, we should
 	// construct the object stats from block info here.
@@ -129,7 +169,7 @@ func splitObjectStats(arg *Argument, proc *process.Process,
 			continue
 		}
 
-		blkInfo := catalog.DecodeBlockInfo(blkVec.GetBytesAt(idx))
+		blkInfo := objectio.DecodeBlockInfo(blkVec.GetBytesAt(idx))
 		if objectio.IsSameObjectLocVsMeta(blkInfo.MetaLocation(), objDataMeta) {
 			continue
 		}
@@ -164,8 +204,10 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	hasObject := false
 	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
-			blkInfo := catalog.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
-			arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+			if arg.AddAffectedRows {
+				blkInfo := objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(i))
+				arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
+			}
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
 				blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
 			hasObject = true
@@ -176,7 +218,9 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			newBat.Cnt = 1
-			arg.affectedRows += uint64(newBat.RowCount())
+			if arg.AddAffectedRows {
+				arg.affectedRows += uint64(newBat.RowCount())
+			}
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}

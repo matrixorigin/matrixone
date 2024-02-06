@@ -550,6 +550,18 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 			}
 			cols := vector.MustFixedCol[bool](vec)
 			cols[rowIdx] = val
+		case types.T_bit:
+			switch v := fieldValue.(type) {
+			default:
+				strVal := fmt.Sprintf("%v", v)
+				val, err := strconv.ParseUint(strVal, 0, int(typ.Width))
+				if err != nil {
+					nulls.Add(vec.GetNulls(), uint64(rowIdx))
+					continue
+				}
+				cols := vector.MustFixedCol[uint64](vec)
+				cols[rowIdx] = val
+			}
 		case types.T_int8:
 			var val int8
 			switch v := fieldValue.(type) {
@@ -816,7 +828,6 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				continue
 			}
 			buf.Reset()
-
 		case types.T_json:
 			var jsonBytes []byte
 			valueStr := fmt.Sprintf("%v", fieldValue)
@@ -879,7 +890,6 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				nulls.Add(vec.GetNulls(), uint64(rowIdx))
 				continue
 			}
-
 		case types.T_enum:
 			valueStr := fmt.Sprintf("%v", fieldValue)
 
@@ -1020,8 +1030,8 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 		}
 	}
 	// each time we create a new consumer group for gather all messages
-	groupId := uuid.New().String()
-	kafkaConfigs.SetKey("group.id", groupId)
+	groupId, _ := uuid.NewV7()
+	kafkaConfigs.SetKey("group.id", groupId.String())
 
 	return kafkaConfigs
 }

@@ -22,8 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "connector"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("pipe connector")
+	buf.WriteString(argName)
+	buf.WriteString(": pipe connector")
 }
 
 func (arg *Argument) Prepare(_ *process.Process) error {
@@ -41,10 +44,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop

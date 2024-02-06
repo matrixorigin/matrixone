@@ -125,6 +125,68 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	})
 }
 
+func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r []T
+			if s > 0 {
+				r = moarray.SubArrayFromLeft[T](types.BytesToArray[T](v), s-1)
+			} else if s < 0 {
+				r = moarray.SubArrayFromRight[T](types.BytesToArray[T](v), -s)
+			} else {
+				r = []T{}
+			}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		in, null1 := vs.GetStrValue(i)
+		s, null2 := starts.GetValue(i)
+		l, null3 := lens.GetValue(i)
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var r []T
+			if s > 0 {
+				r = moarray.SubArrayFromLeftWithLength[T](types.BytesToArray[T](in), s-1, l)
+			} else if s < 0 {
+				r = moarray.SubArrayFromRightWithLength[T](types.BytesToArray[T](in), -s, l)
+			} else {
+				r = []T{}
+			}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](r), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0
@@ -148,6 +210,7 @@ var (
 		types.T_uint32: 1,
 		types.T_int64:  0,
 		types.T_uint64: 0,
+		types.T_bit:    0,
 	}
 	ints  = []int64{1e16, 1e8, 1e4, 1e2, 1e1}
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
@@ -709,11 +772,19 @@ func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opUnaryFixedToStr[int64](ivecs, result, proc, length, hexEncodeInt64)
 }
 
+func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64)
+}
+
 func hexEncodeString(xs []byte) string {
 	return hex.EncodeToString(xs)
 }
 
 func hexEncodeInt64(xs int64) string {
+	return fmt.Sprintf("%X", uint64(xs))
+}
+
+func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
@@ -1179,6 +1250,9 @@ func BitCast(
 	ctx := proc.Ctx
 
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return bitCastBinaryToFixed(ctx, source, rs, 1, length)

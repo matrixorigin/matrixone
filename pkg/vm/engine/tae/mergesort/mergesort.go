@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -29,6 +30,8 @@ func SortBlockColumns(
 	switch cols[pk].GetType().Oid {
 	case types.T_bool:
 		Sort(cols[pk], boolLess, sortedIdx)
+	case types.T_bit:
+		Sort(cols[pk], numericLess[uint64], sortedIdx)
 	case types.T_int8:
 		Sort(cols[pk], numericLess[int8], sortedIdx)
 	case types.T_int16:
@@ -89,139 +92,80 @@ func SortBlockColumns(
 	return sortedIdx, nil
 }
 
-func MergeSortedColumn(
-	column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector, mapping []uint32) {
-	switch column[0].GetType().Oid {
-	case types.T_bool:
-		ret, mapping = Merge(column, sortedIdx, boolLess, fromLayout, toLayout, pool)
-	case types.T_int8:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int8], fromLayout, toLayout, pool)
-	case types.T_int16:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int16], fromLayout, toLayout, pool)
-	case types.T_int32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int32], fromLayout, toLayout, pool)
-	case types.T_int64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int64], fromLayout, toLayout, pool)
-	case types.T_uint8:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint8], fromLayout, toLayout, pool)
-	case types.T_uint16:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint16], fromLayout, toLayout, pool)
-	case types.T_uint32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint32], fromLayout, toLayout, pool)
-	case types.T_uint64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint64], fromLayout, toLayout, pool)
-	case types.T_float32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[float32], fromLayout, toLayout, pool)
-	case types.T_float64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[float64], fromLayout, toLayout, pool)
-	case types.T_date:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Date], fromLayout, toLayout, pool)
-	case types.T_time:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Time], fromLayout, toLayout, pool)
-	case types.T_datetime:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Datetime], fromLayout, toLayout, pool)
-	case types.T_timestamp:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Timestamp], fromLayout, toLayout, pool)
-	case types.T_enum:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Enum], fromLayout, toLayout, pool)
-	case types.T_decimal64:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal64], fromLayout, toLayout, pool)
-	case types.T_decimal128:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal128], fromLayout, toLayout, pool)
-	case types.T_uuid:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Uuid], fromLayout, toLayout, pool)
-	case types.T_TS:
-		ret, mapping = Merge(column, sortedIdx, tsLess, fromLayout, toLayout, pool)
-	case types.T_Rowid:
-		ret, mapping = Merge(column, sortedIdx, rowidLess, fromLayout, toLayout, pool)
-	case types.T_Blockid:
-		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout, pool)
-	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout, pool)
-	default:
-		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
+// MergeColumn merge sorted column. It modify sortidx and mapping as merging record. After that, vector in `column` will be closed. Used by Tn only
+func MergeColumn(
+	column []containers.Vector,
+	sortidx, mapping []uint32,
+	fromLayout, toLayout []uint32,
+	pool *containers.VectorPool,
+) (ret []containers.Vector) {
+
+	columns := make([]*vector.Vector, len(column))
+	for i := range column {
+		columns[i] = column[i].GetDownstreamVector()
 	}
+
+	ret = make([]containers.Vector, len(toLayout))
+	retvec := make([]*vector.Vector, len(toLayout))
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = pool.GetVector(column[0].GetType())
+		retvec[i] = ret[i].GetDownstreamVector()
+	}
+
+	Merge(columns, retvec, sortidx, mapping, fromLayout, toLayout, ret[0].GetAllocator())
+
+	for _, v := range column {
+		v.Close()
+	}
+
 	return
 }
 
-//func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
-//	n := len(blks) * blks[0].Vecs[pk].Length()
-//	mergedSrc := make([]uint16, n)
-//
-//	col := make([]*vector.Vector, len(blks))
-//	for i := 0; i < len(blks); i++ {
-//		col[i] = blks[i].Vecs[pk]
-//	}
-//
-//	switch blks[0].Vecs[pk].Typ.Oid {
-//	case types.T_int8:
-//		int8s.Merge(col, mergedSrc)
-//	case types.T_int16:
-//		int16s.Merge(col, mergedSrc)
-//	case types.T_int32:
-//		int32s.Merge(col, mergedSrc)
-//	case types.T_int64:
-//		int64s.Merge(col, mergedSrc)
-//	case types.T_uint8:
-//		uint8s.Merge(col, mergedSrc)
-//	case types.T_uint16:
-//		uint16s.Merge(col, mergedSrc)
-//	case types.T_uint32:
-//		uint32s.Merge(col, mergedSrc)
-//	case types.T_uint64:
-//		uint64s.Merge(col, mergedSrc)
-//	case types.T_float32:
-//		float32s.Merge(col, mergedSrc)
-//	case types.T_float64:
-//		float64s.Merge(col, mergedSrc)
-//	case types.T_date:
-//		dates.Merge(col, mergedSrc)
-//	case types.T_datetime:
-//		datetimes.Merge(col, mergedSrc)
-//	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
-//		varchar.Merge(col, mergedSrc)
-//	}
-//
-//	for j := 0; j < len(blks[0].Vecs); j++ {
-//		if j == pk {
-//			continue
-//		}
-//		for i := 0; i < len(blks); i++ {
-//			col[i] = blks[i].Vecs[j]
-//		}
-//
-//		switch blks[0].Vecs[j].Typ.Oid {
-//		case types.T_int8:
-//			int8s.Multiplex(col, mergedSrc)
-//		case types.T_int16:
-//			int16s.Multiplex(col, mergedSrc)
-//		case types.T_int32:
-//			int32s.Multiplex(col, mergedSrc)
-//		case types.T_int64:
-//			int64s.Multiplex(col, mergedSrc)
-//		case types.T_uint8:
-//			uint8s.Multiplex(col, mergedSrc)
-//		case types.T_uint16:
-//			uint16s.Multiplex(col, mergedSrc)
-//		case types.T_uint32:
-//			uint32s.Multiplex(col, mergedSrc)
-//		case types.T_uint64:
-//			uint64s.Multiplex(col, mergedSrc)
-//		case types.T_float32:
-//			float32s.Multiplex(col, mergedSrc)
-//		case types.T_float64:
-//			float64s.Multiplex(col, mergedSrc)
-//		case types.T_date:
-//			dates.Multiplex(col, mergedSrc)
-//		case types.T_datetime:
-//			datetimes.Multiplex(col, mergedSrc)
-//		case types.T_char, types.T_json, types.T_varchar, types.T_blob:
-//			varchar.Multiplex(col, mergedSrc)
-//		}
-//	}
-//
-//	return nil
-//}
+// ShuffleColumn shuffle column according to sortedIdx.  After that, vector in `column` will be closed. Used by Tn only
+func ShuffleColumn(
+	column []containers.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
+
+	columns := make([]*vector.Vector, len(column))
+	for i := range column {
+		columns[i] = column[i].GetDownstreamVector()
+	}
+
+	ret = make([]containers.Vector, len(toLayout))
+	retvec := make([]*vector.Vector, len(toLayout))
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = pool.GetVector(column[0].GetType())
+		retvec[i] = ret[i].GetDownstreamVector()
+	}
+
+	Multiplex(columns, retvec, sortedIdx, fromLayout, toLayout, ret[0].GetAllocator())
+
+	for _, v := range column {
+		v.Close()
+	}
+
+	return
+}
+
+// ReshapeColumn rearrange array according to toLayout. After that, vector in `column` will be closed. Used by Tn only
+func ReshapeColumn(
+	column []containers.Vector, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
+	columns := make([]*vector.Vector, len(column))
+	for i := range column {
+		columns[i] = column[i].GetDownstreamVector()
+	}
+	ret = make([]containers.Vector, len(toLayout))
+	retvec := make([]*vector.Vector, len(toLayout))
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = pool.GetVector(column[0].GetType())
+		retvec[i] = ret[i].GetDownstreamVector()
+	}
+
+	Reshape(columns, retvec, fromLayout, toLayout, ret[0].GetAllocator())
+
+	for _, v := range column {
+		v.Close()
+	}
+	return
+}

@@ -262,9 +262,9 @@ func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 		switch vkind {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
@@ -317,7 +317,7 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -374,6 +374,7 @@ func buildRangePartitionItem(binder *PartitionBinder, partitionDef *plan.Partiti
 	return nil
 }
 
+// 我认为这里的PartitionBinder是一个独立的binder，不需要表的上下文信息，可以单独实例化
 func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *plan.PartitionByDef, partition *tree.Partition) error {
 	if valuesLessThan, ok := partition.Values.(*tree.ValuesLessThan); ok {
 		exprs := valuesLessThan.ValueList
@@ -409,9 +410,9 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
 				}
-			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 				switch types.T(vkind.Id) {
-				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64: //+types.T_null:
+				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit: //+types.T_null:
 				default:
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
@@ -464,7 +465,7 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -674,7 +675,7 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -1022,4 +1023,21 @@ func getIntConstVal[T uint64 | int64](cExpr *plan.Expr_Lit) T {
 	default:
 		panic("the `expr` must be integral constant expression")
 	}
+}
+
+// deepCopyTableCols Deeply copy table's column definition information
+// Cols: Table column definitions
+// ignoreRowId: Whether to ignore the rowId column
+func deepCopyTableCols(Cols []*ColDef, ignoreRowId bool) []*ColDef {
+	if Cols == nil {
+		return nil
+	}
+	newCols := make([]*plan.ColDef, 0)
+	for _, col := range Cols {
+		if ignoreRowId && col.Name == catalog.Row_ID {
+			continue
+		}
+		newCols = append(newCols, DeepCopyColDef(col))
+	}
+	return newCols
 }

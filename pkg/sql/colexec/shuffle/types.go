@@ -15,14 +15,13 @@
 package shuffle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Argument)
-
-const shuffleBatchSize = 8192 * 3 / 4
 
 type Argument struct {
 	ctr                *container
@@ -31,33 +30,57 @@ type Argument struct {
 	AliveRegCnt        int32
 	ShuffleColMin      int64
 	ShuffleColMax      int64
-	info               *vm.OperatorInfo
-	children           []vm.Operator
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
+
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 type container struct {
-	ending       bool
-	sels         [][]int32
-	shuffledBats []*batch.Batch
-	lastSentIdx  int
+	ending        bool
+	sels          [][]int32
+	shufflePool   []*batch.Batch
+	sendPool      []*batch.Batch
+	lastSentBatch *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
-		for i := range arg.ctr.shuffledBats {
-			if arg.ctr.shuffledBats[i] != nil {
-				arg.ctr.shuffledBats[i].Clean(proc.Mp())
-				arg.ctr.shuffledBats[i] = nil
+		for i := range arg.ctr.shufflePool {
+			if arg.ctr.shufflePool[i] != nil {
+				arg.ctr.shufflePool[i].Clean(proc.Mp())
+				arg.ctr.shufflePool[i] = nil
 			}
 		}
 		arg.ctr.sels = nil

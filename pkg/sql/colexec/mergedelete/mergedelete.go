@@ -24,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "merge_delete"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" MergeS3DeleteInfo ")
+	buf.WriteString(argName)
+	buf.WriteString(": MergeS3DeleteInfo ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -41,12 +44,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var name string
 	ap := arg
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 

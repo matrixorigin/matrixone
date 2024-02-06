@@ -16,14 +16,15 @@ package ctl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type serviceType string
 
-const (
+var (
 	tn serviceType = "DN"
 	cn serviceType = "CN"
 
@@ -40,9 +41,13 @@ const (
 	AddFaultPointMethod = "ADDFAULTPOINT"
 	BackupMethod        = "BACKUP"
 	TraceSpanMethod     = "TRACESPAN"
+	CoreDumpMethod      = "COREDUMP"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
+
+	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
+	GetLatestBind         = strings.ToUpper("GetLatestBind")
 )
 
 var (
@@ -68,9 +73,12 @@ var (
 		AddFaultPointMethod: handleAddFaultPoint(),
 		BackupMethod:        handleBackup(),
 		TraceSpanMethod:     handleTraceSpan,
+		CoreDumpMethod:      handleCoreDump,
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
+		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
+		GetLatestBind:            handleGetLatestBind,
 	}
 )
 

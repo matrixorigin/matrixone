@@ -31,8 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "on_duplicate_key"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("processing on duplicate key before insert")
+	buf.WriteString(argName)
+	buf.WriteString(": processing on duplicate key before insert")
 }
 
 func (arg *Argument) Prepare(p *process.Process) error {
@@ -47,7 +50,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -67,7 +70,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if end {
 					break
 				}
-				anal.Input(bat, arg.info.IsFirst)
+				anal.Input(bat, arg.GetIsFirst())
 				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 				if err != nil {
 					bat.Clean(proc.Mp())
@@ -79,7 +82,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Eval:
 			if ctr.rbat != nil {
-				anal.Output(ctr.rbat, arg.info.IsLast)
+				anal.Output(ctr.rbat, arg.GetIsLast())
 			}
 			result.Batch = ctr.rbat
 			ctr.state = End
@@ -231,8 +234,16 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
-				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+				_, err := insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+				if err != nil {
+					newBatch.Clean(proc.GetMPool())
+					return err
+				}
+				_, err = checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+				if err != nil {
+					newBatch.Clean(proc.GetMPool())
+					return err
+				}
 			} else {
 
 				if insertArg.IsIgnore {
@@ -257,8 +268,18 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
 					// append batch to insertBatch
-					insertBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
-					checkConflictBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
+					_, err = insertBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
+					if err != nil {
+						tmpBatch.Clean(proc.GetMPool())
+						newBatch.Clean(proc.GetMPool())
+						return err
+					}
+					_, err = checkConflictBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
+					if err != nil {
+						tmpBatch.Clean(proc.GetMPool())
+						newBatch.Clean(proc.GetMPool())
+						return err
+					}
 				}
 				proc.PutBatch(tmpBatch)
 			}
