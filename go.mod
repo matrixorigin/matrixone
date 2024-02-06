@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.20
+go 1.21
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -74,6 +74,7 @@ require (
 
 require (
 	github.com/K-Phoen/sdk v0.12.3 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
