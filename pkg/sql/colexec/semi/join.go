@@ -95,7 +95,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.skipProbe {
+				vecused := make([]bool, len(bat.Vecs))
+				newvecs := make([]*vector.Vector, len(ap.Result))
+				for i, pos := range ap.Result {
+					vecused[pos] = true
+					newvecs[i] = bat.Vecs[pos]
+				}
+				for i := range bat.Vecs {
+					if !vecused[i] {
+						bat.Vecs[i].Free(proc.Mp())
+					}
+				}
+				bat.Vecs = newvecs
 				result.Batch = bat
+				anal.Output(ctr.rbat, arg.GetIsLast())
 				return result, nil
 			}
 			if ctr.mp == nil {
