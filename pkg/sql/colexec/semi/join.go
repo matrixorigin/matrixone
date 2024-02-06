@@ -108,7 +108,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				bat.Vecs = newvecs
 				result.Batch = bat
-				anal.Output(ctr.rbat, arg.GetIsLast())
+				anal.Output(bat, arg.GetIsLast())
 				return result, nil
 			}
 			if ctr.mp == nil {
