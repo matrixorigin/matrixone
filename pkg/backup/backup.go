@@ -20,6 +20,7 @@ import (
 	"encoding/csv"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +49,17 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		//for tae hakeeper
+		// for tae hakeeper
 		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false)
 		if err != nil {
 			return err
 		}
+		// for parallel backup
+		parallel, err := strconv.ParseUint(bs.Parallelism, 10, 16)
+		if err != nil {
+			return err
+		}
+		cfg.Parallelism = uint16(parallel)
 	} else {
 		s3Conf, err = getS3Config(ctx, bs.Option)
 		if err != nil {
@@ -66,6 +73,7 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
+		cfg.Parallelism = s3Conf.parallelism
 	}
 
 	// step 2 : backup mo

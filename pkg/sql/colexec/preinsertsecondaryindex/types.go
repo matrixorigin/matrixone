@@ -16,11 +16,11 @@ package preinsertsecondaryindex
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,7 +30,7 @@ type Argument struct {
 	Ctx          context.Context
 	PreInsertCtx *plan.PreInsertUkCtx
 
-	ps []*types.Packer
+	packer util.PackerList
 
 	buf *batch.Batch
 
@@ -72,9 +72,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 	}
-	for _, p := range arg.ps {
-		if p != nil {
-			p.FreeMem()
-		}
-	}
+	arg.packer.Free()
 }
