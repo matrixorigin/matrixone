@@ -58,11 +58,11 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
 		ap.ctr.state = vm.Build
-		ap.ctr.blockId_type = make(map[string]int8)
-		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
+		ap.ctr.blockId_type = make(map[types.Blockid]int8)
+		ap.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
-		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
-		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
+		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
 	}
 	return nil
 }
@@ -132,7 +132,7 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 
 		for pidx, blockidRowidbatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockidRowidbatch {
-				if err = vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 				bat.SetRowCount(bat.GetVector(0).Length())
@@ -155,7 +155,7 @@ func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) 
 
 		for pidx, blockidDeltaloc := range arg.ctr.partitionId_blockId_deltaLoc {
 			for blkid, bat := range blockidDeltaloc {
-				if err = vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool()); err != nil {
+				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
 				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
