@@ -2621,8 +2621,11 @@ var (
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (123)",
 		}, {
-			input:  "backup '123' filesystem '/home/abc'",
-			output: "backup 123 filesystem /home/abc",
+			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
+			output: "backup 123 filesystem /home/abc parallelism 1",
+		}, {
+			input:  "backup '125' filesystem '/tmp/backup' parallelism '1';",
+			output: "backup 125 filesystem /tmp/backup parallelism 1",
 		}, {
 			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'}",
 			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'}",

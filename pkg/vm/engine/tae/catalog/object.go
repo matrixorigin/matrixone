@@ -267,6 +267,9 @@ func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*Objec
 		}
 	}
 	stat := lastNode.BaseNode.ObjectStats
+	if lastNode.BaseNode.IsEmpty() {
+		panic(fmt.Sprintf("logic error: last node is empty, object %v", entry.PPString(3, 0, "")))
+	}
 	entry.Lock()
 	for _, n := range nodes {
 		if n.BaseNode.IsEmpty() {

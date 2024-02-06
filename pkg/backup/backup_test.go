@@ -121,7 +121,7 @@ func TestBackupData(t *testing.T) {
 	for _, location := range files {
 		locations = append(locations, location)
 	}
-	err = execBackup(ctx, db.Opts.Fs, service, locations)
+	err = execBackup(ctx, db.Opts.Fs, service, locations, 1)
 	assert.Nil(t, err)
 	db.Opts.Fs = service
 	db.Restart(ctx)
@@ -544,8 +544,9 @@ func TestBackup(t *testing.T) {
 	tf1 := getTempFile(t, "", "t1", "test_t1")
 
 	bs := &tree.BackupStart{
-		IsS3: false,
-		Dir:  tDir,
+		IsS3:        false,
+		Dir:         tDir,
+		Parallelism: "10",
 	}
 
 	//backup configs

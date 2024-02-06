@@ -785,8 +785,8 @@ type BaseCollector struct {
 	Usage struct {
 		// db, tbl deletes
 		Deletes        []interface{}
-		SegInserts     []*catalog.ObjectEntry
-		SegDeletes     []*catalog.ObjectEntry
+		ObjInserts     []*catalog.ObjectEntry
+		ObjDeletes     []*catalog.ObjectEntry
 		ReservedAccIds map[uint64]struct{}
 	}
 
@@ -2787,6 +2787,7 @@ func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.Ba
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 		return nil
 	}
 
@@ -2908,6 +2909,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().BaseEntryImpl) {
@@ -2922,6 +2924,9 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 	entry.RUnlock()
 	if len(mvccNodes) == 0 {
 		return nil
+	}
+	if len(mvccNodes) > 2 {
+		panic(fmt.Sprintf("logic err: object has %d nodes, object %v", len(mvccNodes), entry.PPString(3, 0, "")))
 	}
 
 	var needPrefetch bool
@@ -2952,7 +2957,9 @@ func (collector *BaseCollector) visitObjectEntry(entry *catalog.ObjectEntry) err
 			}
 			collector.Objects = append(collector.Objects, entry)
 		} else {
-			entry.SetObjectStatsForPreviousNode(mvccNodes)
+			if !collector.skipLoadObjectStats {
+				entry.SetObjectStatsForPreviousNode(mvccNodes)
+			}
 			err := collector.fillObjectInfoBatch(entry, mvccNodes)
 			if err != nil {
 				return err
@@ -3041,12 +3048,12 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 		if objNode.HasDropCommitted() {
 			// deleted and non-append, record into the usage del bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+				collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 			}
 		} else {
 			// create and non-append, record into the usage ins bat
 			if !entry.IsAppendable() && objNode.IsCommitted() {
-				collector.Usage.SegInserts = append(collector.Usage.SegInserts, entry)
+				collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
 			}
 		}
 
@@ -3073,7 +3080,7 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.Usage.SegDeletes = append(collector.Usage.SegDeletes, entry)
+		collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {

@@ -74,11 +74,11 @@ func (t *typedSlice) setFromVector(v *Vector) {
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
-		if !typeCompatible[T](vec.typ) {
-			panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
-		}
+	//if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
+	if !typeCompatible[T](vec.typ) {
+		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
 	}
+	//}
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 

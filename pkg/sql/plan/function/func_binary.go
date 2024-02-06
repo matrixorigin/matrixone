@@ -22,6 +22,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,14 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -2159,64 +2158,6 @@ func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
-}
-
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	lowerBound := sort.Search(len(lcol), func(i int) bool {
-		return index.PrefixCompare(lcol[i].GetByteSlice(larea), rval) >= 0
-	})
-
-	upperBound := lowerBound
-	for upperBound < len(lcol) && bytes.HasPrefix(lcol[upperBound].GetByteSlice(larea), rval) {
-		upperBound++
-	}
-
-	for i := 0; i < lowerBound; i++ {
-		res[i] = false
-	}
-	for i := lowerBound; i < upperBound; i++ {
-		res[i] = true
-	}
-	for i := upperBound; i < len(res); i++ {
-		res[i] = false
-	}
-
-	return nil
-}
-
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rvec := parameters[1]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	rval := rvec.GetBytesAt(0)
-	rpos := 0
-	rlen := rvec.Length()
-
-	for i := 0; i < length; i++ {
-		lval := lcol[i].GetByteSlice(larea)
-		for index.PrefixCompare(lval, rval) > 0 {
-			rpos++
-			if rpos == rlen {
-				for j := i; j < length; j++ {
-					res[j] = false
-				}
-				return nil
-			}
-
-			rval = rvec.GetBytesAt(rpos)
-		}
-
-		res[i] = bytes.HasPrefix(lval, rval)
-	}
-
-	return nil
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
