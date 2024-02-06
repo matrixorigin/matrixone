@@ -1885,3 +1885,35 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	}
 	return true
 }
+
+func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
+	inExpr := &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: left.Typ.NotNullable,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					left,
+					{
+						Typ: &plan.Type{
+							Id: int32(types.T_tuple),
+						},
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  length,
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return inExpr
+}
