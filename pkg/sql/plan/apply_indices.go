@@ -359,6 +359,8 @@ END0:
 			node.FilterList = newFilterList
 		}
 
+		calcScanStats(node, builder)
+
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
@@ -481,6 +483,7 @@ END0:
 		}
 
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
+		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
