@@ -165,8 +165,21 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
-					col.RelPos = idxTag2 //TODO: watch out for this part.
-					col.ColPos = 2
+					col.RelPos = idxTag0 //TODO: watch out for this part.
+					col.ColPos = 0
+
+					idxColExpr := &plan.Expr{
+						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: idxTag0,
+								ColPos: 0,
+							},
+						},
+					}
+					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
+
+					return metaForCurrVersion
 
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
