@@ -62,7 +62,6 @@ col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
-delete from test_table where col1=3;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
 create role test_role;

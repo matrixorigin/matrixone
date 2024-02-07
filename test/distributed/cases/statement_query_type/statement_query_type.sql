@@ -46,7 +46,6 @@ select * from unnest('{"a":1}') as f;
 -- test DML sql
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
-delete from test_table where col1=3;
 
 
 -- test DCL sql

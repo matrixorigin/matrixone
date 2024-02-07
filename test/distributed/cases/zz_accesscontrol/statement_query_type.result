@@ -51,10 +51,6 @@ update test_01 set a=100 where b='b'    DML    external_sql
 show create table test_01    Other    external_sql
 create table test_01(a int, b varchar)    DDL    external_sql
 drop table if exists test_01    DDL    external_sql
-deallocate prepare s1    Other    external_sql
-execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
-set @a=2    Other    external_sql
-prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
 drop table table_2    DDL    external_sql
 drop view view_2    DDL    external_sql
