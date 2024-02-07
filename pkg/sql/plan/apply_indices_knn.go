@@ -130,10 +130,10 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPos {
 					continue
 				}
-
-				idxTag0 := builder.genNewTag()
-				idxTag1 := builder.genNewTag()
-				idxTag2 := builder.genNewTag()
+				var idxTags = make([]int32, 3)
+				idxTags[0] = builder.genNewTag()
+				idxTags[1] = builder.genNewTag()
+				idxTags[2] = builder.genNewTag()
 
 				// 2.b.3 Create idxObjRefs and idxTableDefs
 				var idxObjRefs = make([]*ObjectRef, 3)
@@ -143,50 +143,50 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
 
 				// 2.b.4 Register all the columns in the index
-				builder.nameByColRef[[2]int32{idxTag0, 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTag0, 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags[0], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags[0], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
 
-				builder.nameByColRef[[2]int32{idxTag1, 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTag1, 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTag1, 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
+				builder.nameByColRef[[2]int32{idxTags[1], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags[1], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags[1], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
 
-				builder.nameByColRef[[2]int32{idxTag2, 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTag2, 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTag2, 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
+				builder.nameByColRef[[2]int32{idxTags[2], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags[2], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags[2], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 				// 2.b.4 Create cast(MetaTable.Version)
 				metaForCurrVersion, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
-					idxObjRefs, idxTag0)
+					idxObjRefs, idxTags[0])
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
 				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTag0, idxTag1, castVersionToBigInt)
+					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
 
 				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
-					col.RelPos = idxTag0 //TODO: watch out for this part.
+					col.RelPos = idxTags[0] //TODO: watch out for this part.
 					col.ColPos = 0
 
 					idxColExpr := &plan.Expr{
 						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: idxTag0,
+								RelPos: idxTags[0],
 								ColPos: 0,
 							},
 						},
 					}
 					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
 
-					return metaForCurrVersion
+					return centroidsForCurrVersion
 
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
 
 					// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
 					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, metaForCurrVersion, idxTag0, idxTag2, castVersionToBigInt)
+						idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
 
 					entriesTblInCentroidsId := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
@@ -194,13 +194,13 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 						Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
 						//Limit:    sortNode.Limit,
 						//Offset:      node.Offset, //TODO: check with someone.
-						BindingTags: []int32{idxTag0, idxTag1, idxTag2},
+						BindingTags: []int32{idxTags[0], idxTags[1], idxTags[2]},
 						ProjectList: []*Expr{
 							{
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
-										RelPos: idxTag2, // entriesForCurrVersion
-										ColPos: 2,       // entries.pk
+										RelPos: idxTags[2], // entriesForCurrVersion
+										ColPos: 2,          // entries.pk
 									},
 								},
 							},
