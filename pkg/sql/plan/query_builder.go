@@ -3692,6 +3692,7 @@ func (builder *QueryBuilder) genNewTag() int32 {
 }
 
 func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
+	// start from 1, and 0 means do not handle with message
 	builder.nextMsgTag++
 	return builder.nextMsgTag
 }

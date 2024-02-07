@@ -36,16 +36,16 @@ type container struct {
 	cmps  []compare.Compare
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
+	desc                    bool
 	topValueZM              objectio.ZoneMap
 	bat                     *batch.Batch
 }
 
 type Argument struct {
-	Limit        int64
-	TopValueTag  int32
-	SendTopValue bool
-	ctr          *container
-	Fs           []*plan.OrderBySpec
+	Limit       int64
+	TopValueTag int32
+	ctr         *container
+	Fs          []*plan.OrderBySpec
 
 	vm.OperatorBase
 }

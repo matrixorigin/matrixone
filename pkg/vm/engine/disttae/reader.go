@@ -309,7 +309,18 @@ func (r *blockReader) Close() error {
 }
 
 func (r *blockReader) SetFilterZM(zm objectio.ZoneMap) {
-	r.filterZM = zm.Clone()
+	if !r.filterZM.IsInited() {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if r.desc && r.filterZM.CompareMax(zm) < 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
 }
 
 func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {

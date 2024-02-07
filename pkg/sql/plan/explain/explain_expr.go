@@ -174,9 +174,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		if vec.Length() > 16 {
 			//don't display too long data in explain
 			vec.SetLength(16)
+			buf.WriteString(vec.String())
+			buf.WriteString("......")
+		} else {
+			buf.WriteString(vec.String())
 		}
-		buf.WriteString(vec.String())
-		buf.WriteString("......")
 	default:
 		panic("unsupported expr")
 	}

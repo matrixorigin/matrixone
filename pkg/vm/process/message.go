@@ -52,9 +52,9 @@ func NewMessageBoard() *MessageBoard {
 }
 
 type MessageAddress struct {
-	cnAddr     string
-	operatorID int32
-	parallelID int32
+	CnAddr     string
+	OperatorID int32
+	ParallelID int32
 }
 
 type Message interface {
@@ -84,7 +84,7 @@ func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
 	mb.RwMutex.Lock()
 	defer mb.RwMutex.Unlock()
-	if m.GetReceiverAddr().cnAddr == CURRENTCN { // message for current CN
+	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
@@ -96,10 +96,10 @@ func (proc *Process) SendMessage(m Message) {
 	}
 }
 
-func (proc *Process) NewMessageReceiver(tags []int32, addr *MessageAddress) *MessageReceiver {
+func (proc *Process) NewMessageReceiver(tags []int32, addr MessageAddress) *MessageReceiver {
 	return &MessageReceiver{
 		tags: tags,
-		addr: addr,
+		addr: &addr,
 		mb:   proc.MessageBoard,
 	}
 }
@@ -152,10 +152,10 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
 
 func MatchAddress(m Message, raddr *MessageAddress) bool {
 	mAddr := m.GetReceiverAddr()
-	if mAddr.operatorID != raddr.operatorID && mAddr.operatorID != -1 {
+	if mAddr.OperatorID != raddr.OperatorID && mAddr.OperatorID != -1 {
 		return false
 	}
-	if mAddr.parallelID != raddr.parallelID && mAddr.parallelID != -1 {
+	if mAddr.ParallelID != raddr.ParallelID && mAddr.ParallelID != -1 {
 		return false
 	}
 	return true
@@ -163,27 +163,25 @@ func MatchAddress(m Message, raddr *MessageAddress) bool {
 
 func AddrBroadCastOnCurrentCN() MessageAddress {
 	return MessageAddress{
-		cnAddr:     CURRENTCN,
-		operatorID: -1,
-		parallelID: -1,
+		CnAddr:     CURRENTCN,
+		OperatorID: -1,
+		ParallelID: -1,
 	}
 }
 
 func AddrBroadCastOnALLCN() MessageAddress {
 	return MessageAddress{
-		cnAddr:     ALLCN,
-		operatorID: -1,
-		parallelID: -1,
+		CnAddr:     ALLCN,
+		OperatorID: -1,
+		ParallelID: -1,
 	}
 }
 
 var _ Message = new(TopValueMessage)
 
 type TopValueMessage struct {
-	topValueZM objectio.ZoneMap
-	tag        int32
-	signed     bool
-	min        bool
+	TopValueZM objectio.ZoneMap
+	Tag        int32
 }
 
 func (t TopValueMessage) Serialize() []byte {
@@ -199,7 +197,7 @@ func (t TopValueMessage) NeedBlock() bool {
 }
 
 func (t TopValueMessage) GetMsgTag() int32 {
-	return t.tag
+	return t.Tag
 }
 
 func (t TopValueMessage) GetReceiverAddr() MessageAddress {

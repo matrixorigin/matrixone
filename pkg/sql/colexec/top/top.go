@@ -66,7 +66,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	typ := ap.Fs[0].Expr.Typ
-	ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	if arg.TopValueTag > 0 {
+		ctr.desc = arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
+		ctr.topValueZM = objectio.NewZM(types.T(typ.Id), typ.Scale)
+	}
 	return nil
 }
 
@@ -107,6 +110,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			err = ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				return result, err
+			}
+			if arg.TopValueTag > 0 && arg.updateTopValueZM() {
+				proc.SendMessage(process.TopValueMessage{TopValueZM: arg.ctr.topValueZM, Tag: arg.TopValueTag})
 			}
 		}
 	}
@@ -272,14 +278,15 @@ func (arg *Argument) updateTopValueZM() bool {
 	}
 	newZM := objectio.NewZM(zm.GetType(), zm.GetScale())
 	index.UpdateZM(newZM, v)
-
-	res := false
-	if arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0 {
-		res, _ = newZM.AnyGT(zm)
-	} else {
-		res, _ = newZM.AnyLT(zm)
+	if arg.ctr.desc && newZM.CompareMax(zm) > 0 {
+		arg.ctr.topValueZM = newZM
+		return true
 	}
-	return res
+	if !arg.ctr.desc && newZM.CompareMin(zm) < 0 {
+		arg.ctr.topValueZM = newZM
+		return true
+	}
+	return false
 }
 
 func (arg *Argument) getTopValue() ([]byte, bool) {

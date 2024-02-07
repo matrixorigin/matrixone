@@ -118,7 +118,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.Bat != nil {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
-			_, err = p.Run(s.DataSource.R, s.Proc)
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
 	}
 
@@ -707,7 +711,6 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			}
 			for j := range ss {
 				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
-				newarg.SendTopValue = arg.SendTopValue
 				newarg.TopValueTag = arg.TopValueTag
 				ss[j].appendInstruction(vm.Instruction{
 					Op:          vm.Top,
