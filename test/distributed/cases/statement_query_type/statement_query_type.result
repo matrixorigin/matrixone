@@ -420,7 +420,7 @@ Project
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(15);
+select sleep(15);
 sleep(15)
 0
 drop account if exists bvt_query_type;
