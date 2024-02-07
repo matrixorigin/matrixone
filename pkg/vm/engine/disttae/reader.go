@@ -333,7 +333,7 @@ func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 
 func (r *blockReader) needReadBlkByZM(i int) bool {
 	zm := r.blockZMS[i]
-	if !r.filterZM.IsInited() || zm.IsInited() {
+	if !r.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
 	if r.desc {

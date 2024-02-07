@@ -104,9 +104,10 @@ func (proc *Process) NewMessageReceiver(tags []int32, addr MessageAddress) *Mess
 	}
 }
 
-func (mr *MessageReceiver) receiveMessageNonBlock(result []Message) {
+func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	mr.mb.RwMutex.RLock()
 	defer mr.mb.RwMutex.RUnlock()
+	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
 		message := *mr.mb.Messages[mr.offset]
@@ -121,6 +122,7 @@ func (mr *MessageReceiver) receiveMessageNonBlock(result []Message) {
 			}
 		}
 	}
+	return result
 }
 
 func (mr *MessageReceiver) Free() {
@@ -136,16 +138,15 @@ func (mr *MessageReceiver) Free() {
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	result := make([]Message, 0)
 	if !needBlock {
-		mr.receiveMessageNonBlock(result)
-		return result
+		return mr.receiveMessageNonBlock()
 	}
+	var result []Message
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
 		mr.mb.Cond.Wait()
 		mr.mb.Cond.L.Unlock()
-		mr.receiveMessageNonBlock(result)
+		result = mr.receiveMessageNonBlock()
 	}
 	return result
 }

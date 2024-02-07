@@ -272,7 +272,7 @@ func (arg *Argument) updateTopValueZM() bool {
 		return false
 	}
 	zm := arg.ctr.topValueZM
-	if zm.IsInited() {
+	if !zm.IsInited() {
 		index.UpdateZM(zm, v)
 		return true
 	}

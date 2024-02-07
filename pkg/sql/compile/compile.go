@@ -304,6 +304,8 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	}
 
+	fmt.Println(DebugShowScopes([]*Scope{s}))
+
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1108,9 +1110,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-
-		// RelationName
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
 		ss, err = c.compileSourceScan(ctx, n)
