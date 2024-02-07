@@ -155,12 +155,12 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				builder.nameByColRef[[2]int32{idxTag2, 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 				// 2.b.4 Create cast(MetaTable.Version)
-				metaTblWithCurrVerId, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
+				metaForCurrVersion, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
 					idxObjRefs, idxTag0)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
 				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag1, castVersionToBigInt)
+					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTag0, idxTag1, castVersionToBigInt)
 
 				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
@@ -173,7 +173,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 
 					// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
 					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag2, castVersionToBigInt)
+						idxTableDefs, idxObjRefs, metaForCurrVersion, idxTag0, idxTag2, castVersionToBigInt)
 
 					entriesTblInCentroidsId := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
