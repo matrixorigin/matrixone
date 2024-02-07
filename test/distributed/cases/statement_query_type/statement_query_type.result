@@ -270,6 +270,7 @@ column_0    column_1
 /* cloud_user */ drop user user_name;
 /* cloud_user */ drop role test_role;
 /* cloud_user */ drop account test_account;
+internal error: do not have privilege to execute the statement
 /* cloud_user */ drop database db1;
 /* cloud_user */ create database db2;
 /* cloud_user */ create table table_2(col1 int,col2 varchar);
@@ -369,6 +370,8 @@ column_0    column_1
 /* cloud_nonuser */ select sleep(1);
 sleep(1)
 0
+/* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: do not have privilege to execute the statement
 /* cloud_nonuser */ create role test_role;
 /* cloud_nonuser */ create user user_name identified by 'password';
 /* cloud_nonuser */ create database if not exists db1;
@@ -377,6 +380,7 @@ sleep(1)
 /* cloud_nonuser */ drop user user_name;
 /* cloud_nonuser */ drop role test_role;
 /* cloud_nonuser */ drop account test_account;
+internal error: do not have privilege to execute the statement
 /* cloud_nonuser */ drop database db1;
 /* cloud_nonuser */ create database db2;
 /* cloud_nonuser */ create table table_2(col1 int,col2 varchar);

@@ -128,6 +128,7 @@ select * from unnest('{"a":1}') as f;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 insert into test_table values (4,'d');
 
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
 create user user_name identified by 'password';
 create database if not exists db1;
