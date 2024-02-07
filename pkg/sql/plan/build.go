@@ -60,6 +60,10 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 	if err != nil {
 		return nil, err
 	}
+	//if plan.GetDcl() != nil && plan.GetDcl().GetExecute() != nil {
+	//	execPlan := plan.GetDcl().GetExecute()
+	//	//TODO:
+	//} else
 	if plan.GetQuery() == nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "the sql query plan does not support explain.")
 	}

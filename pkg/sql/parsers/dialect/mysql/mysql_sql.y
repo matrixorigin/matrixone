@@ -2545,11 +2545,11 @@ prepare_stmt:
     }
 
 execute_stmt:
-    execute_sym stmt_name
+    EXECUTE stmt_name
     {
         $$ = tree.NewExecute(tree.Identifier($2))
     }
-|   execute_sym stmt_name USING variable_list
+|   EXECUTE stmt_name USING variable_list
     {
         $$ = tree.NewExecuteWithVariables(tree.Identifier($2), $4)
     }
@@ -2576,6 +2576,7 @@ explainable_stmt:
     {
         $$ = $1
     }
+|   execute_stmt
 
 explain_stmt:
     explain_sym unresolved_object_name
@@ -11008,7 +11009,7 @@ non_reserved_keyword:
 |	CASCADED
 |	DISABLE
 |	DRAINER
-|	EXECUTE
+//|	EXECUTE
 |	EVENT
 |	EVENTS
 |	FIRST

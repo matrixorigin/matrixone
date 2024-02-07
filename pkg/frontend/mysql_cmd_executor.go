@@ -1216,15 +1216,69 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	ses := mce.GetSession()
 
 	//get query optimizer and execute Optimize
-	plan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	plan0, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
-	if plan.GetQuery() == nil {
+	if plan0.GetDcl() != nil && plan0.GetDcl().GetExecute() != nil {
+		execPlan := plan0.GetDcl().GetExecute()
+		stmtName := execPlan.GetName()
+
+		prepareStmt, err := ses.GetPrepareStmt(stmtName)
+		if err != nil {
+			return err
+		}
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+
+		for _, obj := range preparePlan.GetSchemas() {
+			newObj, newTableDef := ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+			if newObj == nil {
+				return moerr.NewInternalError(requestCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			}
+			if newObj.Obj != obj.Obj || newTableDef.Version != uint32(obj.Server) {
+				return moerr.NewInternalError(requestCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			}
+		}
+
+		numParams := len(preparePlan.ParamTypes)
+		paramVals := make([]any, numParams)
+		if len(execPlan.Args) > 0 {
+			if len(execPlan.Args) != numParams {
+				return moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+
+			for i, arg := range execPlan.Args {
+				exprImpl := arg.Expr.(*plan.Expr_V)
+				param, err := ses.txnCompileCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+				if err != nil {
+					return err
+				}
+				if param == nil {
+					return moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+				}
+				paramVals[i] = param
+			}
+
+		} else {
+			if numParams > 0 {
+				return moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+		}
+		plan0 = preparePlan.Plan
+		if numParams > 0 {
+			//replace the param var by the param value
+			plan0 = plan2.DeepCopyPlanWithParamVals(preparePlan.Plan, paramVals)
+			if plan0 == nil {
+				return moerr.NewInternalError(requestCtx, "failed to copy plan0")
+			}
+		}
+	}
+
+	if plan0.GetQuery() == nil {
 		return moerr.NewNotSupported(requestCtx, "the sql query plan does not support explain.")
 	}
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(plan0.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
