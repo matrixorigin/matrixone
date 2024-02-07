@@ -889,36 +889,58 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 
 }
 
-// getTableWritesIncludingSelf returns all the writes for the given table, including the writes in this Statement.
+// GetTableWritesIncludingSelf returns all the writes for the given table, including the writes in this Statement.
 // Halloween problem!   Use getTableWritesStable to avoid the problem.
-func (txn *Transaction) getTableWritesIncludingSelf(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+//
+//	func (txn *Transaction) GetTableWritesIncludingSelf(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+//		txn.Lock()
+//		defer txn.Unlock()
+//		for _, entry := range txn.writes {
+//			if entry.databaseId != databaseId {
+//				continue
+//			}
+//			if entry.tableId != tableId {
+//				continue
+//			}
+//			writes = append(writes, entry)
+//		}
+//		return writes
+//	}
+//
+// // GetTableWritesStable returns all the writes for the given table, NOT including the writes in current Statement.
+// // This is used to avoid the Halloween problem.
+//
+//	func (txn *Transaction) GetTableWritesStable(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+//		txn.Lock()
+//		defer txn.Unlock()
+//
+//		woff := txn.getWriteOffset()
+//		for i := 0; i < len(txn.writes) && i < woff; i++ {
+//			if txn.writes[i].databaseId == databaseId && txn.writes[i].tableId == tableId {
+//				writes = append(writes, txn.writes[i])
+//			}
+//		}
+//		return writes
+//	}
+func (txn *Transaction) ForEachTableWritesIncludingSelf(databaseid, tableid uint64, f func(e *Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
-			continue
+	for i := 0; i < len(txn.writes); i++ {
+		if txn.writes[i].databaseId == databaseid && txn.writes[i].tableId == tableid {
+			f(&txn.writes[i])
 		}
-		if entry.tableId != tableId {
-			continue
-		}
-		writes = append(writes, entry)
 	}
-	return writes
 }
 
-// getTableWritesStable returns all the writes for the given table, NOT including the writes in current Statement.
-// This is used to avoid the Halloween problem.
-func (txn *Transaction) getTableWritesStable(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+func (txn *Transaction) ForEachTableWritesStable(databaseid, tableid uint64, f func(e *Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-
 	woff := txn.getWriteOffset()
 	for i := 0; i < len(txn.writes) && i < woff; i++ {
-		if txn.writes[i].databaseId == databaseId && txn.writes[i].tableId == tableId {
-			writes = append(writes, txn.writes[i])
+		if txn.writes[i].databaseId == databaseid && txn.writes[i].tableId == tableid {
+			f(&txn.writes[i])
 		}
 	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.

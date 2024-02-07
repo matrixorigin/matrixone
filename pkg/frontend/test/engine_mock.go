@@ -308,6 +308,8 @@ type MockRelation struct {
 	recorder *MockRelationMockRecorder
 }
 
+var _ engine.Relation = (*MockRelation)(nil)
+
 // MockRelationMockRecorder is the mock recorder for MockRelation.
 type MockRelationMockRecorder struct {
 	mock *MockRelation

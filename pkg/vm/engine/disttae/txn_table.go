@@ -88,11 +88,9 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, writes)
-
 	deletes := make(map[types.Rowid]struct{})
-	for _, entry := range writes {
+	// XXX This function calls get table writes including self.  Very dangerous.
+	tbl.db.txn.ForEachTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, func(entry *Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			rows = rows + int64(entry.bat.RowCount())
 		} else {
@@ -107,7 +105,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 				if entry.databaseId == catalog.MO_CATALOG_ID &&
 					entry.tableId == catalog.MO_TABLES_ID &&
 					entry.truncate {
-					continue
+					return
 				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
@@ -115,7 +113,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 				}
 			}
 		}
-	}
+	})
 
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	partition, err := tbl.getPartitionState(ctx)
@@ -281,11 +279,9 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
 
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, writes)
-
+	// WHY calling GetTableWritesIncludingSelf?
 	deletes := make(map[types.Rowid]struct{})
-	for _, entry := range writes {
+	tbl.db.txn.ForEachTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, func(entry *Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededCols[s]; ok {
@@ -304,7 +300,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 				if entry.databaseId == catalog.MO_CATALOG_ID &&
 					entry.tableId == catalog.MO_TABLES_ID &&
 					entry.truncate {
-					continue
+					return
 				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
@@ -312,7 +308,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 				}
 			}
 		}
-	}
+	})
 
 	// Different rows may belong to same batch. So we have
 	// to record the batch which we have already handled to avoid
@@ -596,19 +592,11 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr, stable bool) (ranges engine.Ranges, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	tbl.writes = tbl.writes[:0]
-	// XXX obviously the following should be using Stable get.   FUBAR.
-	if stable {
-		tbl.writes = tbl.db.txn.getTableWritesStable(tbl.db.databaseId, tbl.tableId, tbl.writes)
-	} else {
-		tbl.writes = tbl.db.txn.getTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, tbl.writes)
-	}
 
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
@@ -733,12 +721,13 @@ func (tbl *txnTable) rangesOnePart(
 		}, uncommittedObjects...)
 	}
 
-	for _, entry := range tbl.writes {
+	// XXX By all means this should by calling ForEachTableWritesStable.
+	tbl.db.txn.ForEachTableWritesIncludingSelf(tbl.db.databaseId, tbl.tableId, func(entry *Entry) {
 		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 		// TODO Adjustments will be made here in the future
 		if entry.typ == DELETE || entry.typ == DELETE_TXN {
 			if entry.isGeneratedByTruncate() {
-				continue
+				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 			if entry.fileName == "" {
@@ -749,7 +738,7 @@ func (tbl *txnTable) rangesOnePart(
 				}
 			}
 		}
-	}
+	})
 
 	var (
 		objMeta  objectio.ObjectMeta

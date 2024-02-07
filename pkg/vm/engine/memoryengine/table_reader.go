@@ -211,7 +211,7 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(_ context.Context, _ []*plan.Expr, _ bool) (engine.Ranges, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) (engine.Ranges, error) {
 	// return encoded shard ids
 	nodes := getTNServices(t.engine.cluster)
 	shards := make(ShardIdSlice, 0, len(nodes)*8)

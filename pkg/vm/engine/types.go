@@ -593,7 +593,7 @@ type Relation interface {
 
 	UpdateObjectInfos(context.Context) error
 
-	Ranges(context.Context, []*plan.Expr, bool) (Ranges, error)
+	Ranges(context.Context, []*plan.Expr) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
