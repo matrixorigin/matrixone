@@ -88,7 +88,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag0,
-						ColPos: 0,
+						ColPos: 1,
 					},
 				},
 			},
@@ -164,14 +164,22 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 			},
 		},
 	}
-	joinProjection := append(centroidsTblProjection, castVersionToBigInt)
+	joinProjections := append(centroidsTblProjection, &plan.Expr{
+		Typ: makePlan2Type(&bigIntType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: idxTag0,
+				ColPos: 1,
+			},
+		},
+	})
 
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_SINGLE,
 		Children:    []int32{centroidsScanId, metaTableScanId},
 		BindingTags: []int32{idxTag0, idxTag1},
-		ProjectList: joinProjection,
+		ProjectList: joinProjections,
 	}, bindCtx)
 
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -291,7 +299,15 @@ func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 		},
 	}
 	joinProjections := append(entriesProjection,
-		castVersionToBigInt)
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: 1,
+				},
+			},
+		})
 
 	//TODO: Add NormalizeL2
 	// TODO: Check for condition that the index available is for vector_l2_ops
