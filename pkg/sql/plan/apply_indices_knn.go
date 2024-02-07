@@ -31,24 +31,31 @@ func (builder *QueryBuilder) applyIndicesKNN(nodeID int32, colRefCnt map[[2]int3
 			node.Children[i] = builder.applyIndicesKNN(childID, colRefCnt, idxColMap)
 		}
 
+		//TODO: watch out for this part.
 		replaceColumnsForNode(node, idxColMap)
 
 		return nodeID
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	// 1.a Skip condition one: if there are multiple order by columns
-	if len(node.OrderBy) != 1 {
+	if len(sortNode.OrderBy) != 1 {
 		//TODO: this needs to be modified.
 		// There could be another column in order by which is reference by regular secondary index.
 		return nodeID
 	}
 
+	scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
+	if scanNode == nil {
+		return nodeID
+	}
+	indexes := scanNode.TableDef.Indexes
+
 	// 1.b Skip condition two: if there are no multi-table indexes
 	multiTableIndexes := make(map[string]*MultiTableIndex)
-	for _, indexDef := range node.TableDef.Indexes {
+	for _, indexDef := range indexes {
 		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
@@ -74,7 +81,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, node *plan.Node, c
 
 		// 1.c Skip condition three: if order by column is not an allowed function with one constant
 		colPos := int32(-1)
-		for _, expr := range node.OrderBy {
+		for _, expr := range sortNode.OrderBy {
 			fn := expr.Expr.GetF()
 
 			if fn == nil || !allowedFunctions[fn.Func.ObjName] {
@@ -100,70 +107,86 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, node *plan.Node, c
 
 		// 2.a Check if all other columns are not referenced
 		//TODO: need to understand this part for Aungr
-		for i := range node.TableDef.Cols {
-			if i != int(colPos) && colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] > 0 {
-				goto END0
-			}
-		}
-		colCnt := colRefCnt[[2]int32{node.BindingTags[0], colPos}] - len(node.OrderBy)
+		//for i := range scanNode.TableDef.Cols {
+		//	if i != int(colPos) && colRefCnt[[2]int32{scanNode.BindingTags[0], int32(i)}] > 0 {
+		//		goto END0
+		//	}
+		//}
+		//colCnt := colRefCnt[[2]int32{scanNode.BindingTags[0], colPos}] - len(sortNode.OrderBy)
 
 		// 2.b Apply Index
 		for _, multiTableIndex := range multiTableIndexes {
 
 			// 2.b.1 Check if all index columns are referenced
-			if colCnt > 0 {
-				goto END0
-			}
+			//if colCnt > 0 {
+			//	goto END0
+			//}
 
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 
 				// 2.b.2 Check if index is single column and only column required in the final output
 				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-				if node.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPos {
+				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPos {
 					continue
 				}
 
-				idxTag := builder.genNewTag()
+				idxTag0 := builder.genNewTag()
+				idxTag1 := builder.genNewTag()
+				idxTag2 := builder.genNewTag()
 
 				// 2.b.3 Create idxObjRefs and idxTableDefs
 				var idxObjRefs = make([]*ObjectRef, 3)
 				var idxTableDefs = make([]*TableDef, 3)
-				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(node.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
-				idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(node.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(node.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+				idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+
+				// 2.b.4 Register all the columns in the index
+				builder.nameByColRef[[2]int32{idxTag0, 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTag0, 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+
+				builder.nameByColRef[[2]int32{idxTag1, 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTag1, 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTag1, 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
+
+				builder.nameByColRef[[2]int32{idxTag2, 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTag2, 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTag2, 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 				// 2.b.4 Create cast(MetaTable.Version)
-				metaTblWithCurrVerId, _ := makeMetaTblScanWhereKeyEqVersion(builder, builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs)
+				metaTblWithCurrVerId, _ := makeMetaTblScanWhereKeyEqVersion2(builder, builder.ctxByNode[nodeID], idxTableDefs,
+					idxObjRefs, idxTag0)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
-				centroidsTblWithCurrVerId, _ := makeCrossJoinCentroidsMetaForCurrVersion(builder, builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs, metaTblWithCurrVerId)
+				centroidsTblWithCurrVerId, _ := makeCrossJoinCentroidsMetaForCurrVersion2(builder, builder.ctxByNode[nodeID],
+					idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag1)
 
-				for _, expr := range node.OrderBy {
+				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
-					col.RelPos = idxTag
-					col.ColPos = 0
+					col.RelPos = idxTag2 //TODO: watch out for this part.
+					col.ColPos = 2
 
-					l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
-						idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName)
+					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
+					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
 
 					entriesForCurrVersion, _ := makeCrossJoinEntriesMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, metaTblWithCurrVerId)
+						idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag2)
 
 					entriesTblInCentroidsId := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
 						JoinType: plan.Node_SEMI,
-						Children: []int32{entriesForCurrVersion, l2DistanceOrderBy},
-						Limit:    node.Limit,
+						Children: []int32{entriesForCurrVersion, centroidsTblWithCurrVerId},
+						Limit:    sortNode.Limit,
 						//Offset:      node.Offset, //TODO: check with someone.
-						//BindingTags: []int32{idxTag},//TODO: check with someone.
+						//BindingTags: []int32{idxTag3}, //TODO: check with someone.
 						ProjectList: []*Expr{
 							{
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
-										RelPos: 0, // entriesForCurrVersion
-										ColPos: 2, // entries.pk
+										RelPos: idxTag2, // entriesForCurrVersion
+										ColPos: 2,       // entries.pk
 									},
 								},
 							},
@@ -183,7 +206,7 @@ END0:
 
 func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext, fn *plan.Function,
 	idxTableDefs []*TableDef, idxObjRefs []*ObjectRef,
-	centroidsTblWithCurrVerId int32, distFn string) (int32, error) {
+	centroidsTblWithCurrVerId int32, distFn string, idxTag int32) (int32, error) {
 
 	// 1.a Project centroids.__mo_index_centroid_id
 	centroidIdProj := &plan.Expr{
@@ -196,7 +219,7 @@ func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindConte
 	}
 
 	// 1.b Project l2_distance(centroids, input_literal)
-	l2DistanceProj, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFn, []*plan.Expr{
+	l2DistanceProj, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*plan.Expr{
 		{
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -205,36 +228,60 @@ func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindConte
 				},
 			},
 		},
-		fn.Args[1],
+		{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 2,
+				},
+			},
+		},
+		//fn.Args[1],
 	})
 
 	// 2.a OrderBy
-	orderBy := []*plan.OrderBySpec{
-		{
-			Flag: plan.OrderBySpec_ASC,
-		},
-	}
+	//orderBy := []*plan.OrderBySpec{
+	//	{
+	//		Flag: plan.OrderBySpec_ASC,
+	//	},
+	//}
 
 	// 2.b Limit
 	//TODO: modify
-	limit := makePlan2Int64ConstExprWithType(1)
+	//limit := makePlan2Int64ConstExprWithType(1)
 
 	// 3. Create "order by l2_distance(centroids, input_literal) asc limit @probe_limit"
 	l2DistanceOrderBy := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		TableDef:    idxTableDefs[1],
-		ObjRef:      idxObjRefs[1],
+		NodeType: plan.Node_PROJECT,
+		//TableDef:    idxTableDefs[1],
+		//ObjRef:      idxObjRefs[1],
 		ProjectList: []*Expr{centroidIdProj, l2DistanceProj},
-		Limit:       limit,
-		OrderBy:     orderBy,
-		Children:    []int32{centroidsTblWithCurrVerId},
+		//Limit:       limit,
+		//OrderBy:     orderBy,
+		Children: []int32{centroidsTblWithCurrVerId},
 	}, bindCtx)
 
 	return l2DistanceOrderBy, nil
 }
 
-func makeCrossJoinEntriesMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef, metaTableScanId int32) (int32, error) {
-	entriesScanId := makeEntriesTblScan(builder, bindCtx, indexTableDefs, idxRefs)
+func (builder *QueryBuilder) resolveTableScanWithIndexFromChildren(node *plan.Node) *plan.Node {
+	if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Indexes != nil {
+		return node
+	}
+
+	for _, childID := range node.Children {
+		if n := builder.resolveTableScanWithIndexFromChildren(builder.qry.Nodes[childID]); n != nil {
+			return n
+		}
+	}
+
+	return nil
+}
+
+func makeCrossJoinEntriesMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
+	metaTableScanId int32, idxTag0, idxTag2 int32) (int32, error) {
+	entriesScanId := makeEntriesTblScan(builder, bindCtx, indexTableDefs, idxRefs, idxTag2)
 
 	// 0: entries.version
 	// 1: entries.centroid_id
@@ -245,8 +292,8 @@ func makeCrossJoinEntriesMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 		Typ: makePlan2Type(&bigIntType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
-				ColPos: 0,
+				RelPos: idxTag0,
+				ColPos: 1,
 			},
 		},
 	})
@@ -259,26 +306,71 @@ func makeCrossJoinEntriesMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 		JoinType:    plan.Node_SINGLE,
 		Children:    []int32{entriesScanId, metaTableScanId},
 		ProjectList: joinProjections,
+		//BindingTags: []int32{idxTag2},
 	}, bindCtx)
 
-	prevProjections := getProjectionByLastNode(builder, joinMetaAndCentroidsId)
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		prevProjections[0],
-		prevProjections[3],
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: 1,
+				},
+			},
+		},
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag2,
+					ColPos: 0,
+				},
+			},
+		},
 	})
 	if err != nil {
 		return -1, err
 	}
 	filterCentroidsForCurrVersionId := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{joinMetaAndCentroidsId},
-		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
-		ProjectList: prevProjections[:3],
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{joinMetaAndCentroidsId},
+		FilterList: []*Expr{whereCentroidVersionEqCurrVersion},
+		ProjectList: []*Expr{
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag2,
+						ColPos: 0,
+					},
+				},
+			},
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag2,
+						ColPos: 1,
+					},
+				},
+			},
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag2,
+						ColPos: 2,
+					},
+				},
+			},
+		},
+		//BindingTags: []int32{idxTag2},
 	}, bindCtx)
 	return filterCentroidsForCurrVersionId, nil
 }
 
-func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef) int32 {
+func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag int32) int32 {
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
 	for colIdx, column := range indexTableDefs[2].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
@@ -297,6 +389,194 @@ func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableD
 		ObjRef:      idxRefs[2],
 		TableDef:    indexTableDefs[2],
 		ProjectList: scanNodeProjections,
+		BindingTags: []int32{idxTag},
 	}, bindCtx)
 	return centroidsScanId
+}
+
+func makeMetaTblScanWhereKeyEqVersion2(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, error) {
+	var metaTableScanId int32
+
+	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
+	for colIdx, column := range indexTableDefs[0].Cols {
+		scanNodeProjections[colIdx] = &plan.Expr{
+			Typ: column.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: int32(colIdx),
+					Name:   column.Name,
+				},
+			},
+		}
+	}
+	metaTableScanId = builder.appendNode(&Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      idxRefs[0],
+		TableDef:    indexTableDefs[0],
+		BindingTags: []int32{idxTag0},
+		ProjectList: scanNodeProjections,
+	}, bindCtx)
+
+	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: 0,
+				},
+			},
+		},
+		MakePlan2StringConstExprWithType("version"),
+	})
+	if err != nil {
+		return -1, err
+	}
+	metaTableScanId = builder.appendNode(&Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{metaTableScanId},
+		FilterList: []*Expr{whereKeyEqVersion},
+		//BindingTags: []int32{idxTag0}, /// may not be necessary
+	}, bindCtx)
+
+	castValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(),
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: 1,
+				},
+			},
+		}, makePlan2Type(&bigIntType))
+	if err != nil {
+		return -1, err
+	}
+	metaTableScanId = builder.appendNode(&Node{
+		NodeType:    plan.Node_PROJECT,
+		Stats:       &plan.Stats{},
+		Children:    []int32{metaTableScanId},
+		ProjectList: []*Expr{castValueColToBigInt},
+		BindingTags: []int32{idxTag0},
+	}, bindCtx)
+
+	return metaTableScanId, nil
+}
+
+func makeCentroidsTblScan2(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag1 int32) int32 {
+	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
+	for colIdx, column := range indexTableDefs[1].Cols {
+		scanNodeProjections[colIdx] = &plan.Expr{
+			Typ: column.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag1,
+					ColPos: int32(colIdx),
+					Name:   column.Name,
+				},
+			},
+		}
+	}
+	centroidsScanId := builder.appendNode(&Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      idxRefs[1],
+		TableDef:    indexTableDefs[1],
+		ProjectList: scanNodeProjections,
+		BindingTags: []int32{idxTag1},
+	}, bindCtx)
+	return centroidsScanId
+}
+
+func makeCrossJoinCentroidsMetaForCurrVersion2(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
+	metaTableScanId int32, idxTag0, idxTag1 int32) (int32, error) {
+	centroidsScanId := makeCentroidsTblScan2(builder, bindCtx, indexTableDefs, idxRefs, idxTag1)
+
+	// 0: centroids.version
+	// 1: centroids.centroid_id
+	// 2: centroids.centroid
+	// 3: meta.value i.e, current version
+	joinProjections := getProjectionByLastNode(builder, centroidsScanId)[:3]
+	joinProjections = append(joinProjections, &plan.Expr{
+		Typ: makePlan2Type(&bigIntType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: idxTag0,
+				ColPos: 1,
+			},
+		},
+	})
+
+	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_SINGLE,
+		Children: []int32{centroidsScanId, metaTableScanId},
+		//BindingTags: []int32{idxTag1},
+		ProjectList: joinProjections,
+	}, bindCtx)
+
+	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag1,
+					ColPos: 0,
+				},
+			},
+		},
+		&plan.Expr{
+			Typ: makePlan2Type(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag0,
+					ColPos: 0,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return -1, err
+	}
+	filterCentroidsForCurrVersionId := builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{joinMetaAndCentroidsId},
+		FilterList: []*Expr{whereCentroidVersionEqCurrVersion},
+		//BindingTags: []int32{idxTag1},
+		ProjectList: []*Expr{
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag1,
+						ColPos: 0,
+					},
+				},
+			},
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag1,
+						ColPos: 1,
+					},
+				},
+			},
+			&plan.Expr{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag1,
+						ColPos: 2,
+					},
+				},
+			},
+		},
+	}, bindCtx)
+	return filterCentroidsForCurrVersionId, nil
 }
