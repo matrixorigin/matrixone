@@ -34,12 +34,13 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu   int
-	Id     string `json:"id"`
-	Addr   string `json:"address"`
-	Header objectio.InfoHeader
-	Data   []byte   `json:"payload"`
-	Rel    Relation // local relation
+	Mcpu             int
+	Id               string `json:"id"`
+	Addr             string `json:"address"`
+	Header           objectio.InfoHeader
+	Data             []byte   `json:"payload"`
+	Rel              Relation // local relation
+	NeedExpandRanges bool
 }
 
 // Attribute is a column

@@ -721,7 +721,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, nil, func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -823,7 +823,7 @@ func (tbl *txnTable) rangesOnePart(
 				meta = objMeta.MustDataMeta()
 			}
 
-			ForeachBlkInObjStatsList(true, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				skipBlk := false
 
 				if auxIdCnt > 0 {
@@ -857,13 +857,13 @@ func (tbl *txnTable) rangesOnePart(
 						blk.CanRemote = true
 					}
 					blk.PartitionNum = -1
-					blocks.AppendBlockInfo(*blk)
+					blocks.AppendBlockInfo(blk)
 					return true
 				}
 				// store the block in ranges
 				blk.CanRemote = true
 				blk.PartitionNum = -1
-				blocks.AppendBlockInfo(*blk)
+				blocks.AppendBlockInfo(blk)
 
 				return true
 
@@ -992,7 +992,7 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				if isVec {
 					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
 						return true
@@ -1032,7 +1032,7 @@ func (tbl *txnTable) tryFastRanges(
 					}
 				}
 				blk.PartitionNum = -1
-				blocks.AppendBlockInfo(*blk)
+				blocks.AppendBlockInfo(blk)
 				return true
 			}, obj.ObjectStats)
 
@@ -1602,12 +1602,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
 		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
 
-		//tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
-		//	append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
-		tbl.db.txn.hasS3Op.Store(true)
-		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
+	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
 		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
