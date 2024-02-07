@@ -26,7 +26,7 @@ var (
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, *Expr, error) {
 
-	metaTableScanId, scanProj := makeMetaTblScanWithBindingTag(builder, bindCtx, indexTableDefs, idxRefs, idxTag0)
+	metaTableScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTag0)
 
 	// TODO:
 	// Getting
@@ -66,7 +66,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
 	metaTableScanId int32, idxTag0, idxTag1 int32, castVersionToBigInt *Expr) (int32, error) {
-	centroidsScanId, scanProj := makeCentroidsTblScanWithBindingTag(builder, bindCtx, indexTableDefs, idxRefs, idxTag1)
+	centroidsScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1], idxTag1)
 
 	// 0: centroids.version
 	// 1: centroids.centroid_id
@@ -143,7 +143,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
 	metaTableScanId int32, idxTag0, idxTag2 int32, castVersionToBigInt *Expr) (int32, error) {
-	entriesScanId, scanProj := makeEntriesTblScanWithBindingTag(builder, bindCtx, indexTableDefs, idxRefs, idxTag2)
+	entriesScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2], idxTag2)
 
 	// 0: entries.version
 	// 1: entries.centroid_id

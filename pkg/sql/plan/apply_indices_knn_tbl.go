@@ -16,15 +16,15 @@ package plan
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-func makeMetaTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, []*Expr) {
-	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
-	for colIdx, column := range indexTableDefs[0].Cols {
+func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDef *TableDef, idxRef *ObjectRef, idxTag int32) (int32, []*Expr) {
+	scanNodeProjections := make([]*Expr, len(indexTableDef.Cols))
+	for colIdx, column := range indexTableDef.Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
 			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTag0,
+					RelPos: idxTag,
 					ColPos: int32(colIdx),
 					Name:   column.Name,
 				},
@@ -34,63 +34,10 @@ func makeMetaTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
 	metaTableScanId := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
-		ObjRef:      idxRefs[0],
-		TableDef:    indexTableDefs[0],
-		BindingTags: []int32{idxTag0},
+		ObjRef:      idxRef,
+		TableDef:    indexTableDef,
+		BindingTags: []int32{idxTag},
 		ProjectList: scanNodeProjections,
 	}, bindCtx)
 	return metaTableScanId, scanNodeProjections
-}
-
-func makeCentroidsTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag1 int32) (int32, []*Expr) {
-
-	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
-	for colIdx, column := range indexTableDefs[1].Cols {
-		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: column.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag1,
-					ColPos: int32(colIdx),
-					Name:   column.Name,
-				},
-			},
-		}
-	}
-	centroidsScanId := builder.appendNode(&Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		Stats:       &plan.Stats{},
-		ObjRef:      idxRefs[1],
-		TableDef:    indexTableDefs[1],
-		ProjectList: scanNodeProjections,
-		BindingTags: []int32{idxTag1},
-	}, bindCtx)
-	return centroidsScanId, scanNodeProjections
-}
-
-func makeEntriesTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag2 int32) (int32, []*Expr) {
-	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
-	for colIdx, column := range indexTableDefs[2].Cols {
-		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: column.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag2,
-					ColPos: int32(colIdx),
-					Name:   column.Name,
-				},
-			},
-		}
-	}
-	centroidsScanId := builder.appendNode(&Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		Stats:       &plan.Stats{},
-		ObjRef:      idxRefs[2],
-		TableDef:    indexTableDefs[2],
-		ProjectList: scanNodeProjections,
-		BindingTags: []int32{idxTag2},
-	}, bindCtx)
-	return centroidsScanId, scanNodeProjections
 }
