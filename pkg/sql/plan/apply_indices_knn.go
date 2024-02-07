@@ -155,12 +155,12 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				builder.nameByColRef[[2]int32{idxTag2, 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 				// 2.b.4 Create cast(MetaTable.Version)
-				metaTblWithCurrVerId, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
+				metaTblWithCurrVerId, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
 					idxObjRefs, idxTag0)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
-				centroidsTblWithCurrVerId, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag1)
+				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
+					idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag1, castVersionToBigInt)
 
 				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
@@ -171,14 +171,15 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
 
+					// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
 					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag2)
+						idxTableDefs, idxObjRefs, metaTblWithCurrVerId, idxTag0, idxTag2, castVersionToBigInt)
 
 					entriesTblInCentroidsId := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
 						JoinType: plan.Node_SEMI,
-						Children: []int32{entriesForCurrVersion, centroidsTblWithCurrVerId},
-						Limit:    sortNode.Limit,
+						Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
+						//Limit:    sortNode.Limit,
 						//Offset:      node.Offset, //TODO: check with someone.
 						BindingTags: []int32{idxTag0, idxTag1, idxTag2},
 						ProjectList: []*Expr{

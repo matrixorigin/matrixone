@@ -75,9 +75,9 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			str := ""
 			str += fmt.Sprintf("colMap: ")
 			for k, v := range colMap {
-				str += fmt.Sprintf("%v:%v ", k, v)
+				str += fmt.Sprintf("\n{ %v : %v} \n", k, v)
 			}
-			str += fmt.Sprintf("expr: %v", expr)
+			str += fmt.Sprintf("\nexpr: %v\n", expr)
 			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s", mapID, str)
 		}
 

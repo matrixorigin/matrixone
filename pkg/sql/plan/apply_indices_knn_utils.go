@@ -17,7 +17,7 @@ package plan
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, *Expr, error) {
 	var metaTableScanId int32
 
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
@@ -55,7 +55,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 		MakePlan2StringConstExprWithType("version"),
 	})
 	if err != nil {
-		return -1, err
+		return -1, nil, err
 	}
 	metaTableScanId = builder.appendNode(&Node{
 		NodeType:    plan.Node_FILTER,
@@ -76,17 +76,27 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 			},
 		}, makePlan2Type(&bigIntType))
 	if err != nil {
-		return -1, err
+		return -1, nil, err
 	}
 	metaTableScanId = builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Stats:       &plan.Stats{},
-		Children:    []int32{metaTableScanId},
-		ProjectList: []*Expr{castValueColToBigInt},
+		NodeType: plan.Node_PROJECT,
+		Stats:    &plan.Stats{},
+		Children: []int32{metaTableScanId},
+		ProjectList: []*Expr{
+			{
+				Typ: makePlan2Type(&bigIntType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag0,
+						ColPos: 0,
+					},
+				},
+			},
+		},
 		BindingTags: []int32{idxTag0},
 	}, bindCtx)
 
-	return metaTableScanId, nil
+	return metaTableScanId, castValueColToBigInt, nil
 }
 
 func makeCentroidsTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
@@ -118,7 +128,7 @@ func makeCentroidsTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindCont
 
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTag0, idxTag1 int32) (int32, error) {
+	metaTableScanId int32, idxTag0, idxTag1 int32, castVersionToBigInt *Expr) (int32, error) {
 	centroidsScanId := makeCentroidsTblScanWithBindingTag(builder, bindCtx, indexTableDefs, idxRefs, idxTag1)
 
 	// 0: centroids.version
@@ -154,15 +164,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 			},
 		},
 	}
-	joinProjection := append(centroidsTblProjection, &plan.Expr{
-		Typ: makePlan2Type(&bigIntType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: idxTag0,
-				ColPos: 0,
-			},
-		},
-	})
+	joinProjection := append(centroidsTblProjection, castVersionToBigInt)
 
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -182,15 +184,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 				},
 			},
 		},
-		&plan.Expr{
-			Typ: makePlan2Type(&bigIntType),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag0,
-					ColPos: 0,
-				},
-			},
-		},
+		castVersionToBigInt,
 	})
 	if err != nil {
 		return -1, err
@@ -233,13 +227,14 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	return filterCentroidsForCurrVersionId, nil
 }
 
-func makeEntriesTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag int32) int32 {
+func makeEntriesTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext, indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag2 int32) int32 {
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
 	for colIdx, column := range indexTableDefs[2].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
 			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
+					RelPos: idxTag2,
 					ColPos: int32(colIdx),
 					Name:   column.Name,
 				},
@@ -252,14 +247,14 @@ func makeEntriesTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContex
 		ObjRef:      idxRefs[2],
 		TableDef:    indexTableDefs[2],
 		ProjectList: scanNodeProjections,
-		BindingTags: []int32{idxTag},
+		BindingTags: []int32{idxTag2},
 	}, bindCtx)
 	return centroidsScanId
 }
 
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTag0, idxTag2 int32) (int32, error) {
+	metaTableScanId int32, idxTag0, idxTag2 int32, castVersionToBigInt *Expr) (int32, error) {
 	entriesScanId := makeEntriesTblScanWithBindingTag(builder, bindCtx, indexTableDefs, idxRefs, idxTag2)
 
 	// 0: entries.version
@@ -295,15 +290,8 @@ func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 			},
 		},
 	}
-	joinProjections := append(entriesProjection, &plan.Expr{
-		Typ: makePlan2Type(&bigIntType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: idxTag0,
-				ColPos: 0,
-			},
-		},
-	})
+	joinProjections := append(entriesProjection,
+		castVersionToBigInt)
 
 	//TODO: Add NormalizeL2
 	// TODO: Check for condition that the index available is for vector_l2_ops
@@ -326,15 +314,7 @@ func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 				},
 			},
 		},
-		&plan.Expr{
-			Typ: makePlan2Type(&bigIntType),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag0,
-					ColPos: 0,
-				},
-			},
-		},
+		castVersionToBigInt,
 	})
 	if err != nil {
 		return -1, err
