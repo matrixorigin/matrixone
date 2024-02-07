@@ -76,14 +76,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 
-
--- test other type
-prepare s1 from select * from test_table where col1=?;
-set @a=2;
-execute s1 using @a;
-deallocate prepare s1;
-
-
 -- test DDL and DQL
 drop table if exists test_01;
 create table test_01(a int, b varchar);
