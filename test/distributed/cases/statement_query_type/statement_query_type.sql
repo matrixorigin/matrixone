@@ -323,5 +323,8 @@ use system;
 -- @session
 -- END ALL bvt_query_type query
 
+-- fix continuous exec this case multiple times
+select sleep(15);
+
 -- cleanup
 drop account if exists bvt_query_type;
