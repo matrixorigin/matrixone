@@ -134,8 +134,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 				}
 				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
 					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					colName := tableDef.Cols[col.Col.ColPos].Name
-					if GetSortOrder(tableDef, colName) != 0 {
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 						return
 					}
 				}

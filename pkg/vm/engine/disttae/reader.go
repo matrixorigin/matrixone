@@ -95,7 +95,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
-			if plan2.GetSortOrder(mixin.tableDef, column) == 0 {
+			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
 			}
 			colIdx := mixin.tableDef.Name2ColIndex[column]
@@ -336,6 +336,9 @@ func (r *blockReader) needReadBlkByZM(i int) bool {
 	if !r.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
+
+	logutil.Infof("filterzm min %v, blockzm min %v", r.filterZM.GetMin(), zm.GetMin())
+
 	if r.desc {
 		return r.filterZM.CompareMax(zm) <= 0
 	} else {
@@ -351,8 +354,8 @@ func (r *blockReader) getBlockZMs() {
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
 	for i := range r.blks {
+		location = r.blks[i].MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			location = r.blks[i].MetaLocation()
 			objMeta, err := objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
 			if err != nil {
 				panic("load object meta error when ordered scan!")
@@ -365,12 +368,12 @@ func (r *blockReader) getBlockZMs() {
 }
 
 func (r *blockReader) sortBlockList() {
-	helper := make([]blockSortHelper, len(r.blks))
+	helper := make([]*blockSortHelper, len(r.blks))
 	for i := range r.blks {
+		helper[i] = &blockSortHelper{}
 		helper[i].blk = r.blks[i]
 		helper[i].zm = r.blockZMS[i]
 	}
-
 	if r.desc {
 		sort.Slice(helper, func(i, j int) bool {
 			zm1 := helper[i].zm
@@ -389,7 +392,7 @@ func (r *blockReader) sortBlockList() {
 			if !zm1.IsInited() {
 				return true
 			}
-			zm2 := helper[i].zm
+			zm2 := helper[j].zm
 			if !zm2.IsInited() {
 				return false
 			}
@@ -433,13 +436,12 @@ func (r *blockReader) Read(
 		i := 0
 		for i < len(r.blks) {
 			if r.needReadBlkByZM(i) {
-				r.deleteFirstNBlocks(i)
 				break
 			}
 			i++
 		}
+		r.deleteFirstNBlocks(i)
 	}
-
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
