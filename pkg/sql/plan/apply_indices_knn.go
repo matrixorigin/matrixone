@@ -130,14 +130,14 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPos {
 					continue
 				}
+
+				// 2.b.3 Create idxTags, idxObjRefs and idxTableDefs
 				var idxTags = make([]int32, 3)
+				var idxObjRefs = make([]*ObjectRef, 3)
+				var idxTableDefs = make([]*TableDef, 3)
 				idxTags[0] = builder.genNewTag()
 				idxTags[1] = builder.genNewTag()
 				idxTags[2] = builder.genNewTag()
-
-				// 2.b.3 Create idxObjRefs and idxTableDefs
-				var idxObjRefs = make([]*ObjectRef, 3)
-				var idxTableDefs = make([]*TableDef, 3)
 				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 				idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
@@ -156,7 +156,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 
 				// 2.b.4 Create cast(MetaTable.Version)
 				metaForCurrVersion, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
-					idxObjRefs, idxTags[0])
+					idxObjRefs, idxTags)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
 				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],

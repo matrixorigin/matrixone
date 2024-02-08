@@ -24,9 +24,9 @@ var (
 )
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTag0 int32) (int32, *Expr, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags []int32) (int32, *Expr, error) {
 
-	metaTableScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTag0)
+	metaTableScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[0])
 
 	// TODO:
 	// Getting
@@ -44,7 +44,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 		NodeType:    plan.Node_FILTER,
 		Children:    []int32{metaTableScanId},
 		FilterList:  []*Expr{whereKeyEqVersion},
-		BindingTags: []int32{idxTag0}, /// may not be necessary
+		BindingTags: []int32{idxTags[0]}, /// may not be necessary
 	}, bindCtx)
 
 	metaTableScanId = builder.appendNode(&Node{
@@ -52,7 +52,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 		Stats:       &plan.Stats{},
 		Children:    []int32{metaTableScanId},
 		ProjectList: []*Expr{scanProj[1]},
-		BindingTags: []int32{idxTag0},
+		BindingTags: []int32{idxTags[0]},
 	}, bindCtx)
 
 	castValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanProj[1], makePlan2Type(&bigIntType))
@@ -66,6 +66,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
 	metaTableScanId int32, idxTags []int32, castVersionToBigInt *Expr) (int32, error) {
+
 	centroidsScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1], idxTags[1])
 
 	// 0: centroids.version
@@ -90,6 +91,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_SINGLE,
+		Stats:       &plan.Stats{},
 		Children:    []int32{centroidsScanId, metaTableScanId},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
 		ProjectList: joinProjections,
@@ -107,6 +109,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		Children:    []int32{joinMetaAndCentroidsId},
 		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
+		Stats:       &plan.Stats{},
 		//ProjectList: []*Expr{
 		//	&plan.Expr{
 		//		Typ: makePlan2Type(&bigIntType),
