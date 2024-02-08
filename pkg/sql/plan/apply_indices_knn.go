@@ -173,6 +173,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 
 					centroidIdEqEntriesCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 						{
+							Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: idxTags["centroids.project"], // centroidsForCurrVersion
@@ -181,6 +182,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 							},
 						},
 						{
+							Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: idxTags["entries.project"], // entriesForCurrVersion
