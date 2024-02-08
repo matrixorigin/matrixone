@@ -1602,12 +1602,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
 		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
 
-		//tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
-		//	append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
-		tbl.db.txn.hasS3Op.Store(true)
-		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
+	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
 		logutil.Infof("data return by remote pipeline\n")
 		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)

@@ -951,11 +951,11 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 	if node.Stats.Cost < 1 {
 		node.Stats.Cost = 1
 	}
-	node.Stats.BlockNum = int32(float64(node.Stats.BlockNum)*runtimeFilterSel) + 1
+	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !needStats(node.TableDef) {
+	if !InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
@@ -998,16 +998,18 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 	return false
 }
 
-func needStats(tableDef *TableDef) bool {
+func InternalTable(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false
 	}
-	switch tableDef.Name {
-	case "sys_async_task", "sys_cron_task":
+	if strings.HasPrefix(tableDef.Name, "sys_") {
 		return false
 	}
-	return !strings.HasPrefix(tableDef.Name, "mo_")
+	if strings.HasPrefix(tableDef.Name, "mo_") {
+		return false
+	}
+	return true
 }
 
 func DefaultHugeStats() *plan.Stats {
