@@ -132,82 +132,84 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				}
 
 				// 2.b.3 Create idxTags, idxObjRefs and idxTableDefs
-				var idxTags = make([]int32, 3)
+				var idxTags = make(map[string]int32)
 				var idxObjRefs = make([]*ObjectRef, 3)
 				var idxTableDefs = make([]*TableDef, 3)
-				idxTags[0] = builder.genNewTag()
-				idxTags[1] = builder.genNewTag()
-				idxTags[2] = builder.genNewTag()
+				idxTags["meta"] = builder.genNewTag()
+				idxTags["centroids"] = builder.genNewTag()
+				idxTags["entries"] = builder.genNewTag()
 				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 				idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
 
 				// 2.b.4 Register all the columns in the index
-				builder.nameByColRef[[2]int32{idxTags[0], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags[0], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags["meta"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags["meta"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
 
-				builder.nameByColRef[[2]int32{idxTags[1], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags[1], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTags[1], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
+				builder.nameByColRef[[2]int32{idxTags["centroids"], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags["centroids"], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags["centroids"], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
 
-				builder.nameByColRef[[2]int32{idxTags[2], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags[2], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTags[2], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
+				builder.nameByColRef[[2]int32{idxTags["entries"], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags["entries"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags["entries"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 				// 2.b.4 Create cast(MetaTable.Version)
-				metaForCurrVersion, castVersionToBigInt, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
+				metaForCurrVersion, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
 					idxObjRefs, idxTags)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
-				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
+				//centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
+				//	idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
 
 				for _, expr := range sortNode.OrderBy {
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
-					col.RelPos = idxTags[0] //TODO: watch out for this part.
+					col.RelPos = idxTags["meta"] //TODO: watch out for this part.
 					col.ColPos = 0
 
 					idxColExpr := &plan.Expr{
 						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: idxTags[0],
+								RelPos: idxTags["meta"],
 								ColPos: 0,
 							},
 						},
 					}
 					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
 
-					return centroidsForCurrVersion
+					return metaForCurrVersion
+
+					//print(centroidsForCurrVersion)
 
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
 
-					// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
-					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
-
-					entriesTblInCentroidsId := builder.appendNode(&plan.Node{
-						NodeType: plan.Node_JOIN,
-						JoinType: plan.Node_SEMI,
-						Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
-						//Limit:    sortNode.Limit,
-						//Offset:      node.Offset, //TODO: check with someone.
-						BindingTags: []int32{idxTags[0], idxTags[1], idxTags[2]},
-						ProjectList: []*Expr{
-							{
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: idxTags[2], // entriesForCurrVersion
-										ColPos: 2,          // entries.pk
-									},
-								},
-							},
-						},
-					}, builder.ctxByNode[nodeID])
-
-					return entriesTblInCentroidsId
+					//// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
+					//entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
+					//	idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags, castVersionToBigInt)
+					//
+					//entriesTblInCentroidsId := builder.appendNode(&plan.Node{
+					//	NodeType: plan.Node_JOIN,
+					//	JoinType: plan.Node_SEMI,
+					//	Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
+					//	//Limit:    sortNode.Limit,
+					//	//Offset:      node.Offset, //TODO: check with someone.
+					//	BindingTags: []int32{idxTags[0], idxTags[1], idxTags[2]},
+					//	ProjectList: []*Expr{
+					//		{
+					//			Expr: &plan.Expr_Col{
+					//				Col: &plan.ColRef{
+					//					RelPos: idxTags[2], // entriesForCurrVersion
+					//					ColPos: 2,          // entries.pk
+					//				},
+					//			},
+					//		},
+					//	},
+					//}, builder.ctxByNode[nodeID])
+					//
+					//return entriesTblInCentroidsId
 
 				}
 			}

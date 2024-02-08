@@ -24,60 +24,79 @@ var (
 )
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags []int32) (int32, *Expr, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32) (int32, error) {
 
 	// 1. Scan key, value, row_id from meta table
-	metaTableScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[0])
+	metaTableScanId, _, node := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags["meta"])
 
 	// 2. Filter key == "version"
+	idxTags["meta.filter"] = builder.genNewTag()
 	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		scanProj[0],
+		{
+			Typ: DeepCopyType(indexTableDefs[0].Cols[0].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["meta"],
+					ColPos: 0,
+				},
+			},
+		},
 		MakePlan2StringConstExprWithType("version"),
 	})
 	if err != nil {
-		return -1, nil, err
+		return -1, err
 	}
 	metaFilterId := builder.appendNode(&Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{metaTableScanId},
-		FilterList:  []*Expr{whereKeyEqVersion},
-		BindingTags: []int32{idxTags[0]}, /// may not be necessary
+		NodeType:     plan.Node_FILTER,
+		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+		Children:     []int32{metaTableScanId},
+		FilterList:   []*Expr{whereKeyEqVersion},
+		BindingTags:  []int32{idxTags["meta.filter"]},
 	}, bindCtx)
 
 	// 3. Project value
+	idxTags["meta.project"] = builder.genNewTag()
 	metaProjectId := builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Stats:       &plan.Stats{},
-		Children:    []int32{metaFilterId},
-		ProjectList: []*Expr{scanProj[1]},
-		BindingTags: []int32{idxTags[0]},
+		NodeType:     plan.Node_PROJECT,
+		Stats:        &plan.Stats{},
+		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+		Children:     []int32{metaFilterId},
+		ProjectList: []*Expr{
+			{
+				Typ: DeepCopyType(indexTableDefs[0].Cols[1].Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTags["meta"],
+						ColPos: 1,
+					},
+				},
+			},
+		},
+		BindingTags: []int32{idxTags["meta.project"]},
 	}, bindCtx)
 
-	castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanProj[1], makePlan2Type(&bigIntType))
-	if err != nil {
-		return -1, nil, err
-	}
-
-	return metaProjectId, castMetaValueColToBigInt, nil
+	return metaProjectId, nil
 }
 
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTags []int32, castMetaValueColToBigInt *Expr) (int32, error) {
+	metaTableScanId int32, idxTags map[string]int32, castMetaValueColToBigInt *Expr) (int32, error) {
 
 	// 1. Scan version, centroid_id, centroid from centroids table
-	centroidsScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1], idxTags[1])
+	centroidsScanId, scanProj, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1], idxTags["centroids"])
 
 	//2. JOIN centroids and meta on version
+	idxTags["centroids.join"] = builder.genNewTag()
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_SINGLE,
 		Stats:       &plan.Stats{},
 		Children:    []int32{centroidsScanId, metaTableScanId},
-		BindingTags: []int32{idxTags[0], idxTags[1]},
+		BindingTags: []int32{idxTags["centroids.join"]},
 	}, bindCtx)
 
 	// 3. Project version, centroid_id, centroid, meta.value
+	idxTags["centroids.project1"] = builder.genNewTag()
 	joinProjections := []*plan.Expr{
 		scanProj[0], //centroids.version
 		scanProj[1], //centroids.centroid_id
@@ -86,8 +105,8 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 			Typ: makePlan2Type(&varcharType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags[0], //meta.value i.e, current version
-					ColPos: 1,
+					RelPos: idxTags["meta.project"], //meta.value i.e, current version
+					ColPos: 0,
 				},
 			},
 		},
@@ -97,11 +116,20 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		Stats:       &plan.Stats{},
 		Children:    []int32{joinMetaAndCentroidsId},
 		ProjectList: joinProjections,
-		BindingTags: []int32{idxTags[0], idxTags[1]},
+		BindingTags: []int32{idxTags["centroids.project1"]},
 	}, bindCtx)
 
+	// 4. Filter centroids for current version
+	idxTags["centroids.filter"] = builder.genNewTag()
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		joinProjections[0],
+		{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["centroids.project1"],
+					ColPos: 0,
+				},
+			},
+		},
 		castMetaValueColToBigInt,
 	})
 	if err != nil {
@@ -111,16 +139,18 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		NodeType:    plan.Node_FILTER,
 		Children:    []int32{projectCols},
 		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
-		BindingTags: []int32{idxTags[0], idxTags[1]},
+		BindingTags: []int32{idxTags["centroids.filter"]},
 		Stats:       &plan.Stats{},
 	}, bindCtx)
 
+	// 5. Project version, centroid_id, centroid
+	idxTags["centroids.project2"] = builder.genNewTag()
 	projectCentroidsTable := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Stats:       &plan.Stats{},
 		Children:    []int32{filterCentroidsForCurrVersionId},
 		ProjectList: joinProjections[:3],
-		BindingTags: []int32{idxTags[0], idxTags[1]},
+		BindingTags: []int32{idxTags["centroids.project2"]},
 	}, bindCtx)
 
 	return projectCentroidsTable, nil
@@ -129,7 +159,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
 	metaTableScanId int32, idxTags []int32, castMetaValueColToBigInt *Expr) (int32, error) {
-	entriesScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2], idxTags[2])
+	entriesScanId, scanProj, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2], idxTags[2])
 
 	// 0: entries.version
 	// 1: entries.centroid_id
