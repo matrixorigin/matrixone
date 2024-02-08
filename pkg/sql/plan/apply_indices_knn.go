@@ -154,36 +154,19 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
 				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
-				// 2.b.4 Create cast(MetaTable.Version)
-				metaForCurrVersion, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID], idxTableDefs,
-					idxObjRefs, idxTags)
+				// 2.b.4 Create MetaTable.Version where MetaTable.Key == "version"
+				metaForCurrVersion, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
+					idxTableDefs, idxObjRefs, idxTags)
 
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
 				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags)
+					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion)
 
 				// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
 				entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, metaForCurrVersion, idxTags)
+					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion)
 
 				for _, expr := range sortNode.OrderBy {
-					fn := expr.Expr.GetF()
-					col := fn.Args[0].GetCol()
-					col.RelPos = idxTags["entries.project"] //TODO: watch out for this part.
-					col.ColPos = 2
-
-					idxColExpr := &plan.Expr{
-						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: idxTags["entries.project"],
-								ColPos: 2,
-							},
-						},
-					}
-					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
-
-					return entriesForCurrVersion
 
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
@@ -214,28 +197,39 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 						OnList:   []*Expr{centroidIdEqEntriesCentroidId},
 					}, builder.ctxByNode[nodeID])
 
-					return joinEntriesAndCentroids
+					//idxTags["centroid_entries.project"] = builder.genNewTag()
+					//projectCols := builder.appendNode(&plan.Node{
+					//	NodeType: plan.Node_PROJECT,
+					//	Children: []int32{joinEntriesAndCentroids},
+					//	ProjectList: []*Expr{
+					//		{
+					//			Expr: &plan.Expr_Col{
+					//				Col: &plan.ColRef{
+					//					RelPos: idxTags["entries.project"], // entriesForCurrVersion
+					//					ColPos: 2,                          // entries.pk
+					//				},
+					//			},
+					//		},
+					//	},
+					//	BindingTags: []int32{idxTags["centroid_entries.project"]},
+					//}, builder.ctxByNode[nodeID])
 
-					idxTags["centroid_entries.project"] = builder.genNewTag()
-					projectCols := builder.appendNode(&plan.Node{
-						NodeType: plan.Node_PROJECT,
-						Children: []int32{joinEntriesAndCentroids},
-						ProjectList: []*Expr{
-							{
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: idxTags["entries.project"], // entriesForCurrVersion
-										ColPos: 2,                          // entries.pk
-									},
-								},
+					fn := expr.Expr.GetF()
+					col := fn.Args[0].GetCol()
+					col.RelPos = idxTags["entries.project"] //TODO: watch out for this part.
+					col.ColPos = 0
+
+					idxColExpr := &plan.Expr{
+						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: idxTags["entries.project"],
+								ColPos: 0,
 							},
 						},
-						BindingTags: []int32{idxTags["centroid_entries.project"]},
-					}, builder.ctxByNode[nodeID])
-
+					}
 					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
-
-					return projectCols
+					return joinEntriesAndCentroids
 
 				}
 			}

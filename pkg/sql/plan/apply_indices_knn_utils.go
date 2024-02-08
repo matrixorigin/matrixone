@@ -55,8 +55,8 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 }
 
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTags map[string]int32) (int32, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
+	metaTableScanId int32) (int32, error) {
 
 	// 1. Scan version, centroid_id, centroid from centroids table
 	centroidsScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1],
@@ -101,8 +101,8 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 // TODO: Check for condition that the index available is for vector_l2_ops
 // TODO: add LIMIT and OFFSET
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTags map[string]int32) (int32, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
+	metaTableScanId int32) (int32, error) {
 
 	// 1. Scan version, centroid_id_fk, origin_pk from entries table
 	entriesScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2],
