@@ -24,10 +24,10 @@ var (
 )
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32) (int32, error) {
+	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32, prefix string) (int32, error) {
 
 	// 1. Scan key, value, row_id from meta table
-	metaTableScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags["meta.scan"])
+	metaTableScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[prefix+".scan"])
 
 	// 2. Filter key == "version"
 	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -42,13 +42,13 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	}, bindCtx)
 
 	// 3. Project value column as BigInt
-	idxTags["meta.project"] = builder.genNewTag()
+	idxTags[prefix+".project"] = builder.genNewTag()
 	//castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanCols[1], makePlan2Type(&bigIntType))
 	metaProjectId := builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{metaFilterId},
 		ProjectList: []*plan.Expr{scanCols[1]},
-		BindingTags: []int32{idxTags["meta.project"]},
+		BindingTags: []int32{idxTags[prefix+".project"]},
 	}, bindCtx)
 
 	return metaProjectId, nil
@@ -69,7 +69,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 			Typ: makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["meta.project"],
+					RelPos: idxTags["meta1.project"],
 					ColPos: 0,
 				},
 			},
@@ -115,7 +115,7 @@ func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 			Typ: makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["meta.project"],
+					RelPos: idxTags["meta2.project"],
 					ColPos: 0,
 				},
 			},

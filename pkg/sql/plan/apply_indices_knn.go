@@ -135,7 +135,8 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 				var idxTags = make(map[string]int32)
 				var idxObjRefs = make([]*ObjectRef, 3)
 				var idxTableDefs = make([]*TableDef, 3)
-				idxTags["meta.scan"] = builder.genNewTag()
+				idxTags["meta1.scan"] = builder.genNewTag()
+				idxTags["meta2.scan"] = builder.genNewTag()
 				idxTags["centroids.scan"] = builder.genNewTag()
 				idxTags["entries.scan"] = builder.genNewTag()
 				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
@@ -143,8 +144,10 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
 
 				// 2.b.4 Register all the columns in the index
-				builder.nameByColRef[[2]int32{idxTags["meta.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags["meta.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+				builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+				builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
 
 				builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
 				builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
@@ -154,17 +157,17 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
 				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
-				// 2.b.4 Create MetaTable.Version where MetaTable.Key == "version"
-				metaForCurrVersion, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags)
-
 				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
+				metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
+					idxTableDefs, idxObjRefs, idxTags, "meta1")
 				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion)
+					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1)
 
 				// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
+				metaForCurrVersion2, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
+					idxTableDefs, idxObjRefs, idxTags, "meta2")
 				entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion)
+					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion2)
 
 				for _, expr := range sortNode.OrderBy {
 
@@ -220,14 +223,14 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
 					col.RelPos = idxTags["entries.project"] //TODO: watch out for this part.
-					col.ColPos = 0
+					col.ColPos = 2
 
 					idxColExpr := &plan.Expr{
 						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: idxTags["entries.project"],
-								ColPos: 0,
+								ColPos: 2,
 							},
 						},
 					}
