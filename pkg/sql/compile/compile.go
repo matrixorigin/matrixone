@@ -1111,6 +1111,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		if n.Offset != nil {
+			ss = c.compileOffset(n, ss)
+		}
+		if n.Limit != nil {
+			ss = c.compileLimit(n, ss)
+		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
 		ss, err = c.compileSourceScan(ctx, n)
