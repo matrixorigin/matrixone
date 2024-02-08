@@ -78,15 +78,15 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		scanProj[1],
 		scanProj[2],
 	}
-	joinProjections := append(centroidsTblProjection, &plan.Expr{
-		Typ: makePlan2Type(&varcharType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: idxTags[0],
-				ColPos: 1,
-			},
-		},
-	})
+	//joinProjections := append(centroidsTblProjection, &plan.Expr{
+	//	Typ: makePlan2Type(&varcharType),
+	//	Expr: &plan.Expr_Col{
+	//		Col: &plan.ColRef{
+	//			RelPos: idxTags[0],
+	//			ColPos: 1,
+	//		},
+	//	},
+	//})
 
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -94,12 +94,12 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		Stats:       &plan.Stats{},
 		Children:    []int32{centroidsScanId, metaTableScanId},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
-		ProjectList: joinProjections,
+		ProjectList: centroidsTblProjection,
 	}, bindCtx)
 
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		scanProj[0],
-		castVersionToBigInt,
+		centroidsTblProjection[0],
+		centroidsTblProjection[1],
 	})
 	if err != nil {
 		return -1, err
@@ -110,6 +110,7 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
 		Stats:       &plan.Stats{},
+		ProjectList: centroidsTblProjection,
 		//ProjectList: []*Expr{
 		//	&plan.Expr{
 		//		Typ: makePlan2Type(&bigIntType),
