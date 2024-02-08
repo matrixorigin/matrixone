@@ -24,7 +24,7 @@ func (builder *QueryBuilder) applyIndicesKNN(nodeID int32, colRefCnt map[[2]int3
 
 	switch node.NodeType {
 	case plan.Node_SORT:
-		return builder.applyIndicesForKNN(nodeID, node, colRefCnt, idxColMap)
+		return builder.handleSort(nodeID, node, colRefCnt, idxColMap)
 
 	default:
 		for i, childID := range node.Children {
@@ -38,7 +38,7 @@ func (builder *QueryBuilder) applyIndicesKNN(nodeID int32, colRefCnt map[[2]int3
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	// 1.a Skip condition one: if there are multiple order by columns
 	if len(sortNode.OrderBy) != 1 {
@@ -205,6 +205,7 @@ func (builder *QueryBuilder) applyIndicesForKNN(nodeID int32, sortNode *plan.Nod
 					//	Children: []int32{joinEntriesAndCentroids},
 					//	ProjectList: []*Expr{
 					//		{
+					//			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
 					//			Expr: &plan.Expr_Col{
 					//				Col: &plan.ColRef{
 					//					RelPos: idxTags["entries.project"], // entriesForCurrVersion
