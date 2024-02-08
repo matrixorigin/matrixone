@@ -284,6 +284,22 @@ func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPublishing", reflect.TypeOf((*MockCompilerContext2)(nil).IsPublishing), dbName)
 }
 
+// ReplacePlan mocks base method.
+func (m *MockCompilerContext2) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReplacePlan", execPlan)
+	ret0, _ := ret[0].(*plan.Plan)
+	ret1, _ := ret[1].(tree.Statement)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ReplacePlan indicates an expected call of ReplacePlan.
+func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplacePlan", reflect.TypeOf((*MockCompilerContext2)(nil).ReplacePlan), execPlan)
+}
+
 // Resolve mocks base method.
 func (m *MockCompilerContext2) Resolve(schemaName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
 	m.ctrl.T.Helper()
