@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -622,19 +621,22 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		// update workspace
 	}
 	// cn rowId antiShrink
-	bat.AntiShrink(cnRowIdOffsets)
+	bat.Shrink(cnRowIdOffsets, true)
 	if bat.RowCount() == 0 {
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
+
 	sels = sels[:0]
+	rowids = vector.MustFixedCol[types.Rowid](bat.GetVector(0))
 	for k, rowid := range rowids {
-		if mp[rowid] == 0 {
+		// put rowid to be deleted into sels.
+		if mp[rowid] != 0 {
 			sels = append(sels, int64(k))
 		}
 	}
-	bat.Shrink(sels)
+	bat.Shrink(sels, true)
 	txn.proc.Mp().PutSels(sels)
 	return bat
 }
@@ -659,6 +661,9 @@ func (txn *Transaction) deleteTableWrites(
 		if e.bat == nil {
 			continue
 		}
+		if e.typ == UPDATE || e.typ == ALTER {
+			continue
+		}
 		// for 3 and 4 above.
 		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
 			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
@@ -674,7 +679,8 @@ func (txn *Transaction) deleteTableWrites(
 			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
-			// current batch is not be deleted
+			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
+			// so if e.bat is not to be deleted,skip it.
 			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
 			}
@@ -685,6 +691,7 @@ func (txn *Transaction) deleteTableWrites(
 			}
 			for k, v := range vs {
 				if _, ok := mp[v]; !ok {
+					// if the v is not to be deleted, then add its index into the sels.
 					sels = append(sels, int64(k))
 				} else {
 					mp[v]++
@@ -721,20 +728,21 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				e.bat.Shrink(sels)
+				e.bat.Shrink(sels, false)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}
 	}
-	return nil
+	return txn.compactionBlksLocked()
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) mergeCompactionLocked() error {
+func (txn *Transaction) compactionBlksLocked() error {
 	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
-		txn.deletedBlocks = nil
+		//txn.deletedBlocks = nil
+		txn.deletedBlocks.clean()
 	}()
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
@@ -754,7 +762,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
-			delete(txn.cnBlkId_Pos, *blkId)
+			//delete(txn.cnBlkId_Pos, *blkId)
 			return true
 		})
 
@@ -765,7 +773,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, stats, err := tbl.mergeCompaction(blks)
+		createdBlks, stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err
 		}
@@ -829,7 +837,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
 		}
-		entry.bat.AntiShrink(compactedEntries[entry.bat])
+		entry.bat.Shrink(compactedEntries[entry.bat], true)
 		if entry.bat.RowCount() == 0 {
 			txn.writes[i].bat.Clean(txn.proc.GetMPool())
 			txn.writes[i].bat = nil
@@ -931,9 +939,9 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.mergeCompactionLocked(); err != nil {
-		return nil, err
-	}
+	//if err := txn.mergeCompactionLocked(); err != nil {
+	//	return nil, err
+	//}
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}

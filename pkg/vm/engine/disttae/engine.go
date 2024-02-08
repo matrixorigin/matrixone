@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"runtime"
 	"sort"
 	"strings"
@@ -104,6 +105,11 @@ func New(
 			},
 		),
 	}
+	pool, err := ants.NewPool(5)
+	if err != nil {
+		panic(err)
+	}
+	e.gcPool = pool
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
