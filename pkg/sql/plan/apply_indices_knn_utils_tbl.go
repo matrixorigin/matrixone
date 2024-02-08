@@ -17,10 +17,20 @@ package plan
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDef *TableDef, idxRef *ObjectRef, idxTag int32) (int32, []*Expr, *Node) {
-	scanNodeProjections := make([]*Expr, len(indexTableDef.Cols))
+	indexTableDef *TableDef, idxObjRef *ObjectRef, idxTag int32) (int32, []*Expr, *Node) {
+
+	// 1. Create Scan
+	scanId := builder.appendNode(&Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    indexTableDef,
+		ObjRef:      idxObjRef,
+		BindingTags: []int32{idxTag},
+	}, bindCtx)
+
+	// 2. Create Scan Cols
+	scanCols := make([]*Expr, len(indexTableDef.Cols))
 	for colIdx, column := range indexTableDef.Cols {
-		scanNodeProjections[colIdx] = &plan.Expr{
+		scanCols[colIdx] = &plan.Expr{
 			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -31,14 +41,5 @@ func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext
 			},
 		}
 	}
-	node := &Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		Stats:       &plan.Stats{},
-		ObjRef:      DeepCopyObjectRef(idxRef),
-		TableDef:    DeepCopyTableDef(indexTableDef, true),
-		BindingTags: []int32{idxTag},
-		ProjectList: scanNodeProjections,
-	}
-	metaTableScanId := builder.appendNode(node, bindCtx)
-	return metaTableScanId, scanNodeProjections, node
+	return scanId, scanCols, nil
 }
