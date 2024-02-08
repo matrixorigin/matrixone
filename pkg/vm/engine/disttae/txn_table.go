@@ -1528,7 +1528,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.db.txn.hasS3Op.Store(true)
-		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
 		return tbl.db.txn.WriteFile(
 			INSERT,
@@ -1623,7 +1622,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) mergeCompaction(
+func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
@@ -2318,6 +2317,6 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 // get the table's snapshot.
 func (tbl *txnTable) updateWriteOffset() {
 	if tbl.db.txn.statementID > 0 {
-		tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
+		tbl.writesOffset = tbl.db.txn.offsets[tbl.db.txn.statementID-1]
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 var Srv *Server
@@ -129,28 +130,25 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 func (srv *Server) GenerateObject() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
-	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	// for future fileOffset
-	// if srv.InitSegmentId {
-	// 	srv.incrementSegmentId()
-	// } else {
-	// 	srv.getNewSegmentId()
-	// 	srv.currentFileOffset = 0
-	// 	srv.InitSegmentId = true
-	// }
-	// return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileOffset)
+	if srv.InitSegmentId {
+		srv.incrementSegmentId()
+	} else {
+		srv.getNewSegmentId()
+		srv.currentFileNum = 0
+		srv.InitSegmentId = true
+	}
+	return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileNum)
 }
 
-// func (srv *Server) incrementSegmentId() {
-// 	if srv.currentFileOffset < math.MaxUint16 {
-// 		srv.currentFileOffset++
-// 	} else {
-// 		srv.getNewSegmentId()
-// 		srv.currentFileOffset = 0
-// 	}
-// }
+func (srv *Server) incrementSegmentId() {
+	if srv.currentFileNum < math.MaxUint16 {
+		srv.currentFileNum++
+	} else {
+		srv.getNewSegmentId()
+		srv.currentFileNum = 0
+	}
+}
 
-// // for now, rowId is common between CN and DN.
-// func (srv *Server) getNewSegmentId() {
-// 	srv.CNSegmentId = common.NewSegmentid()
-// }
+func (srv *Server) getNewSegmentId() {
+	srv.CNSegmentId = objectio.NewSegmentid()
+}

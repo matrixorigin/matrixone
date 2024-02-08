@@ -49,9 +49,10 @@ type ReceiveInfo struct {
 type Server struct {
 	sync.Mutex
 
-	hakeeper      logservice.CNHAKeeperClient
-	CNSegmentId   types.Uuid
-	InitSegmentId bool
+	hakeeper       logservice.CNHAKeeperClient
+	CNSegmentId    *types.Segmentid
+	currentFileNum uint16
+	InitSegmentId  bool
 	// currentFileOffset uint16
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.

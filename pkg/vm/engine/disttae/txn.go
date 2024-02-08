@@ -744,15 +744,15 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 			}
 		}
 	}
-	return nil
+	return txn.compactionBlksLocked()
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) mergeCompactionLocked() error {
+func (txn *Transaction) compactionBlksLocked() error {
 	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
-		txn.deletedBlocks = nil
+		txn.deletedBlocks.clean()
 	}()
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
@@ -772,7 +772,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
-			delete(txn.cnBlkId_Pos, *blkId)
+			//delete(txn.cnBlkId_Pos, *blkId)
 			return true
 		})
 
@@ -783,7 +783,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, stats, err := tbl.mergeCompaction(blks)
+		createdBlks, stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err
 		}
@@ -947,9 +947,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, nil
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
-		return nil, err
-	}
-	if err := txn.mergeCompactionLocked(); err != nil {
 		return nil, err
 	}
 	if err := txn.dumpBatchLocked(0); err != nil {
