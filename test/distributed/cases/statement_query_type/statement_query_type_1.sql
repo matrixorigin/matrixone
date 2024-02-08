@@ -1,9 +1,9 @@
 -- prepare
-drop account if exists bvt_query_type;
-create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop account if exists bvt_query_type_part1;
+create account if not exists `bvt_query_type_part1` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
--- Login bvt_query_type account
--- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
+-- Login bvt_query_type_part1 account
+-- @session:id=1&user=bvt_query_type_part1:admin:accountadmin&password=123456
 
 -- CASE: part 1
 create database statement_query_type;
@@ -135,7 +135,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 
-insert into test_table values (1,'a'),(2,'b'),(3,'c'),(4,'d');
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -154,4 +153,4 @@ use system;
 --
 
 -- cleanup
-drop account if exists bvt_query_type;
+drop account if exists bvt_query_type_part1;
