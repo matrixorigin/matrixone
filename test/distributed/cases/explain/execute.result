@@ -1,0 +1,86 @@
+drop database if exists exec_test;
+create database exec_test;
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+prepare st1 from 'select * from t1 where a = ?';
+set @a=1;
+execute st1 using @a;
+a
+1
+explain execute st1 using @a;
+QUERY PLAN
+Project
+  ->  Table Scan on execute.t1
+        Filter Cond: (t1.a = cast('1' AS INT))
+explain verbose execute st1 using @a;
+QUERY PLAN
+Project (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+  Output: t1.a
+  ->  Table Scan on execute.t1 (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+        Output: t1.a
+        Table: 't1' (0:'a')
+        Filter Cond: (t1.a = cast('1' AS INT))
+explain analyze execute st1 using @a;
+QUERY PLAN
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=4bytes OutputSize=4bytes MemorySize=4bytes
+  ->  Table Scan on execute.t1
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 InputSize=12bytes OutputSize=4bytes MemorySize=19bytes
+        Filter Cond: (t1.a = 1)
+explain analyze verbose execute st1 using @a;
+QUERY PLAN
+Project (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+  Output: t1.a
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=4bytes OutputSize=4bytes MemorySize=4bytes
+  ->  Table Scan on execute.t1 (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+        Output: t1.a
+        Table: 't1' (0:'a')
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 InputSize=12bytes OutputSize=4bytes MemorySize=19bytes
+        Filter Cond: (t1.a = 1)
+drop table if exists t2;
+create table t2(a int, b int);
+insert into t2 values (1,1),(2,2),(3,3);
+select * from t2;
+a    b
+1    1
+2    2
+3    3
+prepare st2 from 'select * from t2 where a = ? and b = ?';
+set @a = 1, @b=1;
+execute st2 using @a,@b;
+a    b
+1    1
+explain execute st2 using @a,@b;
+QUERY PLAN
+Project
+  ->  Table Scan on execute.t2
+        Filter Cond: (t2.b = cast('1' AS INT)), (t2.a = cast('1' AS INT))
+explain verbose execute st2 using @a,@b;
+QUERY PLAN
+Project (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+  Output: t2.a, t2.b
+  ->  Table Scan on execute.t2 (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+        Output: t2.a, t2.b
+        Table: 't2' (0:'a', 1:'b')
+        Filter Cond: (t2.b = cast('1' AS INT)), (t2.a = cast('1' AS INT))
+explain analyze execute st2 using @a,@b;
+QUERY PLAN
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes
+  ->  Table Scan on execute.t2
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 InputSize=24bytes OutputSize=8bytes MemorySize=36bytes
+        Filter Cond: (t2.b = 1), (t2.a = 1)
+explain analyze verbose execute st2 using @a,@b;
+QUERY PLAN
+Project (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+  Output: t2.a, t2.b
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes
+  ->  Table Scan on execute.t2 (cost=1000.00 outcnt=1000.00 selectivity=1.0000 blockNum=1)
+        Output: t2.a, t2.b
+        Table: 't2' (0:'a', 1:'b')
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 InputSize=24bytes OutputSize=8bytes MemorySize=36bytes
+        Filter Cond: (t2.b = 1), (t2.a = 1)
+drop table if exists t1;
+drop table if exists t2;
+drop database if exists exec_test;

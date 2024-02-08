@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,10 +50,16 @@ type TxnCompilerContext struct {
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
-	mu                   sync.Mutex
+	//for support explain analyze
+	cwft *TxnComputationWrapper
+	mu   sync.Mutex
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+
+func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	return replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.cwft, execPlan)
+}
 
 func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 	tcc.mu.Lock()
