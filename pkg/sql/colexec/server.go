@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 var Srv *Server
@@ -126,29 +125,9 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 	return srv.cnSegmentMap.mp[*sid]
 }
 
-// SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
+// GenerateObject used to generate a new object name for CN.
 func (srv *Server) GenerateObject() objectio.ObjectName {
-	srv.Lock()
-	defer srv.Unlock()
-	if srv.InitSegmentId {
-		srv.incrementSegmentId()
-	} else {
-		srv.getNewSegmentId()
-		srv.currentFileNum = 0
-		srv.InitSegmentId = true
-	}
-	return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileNum)
-}
-
-func (srv *Server) incrementSegmentId() {
-	if srv.currentFileNum < math.MaxUint16 {
-		srv.currentFileNum++
-	} else {
-		srv.getNewSegmentId()
-		srv.currentFileNum = 0
-	}
-}
-
-func (srv *Server) getNewSegmentId() {
-	srv.CNSegmentId = objectio.NewSegmentid()
+	segId := objectio.NewSegmentid()
+	srv.PutCnSegment(segId, CnBlockIdType)
+	return objectio.BuildObjectName(segId, 0)
 }

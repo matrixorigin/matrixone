@@ -951,7 +951,7 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 	if node.Stats.Cost < 1 {
 		node.Stats.Cost = 1
 	}
-	node.Stats.BlockNum = int32(float64(node.Stats.BlockNum)*runtimeFilterSel) + 1
+	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
