@@ -202,40 +202,40 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 						OnList:   []*Expr{centroidIdEqEntriesCentroidId},
 					}, builder.ctxByNode[nodeID])
 
-					//idxTags["centroid_entries.project"] = builder.genNewTag()
-					//projectCols := builder.appendNode(&plan.Node{
-					//	NodeType: plan.Node_PROJECT,
-					//	Children: []int32{joinEntriesAndCentroids},
-					//	ProjectList: []*Expr{
-					//		{
-					//			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
-					//			Expr: &plan.Expr_Col{
-					//				Col: &plan.ColRef{
-					//					RelPos: idxTags["entries.project"], // entriesForCurrVersion
-					//					ColPos: 2,                          // entries.pk
-					//				},
-					//			},
-					//		},
-					//	},
-					//	BindingTags: []int32{idxTags["centroid_entries.project"]},
-					//}, builder.ctxByNode[nodeID])
+					idxTags["centroid_entries.project"] = builder.genNewTag()
+					projectCols := builder.appendNode(&plan.Node{
+						NodeType: plan.Node_PROJECT,
+						Children: []int32{joinEntriesAndCentroids},
+						ProjectList: []*Expr{
+							{
+								Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: idxTags["entries.project"], // entriesForCurrVersion
+										ColPos: 2,                          // entries.pk
+									},
+								},
+							},
+						},
+						BindingTags: []int32{idxTags["centroid_entries.project"]},
+					}, builder.ctxByNode[nodeID])
 
 					fn := expr.Expr.GetF()
 					col := fn.Args[0].GetCol()
-					col.RelPos = idxTags["entries.project"] //TODO: watch out for this part.
-					col.ColPos = 2
+					col.RelPos = idxTags["centroid_entries.project"] //TODO: watch out for this part.
+					col.ColPos = 0
 
 					idxColExpr := &plan.Expr{
 						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: idxTags["entries.project"],
-								ColPos: 2,
+								RelPos: idxTags["centroid_entries.project"],
+								ColPos: 0,
 							},
 						},
 					}
 					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
-					return joinEntriesAndCentroids
+					return projectCols
 
 				}
 			}
