@@ -1229,7 +1229,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 		}
 
 		plan0 = replaced
-		paramVals := ses.GetTxnCompileCtx().cwft.paramVals
+		paramVals := ses.GetTxnCompileCtx().tcw.paramVals
 		if len(paramVals) > 0 {
 			//replace the param var in the plan by the param value
 			plan0, err = plan2.FillValuesOfParamsInPlan(requestCtx, plan0, paramVals)
@@ -2963,7 +2963,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
 	ses.SetQueryInExecute(true)
-	ses.GetTxnCompileCtx().cwft = cw.(*TxnComputationWrapper)
+	if txw, ok := cw.(*TxnComputationWrapper); ok {
+		ses.GetTxnCompileCtx().tcw = txw
+	}
+
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
