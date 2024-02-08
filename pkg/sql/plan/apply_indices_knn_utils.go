@@ -26,13 +26,10 @@ var (
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags []int32) (int32, *Expr, error) {
 
+	// 1. Scan key, value, row_id from meta table
 	metaTableScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[0])
 
-	// TODO:
-	// Getting
-	// Filter Cond: (__mo_index_secondary_018d8167-af7f-7005-b02b-8a6fe6b31be5.__mo_index_key = cast('version' AS BIGINT))
-	// instead of
-	// Filter Cond: (__mo_index_secondary_018d8167-af7f-7005-b02b-8a6fe6b31be5.__mo_index_key = 'version')
+	// 2. Filter key == "version"
 	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanProj[0],
 		MakePlan2StringConstExprWithType("version"),
@@ -40,113 +37,98 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	if err != nil {
 		return -1, nil, err
 	}
-	metaTableScanId = builder.appendNode(&Node{
+	metaFilterId := builder.appendNode(&Node{
 		NodeType:    plan.Node_FILTER,
 		Children:    []int32{metaTableScanId},
 		FilterList:  []*Expr{whereKeyEqVersion},
 		BindingTags: []int32{idxTags[0]}, /// may not be necessary
 	}, bindCtx)
 
-	metaTableScanId = builder.appendNode(&Node{
+	// 3. Project value
+	metaProjectId := builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Stats:       &plan.Stats{},
-		Children:    []int32{metaTableScanId},
+		Children:    []int32{metaFilterId},
 		ProjectList: []*Expr{scanProj[1]},
 		BindingTags: []int32{idxTags[0]},
 	}, bindCtx)
 
-	castValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanProj[1], makePlan2Type(&bigIntType))
+	castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanProj[1], makePlan2Type(&bigIntType))
 	if err != nil {
 		return -1, nil, err
 	}
 
-	return metaTableScanId, castValueColToBigInt, nil
+	return metaProjectId, castMetaValueColToBigInt, nil
 }
 
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTags []int32, castVersionToBigInt *Expr) (int32, error) {
+	metaTableScanId int32, idxTags []int32, castMetaValueColToBigInt *Expr) (int32, error) {
 
+	// 1. Scan version, centroid_id, centroid from centroids table
 	centroidsScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1], idxTags[1])
 
-	// 0: centroids.version
-	// 1: centroids.centroid_id
-	// 2: centroids.centroid
-	// 3: meta.value i.e, current version
-	centroidsTblProjection := []*plan.Expr{
-		scanProj[0],
-		scanProj[1],
-		scanProj[2],
-	}
-	//joinProjections := append(centroidsTblProjection, &plan.Expr{
-	//	Typ: makePlan2Type(&varcharType),
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: idxTags[0],
-	//			ColPos: 1,
-	//		},
-	//	},
-	//})
-
+	//2. JOIN centroids and meta on version
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_SINGLE,
 		Stats:       &plan.Stats{},
 		Children:    []int32{centroidsScanId, metaTableScanId},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
-		ProjectList: centroidsTblProjection,
+	}, bindCtx)
+
+	// 3. Project version, centroid_id, centroid, meta.value
+	joinProjections := []*plan.Expr{
+		scanProj[0], //centroids.version
+		scanProj[1], //centroids.centroid_id
+		scanProj[2], //centroids.centroid
+		{
+			Typ: makePlan2Type(&varcharType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags[0], //meta.value i.e, current version
+					ColPos: 1,
+				},
+			},
+		},
+	}
+	projectCols := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Stats:       &plan.Stats{},
+		Children:    []int32{joinMetaAndCentroidsId},
+		ProjectList: joinProjections,
+		BindingTags: []int32{idxTags[0], idxTags[1]},
 	}, bindCtx)
 
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		centroidsTblProjection[0],
-		centroidsTblProjection[1],
+		joinProjections[0],
+		castMetaValueColToBigInt,
 	})
 	if err != nil {
 		return -1, err
 	}
 	filterCentroidsForCurrVersionId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_FILTER,
-		Children:    []int32{joinMetaAndCentroidsId},
+		Children:    []int32{projectCols},
 		FilterList:  []*Expr{whereCentroidVersionEqCurrVersion},
 		BindingTags: []int32{idxTags[0], idxTags[1]},
 		Stats:       &plan.Stats{},
-		ProjectList: centroidsTblProjection,
-		//ProjectList: []*Expr{
-		//	&plan.Expr{
-		//		Typ: makePlan2Type(&bigIntType),
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: idxTag1,
-		//				ColPos: 0,
-		//			},
-		//		},
-		//	},
-		//	&plan.Expr{
-		//		Typ: makePlan2Type(&bigIntType),
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: idxTag1,
-		//				ColPos: 1,
-		//			},
-		//		},
-		//	},
-		//	&plan.Expr{
-		//		Typ: makePlan2Type(&bigIntType),
-		//		Expr: &plan.Expr_Col{
-		//			Col: &plan.ColRef{
-		//				RelPos: idxTag1,
-		//				ColPos: 2,
-		//			},
-		//		},
-		//	},
-		//},
 	}, bindCtx)
-	return filterCentroidsForCurrVersionId, nil
+
+	projectCentroidsTable := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Stats:       &plan.Stats{},
+		Children:    []int32{filterCentroidsForCurrVersionId},
+		ProjectList: joinProjections[:3],
+		BindingTags: []int32{idxTags[0], idxTags[1]},
+	}, bindCtx)
+
+	return projectCentroidsTable, nil
 }
 
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef,
-	metaTableScanId int32, idxTags []int32, castVersionToBigInt *Expr) (int32, error) {
+	metaTableScanId int32, idxTags []int32, castMetaValueColToBigInt *Expr) (int32, error) {
 	entriesScanId, scanProj := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2], idxTags[2])
 
 	// 0: entries.version
@@ -184,7 +166,7 @@ func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bind
 
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanProj[0],
-		castVersionToBigInt,
+		castMetaValueColToBigInt,
 	})
 	if err != nil {
 		return -1, err
