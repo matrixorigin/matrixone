@@ -79,11 +79,6 @@ drop database db2;
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
-insert into test_01 values (1,'a');
-insert into test_01 values (2,'b');
-update test_01 set a=100 where b='b';
-select * from test_01;
-select * from test_01;
 explain select * from test_01;
 delete from test_01 where a=1;
 truncate table test_01;
@@ -115,9 +110,6 @@ show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
-
-insert into test_table values (1,'a'),(2,'b'),(3,'c');
-insert into test_table values (4,'d');
 
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
@@ -188,6 +180,7 @@ use system;
 /* cloud_user */ update test_table set col2='xxx' where col1=1;
 /* cloud_user */ delete from test_table where col1=3;
 
+/* cloud_user */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_user */ create role test_role;
 /* cloud_user */ create user user_name identified by 'password';
 /* cloud_user */ create database if not exists db1;
@@ -244,6 +237,7 @@ use system;
 /* cloud_nonuser */ use test_db;
 /* cloud_nonuser */ drop table if exists test_table;
 /* cloud_nonuser */ create table test_table(col1 int,col2 varchar);
+/* cloud_nonuser */ show create table test_table;
 /* cloud_nonuser */ create view test_view as select * from test_table;
 /* cloud_nonuser */ show create database test_db;
 /* cloud_nonuser */ show create table test_table;
@@ -260,12 +254,12 @@ use system;
 /* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
 /* cloud_nonuser */ show index from test_table;
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
-/* cloud_nonuser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+/* cloud_nonuser */ WITH cte1 AS (SELECT sleep(1)),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 
 /* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 /* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
 /* cloud_nonuser */ delete from test_table where col1=3;
-/* cloud_nonuser */ select sleep(1);
+/* cloud_nonuser */ explain select * from test_table;
 
 /* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_nonuser */ create role test_role;
@@ -292,19 +286,10 @@ use system;
 /* cloud_nonuser */ set @a=2;
 /* cloud_nonuser */ execute s1 using @a;
 /* cloud_nonuser */ deallocate prepare s1;
+/* cloud_nonuser */ truncate table test_table;
+/* cloud_nonuser */ drop table test_table;
 
-/* cloud_nonuser */ drop table if exists test_01;
-/* cloud_nonuser */ create table test_01(a int, b varchar);
-/* cloud_nonuser */ show create table test_01;
-/* cloud_nonuser */ insert into test_01 values (1,'a');
-/* cloud_nonuser */ insert into test_01 values (2,'b');
-/* cloud_nonuser */ update test_01 set a=100 where b='b';
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
-/* cloud_nonuser */ select * from test_01;
-/* cloud_nonuser */ explain select * from test_01;
-/* cloud_nonuser */ delete from test_01 where a=1;
-/* cloud_nonuser */ truncate table test_01;
-/* cloud_nonuser */ drop table test_01;
+/* cloud_nonuser */ select sleep(1), * from unnest('{"a":1}') as f;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
 
