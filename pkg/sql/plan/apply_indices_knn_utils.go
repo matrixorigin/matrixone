@@ -21,6 +21,7 @@ import (
 
 var (
 	varcharType = types.T_varchar.ToType()
+	float64Type = types.T_float64.ToType()
 )
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
@@ -56,7 +57,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 
 func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
-	metaTableScanId int32) (int32, error) {
+	metaTableScanId int32, fn *plan.Function) (int32, error) {
 
 	// 1. Scan version, centroid_id, centroid from centroids table
 	centroidsScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1],
@@ -85,20 +86,55 @@ func makeCentroidsCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		OnList:   []*Expr{joinCond},
 	}, bindCtx)
 
-	// 3. Project version, centroid_id, centroid, meta.value
+	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
+	NormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
+		{
+			Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["centroids.scan"],
+					ColPos: 2,
+				},
+			},
+		},
+	})
+	distFnName := fn.Func.ObjName
+	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
+		NormalizeL2Col, // normalize_l2(col)
+		fn.Args[1],     // literal
+	})
 	idxTags["centroids.project"] = builder.genNewTag()
 	projectCols := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{joinMetaAndCentroidsId},
-		ProjectList: []*Expr{scanCols[0], scanCols[1], scanCols[2]},
+		ProjectList: []*Expr{scanCols[0], scanCols[1], scanCols[2], l2DistanceLitNormalizeL2Col},
 		BindingTags: []int32{idxTags["centroids.project"]},
 	}, bindCtx)
 
-	return projectCols, nil
+	// 4. Sort by l2_distance(literal, normalize_l2(col)) limit 1
+	sortByL2DistanceId := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{projectCols},
+		Limit:    makePlan2Int64ConstExprWithType(1), //TODO: need to fix.
+		OrderBy: []*OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: makePlan2Type(&float64Type),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTags["centroids.project"],
+							ColPos: 3,
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_ASC, //TODO: need to fix.
+			},
+		},
+	}, bindCtx)
+
+	return sortByL2DistanceId, nil
 }
 
-// TODO: Add NormalizeL2
-// TODO: Check for condition that the index available is for vector_l2_ops
 // TODO: add LIMIT and OFFSET
 func makeEntriesCrossJoinMetaForCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,

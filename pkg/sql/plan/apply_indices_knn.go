@@ -127,8 +127,8 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 				for _, expr := range sortNode.OrderBy {
 
 					// 4.a.1 Skip Condition.
+					fn := expr.Expr.GetF()
 					{
-						fn := expr.Expr.GetF()
 						storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
 						if err != nil {
 							continue
@@ -171,10 +171,11 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 					builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 					// 4.c Create Centroids.Version == cast(MetaTable.Version)
+					//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit //TODO: @probe_limit = 1
 					metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
 						idxTableDefs, idxObjRefs, idxTags, "meta1")
 					centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1)
+						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1, fn)
 
 					// 4.d Create Entries.Version ==  cast(MetaTable.Version)
 					metaForCurrVersion2, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
@@ -182,16 +183,13 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
 						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion2)
 
-					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
-					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
-
 					centroidIdEqEntriesCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 						{
 							Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: idxTags["centroids.project"], // centroidsForCurrVersion
-									ColPos: 1,                            // centroids.centroid_id
+									RelPos: idxTags["centroids.project"],
+									ColPos: 1, // centroids.__mo_index_centroid_id
 								},
 							},
 						},
@@ -199,8 +197,8 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 							Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: idxTags["entries.project"], // entriesForCurrVersion
-									ColPos: 1,                          // entries.centroid_id_fk
+									RelPos: idxTags["entries.project"],
+									ColPos: 1, // entries.__mo_index_centroid_fk_id
 								},
 							},
 						},
@@ -208,7 +206,7 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 
 					joinEntriesAndCentroids := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
-						JoinType: plan.Node_INNER,
+						JoinType: plan.Node_SEMI,
 						Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
 						OnList:   []*Expr{centroidIdEqEntriesCentroidId},
 					}, builder.ctxByNode[nodeID])
@@ -245,8 +243,8 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 					}
 
 					return projectCols
-
 				}
+
 			}
 		}
 
@@ -279,15 +277,7 @@ func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindConte
 				},
 			},
 		},
-		{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 2,
-				},
-			},
-		},
-		//fn.Args[1],
+		fn.Args[1],
 	})
 
 	// 2.a OrderBy
