@@ -45,6 +45,9 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
+	case plan.Node_SORT:
+		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
+
 	default:
 		for i, childID := range node.Children {
 			node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)

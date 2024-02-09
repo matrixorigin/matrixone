@@ -19,43 +19,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func (builder *QueryBuilder) applyIndicesKNN(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-	node := builder.qry.Nodes[nodeID]
+// You replace Sort Node with a new Project Node
+func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
-	switch node.NodeType {
-	case plan.Node_SORT:
-		return builder.handleSort(nodeID, node, colRefCnt, idxColMap)
-
-	default:
-		for i, childID := range node.Children {
-			node.Children[i] = builder.applyIndicesKNN(childID, colRefCnt, idxColMap)
-		}
-
-		//TODO: watch out for this part.
-		replaceColumnsForNode(node, idxColMap)
-
-		return nodeID
-	}
-}
-
-func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-
-	// 1.a Skip condition one: if there are multiple order by columns
-	if len(sortNode.OrderBy) != 1 {
-		//TODO: this needs to be modified.
-		// There could be another column in order by which is reference by regular secondary index.
-		return nodeID
-	}
-
+	// 1. Find Sort and TableScan nodes
 	scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
-	if scanNode == nil {
+
+	// 2.a Skip condition: Only one order by column is allowed
+	if scanNode == nil || sortNode == nil || len(sortNode.OrderBy) != 1 {
 		return nodeID
 	}
-	indexes := scanNode.TableDef.Indexes
 
-	// 1.b Skip condition two: if there are no multi-table indexes
+	// 2.b Skip condition: if there are no multi-table indexes
 	multiTableIndexes := make(map[string]*MultiTableIndex)
-	for _, indexDef := range indexes {
+	for _, indexDef := range scanNode.TableDef.Indexes {
 		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
@@ -66,29 +43,51 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 	}
-
-	allowedFunctions := map[string]bool{
-		"l2_distance":     true,
-		"cosine_distance": true,
-		"inner_product":   true,
+	if len(multiTableIndexes) == 0 {
+		return nodeID
 	}
 
 	{
-		// 1.b Skip condition two: if there are no multi-table indexes
-		if len(multiTableIndexes) == 0 {
-			goto END0
+		distFuncOpTypes := map[string]string{
+			"l2_distance":     "vector_l2_ops",
+			"cosine_distance": "vector_ip_ops",
+			"inner_product":   "vector_cosine_ops",
 		}
-
-		// 1.c Skip condition three: if order by column is not an allowed function with one constant
-		colPos := int32(-1)
+		colPosOrderBy := int32(-1)
 		for _, expr := range sortNode.OrderBy {
-			fn := expr.Expr.GetF()
 
-			if fn == nil || !allowedFunctions[fn.Func.ObjName] {
+			// 2.c Skip condition: if the distance function in l2_distance, cosine_distance or inner_product
+			fn := expr.Expr.GetF()
+			if fn == nil {
+				goto END0
+			}
+			if _, ok := distFuncOpTypes[fn.Func.ObjName]; !ok {
 				goto END0
 			}
 
-			{ // 2.a swap order if l2_distance(const, col) is used
+			// 2.d Skip condition: if the distance function is not indexed in any of the multi-table IVFFLAT indexes
+			distanceFunctionIndexed := false
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+					if err != nil {
+						continue
+					}
+					storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
+					if !ok {
+						continue
+					}
+					if storedOpType == distFuncOpTypes[fn.Func.ObjName] {
+						distanceFunctionIndexed = true
+					}
+				}
+			}
+			if !distanceFunctionIndexed {
+				goto END0
+			}
+
+			{ // swap order if l2_distance(const, col) is provided by the user
 				if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 				}
@@ -98,14 +97,14 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 				}
 			}
 
-			col := fn.Args[0].GetCol()
-			if col == nil {
+			// 2.e Skip condition: if order by function is not of the form distFn(col, const)
+			if fn.Args[0].GetCol() == nil {
 				goto END0
 			}
-			colPos = col.ColPos
+			colPosOrderBy = fn.Args[0].GetCol().ColPos
 		}
 
-		// 2.a Check if all other columns are not referenced
+		// 3.a Check if all other columns are not referenced
 		//TODO: need to understand this part for Aungr
 		//for i := range scanNode.TableDef.Cols {
 		//	if i != int(colPos) && colRefCnt[[2]int32{scanNode.BindingTags[0], int32(i)}] > 0 {
@@ -114,10 +113,9 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 		//}
 		//colCnt := colRefCnt[[2]int32{scanNode.BindingTags[0], colPos}] - len(sortNode.OrderBy)
 
-		// 2.b Apply Index
 		for _, multiTableIndex := range multiTableIndexes {
 
-			// 2.b.1 Check if all index columns are referenced
+			// 3.b Check if all index columns are referenced
 			//if colCnt > 0 {
 			//	goto END0
 			//}
@@ -125,51 +123,64 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 
-				// 2.b.2 Check if index is single column and only column required in the final output
-				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPos {
-					continue
-				}
-
-				// 2.b.3 Create idxTags, idxObjRefs and idxTableDefs
-				var idxTags = make(map[string]int32)
-				var idxObjRefs = make([]*ObjectRef, 3)
-				var idxTableDefs = make([]*TableDef, 3)
-				idxTags["meta1.scan"] = builder.genNewTag()
-				idxTags["meta2.scan"] = builder.genNewTag()
-				idxTags["centroids.scan"] = builder.genNewTag()
-				idxTags["entries.scan"] = builder.genNewTag()
-				idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
-				idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-				idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
-
-				// 2.b.4 Register all the columns in the index
-				builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
-
-				builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
-
-				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
-				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
-				builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
-
-				// 2.b.5 Create Centroids.Version == cast(MetaTable.Version)
-				metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, "meta1")
-				centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1)
-
-				// 2.b.6 Create Entries.Version ==  cast(MetaTable.Version)
-				metaForCurrVersion2, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, "meta2")
-				entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
-					idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion2)
-
+				// 4.a Modify Order By to use the index
 				for _, expr := range sortNode.OrderBy {
+
+					// 4.a.1 Skip Condition.
+					{
+						fn := expr.Expr.GetF()
+						storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+						if err != nil {
+							continue
+						}
+						storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
+						if !ok {
+							continue
+						}
+						if storedOpType != distFuncOpTypes[fn.Func.ObjName] {
+							continue
+						}
+					}
+
+					// 4.a.2 Skip Condition.
+					idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+					if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
+						continue
+					}
+
+					// 4.b Create idxTags, idxObjRefs and idxTableDefs
+					var idxTags = make(map[string]int32)
+					var idxObjRefs = make([]*ObjectRef, 3)
+					var idxTableDefs = make([]*TableDef, 3)
+					idxTags["meta1.scan"] = builder.genNewTag()
+					idxTags["meta2.scan"] = builder.genNewTag()
+					idxTags["centroids.scan"] = builder.genNewTag()
+					idxTags["entries.scan"] = builder.genNewTag()
+					idxObjRefs[0], idxTableDefs[0] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+					idxObjRefs[1], idxTableDefs[1] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+					idxObjRefs[2], idxTableDefs[2] = builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+					builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+					builder.nameByColRef[[2]int32{idxTags["meta1.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+					builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 0}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[0].Name
+					builder.nameByColRef[[2]int32{idxTags["meta2.scan"], 1}] = idxTableDefs[0].Name + "." + idxTableDefs[0].Cols[1].Name
+					builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 0}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[0].Name
+					builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 1}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[1].Name
+					builder.nameByColRef[[2]int32{idxTags["centroids.scan"], 2}] = idxTableDefs[1].Name + "." + idxTableDefs[1].Cols[2].Name
+					builder.nameByColRef[[2]int32{idxTags["entries.scan"], 0}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[0].Name
+					builder.nameByColRef[[2]int32{idxTags["entries.scan"], 1}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[1].Name
+					builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
+
+					// 4.c Create Centroids.Version == cast(MetaTable.Version)
+					metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
+						idxTableDefs, idxObjRefs, idxTags, "meta1")
+					centroidsForCurrVersion, _ := makeCentroidsCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
+						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1)
+
+					// 4.d Create Entries.Version ==  cast(MetaTable.Version)
+					metaForCurrVersion2, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
+						idxTableDefs, idxObjRefs, idxTags, "meta2")
+					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
+						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion2)
 
 					//l2DistanceOrderBy, _ := makeCentroidsTblOrderByL2Distance(builder, builder.ctxByNode[nodeID], fn,
 					//	idxTableDefs, idxObjRefs, centroidsTblWithCurrVerId, fn.Func.ObjName, idxTag)
@@ -234,7 +245,7 @@ func (builder *QueryBuilder) handleSort(nodeID int32, sortNode *plan.Node, colRe
 							},
 						},
 					}
-					idxColMap[[2]int32{scanNode.BindingTags[0], colPos}] = idxColExpr
+					idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = idxColExpr
 					return projectCols
 
 				}
@@ -304,6 +315,25 @@ func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindConte
 	}, bindCtx)
 
 	return l2DistanceOrderBy, nil
+}
+
+func (builder *QueryBuilder) resolveSortAndTableScanForVectorIndex(node *plan.Node) (*plan.Node, *plan.Node) {
+	if node.NodeType == plan.Node_SORT {
+		if node.OrderBy != nil {
+			sortNode := node
+			tableScanNode := builder.resolveTableScanWithIndexFromChildren(node)
+			if tableScanNode != nil {
+				return sortNode, tableScanNode
+			}
+		}
+	}
+
+	for _, childID := range node.Children {
+		if sortNode, tableScanNode := builder.resolveSortAndTableScanForVectorIndex(builder.qry.Nodes[childID]); sortNode != nil && tableScanNode != nil {
+			return sortNode, tableScanNode
+		}
+	}
+	return nil, nil
 }
 
 func (builder *QueryBuilder) resolveTableScanWithIndexFromChildren(node *plan.Node) *plan.Node {

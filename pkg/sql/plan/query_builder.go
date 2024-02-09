@@ -1490,8 +1490,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
-		//rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
-		rootID = builder.applyIndicesKNN(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
