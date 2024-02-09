@@ -183,13 +183,24 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 					entriesForCurrVersion, _ := makeEntriesCrossJoinMetaForCurrVersion(builder, builder.ctxByNode[nodeID],
 						idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion2)
 
-					centroidIdEqEntriesCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+					// 4.e Create JOIN entries and centroids on centroid_id_fk == centroid_id
+					//     Project origin_pk
+					entriesJoinCentroids := makeEntriesJoinCentroids(builder, builder.ctxByNode[nodeID], idxTableDefs, idxTags,
+						entriesForCurrVersion, centroidsForCurrVersion)
+
+					// 4.f Create entries JOIN tbl on entries.original_pk == tbl.pk
+					//     Project tbl.*
+					var pkPos int32 = -1
+					if len(scanNode.TableDef.Pkey.Names) == 1 {
+						pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.Names[0]]
+					}
+					entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 						{
-							Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
+							Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: idxTags["centroids.project"],
-									ColPos: 1, // centroids.__mo_index_centroid_id
+									RelPos: idxTags["centroid_entries.project"],
+									ColPos: 0, // entries.origin_pk
 								},
 							},
 						},
@@ -197,36 +208,39 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 							Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: idxTags["entries.project"],
-									ColPos: 1, // entries.__mo_index_centroid_fk_id
+									RelPos: scanNode.BindingTags[0],
+									ColPos: pkPos, // tbl.pk
 								},
 							},
 						},
 					})
-
-					joinEntriesAndCentroids := builder.appendNode(&plan.Node{
+					entriesJoinTbl := builder.appendNode(&plan.Node{
 						NodeType: plan.Node_JOIN,
 						JoinType: plan.Node_SEMI,
-						Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
-						OnList:   []*Expr{centroidIdEqEntriesCentroidId},
+						Children: []int32{entriesJoinCentroids, scanNode.NodeId},
+						OnList:   []*Expr{entriesOriginPkEqTblPk},
 					}, builder.ctxByNode[nodeID])
 
-					idxTags["centroid_entries.project"] = builder.genNewTag()
-					projectCols := builder.appendNode(&plan.Node{
-						NodeType: plan.Node_PROJECT,
-						Children: []int32{joinEntriesAndCentroids},
-						ProjectList: []*Expr{
-							{
-								Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: idxTags["entries.project"], // entriesForCurrVersion
-										ColPos: 2,                          // entries.pk
-									},
+					var projectList []*Expr
+					for i, colDef := range scanNode.TableDef.Cols {
+						idxColExpr := &plan.Expr{
+							Typ: DeepCopyType(colDef.Typ),
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: scanNode.BindingTags[0],
+									ColPos: int32(i),
 								},
 							},
-						},
-						BindingTags: []int32{idxTags["centroid_entries.project"]},
+						}
+						projectList = append(projectList, idxColExpr)
+					}
+
+					idxTags["tbl_entries.project"] = builder.genNewTag()
+					projectTbl := builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_PROJECT,
+						Children:    []int32{entriesJoinTbl},
+						ProjectList: projectList,
+						BindingTags: []int32{idxTags["tbl_entries.project"]},
 					}, builder.ctxByNode[nodeID])
 
 					for i, colDef := range scanNode.TableDef.Cols {
@@ -234,7 +248,7 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 							Typ: DeepCopyType(colDef.Typ),
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
-									RelPos: idxTags["centroid_entries.project"],
+									RelPos: idxTags["tbl_entries.project"],
 									ColPos: int32(i),
 								},
 							},
@@ -242,7 +256,7 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 						idxColMap[[2]int32{scanNode.BindingTags[0], int32(i)}] = idxColExpr
 					}
 
-					return projectCols
+					return projectTbl
 				}
 
 			}
@@ -251,6 +265,57 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 	}
 END0:
 	return nodeID
+}
+
+func makeEntriesJoinCentroids(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
+	centroidIdEqEntriesCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{
+			Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["centroids.project"],
+					ColPos: 1, // centroids.__mo_index_centroid_id
+				},
+			},
+		},
+		{
+			Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.project"],
+					ColPos: 1, // entries.__mo_index_centroid_fk_id
+				},
+			},
+		},
+	})
+
+	// 1. Create JOIN entries and centroids on centroid_id_fk == centroid_id
+	joinEntriesAndCentroids := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_SEMI,
+		Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
+		OnList:   []*Expr{centroidIdEqEntriesCentroidId},
+	}, bindCtx)
+
+	// 2. Project entries.origin_pk
+	idxTags["centroid_entries.project"] = builder.genNewTag()
+	projectCols := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{joinEntriesAndCentroids},
+		ProjectList: []*Expr{
+			{
+				Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTags["entries.project"], // entriesForCurrVersion
+						ColPos: 2,                          // entries.pk
+					},
+				},
+			},
+		},
+		BindingTags: []int32{idxTags["centroid_entries.project"]},
+	}, bindCtx)
+	return projectCols
 }
 
 func makeCentroidsTblOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext, fn *plan.Function,
