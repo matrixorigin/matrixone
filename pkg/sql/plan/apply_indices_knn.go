@@ -231,11 +231,6 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 						BindingTags: []int32{idxTags["centroid_entries.project"]},
 					}, builder.ctxByNode[nodeID])
 
-					fn := expr.Expr.GetF()
-					col := fn.Args[0].GetCol()
-					col.RelPos = idxTags["centroid_entries.project"] //TODO: watch out for this part.
-					col.ColPos = 0
-
 					idxColExpr := &plan.Expr{
 						Typ: DeepCopyType(idxTableDefs[0].Cols[1].Typ),
 						Expr: &plan.Expr_Col{
@@ -245,7 +240,7 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 							},
 						},
 					}
-					idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = idxColExpr
+					idxColMap[[2]int32{scanNode.BindingTags[0], 0}] = idxColExpr
 					return projectCols
 
 				}
