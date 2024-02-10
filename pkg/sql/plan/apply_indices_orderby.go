@@ -284,21 +284,22 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	}, bindCtx)
 
 	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
-	normalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
-		{
-			Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["centroids.scan"],
-					ColPos: 2,
-				},
+	centroidsCol := &plan.Expr{
+		Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: idxTags["centroids.scan"],
+				ColPos: 2,
 			},
 		},
+	}
+	normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
+		distFnExpr.Args[1],
 	})
 	distFnName := distFnExpr.Func.ObjName
 	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
-		normalizeL2Col,     // normalize_l2(col)
-		distFnExpr.Args[1], // literal
+		centroidsCol,   // centroid
+		normalizeL2Lit, // normalize_l2(literal)
 	})
 	idxTags["centroids.project"] = builder.genNewTag()
 	projectCols := builder.appendNode(&plan.Node{
@@ -325,7 +326,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{projectCols},
-		Limit:    makePlan2Int64ConstExprWithType(1), //TODO: need to fix.
+		Limit:    makePlan2Int64ConstExprWithType(32), //TODO: need to fix.
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: &plan.Expr{
@@ -468,10 +469,13 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 			},
 		},
 	})
+	normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
+		fn.Args[1],
+	})
 	distFnName := fn.Func.ObjName
 	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		normalizeL2Col, // normalize_l2(col)
-		fn.Args[1],     // literal
+		normalizeL2Lit, // normalize_l2(lit)
 	})
 	sortTblByL2Distance := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
