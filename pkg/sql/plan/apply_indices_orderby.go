@@ -33,6 +33,8 @@ var (
 func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	// 1. Vector Index Check
+	// Handle Queries like
+	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
 	{
 		scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
 
