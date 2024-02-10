@@ -58,9 +58,17 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 		} else if _, ok := expr.Expr.(*plan.Expr_V); ok {
+			// SELECT IFNULL(CAST(@var AS BIGINT), 1)
+			//TODO: need to see how to implement the ifnull in BindFuncExprImplByPlanExpr
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			//castExpr, err := appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			//if err != nil {
+			//	return nil, err
+			//}
+			//return BindFuncExprImplByPlanExpr(b.GetContext(), "ifnull",
+			//	[]*plan.Expr{castExpr, makePlan2Int64ConstExprWithType(1)})
 		} else {
 			return nil, moerr.NewSyntaxError(b.GetContext(), "only int64 support in limit/offset clause")
 		}
