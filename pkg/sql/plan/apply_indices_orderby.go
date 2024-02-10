@@ -27,6 +27,7 @@ var (
 		"inner_product":   "vector_cosine_ops",
 	}
 	float64Type = types.T_float64.ToType() // return type of distance functions
+	int64Type   = types.T_int64.ToType()   // return type of probe limit
 )
 
 func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -307,7 +308,20 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		BindingTags: []int32{idxTags["centroids.project"]},
 	}, bindCtx)
 
-	// 4. Sort by l2_distance(normalize_l2(col), literal) limit 1
+	// 4. Sort by l2_distance(normalize_l2(col), literal) limit @probe_limit
+	//probeLimitValueExpr := &plan.Expr{
+	//	Typ: makePlan2Type(&int64Type),
+	//	Expr: &plan.Expr_V{
+	//		V: &plan.VarRef{
+	//			Name:   "probe_limit",
+	//			Global: false,
+	//			System: false,
+	//		},
+	//	},
+	//}
+	//targetType := types.T_int64.ToType()
+	//planTargetType := makePlan2Type(&targetType)
+	//castProbeLimitExpr, _ := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, planTargetType)
 	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{projectCols},
@@ -323,7 +337,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 						},
 					},
 				},
-				Flag: sortDirection, //TODO: need to fix.
+				Flag: sortDirection,
 			},
 		},
 	}, bindCtx)
