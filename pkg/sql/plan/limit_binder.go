@@ -32,7 +32,7 @@ func NewLimitBinder(builder *QueryBuilder, ctx *BindContext) *LimitBinder {
 
 func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	switch astExpr.(type) {
-	case *tree.VarExpr, *tree.UnqualifiedStar:
+	case *tree.UnqualifiedStar:
 		// need check other expr
 		return nil, moerr.NewSyntaxError(b.GetContext(), "unsupported expr in limit clause")
 	}
@@ -54,6 +54,10 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 		} else if _, ok := expr.Expr.(*plan.Expr_P); ok {
+			targetType := types.T_int64.ToType()
+			planTargetType := makePlan2Type(&targetType)
+			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+		} else if _, ok := expr.Expr.(*plan.Expr_V); ok {
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
