@@ -458,7 +458,8 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
 	scanNode, sortNode *plan.Node, colPosOrderBy int32, fn *plan.Function, projectTbl int32,
 	sortDirection plan.OrderBySpec_OrderByFlag) int32 {
-	normalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
+	distFnName := fn.Func.ObjName
+	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
 			Typ: DeepCopyType(scanNode.TableDef.Cols[colPosOrderBy].Typ),
 			Expr: &plan.Expr_Col{
@@ -467,15 +468,8 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 					ColPos: colPosOrderBy,
 				},
 			},
-		},
-	})
-	normalizeL2Lit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
-		fn.Args[1],
-	})
-	distFnName := fn.Func.ObjName
-	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
-		normalizeL2Col, // normalize_l2(col)
-		normalizeL2Lit, // normalize_l2(lit)
+		}, // vector col
+		fn.Args[1], // lit
 	})
 	sortTblByL2Distance := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
@@ -483,7 +477,7 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 		Limit:    sortNode.Limit,
 		OrderBy: []*OrderBySpec{
 			{
-				Expr: l2DistanceLitNormalizeL2Col,
+				Expr: l2DistanceColLit,
 				Flag: sortDirection,
 			},
 		},
