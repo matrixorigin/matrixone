@@ -134,6 +134,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	colPosOrderBy int32) int32 {
 
 	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 
 	// 1.a if any of the other columns in the table are referenced, skip
 	for i := range scanNode.TableDef.Cols {
@@ -175,7 +176,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
 		idxTableDefs, idxObjRefs, idxTags, "meta1")
 	centroidsForCurrVersion, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder,
-		builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1, distFnExpr)
+		builder.ctxByNode[nodeID], idxTableDefs, idxObjRefs, idxTags, metaForCurrVersion1, distFnExpr, sortDirection)
 
 	// 2.c Create Entries.Version ==  cast(MetaTable.Version)
 	metaForCurrVersion2, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
@@ -196,7 +197,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 
 	// 2.f Sort By l2_distance(vector_col, normalize_l2(literal)) ASC limit original_limit
 	sortTblByL2Distance := makeTblOrderByL2DistNormalizeL2(builder, builder.ctxByNode[nodeID],
-		scanNode, sortNode, colPosOrderBy, distFnExpr, projectTbl)
+		scanNode, sortNode, colPosOrderBy, distFnExpr, projectTbl, sortDirection)
 
 	return sortTblByL2Distance
 
@@ -252,7 +253,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 
 func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32,
-	metaTableScanId int32, fn *plan.Function) (int32, error) {
+	metaTableScanId int32, distFnExpr *plan.Function, sortDirection plan.OrderBySpec_OrderByFlag) (int32, error) {
 
 	// 1. Scan version, centroid_id, centroid from centroids table
 	centroidsScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1],
@@ -293,10 +294,10 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 			},
 		},
 	})
-	distFnName := fn.Func.ObjName
+	distFnName := distFnExpr.Func.ObjName
 	l2DistanceLitNormalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
-		normalizeL2Col, // normalize_l2(col)
-		fn.Args[1],     // literal
+		normalizeL2Col,     // normalize_l2(col)
+		distFnExpr.Args[1], // literal
 	})
 	idxTags["centroids.project"] = builder.genNewTag()
 	projectCols := builder.appendNode(&plan.Node{
@@ -322,7 +323,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 						},
 					},
 				},
-				Flag: plan.OrderBySpec_ASC, //TODO: need to fix.
+				Flag: sortDirection, //TODO: need to fix.
 			},
 		},
 	}, bindCtx)
@@ -440,7 +441,8 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 }
 
 func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
-	scanNode, sortNode *plan.Node, colPosOrderBy int32, fn *plan.Function, projectTbl int32) int32 {
+	scanNode, sortNode *plan.Node, colPosOrderBy int32, fn *plan.Function, projectTbl int32,
+	sortDirection plan.OrderBySpec_OrderByFlag) int32 {
 	normalizeL2Col, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*plan.Expr{
 		{
 			Typ: DeepCopyType(scanNode.TableDef.Cols[colPosOrderBy].Typ),
@@ -464,7 +466,7 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: l2DistanceLitNormalizeL2Col,
-				Flag: plan.OrderBySpec_ASC,
+				Flag: sortDirection,
 			},
 		},
 	}, bindCtx)
