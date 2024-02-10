@@ -143,10 +143,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	}
 
 	// 1.b Check the order by column has refCount > len(sortNode.OrderBy)
-	//colCntOrderBy := colRefCnt[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] - len(sortNode.OrderBy)
-	//if colCntOrderBy > 0 {
-	//	goto END0
-	//}
+	colCntOrderBy := colRefCnt[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] - len(sortNode.OrderBy)
+	if colCntOrderBy > 0 {
+		//goto END0 //TODO: need to understand this part for Aungr
+	}
 
 	// 2.a  idxTags, idxObjRefs and idxTableDefs
 	var idxTags = make(map[string]int32)
@@ -171,7 +171,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	builder.nameByColRef[[2]int32{idxTags["entries.scan"], 2}] = idxTableDefs[2].Name + "." + idxTableDefs[2].Cols[2].Name
 
 	// 2.b Create Centroids.Version == cast(MetaTable.Version)
-	//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit //TODO: @probe_limit = 1
+	//     Order By L2 Distance(centroids,	input_literal) ASC limit @probe_limit
 	metaForCurrVersion1, _ := makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder, builder.ctxByNode[nodeID],
 		idxTableDefs, idxObjRefs, idxTags, "meta1")
 	centroidsForCurrVersion, _ := makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder,
@@ -306,8 +306,8 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		BindingTags: []int32{idxTags["centroids.project"]},
 	}, bindCtx)
 
-	// 4. Sort by l2_distance(literal, normalize_l2(col)) limit 1
-	sortByL2DistanceId := builder.appendNode(&plan.Node{
+	// 4. Sort by l2_distance(normalize_l2(col), literal) limit 1
+	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{projectCols},
 		Limit:    makePlan2Int64ConstExprWithType(1), //TODO: need to fix.
@@ -327,7 +327,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		},
 	}, bindCtx)
 
-	return sortByL2DistanceId, nil
+	return sortCentroidsByL2DistanceId, nil
 }
 
 func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindContext,
