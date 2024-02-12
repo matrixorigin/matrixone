@@ -58,11 +58,33 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 		} else if _, ok := expr.Expr.(*plan.Expr_V); ok {
-			// SELECT IFNULL(CAST(@var AS BIGINT), 1)
-			//TODO: need to see how to implement the ifnull in BindFuncExprImplByPlanExpr
+			// SELECT IFNULL(CAST(@var AS BIGINT), 1) => CASE( ISNULL(@var), 1, CAST(@var AS BIGINT))
+
+			//ISNULL(@var)
+			arg0, err := BindFuncExprImplByPlanExpr(b.GetContext(), "isnull", []*plan.Expr{
+				expr,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			// CAST( 1 AS BIGINT)
+			arg1 := makePlan2Int64ConstExprWithType(1)
+
+			// CAST(@var AS BIGINT)
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
-			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			arg2, err := appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			if err != nil {
+				return nil, err
+			}
+
+			return BindFuncExprImplByPlanExpr(b.GetContext(), "case", []*plan.Expr{
+				arg0,
+				arg1,
+				arg2,
+			})
+
 			//castExpr, err := appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 			//if err != nil {
 			//	return nil, err

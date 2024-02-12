@@ -313,6 +313,8 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	}, bindCtx)
 
 	// 4. Sort by l2_distance(normalize_l2(col), literal) limit @probe_limit
+
+	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
 		Typ: makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
@@ -323,14 +325,39 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 			},
 		},
 	}
-	castProbeLimitExpr, err := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, makePlan2Type(&int64Type))
+
+	//4.2 ISNULL(@var)
+	arg0, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{
+		probeLimitValueExpr,
+	})
 	if err != nil {
 		return -1, err
 	}
+
+	// 4.3 CAST( 1 AS BIGINT)
+	arg1 := makePlan2Int64ConstExprWithType(1)
+
+	// 4.4 CAST(@var AS BIGINT)
+	targetType := types.T_int64.ToType()
+	planTargetType := makePlan2Type(&targetType)
+	arg2, err := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, planTargetType)
+	if err != nil {
+		return -1, err
+	}
+
+	ifNullLimitExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+		arg0,
+		arg1,
+		arg2,
+	})
+	if err != nil {
+		return -1, err
+	}
+
 	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{projectCols},
-		Limit:    castProbeLimitExpr,
+		Limit:    ifNullLimitExpr,
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: &plan.Expr{
