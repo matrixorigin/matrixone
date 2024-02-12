@@ -27,7 +27,8 @@ var (
 		"inner_product":   "vector_cosine_ops",
 	}
 	float64Type = types.T_float64.ToType() // return type of distance functions
-	int64Type   = types.T_int64.ToType()   // return type of probe limit
+	int64Type   = types.T_int64.ToType()   // return type of system variables
+	textType    = types.T_text.ToType()    // return type of @probe_limit
 )
 
 func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -312,23 +313,24 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	}, bindCtx)
 
 	// 4. Sort by l2_distance(normalize_l2(col), literal) limit @probe_limit
-	//probeLimitValueExpr := &plan.Expr{
-	//	Typ: makePlan2Type(&int64Type),
-	//	Expr: &plan.Expr_V{
-	//		V: &plan.VarRef{
-	//			Name:   "probe_limit",
-	//			Global: false,
-	//			System: false,
-	//		},
-	//	},
-	//}
-	//targetType := types.T_int64.ToType()
-	//planTargetType := makePlan2Type(&targetType)
-	//castProbeLimitExpr, _ := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, planTargetType)
+	probeLimitValueExpr := &plan.Expr{
+		Typ: makePlan2Type(&textType), // T_text
+		Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name:   "probe_limit",
+				Global: false,
+				System: false,
+			},
+		},
+	}
+	castProbeLimitExpr, err := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, makePlan2Type(&int64Type))
+	if err != nil {
+		return -1, err
+	}
 	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{projectCols},
-		Limit:    makePlan2Int64ConstExprWithType(32), //TODO: need to fix.
+		Limit:    castProbeLimitExpr,
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: &plan.Expr{
