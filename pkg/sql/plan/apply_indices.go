@@ -126,7 +126,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 		for _, idxDef := range indexes {
 			if !idxDef.Unique && colCnt > 0 {
-				//goto END0
+				goto END0
 			}
 
 			if !idxDef.TableExist {
@@ -225,9 +225,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	}
 
 END0:
-	//if node.Stats.Selectivity > 0.05 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
-	//	return nodeID
-	//}
+	if node.Stats.Selectivity > 0.05 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
+		return nodeID
+	}
 
 	// Apply unique/secondary indices for point select
 
