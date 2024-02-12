@@ -146,6 +146,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 			//goto END0 //TODO: need to understand this part for Aungr
 		}
 	}
+	//TODO: selectivity rule.
 
 	// 1.b Check the order by column has refCount > len(sortNode.OrderBy)
 	colCntOrderBy := colRefCnt[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] - len(sortNode.OrderBy)
