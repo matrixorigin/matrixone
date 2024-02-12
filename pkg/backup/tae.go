@@ -19,18 +19,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-<<<<<<< HEAD
-=======
 	"io"
->>>>>>> upstream/main
 	"os"
 	"path"
 	"strconv"
 	"strings"
-<<<<<<< HEAD
-=======
 	"time"
->>>>>>> upstream/main
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
