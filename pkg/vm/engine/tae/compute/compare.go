@@ -60,6 +60,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	switch t {
 	case types.T_bool:
 		return CompareBool(types.DecodeBool(a), types.DecodeBool(b))
+	case types.T_bit:
+		return CompareOrdered(types.DecodeUint64(a), types.DecodeUint64(b))
 	case types.T_int8:
 		return CompareOrdered(types.DecodeInt8(a), types.DecodeInt8(b))
 	case types.T_int16:
@@ -121,6 +123,8 @@ func CompareGeneric(a, b any, t types.T) int {
 	switch t {
 	case types.T_bool:
 		return CompareBool(a.(bool), b.(bool))
+	case types.T_bit:
+		return CompareOrdered(a.(uint64), b.(uint64))
 	case types.T_int8:
 		return CompareOrdered(a.(int8), b.(int8))
 	case types.T_int16:
