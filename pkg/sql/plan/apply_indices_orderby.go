@@ -90,7 +90,6 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 		distanceFunctionIndexed := false
 		var multiTableIndexWithSortDistFn *MultiTableIndex
 		for _, multiTableIndex := range multiTableIndexes {
-			idxFound := false
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
@@ -112,10 +111,9 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
 					distanceFunctionIndexed = true
 					multiTableIndexWithSortDistFn = multiTableIndex
-					idxFound = true
 				}
 			}
-			if idxFound {
+			if distanceFunctionIndexed {
 				break
 			}
 		}
