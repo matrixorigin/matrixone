@@ -27,7 +27,6 @@ var (
 		"inner_product":   "vector_cosine_ops",
 	}
 	float64Type = types.T_float64.ToType() // return type of distance functions
-	int64Type   = types.T_int64.ToType()   // return type of system variables
 	textType    = types.T_text.ToType()    // return type of @probe_limit
 )
 
@@ -91,6 +90,7 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 		distanceFunctionIndexed := false
 		var multiTableIndexWithSortDistFn *MultiTableIndex
 		for _, multiTableIndex := range multiTableIndexes {
+			idxFound := false
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
@@ -112,8 +112,11 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
 					distanceFunctionIndexed = true
 					multiTableIndexWithSortDistFn = multiTableIndex
-					break
+					idxFound = true
 				}
+			}
+			if idxFound {
+				break
 			}
 		}
 		if !distanceFunctionIndexed {
@@ -141,18 +144,18 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 
 	// 1.a if any of the other columns in the table are referenced, skip
-	for i := range scanNode.TableDef.Cols {
-		if i != int(colPosOrderBy) && colRefCnt[[2]int32{scanNode.BindingTags[0], int32(i)}] > 0 {
-			//goto END0 //TODO: need to understand this part for Aungr
-		}
-	}
+	//for i := range scanNode.TableDef.Cols {
+	//	if i != int(colPosOrderBy) && colRefCnt[[2]int32{scanNode.BindingTags[0], int32(i)}] > 0 {
+	//		goto END0 //TODO: need to understand this part for Aungr
+	//	}
+	//}
 	//TODO: selectivity rule.
 
 	// 1.b Check the order by column has refCount > len(sortNode.OrderBy)
-	colCntOrderBy := colRefCnt[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] - len(sortNode.OrderBy)
-	if colCntOrderBy > 0 {
-		//goto END0 //TODO: need to understand this part for Aungr
-	}
+	//colCntOrderBy := colRefCnt[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] - len(sortNode.OrderBy)
+	//if colCntOrderBy > 0 {
+	//	//goto END0 //TODO: need to understand this part for Aungr
+	//}
 
 	// 2.a  idxTags, idxObjRefs and idxTableDefs
 	var idxTags = make(map[string]int32)
@@ -246,6 +249,9 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	// 3. Project value column as BigInt
 	idxTags[prefix+".project"] = builder.genNewTag()
 	castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanCols[1], makePlan2Type(&bigIntType))
+	if err != nil {
+		return -1, err
+	}
 	metaProjectId := builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{metaFilterId},
