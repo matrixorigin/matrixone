@@ -1004,19 +1004,25 @@ func (h *Handle) HandleWrite(
 				return err
 			}
 			var ok bool
-			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			var vectors []containers.Vector
+			var closeFunc func()
+			//Extend lifetime of vectors is within the function.
+			//No NeedCopy. closeFunc is required after use.
+			//closeFunc is not nil.
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				false,
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			defer closeFunc()
+			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {
 				for blkID := range blkids {
@@ -1033,9 +1039,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
+			rowIDVec := vectors[0]
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
+			pkVec := vectors[1]
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return

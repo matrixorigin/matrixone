@@ -86,7 +86,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
-	if typ == INSERT {
+	if typ == INSERT || typ == INSERT_TXN {
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.RowCount()
@@ -153,6 +153,9 @@ func checkPKDup(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)
@@ -269,7 +272,7 @@ func (txn *Transaction) checkDup() error {
 		if e.fileName != "" {
 			continue
 		}
-		if (e.typ == DELETE || e.typ == UPDATE) &&
+		if (e.typ == DELETE || e.typ == DELETE_TXN || e.typ == UPDATE) &&
 			e.databaseId == catalog.MO_DATABASE_ID &&
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
@@ -278,7 +281,7 @@ func (txn *Transaction) checkDup() error {
 		if _, ok := txn.deletedTableMap.Load(tableKey); ok {
 			continue
 		}
-		if e.typ == INSERT {
+		if e.typ == INSERT || e.typ == INSERT_TXN {
 			if _, ok := tablesDef[e.tableId]; !ok {
 				tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
 				if err != nil {
@@ -328,7 +331,7 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
-		if e.typ == DELETE {
+		if e.typ == DELETE || e.typ == DELETE_TXN {
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
@@ -354,7 +357,25 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-
+	if offset > 0 {
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				continue
+			}
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				continue
+			}
+			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+				size += uint64(txn.writes[i].bat.Size())
+			}
+		}
+		if size < WorkspaceThreshold {
+			return nil
+		}
+		size = 0
+	}
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 
@@ -615,6 +636,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
+	//Delete rows belongs to uncommitted raw data batch in txn's workspace.
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 	sels = sels[:0]
 	for k, rowid := range rowids {
@@ -622,6 +644,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			sels = append(sels, int64(k))
 		}
 	}
+	//Shrink the batch to retain sels.
 	bat.Shrink(sels)
 	txn.proc.Mp().PutSels(sels)
 	return bat
@@ -719,7 +742,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[tableKey]map[objectio.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -732,14 +755,14 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				dbName:    pos.dbName,
 				name:      pos.tbName,
 			}]; ok {
-				v[pos.blkInfo] = offsets
+				v[pos.blkInfo.MetaLoc] = offsets
 			} else {
 				compactedBlks[tableKey{
 					accountId: pos.accountId,
 					dbName:    pos.dbName,
 					name:      pos.tbName,
 				}] =
-					map[objectio.BlockInfo][]int64{pos.blkInfo: offsets}
+					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
 			delete(txn.cnBlkId_Pos, *blkId)
@@ -808,6 +831,11 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
 		if entry.typ != INSERT ||
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
@@ -842,13 +870,20 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
-		statsList = append(statsList, stats)
-
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			statsList = append(statsList, stats)
+		}
 	}
 	return statsList, nil
 
@@ -979,6 +1014,13 @@ func (txn *Transaction) rollbackCreateTableLocked() {
 		if value.(*txnTable).createByStatementID == txn.statementID {
 			txn.createMap.Delete(key)
 		}
+		return true
+	})
+}
+
+func (txn *Transaction) clearTableCache() {
+	txn.tableCache.tableMap.Range(func(key, value any) bool {
+		txn.tableCache.tableMap.Delete(key)
 		return true
 	})
 }

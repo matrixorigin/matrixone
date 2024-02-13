@@ -65,6 +65,17 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 				vec.Append(false, false)
 			}
 		}
+	case types.T_bit:
+		if unique {
+			for i := 0; i < rows; i++ {
+				vec.Append(uint64(i), false)
+			}
+		} else {
+			for i := 0; i < rows; i++ {
+				ival := rand.Int63()
+				vec.Append(uint64(ival), false)
+			}
+		}
 	case types.T_int8:
 		if unique {
 			if int(rows) >= math.MaxInt8-math.MinInt8 {
@@ -250,6 +261,10 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 			} else {
 				vec.Append(false, false)
 			}
+		}
+	case types.T_bit:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint64(i+offset), false)
 		}
 	case types.T_int8:
 		for i := 0; i < rows; i++ {

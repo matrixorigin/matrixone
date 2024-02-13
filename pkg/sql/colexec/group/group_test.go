@@ -112,7 +112,7 @@ func TestGroup(t *testing.T) {
 		require.NoError(t, err)
 
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -138,7 +138,7 @@ func BenchmarkGroup(b *testing.B) {
 			require.NoError(t, err)
 
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.children[0].Free(tc.proc, false, nil)
+			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 			tc.proc.FreeVectors()
 		}
 	}
@@ -162,10 +162,12 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			Exprs: exprs,
 			Types: ts,
 			Aggs:  aggs,
-			info: &vm.OperatorInfo{
-				Idx:     1,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -188,16 +190,18 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
+	if arg.NumChildren() == 0 {
 		arg.AppendChild(&value_scan.Argument{
 			Batchs: bats,
 		})
 
 	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
+		arg.SetChildren(
+			[]vm.Operator{
+				&value_scan.Argument{
+					Batchs: bats,
+				},
+			})
 	}
 	arg.ctr.state = vm.Build
 }

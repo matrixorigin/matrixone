@@ -297,7 +297,8 @@ type storageUsageHistoryArg struct {
 		accounts     map[uint64]struct{}
 	}
 
-	transfer bool
+	transfer        bool
+	eliminateErrors bool
 }
 
 func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
@@ -312,6 +313,7 @@ func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
 	// storage usage details in ckp
 	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
 	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	storageUsageCmd.Flags().StringP("eliminate_errors", "e", "", "format: *")
 	return storageUsageCmd
 }
 
@@ -353,6 +355,15 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 		}
 	}
 
+	expr, _ = cmd.Flags().GetString("eliminate_errors")
+	if expr != "" {
+		if expr == "*" {
+			c.eliminateErrors = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -e *` expected")
+		}
+	}
+
 	return nil
 }
 
@@ -362,7 +373,9 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 	} else if c.trace != nil {
 		return storageTrace(c)
 	} else if c.transfer {
-		return storageTransfer(c)
+		return storageUsageTransfer(c)
+	} else if c.eliminateErrors {
+		return storageUsageEliminateErrors(c)
 	}
 	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
 }
@@ -1149,7 +1162,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	return nil
 }
 
-func storageTransfer(c *storageUsageHistoryArg) (err error) {
+func storageUsageTransfer(c *storageUsageHistoryArg) (err error) {
 	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
 	if err != nil {
 		return err
@@ -1157,4 +1170,12 @@ func storageTransfer(c *storageUsageHistoryArg) (err error) {
 
 	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
 	return
+}
+
+func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
+	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog)
+
+	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+
+	return nil
 }

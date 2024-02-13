@@ -34,12 +34,13 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu   int
-	Id     string `json:"id"`
-	Addr   string `json:"address"`
-	Header objectio.InfoHeader
-	Data   []byte   `json:"payload"`
-	Rel    Relation // local relation
+	Mcpu             int
+	Id               string `json:"id"`
+	Addr             string `json:"address"`
+	Header           objectio.InfoHeader
+	Data             []byte   `json:"payload"`
+	Rel              Relation // local relation
+	NeedExpandRanges bool
 }
 
 // Attribute is a column
@@ -618,6 +619,9 @@ type Relation interface {
 
 	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
 
+	// Support renaming tables within explicit transactions (CN worspace)
+	TableRenameInTxn(ctx context.Context, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
 
 	// GetTableName returns the name of the table.
@@ -626,7 +630,7 @@ type Relation interface {
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
-	NewReader(context.Context, int, *plan.Expr, []byte) ([]Reader, error)
+	NewReader(context.Context, int, *plan.Expr, []byte, bool) ([]Reader, error)
 
 	TableColumns(ctx context.Context) ([]*Attribute, error)
 
@@ -646,6 +650,9 @@ type Relation interface {
 type Reader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
+	SetOrderBy([]*plan.OrderBySpec)
+	GetOrderBy() []*plan.OrderBySpec
+	SetFilterZM(objectio.ZoneMap)
 }
 
 type Database interface {

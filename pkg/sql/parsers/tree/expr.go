@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // AST for the expression
@@ -1662,6 +1663,8 @@ func (node *MaxValue) Accept(v Visitor) (Expr, bool) {
 type SampleExpr struct {
 	// rows or percent.
 	typ sampleType
+	// sample level.
+	level sampleLevel
 
 	// N or K
 	n int
@@ -1711,25 +1714,38 @@ func (s SampleExpr) GetColumns() (columns Exprs, isStar bool) {
 	return s.columns, s.isStar
 }
 
-func (s SampleExpr) GetSampleDetail() (isSampleRows bool, n int32, k float64) {
-	return s.typ == SampleRows, int32(s.n), s.k
+func (s SampleExpr) GetSampleDetail() (isSampleRows bool, usingRow bool, n int32, k float64) {
+	return s.typ == SampleRows, s.level == SampleUsingRow, int32(s.n), s.k
 }
 
 type sampleType int
+type sampleLevel int
 
 const (
 	SampleRows    sampleType = 0
 	SamplePercent sampleType = 1
+
+	SampleUsingBlock sampleLevel = 0
+	SampleUsingRow   sampleLevel = 1
 )
 
-func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs) (*SampleExpr, error) {
-	return &SampleExpr{
+func NewSampleRowsFuncExpression(number int, isStar bool, columns Exprs, sampleUnit string) (*SampleExpr, error) {
+	e := &SampleExpr{
 		typ:     SampleRows,
 		n:       number,
 		k:       0,
 		isStar:  isStar,
 		columns: columns,
-	}, nil
+	}
+	if len(sampleUnit) == 5 && strings.ToLower(sampleUnit) == "block" {
+		e.level = SampleUsingBlock
+		return e, nil
+	}
+	if len(sampleUnit) == 3 && strings.ToLower(sampleUnit) == "row" {
+		e.level = SampleUsingRow
+		return e, nil
+	}
+	return e, moerr.NewInternalErrorNoCtx("sample(expr, N rows, unit) only support unit 'block' or 'row'")
 }
 
 func NewSamplePercentFuncExpression1(percent int64, isStar bool, columns Exprs) (*SampleExpr, error) {

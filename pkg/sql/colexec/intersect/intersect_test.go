@@ -119,7 +119,7 @@ func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*ba
 		}
 	}
 	arg := new(Argument)
-	arg.info = &vm.OperatorInfo{
+	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 		Idx:     0,
 		IsFirst: false,
 		IsLast:  false,

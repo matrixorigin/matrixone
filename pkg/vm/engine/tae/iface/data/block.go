@@ -135,6 +135,7 @@ type Block interface {
 	GCInMemeoryDeletesByTS(types.TS)
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
+	CollectDeleteInRangeAfterDeltalocation(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

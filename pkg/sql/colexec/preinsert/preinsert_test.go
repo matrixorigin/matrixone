@@ -84,10 +84,12 @@ func TestPreInsertNormal(t *testing.T) {
 		Attrs:      []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		IsUpdate:   false,
 		HasAutoCol: false,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 	checkResultBat, _ := batch1.Dup(proc.Mp())
@@ -156,10 +158,12 @@ func TestPreInsertNullCheck(t *testing.T) {
 				PkeyColName: "int64_column_primary",
 			},
 		},
-		info: &vm.OperatorInfo{
-			Idx:     1,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     1,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 	resetChildren(&argument2, batch2)
@@ -168,15 +172,10 @@ func TestPreInsertNullCheck(t *testing.T) {
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }
