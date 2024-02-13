@@ -208,6 +208,7 @@ type server struct {
 // NewServer create a lockservice server. One LockService corresponds to one Server
 func NewServer(
 	address string,
+	serviceAddress string,
 	cfg morpc.Config,
 	opts ...ServerOption) (Server, error) {
 	s := &server{
@@ -229,7 +230,8 @@ func NewServer(
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
 		releaseResponse,
-		morpc.WithServerDisableAutoCancelContext())
+		morpc.WithServerDisableAutoCancelContext(),
+		morpc.WithServerRegisterLocal(serviceAddress))
 	if err != nil {
 		return nil, err
 	}
@@ -286,9 +288,7 @@ func (s *server) onMessage(
 			getLogger().Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
-		if msg.Cancel != nil {
-			msg.Cancel()
-		}
+		msg.Cancel()
 		releaseRequest(req)
 		return nil
 	}

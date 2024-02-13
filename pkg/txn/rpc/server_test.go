@@ -182,7 +182,9 @@ func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts 
 	opts = append(opts,
 		WithServerQueueBufferSize(100),
 		WithServerQueueWorkers(2))
-	s, err := NewTxnServer(addr,
+	s, err := NewTxnServer(
+		addr,
+		"",
 		newTestRuntime(clock.NewHLCClock(func() int64 { return 0 }, 0), logutil.GetPanicLogger()),
 		opts...)
 	assert.NoError(t, err)
@@ -244,10 +246,7 @@ func newTestRuntime(clock clock.Clock, logger *zap.Logger) runtime.Runtime {
 }
 
 func newMessage(req morpc.Message) morpc.RPCMessage {
-	ctx, cancel := context.WithCancel(context.Background())
 	return morpc.RPCMessage{
-		Ctx:     ctx,
-		Cancel:  cancel,
 		Message: req,
 	}
 }

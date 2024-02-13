@@ -525,6 +525,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
 	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	s.cfg.LockService.ServiceAddress = s.lockServiceServiceAddr()
 	return s.cfg.LockService
 }
 

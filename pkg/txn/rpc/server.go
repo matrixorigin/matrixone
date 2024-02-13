@@ -110,6 +110,7 @@ type server struct {
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
 func NewTxnServer(
 	address string,
+	serviceAddress string,
 	rt runtime.Runtime,
 	opts ...ServerOption) (TxnServer, error) {
 	s := &server{
@@ -149,6 +150,7 @@ func NewTxnServer(
 		morpc.NewMessageCodec(s.acquireRequest, codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
 		morpc.WithServerDisableAutoCancelContext(),
+		morpc.WithServerRegisterLocal(serviceAddress),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
 			if !m.InternalMessage() {
@@ -289,8 +291,10 @@ type executor struct {
 }
 
 func (r executor) exec() ([]byte, error) {
-	defer r.cancel()
-	defer r.s.releaseRequest(r.req)
+	defer func() {
+		r.s.releaseRequest(r.req)
+		r.cancel()
+	}()
 	resp := r.s.acquireResponse()
 	if err := r.handler(r.ctx, r.req, resp); err != nil {
 		r.s.releaseResponse(resp)

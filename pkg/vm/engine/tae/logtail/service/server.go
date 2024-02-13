@@ -133,7 +133,12 @@ type LogtailServer struct {
 
 // NewLogtailServer initializes a server for logtail push model.
 func NewLogtailServer(
-	address string, cfg *options.LogtailServerCfg, logtail taelogtail.Logtailer, rt runtime.Runtime, opts ...ServerOption,
+	address string,
+	serviceAddress string,
+	cfg *options.LogtailServerCfg,
+	logtail taelogtail.Logtailer,
+	rt runtime.Runtime,
+	opts ...ServerOption,
 ) (*LogtailServer, error) {
 	s := &LogtailServer{
 		rt:        rt,
@@ -176,6 +181,7 @@ func NewLogtailServer(
 
 	rpc, err := morpc.NewRPCServer(LogtailServiceRPCName, address, codec,
 		morpc.WithServerLogger(s.logger.RawLogger()),
+		morpc.WithServerRegisterLocal(serviceAddress),
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 				msg := v.(morpc.RPCMessage)

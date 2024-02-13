@@ -165,6 +165,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ckpcfg,
 		gcCfg,
 		logtailServerAddr,
+		s.logtailServiceServiceAddr(),
 		logtailServerCfg,
 		s.cfg.Txn.IncrementalDedup == "true",
 		uint64(s.cfg.RPC.MaxMessageSize),

@@ -32,6 +32,7 @@ type lockTableAllocator struct {
 	stopper         *stopper.Stopper
 	keepBindTimeout time.Duration
 	address         string
+	serviceAddress  string
 	server          Server
 
 	mu struct {
@@ -44,6 +45,7 @@ type lockTableAllocator struct {
 // NewLockTableAllocator create a memory based lock table allocator.
 func NewLockTableAllocator(
 	address string,
+	serviceAddress string,
 	keepBindTimeout time.Duration,
 	cfg morpc.Config) LockTableAllocator {
 	if keepBindTimeout == 0 {
@@ -53,8 +55,9 @@ func NewLockTableAllocator(
 	logger := runtime.ProcessLevelRuntime().Logger()
 	tag := "lockservice.allocator"
 	la := &lockTableAllocator{
-		address: address,
-		logger:  logger.Named(tag),
+		address:        address,
+		serviceAddress: serviceAddress,
+		logger:         logger.Named(tag),
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
@@ -362,7 +365,7 @@ func (b *serviceBinds) getTablesLocked(group uint32) map[uint64]struct{} {
 }
 
 func (l *lockTableAllocator) initServer(cfg morpc.Config) {
-	s, err := NewServer(l.address, cfg)
+	s, err := NewServer(l.address, l.serviceAddress, cfg)
 	if err != nil {
 		panic(err)
 	}

@@ -181,6 +181,7 @@ func NewService(
 				}
 			}),
 		),
+		morpc.WithServerRegisterLocal(srv.pipelineServiceServiceAddr()),
 		morpc.WithServerDisableAutoCancelContext())
 	if err != nil {
 		return nil, err

@@ -231,7 +231,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	// true. So we use the pessimistic wait for the context to time out automatically be canceled
 	// behavior here, which may cause some resources to be released more slowly.
 	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
-	if !s.options.disableAutoCancelContext && request.Cancel != nil {
+	if !s.options.disableAutoCancelContext {
 		defer request.Cancel()
 	}
 	// get requestID here to avoid data race, because the request maybe released in handler

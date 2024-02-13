@@ -764,9 +764,7 @@ func (rb *remoteBackend) requestDone(
 	}()
 
 	response := msg.Message
-	if msg.Cancel != nil {
-		defer msg.Cancel()
-	}
+	defer msg.Cancel()
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -1156,9 +1154,7 @@ func (s *stream) done(
 		s.cleanCLocked()
 	}
 	response := message.Message
-	if message.Cancel != nil {
-		defer message.Cancel()
-	}
+	defer message.Cancel()
 	if response != nil && !message.stream {
 		panic("BUG")
 	}

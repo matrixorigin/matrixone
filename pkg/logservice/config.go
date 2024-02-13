@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"fmt"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -35,7 +36,8 @@ const (
 	defaultDataDir           = "mo-data/logservice"
 	defaultSnapshotExportDir = "exported-snapshot"
 	defaultRaftAddress       = "0.0.0.0:32000"
-	defaultServiceAddress    = "0.0.0.0:32001"
+	defaultServiceAddress    = "127.0.0.1:32001"
+	defaultListenAddress     = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
 	defaultRaftPort          = 32000
@@ -477,7 +479,7 @@ func DefaultConfig() Config {
 func (c *Config) Fill() {
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
-		c.ServiceListenAddress = defaultServiceAddress
+		c.ServiceListenAddress = defaultListenAddress
 	} else if len(c.ServiceAddress) != 0 && len(c.ServiceListenAddress) == 0 {
 		c.ServiceListenAddress = c.ServiceAddress
 	}

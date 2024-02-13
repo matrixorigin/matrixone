@@ -364,6 +364,7 @@ func (s *store) initTxnSender() error {
 func (s *store) initTxnServer() error {
 	server, err := rpc.NewTxnServer(
 		s.txnServiceListenAddr(),
+		s.txnServiceServiceAddr(),
 		s.rt,
 		rpc.WithServerQueueBufferSize(s.cfg.RPC.ServerBufferQueueSize),
 		rpc.WithServerQueueWorkers(s.cfg.RPC.ServerWorkers),
@@ -387,6 +388,7 @@ func (s *store) initClocker() error {
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
 		s.lockServiceListenAddr(),
+		s.lockServiceServiceAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
 	return nil

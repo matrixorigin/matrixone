@@ -946,6 +946,7 @@ func newTestLockTablesAllocator(
 
 	return lockservice.NewLockTableAllocator(
 		"unix://"+address,
+		"",
 		keepTimeout,
 		morpc.Config{})
 }
