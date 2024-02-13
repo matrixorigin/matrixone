@@ -479,9 +479,8 @@ func DefaultConfig() Config {
 func (c *Config) Fill() {
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
-		c.ServiceListenAddress = defaultListenAddress
 	} else if len(c.ServiceAddress) != 0 && len(c.ServiceListenAddress) == 0 {
-		c.ServiceListenAddress = c.ServiceAddress
+		c.ServiceListenAddress = defaultListenAddress
 	}
 	if len(c.RaftAddress) == 0 {
 		c.RaftAddress = defaultRaftAddress
