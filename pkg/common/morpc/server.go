@@ -78,6 +78,13 @@ func WithServerDisableAutoCancelContext() ServerOption {
 	}
 }
 
+// WithServerRegisterLocal register local server, handle rpc message use local goetty.IOSession.
+func WithServerRegisterLocal(serviceAddress string) ServerOption {
+	return func(s *server) {
+		s.local.serviceAddress = serviceAddress
+	}
+}
+
 type server struct {
 	name        string
 	metrics     *serverMetrics
@@ -97,6 +104,11 @@ type server struct {
 	}
 	pool struct {
 		futures *sync.Pool
+	}
+	local struct {
+		serviceAddress string
+		clients        sync.Map // id -> clientConn
+		c              chan localMessage
 	}
 }
 
@@ -143,6 +155,14 @@ func NewRPCServer(
 	}
 	if err := s.stopper.RunTask(s.closeDisconnectedSession); err != nil {
 		panic(err)
+	}
+
+	if s.local.serviceAddress != "" {
+		local.registerServer(s.local.serviceAddress, s.registerLocal)
+		s.local.c = make(chan localMessage, 1024)
+		if err := s.stopper.RunTask(s.handleLocal); err != nil {
+			panic(err)
+		}
 	}
 	return s, nil
 }
@@ -478,6 +498,11 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 			return
 		case <-timer.C:
 			s.sessions.Range(func(key, value any) bool {
+				_, ok := s.local.clients.Load(key)
+				if ok {
+					return true
+				}
+
 				id := key.(uint64)
 				rs, err := s.application.GetSession(id)
 				if err == nil && rs == nil {
@@ -485,6 +510,32 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 				}
 				return true
 			})
+		}
+	}
+}
+
+func (s *server) registerLocal(conn goetty.IOSession) (chan localMessage, func(uint64)) {
+	s.local.clients.Store(conn.ID(), conn)
+	return s.local.c, s.unregisterLocal
+}
+
+func (s *server) unregisterLocal(id uint64) {
+	s.local.clients.Delete(id)
+}
+
+func (s *server) handleLocal(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-s.local.c:
+			if ok {
+				v, ok := s.local.clients.Load(msg.id)
+				if !ok {
+					continue
+				}
+				_ = s.onMessage(v.(goetty.IOSession), msg.v, 0)
+			}
 		}
 	}
 }

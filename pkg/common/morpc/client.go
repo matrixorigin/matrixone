@@ -309,7 +309,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 			b = nil
 		}
 
-		// all backend inactived, trigger gc inactive.
+		// all backend inactive, trigger gc inactive.
 		if b == nil && n > 0 {
 			c.triggerGCInactive(backend)
 			c.logger.Debug("no available backends",
@@ -381,7 +381,7 @@ func (c *client) gcIdleTask(ctx context.Context) {
 func (c *client) triggerGCInactive(remote string) {
 	select {
 	case c.gcInactiveC <- remote:
-		c.logger.Debug("try to remove all inactived backends",
+		c.logger.Debug("try to remove all inactive backends",
 			zap.String("remote", remote))
 	default:
 	}
