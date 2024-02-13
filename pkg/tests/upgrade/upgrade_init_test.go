@@ -33,6 +33,11 @@ import (
 )
 
 func TestUpgradeFrameworkInit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	runUpgradeTest(
 		t,
 		func(opts service.Options) service.Options {
@@ -58,6 +63,11 @@ func TestUpgradeFrameworkInit(t *testing.T) {
 }
 
 func TestUpgradeFrameworkInitWithHighVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	h := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No)
 
 	runUpgradeTest(

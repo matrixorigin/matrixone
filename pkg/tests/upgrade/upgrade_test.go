@@ -28,6 +28,11 @@ import (
 )
 
 func TestUpgrade(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	h := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.Yes)
 	runUpgradeTest(
 		t,
@@ -76,6 +81,11 @@ func TestUpgrade(t *testing.T) {
 }
 
 func TestUpgradeCrossVersions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
 	h1 := newTestVersionHandler("1.3.0", "1.2.0", versions.Yes, versions.No)
 	h2 := newTestVersionHandler("1.4.0", "1.3.0", versions.No, versions.No)
 	h3 := newTestVersionHandler("1.5.0", "1.4.0", versions.No, versions.Yes)

@@ -42,7 +42,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut UT_PARALLEL=1
+          make ut UT_PARALLEL=6
                 
   ut-mac-x86:
     if: ${{ !github.event.pull_request.draft }}
@@ -67,7 +67,7 @@ jobs:
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
-          make ut UT_PARALLEL=1
+          make ut UT_PARALLEL=6
        
   sca:
     runs-on: ubuntu-latest
