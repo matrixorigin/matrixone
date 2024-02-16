@@ -174,7 +174,7 @@ func (n *MVCCHandle) IsDeletedLocked(
 func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS, pkType types.Type, mp *mpool.MPool,
 ) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
+	aborts *nulls.Bitmap, deletes []uint32, minTS, persistedTS types.TS,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -182,6 +182,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	if !n.ExistDeleteInRange(start, end) {
 		return
 	}
+	persistedTS = n.persistedTS
 
 	for {
 		needWaitFound := false

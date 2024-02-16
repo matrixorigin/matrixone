@@ -15,12 +15,12 @@
 package sort
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 const (
@@ -95,6 +95,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			genericSort(col, os, boolLess[bool])
 		} else {
 			genericSort(col, os, boolGreater[bool])
+		}
+	case types.T_bit:
+		col := vector.MustFixedCol[uint64](vec)
+		if !desc {
+			genericSort(col, os, genericLess[uint64])
+		} else {
+			genericSort(col, os, genericGreater[uint64])
 		}
 	case types.T_int8:
 		col := vector.MustFixedCol[int8](vec)

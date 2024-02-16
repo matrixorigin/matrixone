@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -45,6 +46,16 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
+func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
+}
+
+func (p *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (p *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
 	p.inserts = nil
@@ -61,7 +72,7 @@ func (p *PartitionReader) prepare() error {
 		inserts = make([]*batch.Batch, 0, len(p.table.writes))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range p.table.writes {
-			if entry.typ == INSERT {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				if entry.bat == nil || entry.bat.IsEmpty() {
 					continue
 				}

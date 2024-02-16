@@ -18,8 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -39,6 +40,7 @@ import (
 var supportedTypeCast = map[types.T][]types.T{
 	types.T_any: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
@@ -52,14 +54,28 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_bool: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
 
+	types.T_bit: {
+		types.T_bool,
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_enum,
+	},
+
 	types.T_int8: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -71,6 +87,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_int16: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -82,6 +99,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_int32: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -93,6 +111,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_int64: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -104,6 +123,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_uint8: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -115,6 +135,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_uint16: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -126,6 +147,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_uint32: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -137,6 +159,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_uint64: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -148,6 +171,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_float32: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -158,6 +182,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_float64: {
 		types.T_bool,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -200,9 +225,11 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
+		types.T_bit,
 	},
 
 	types.T_decimal64: {
+		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -213,6 +240,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal128: {
+		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -222,6 +250,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_char: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -236,6 +265,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_varchar: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -251,6 +281,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_binary: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -264,6 +295,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_varbinary: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -277,6 +309,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_blob: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -292,6 +325,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_text: {
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -361,6 +395,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
 		err = boolToOthers(proc.Ctx, s, *toType, result, length)
+	case types.T_bit:
+		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
+		err = bitToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
 		err = int8ToOthers(proc.Ctx, s, *toType, result, length)
@@ -448,6 +485,8 @@ func scalarNullToOthers(ctx context.Context,
 	switch totype.Oid {
 	case types.T_bool:
 		return appendNulls[bool](result, length)
+	case types.T_bit:
+		return appendNulls[uint64](result, length)
 	case types.T_int8:
 		return appendNulls[int8](result, length)
 	case types.T_int16:
@@ -495,6 +534,9 @@ func boolToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return rs.DupFromParameter(source, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return boolToInteger(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_binary,
 		types.T_varbinary, types.T_blob, types.T_text:
 		// string type.
@@ -528,6 +570,69 @@ func boolToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
 
+func bitToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[uint64],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return numericToNumeric(ctx, source, rs, length)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return unsignedToDecimal64(source, rs, length)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return unsignedToDecimal128(source, rs, length)
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return bitToStr(source, rs, length, toType)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return integerToTime(ctx, source, rs, length)
+	case types.T_timestamp:
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
+}
+
 // although we can merge the int8ToOthers / int16ToOthers ... into intToOthers (use the generic).
 // but for extensibility, we didn't do that.
 // uint and float are the same.
@@ -538,6 +643,9 @@ func int8ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return rs.DupFromParameter(source, length)
@@ -596,6 +704,9 @@ func int16ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -654,6 +765,9 @@ func int32ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -712,6 +826,9 @@ func int64ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -773,6 +890,9 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -833,6 +953,9 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -893,6 +1016,9 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -953,6 +1079,9 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length)
@@ -1013,6 +1142,9 @@ func float32ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return floatToInteger(ctx, source, rs, length)
@@ -1070,6 +1202,9 @@ func float64ToOthers(ctx context.Context,
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return floatToInteger(ctx, source, rs, length)
@@ -1240,6 +1375,9 @@ func timeToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Time],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return timeToInteger(ctx, source, rs, length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return timeToInteger(ctx, source, rs, length)
@@ -1293,6 +1431,9 @@ func decimal64ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal64],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal64ToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal64ToFloat(ctx, source, rs, length, 32)
@@ -1355,6 +1496,9 @@ func decimal128ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal128],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal128ToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return decimal128ToSigned(ctx, source, rs, 8, length)
@@ -1426,10 +1570,10 @@ func strTypeToOthers(proc *process.Process,
 		switch toType.Oid {
 		case types.T_array_float32:
 			rs := vector.MustFunctionResult[types.Varlena](result)
-			return blobToArray[float32](proc.Ctx, source, rs, length, toType)
+			return blobToArray[float32](ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			rs := vector.MustFunctionResult[types.Varlena](result)
-			return blobToArray[float64](proc.Ctx, source, rs, length, toType)
+			return blobToArray[float64](ctx, source, rs, length, toType)
 			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
 			// then continue to the `str` to `Other` code.
 			// NOTE 2: don't create a switch T_blob case in NewCast() as
@@ -1438,6 +1582,9 @@ func strTypeToOthers(proc *process.Process,
 		}
 	}
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return strToBit(ctx, source, rs, int(toType.Width), length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return strToSigned(ctx, source, rs, 8, length)
@@ -1502,13 +1649,13 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(proc.Ctx, source, rs, length, toType)
+		return strToStr(ctx, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToArray[float32](proc.Ctx, source, rs, length, toType)
+		return strToArray[float32](ctx, source, rs, length, toType)
 	case types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToArray[float64](proc.Ctx, source, rs, length, toType)
+		return strToArray[float64](ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -1524,16 +1671,16 @@ func arrayTypeToOthers(proc *process.Process,
 	case types.T_array_float32:
 		switch toType.Oid {
 		case types.T_array_float32:
-			return ArrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
+			return arrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
-			return ArrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
+			return arrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
 		}
 	case types.T_array_float64:
 		switch toType.Oid {
 		case types.T_array_float32:
-			return ArrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
+			return arrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
-			return ArrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
+			return arrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
 		}
 	}
 
@@ -1713,6 +1860,37 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	return nil
 }
 
+func numericToBit[T constraints.Integer | constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[uint64], bitSize int,
+	length int) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(uint64(0), true); err != nil {
+				return err
+			}
+		} else {
+			var val uint64
+			switch any(v).(type) {
+			case float32, float64:
+				val = uint64(math.Round(float64(v)))
+			default:
+				val = uint64(v)
+			}
+
+			if val > uint64(1<<bitSize-1) {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
+			}
+			if err := to.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // XXX do not use it to cast float to integer, please use floatToInteger
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
@@ -1782,28 +1960,17 @@ func boolToStr(
 				return err
 			}
 		} else {
+			result := []byte("0")
 			if v {
-				result := []byte("1")
-				if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
-					add0 := int(toType.Width) - len(result)
-					for ; add0 != 0; add0-- {
-						result = append(result, 0)
-					}
+				result = []byte("1")
+			}
+			if toType.Oid == types.T_binary {
+				for len(result) < int(toType.Width) {
+					result = append(result, 0)
 				}
-				if err := to.AppendBytes(result, false); err != nil {
-					return err
-				}
-			} else {
-				result := []byte("0")
-				if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
-					add0 := int(toType.Width) - len(result)
-					for ; add0 != 0; add0-- {
-						result = append(result, 0)
-					}
-				}
-				if err := to.AppendBytes(result, false); err != nil {
-					return err
-				}
+			}
+			if err := to.AppendBytes(result, false); err != nil {
+				return err
 			}
 		}
 	}
@@ -1832,6 +1999,60 @@ func boolToInteger[T constraints.Integer](
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func bitToStr(
+	from vector.FunctionParameterWrapper[uint64],
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+
+	uint64ToBytes := func(v uint64) []byte {
+		b := types.EncodeUint64(&v)
+		// remove leading zero bytes
+		l := len(b)
+		for l > 1 && b[l-1] == byte(0) {
+			l -= 1
+		}
+		return b[:l]
+	}
+
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i := 0; i < length; i++ {
+			v, null := from.GetValue(uint64(i))
+			b := uint64ToBytes(v)
+			if err := explicitCastToBinary(toType, b, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		b := uint64ToBytes(v)
+		if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+			if len(b) > int(toType.Width) {
+				return moerr.NewDataTruncatedNoCtx("Bit", "truncated for binary/varbinary")
+			}
+		}
+
+		slices.Reverse(b)
+		if toType.Oid == types.T_binary {
+			for len(b) < int(toType.Width) {
+				b = append(b, byte(0))
+			}
+		}
+		if err := to.AppendBytes(b, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -3495,6 +3716,58 @@ func decimal128ToStr(
 	return nil
 }
 
+func decimal64ToBit(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(uint64(0), true); err != nil {
+				return err
+			}
+		} else {
+			var result uint64
+			var err error
+			xStr := v.Format(from.GetType().Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToBit(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(uint64(0), true); err != nil {
+				return err
+			}
+		} else {
+			var result uint64
+			var err error
+			xStr := v.Format(from.GetType().Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -3987,6 +4260,37 @@ func strToStr(
 	return nil
 }
 
+func strToBit(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[uint64], bitSize int, length int) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetStrValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if len(v) > 8 {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+			}
+
+			var val uint64
+			for j := range v {
+				val = (val << 8) | uint64(v[j])
+			}
+			if val > uint64(1<<bitSize-1) {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+			}
+
+			if err := to.Append(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func strToArray[T types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -4044,7 +4348,7 @@ func blobToArray[T types.RealNumbers](
 	return nil
 }
 
-func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
+func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -4646,7 +4950,7 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 }
 
 func floatToBytes(v float64, bitSize int) []byte {
-	if v >= float64(1e15) || v < float64(1e-13) {
+	if v >= float64(1e15) || (v < float64(1e-13) && v > 0) || (v < 0 && v > -1e-13) || v <= -1e15 {
 		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
 	} else {
 		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))

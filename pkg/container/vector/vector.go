@@ -76,11 +76,11 @@ func (t *typedSlice) setFromVector(v *Vector) {
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
-		if !typeCompatible[T](vec.typ) {
-			panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
-		}
+	//if (uintptr(unsafe.Pointer(vec))^uintptr(unsafe.Pointer(ret)))&0xffff == 0 {
+	if !typeCompatible[T](vec.typ) {
+		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
 	}
+	//}
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
@@ -672,6 +672,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	switch v.typ.Oid {
 	case types.T_bool:
 		shrinkFixed[bool](v, sels, negate)
+	case types.T_bit:
+		shrinkFixed[uint64](v, sels, negate)
 	case types.T_int8:
 		shrinkFixed[int8](v, sels, negate)
 	case types.T_int16:
@@ -734,6 +736,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixed[bool](v, sels, mp)
+	case types.T_bit:
+		err = shuffleFixed[uint64](v, sels, mp)
 	case types.T_int8:
 		err = shuffleFixed[int8](v, sels, mp)
 	case types.T_int16:
@@ -849,6 +853,36 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				for i := 0; i < w.length; i++ {
 					if w.nsp.Contains(uint64(i)) {
 						v.nsp.Set(uint64(i + v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_bit:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[uint64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(&w.nsp, uint64(i)) {
+						nulls.Add(&v.nsp, uint64(i+v.length))
 					}
 				}
 			}
@@ -1550,6 +1584,17 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
 		}
+	case types.T_bit:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint64(0), true, mp)
+			}
+			ws := MustFixedCol[uint64](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
+			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
+		}
 	case types.T_int8:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
@@ -1812,6 +1857,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[bool](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_bit:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[uint64](w)
 			if w.IsConst() {
 				return SetConstFixed(v, ws[0], length, mp)
 			}
@@ -2447,6 +2503,8 @@ func (v *Vector) String() string {
 	switch v.typ.Oid {
 	case types.T_bool:
 		return vecToString[bool](v)
+	case types.T_bit:
+		return vecToString[uint64](v)
 	case types.T_int8:
 		return vecToString[int8](v)
 	case types.T_int16:
@@ -2619,6 +2677,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	switch vec.typ.Oid {
 	case types.T_bool:
 		return appendOneFixed(vec, val.(bool), false, mp)
+	case types.T_bit:
+		return appendOneFixed(vec, val.(uint64), false, mp)
 	case types.T_int8:
 		return appendOneFixed(vec, val.(int8), false, mp)
 	case types.T_int16:
@@ -3092,6 +3152,29 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if start == end {
 		return nil
 	}
+	if v.IsConstNull() {
+		w.class = CONSTANT
+		w.length = end - start
+		w.data = nil
+		return nil
+	} else if v.IsConst() {
+		if v.typ.IsVarlen() {
+			w.class = CONSTANT
+			SetConstBytes(v, v.GetBytesAt(0), end-start, mp)
+			return nil
+		} else {
+			w.class = v.class
+			w.col = v.col
+			w.data = make([]byte, len(v.data))
+			copy(w.data, v.data)
+			w.capacity = v.capacity
+			w.length = end - start
+			w.cantFreeArea = true
+			w.cantFreeData = true
+			w.sorted = v.sorted
+			return nil
+		}
+	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
@@ -3144,6 +3227,9 @@ func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
 	}
 	ok = true
 	switch v.typ.Oid {
+	case types.T_bit:
+		sumVal := IntegerGetSum[uint64, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
 	case types.T_int8:
 		sumVal := IntegerGetSum[int8, int64](v)
 		sumv = types.EncodeInt64(&sumVal)
@@ -3217,6 +3303,11 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		}
 		minv = types.EncodeBool(&minVal)
 		maxv = types.EncodeBool(&maxVal)
+
+	case types.T_bit:
+		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minv = types.EncodeUint64(&minVal)
+		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_int8:
 		minVal, maxVal := OrderedGetMinAndMax[int8](v)
@@ -3505,6 +3596,12 @@ func (v *Vector) InplaceSort() {
 		col := MustFixedCol[bool](v)
 		sort.Slice(col, func(i, j int) bool {
 			return !col[i] && col[j]
+		})
+
+	case types.T_bit:
+		col := MustFixedCol[uint64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
 		})
 
 	case types.T_int8:

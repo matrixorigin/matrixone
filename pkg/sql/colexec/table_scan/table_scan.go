@@ -33,12 +33,13 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	arg.OrderBy = arg.Reader.GetOrderBy()
 	return nil
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()

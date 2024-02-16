@@ -85,6 +85,11 @@ type MOCluster interface {
 	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
 	// internally for debug purpose.
 	DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
+
+	// RemoveCN removes the specified CN from the cluster
+	RemoveCN(id string)
+	// AddCN adds the specified CN to the cluster
+	AddCN(metadata.CNService)
 }
 
 type ClusterClient interface {

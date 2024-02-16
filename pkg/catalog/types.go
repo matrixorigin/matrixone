@@ -40,14 +40,21 @@ const (
 )
 
 var InternalColumns = map[string]int8{
-	Row_ID:                   0,
-	PrefixPriColName:         0,
-	PrefixCBColName:          0,
-	PrefixIndexTableName:     0,
-	CPrimaryKeyColName:       0,
-	FakePrimaryKeyColName:    0,
-	IndexTableIndexColName:   0,
-	IndexTablePrimaryColName: 0,
+	Row_ID:                                     0,
+	PrefixPriColName:                           0,
+	PrefixCBColName:                            0,
+	PrefixIndexTableName:                       0,
+	CPrimaryKeyColName:                         0,
+	FakePrimaryKeyColName:                      0,
+	IndexTableIndexColName:                     0,
+	IndexTablePrimaryColName:                   0,
+	SystemSI_IVFFLAT_TblCol_Metadata_key:       0,
+	SystemSI_IVFFLAT_TblCol_Metadata_val:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_version:  0,
+	SystemSI_IVFFLAT_TblCol_Centroids_id:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
+	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
+	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -239,7 +246,12 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 
-	/************ 1. IVF_FLAT Secondary Index ************/
+	/************ 1. Master Index  ************/
+
+	MasterIndexTableIndexColName   = IndexTableIndexColName
+	MasterIndexTablePrimaryColName = IndexTablePrimaryColName
+
+	/************ 2. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
 	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
