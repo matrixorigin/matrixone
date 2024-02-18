@@ -2576,7 +2576,6 @@ explainable_stmt:
     {
         $$ = $1
     }
-|   execute_stmt
 
 explain_stmt:
     explain_sym unresolved_object_name
@@ -2636,6 +2635,36 @@ explain_stmt:
             explainStmt.Options = $3
             $$ = explainStmt
         }
+    }
+|   explain_sym FORCE execute_stmt
+{
+    $$ = tree.NewExplainStmt($3, "text")
+}
+|   explain_sym VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainStmt($4, "text")
+        optionElem := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($4, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($5, "text")
+        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 
 explain_option_key:
