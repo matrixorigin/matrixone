@@ -687,13 +687,20 @@ func TestTxn9(t *testing.T) {
 		assert.NoError(t, txn2.Commit(context.Background()))
 	}
 
-	scanCol := func(expect int) {
+	scanCol := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) {
 		defer wg.Done()
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		// testutil.CheckAllColRowsByScan(t, rel, int(expectRows/5*2), true)
-		testutil.CheckAllColRowsByScan(t, rel, expect, true)
+		if waitTxn != nil {
+			if txn.GetStartTS().Greater(waitTxn.GetPrepareTS()) {
+				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
+			} else {
+				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
+			}
+		} else {
+			testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
+		}
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -714,10 +721,10 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 
-	apply := func(expect int) func(txnif.AsyncTxn) error {
+	apply := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) func(txnif.AsyncTxn) error {
 		return func(txn txnif.AsyncTxn) error {
 			wg.Add(1)
-			go scanCol(expect)
+			go scanCol(waitExpect, nowaitExpect, waitTxn)
 			time.Sleep(time.Millisecond * 10)
 			store := txn.GetStore()
 			return store.ApplyCommit()
@@ -726,7 +733,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply(int(expectRows / 5 * 2)))
+	txn.SetApplyCommitFn(apply(int(expectRows)/5*2, int(expectRows/5), txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
@@ -735,7 +742,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply(int(expectRows/5*2) - 1))
+	txn.SetApplyCommitFn(apply(int(expectRows/5*2)-1, int(expectRows/5)*2, txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -748,7 +755,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply(int(expectRows/5*2) - 1))
+	txn.SetApplyCommitFn(apply(0, int(expectRows/5*2)-1, nil))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
