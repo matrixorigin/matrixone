@@ -1293,6 +1293,8 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
+	case types.T_bit:
+		return true, uint64(v)
 	case types.T_int8:
 		return true, int8(v)
 	case types.T_int16:
@@ -1320,6 +1322,8 @@ func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 
 func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
 	switch oid {
+	case types.T_bit:
+		return true, uint64(v)
 	case types.T_int8:
 		return true, int8(v)
 	case types.T_int16:

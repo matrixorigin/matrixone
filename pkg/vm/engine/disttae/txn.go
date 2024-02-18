@@ -153,6 +153,9 @@ func checkPKDup(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
 		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](pk)
+		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
 		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)
@@ -633,6 +636,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
+	//Delete rows belongs to uncommitted raw data batch in txn's workspace.
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 	sels = sels[:0]
 	for k, rowid := range rowids {
@@ -640,6 +644,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			sels = append(sels, int64(k))
 		}
 	}
+	//Shrink the batch to retain sels.
 	bat.Shrink(sels)
 	txn.proc.Mp().PutSels(sels)
 	return bat
@@ -737,7 +742,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 
 // CN blocks compaction for txn
 func (txn *Transaction) mergeCompactionLocked() error {
-	compactedBlks := make(map[tableKey]map[objectio.BlockInfo][]int64)
+	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
 		txn.deletedBlocks = nil
@@ -750,14 +755,14 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				dbName:    pos.dbName,
 				name:      pos.tbName,
 			}]; ok {
-				v[pos.blkInfo] = offsets
+				v[pos.blkInfo.MetaLoc] = offsets
 			} else {
 				compactedBlks[tableKey{
 					accountId: pos.accountId,
 					dbName:    pos.dbName,
 					name:      pos.tbName,
 				}] =
-					map[objectio.BlockInfo][]int64{pos.blkInfo: offsets}
+					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
 			delete(txn.cnBlkId_Pos, *blkId)

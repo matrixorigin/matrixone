@@ -229,6 +229,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 				Bval: vector.MustFixedCol[bool](vec)[row],
 			},
 		}
+	case types.T_bit:
+		return &plan.Literal{
+			Value: &plan.Literal_U64Val{
+				U64Val: vector.MustFixedCol[uint64](vec)[row],
+			},
+		}
 	case types.T_int8:
 		return &plan.Literal{
 			Value: &plan.Literal_I8Val{

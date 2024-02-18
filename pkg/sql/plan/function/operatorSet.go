@@ -31,6 +31,7 @@ var (
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_bool,
+		types.T_bit,
 		types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 		types.T_decimal64, types.T_decimal128,
@@ -143,6 +144,8 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	t := result.GetResultVector().GetType()
 	switch t.Oid {
+	case types.T_bit:
+		return generalCaseFn[uint64](parameters, result, proc, length)
 	case types.T_int8:
 		return generalCaseFn[int8](parameters, result, proc, length)
 	case types.T_int16:
@@ -181,7 +184,6 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[types.Decimal128](parameters, result, proc, length)
 	case types.T_enum:
 		return generalCaseFn[types.Enum](parameters, result, proc, length)
-
 	case types.T_char:
 		return strCaseFn(parameters, result, proc, length)
 	case types.T_varchar:
@@ -318,6 +320,7 @@ var (
 		types.T_float32, types.T_float64,
 		types.T_uuid,
 		types.T_bool, types.T_date, types.T_datetime,
+		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
 		types.T_decimal64, types.T_decimal128,
 		types.T_timestamp, types.T_time,
@@ -372,6 +375,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rett := result.GetResultVector().GetType()
 	switch rett.Oid {
+	case types.T_bit:
+		return generalIffFn[uint64](parameters, result, proc, length)
 	case types.T_int8:
 		return generalIffFn[int8](parameters, result, proc, length)
 	case types.T_int16:

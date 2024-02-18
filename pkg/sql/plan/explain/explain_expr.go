@@ -161,7 +161,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
+		if vec.Length() > 16 {
+			//don't display too long data in explain
+			vec.SetLength(16)
+		}
 		buf.WriteString(vec.String())
+		buf.WriteString("......")
 	default:
 		panic("unsupported expr")
 	}
