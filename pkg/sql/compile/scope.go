@@ -386,7 +386,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	switch {
 	case remote:
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			panic("ordered scan can't run on remote CN!")
 		}
 		ctx := c.ctx
@@ -417,11 +417,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.OrderBy != nil); err != nil {
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
@@ -461,7 +461,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
@@ -472,7 +472,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				mcpu,
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
-				s.DataSource.OrderBy != nil)
+				len(s.DataSource.OrderBy) > 0)
 			if err != nil {
 				return err
 			}
@@ -504,7 +504,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					mcpu,
 					s.DataSource.FilterExpr,
 					cleanRanges,
-					s.DataSource.OrderBy != nil)
+					len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -517,7 +517,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], s.DataSource.OrderBy != nil)
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -544,7 +544,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.Run(c)
 	}
 
-	if s.DataSource.OrderBy != nil {
+	if len(s.DataSource.OrderBy) > 0 {
 		panic("ordered scan must run on only one parallel!")
 	}
 	ss := make([]*Scope, mcpu)

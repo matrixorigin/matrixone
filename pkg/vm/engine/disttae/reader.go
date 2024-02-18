@@ -408,7 +408,7 @@ func (r *blockReader) sortBlockList() {
 
 func (r *blockReader) deleteFirstNBlocks(n int) {
 	r.blks = r.blks[n:]
-	if r.OrderBy != nil {
+	if len(r.OrderBy) > 0 {
 		r.blockZMS = r.blockZMS[n:]
 	}
 }
@@ -426,7 +426,7 @@ func (r *blockReader) Read(
 	}()
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
-	if r.OrderBy != nil {
+	if len(r.OrderBy) > 0 {
 		if !r.sorted {
 			r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			r.getBlockZMs()
