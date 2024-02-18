@@ -1888,7 +1888,7 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 
 func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
 	inExpr := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: left.Typ.NotNullable,
 		},
@@ -1901,7 +1901,7 @@ func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
 				Args: []*plan.Expr{
 					left,
 					{
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id: int32(types.T_tuple),
 						},
 						Expr: &plan.Expr_Vec{

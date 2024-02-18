@@ -2770,7 +2770,7 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 	serialArgs := make([]*plan.Expr, 3)
 	serialArgs[0] = makePlan2StringConstExprWithType(part)
 	serialArgs[1] = &Expr{
-		Typ: colsType[part],
+		Typ: *colsType[part],
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -2780,7 +2780,7 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 		},
 	}
 	serialArgs[2] = &Expr{
-		Typ: originPkType,
+		Typ: *originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -2796,7 +2796,7 @@ func buildSerialFullAndPKColsProj(builder *QueryBuilder, bindCtx *BindContext, t
 
 	//3.ii build pk
 	projectProjection[1] = &Expr{
-		Typ: originPkType,
+		Typ: *originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -3356,7 +3356,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		}
 
 		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: colVal.Typ,
+			Typ: *colVal.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -3384,7 +3384,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		leftExprArgs := make([]*Expr, 3)
 		leftExprArgs[0] = makePlan2StringConstExprWithType(part)
 		leftExprArgs[1] = &Expr{
-			Typ: typMap[part],
+			Typ: *typMap[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -3394,7 +3394,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		}
 		leftExprArgs[2] = &Expr{
-			Typ: originPkType,
+			Typ: *originPkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -3409,7 +3409,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		}
 
 		var rightExpr = &plan.Expr{
-			Typ: masterTableDef.Cols[rightPkPos].Typ,
+			Typ: *masterTableDef.Cols[rightPkPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
@@ -3433,7 +3433,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	projectList = append(projectList, &plan.Expr{
-		Typ: masterTableDef.Cols[rightRowIdPos].Typ,
+		Typ: *masterTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -3442,7 +3442,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		},
 	}, &plan.Expr{
-		Typ: masterTableDef.Cols[rightPkPos].Typ,
+		Typ: *masterTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
