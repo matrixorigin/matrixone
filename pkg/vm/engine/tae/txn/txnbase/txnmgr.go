@@ -449,8 +449,12 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
-	commitTS := txn.GetCommitTS()
-	mgr.MaxCommittedTS.Store(&commitTS)
+	new := txn.GetCommitTS()
+	for old := mgr.MaxCommittedTS.Load(); new.Greater(*old); old = mgr.MaxCommittedTS.Load() {
+		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
+			return
+		}
+	}
 }
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
