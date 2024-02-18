@@ -56,6 +56,7 @@ type Options struct {
 	waitCommittedLogApplied bool
 	timeZone                *time.Location
 	statementOptions        StatementOption
+	txnOpts                 []client.TxnOption
 }
 
 // StatementOption statement execute option.

@@ -144,3 +144,17 @@ func (opts StatementOption) WithWaitPolicy(waitPolicy lock.WaitPolicy) Statement
 func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 	return opts.waitPolicy
 }
+
+func (opts Options) WithDisableTrace() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
+	return opts
+}
+
+func (opts Options) WithDisableLock() Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithDisableLock(true))
+	return opts
+}
+
+func (opts Options) ExtraTxnOptions() []client.TxnOption {
+	return opts.txnOpts
+}

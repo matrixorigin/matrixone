@@ -22,8 +22,9 @@ import (
 type EventType int
 
 const (
-	// ClosedEvent txn closed event
-	ClosedEvent = EventType(0)
+	ActiveEvent          = EventType(0)
+	SnapshotUpdatedEvent = EventType(1)
+	ClosedEvent          = EventType(2)
 )
 
 func (tc *txnOperator) AppendEventCallback(
@@ -38,6 +39,12 @@ func (tc *txnOperator) AppendEventCallback(
 		tc.mu.callbacks = make(map[EventType][]func(txn.TxnMeta), 1)
 	}
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
+}
+
+func (tc *txnOperator) triggerEvent(event EventType) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	tc.triggerEventLocked(event)
 }
 
 func (tc *txnOperator) triggerEventLocked(event EventType) {

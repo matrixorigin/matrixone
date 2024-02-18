@@ -15,61 +15,31 @@
 package trace
 
 import (
-	"sync"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+func GetService() Service {
+	return &service{}
+}
+
 type Service interface {
+	TxnCreated(op client.TxnOperator)
+	CommitEntries(txnID []byte, entries []*api.Entry)
+	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
+
+	Enable()
+	Disable()
+	AddEntryFilters([]EntryFilter)
+	ClearEntryFilters()
 }
 
-type TxnTrace struct {
-	sync.RWMutex
+// Option options to create trace service
+type Option func(*service)
 
-	TxnID       []byte
-	SnapshotTS  timestamp.Timestamp
-	CommitTS    timestamp.Timestamp
-	FinalStatus txn.TxnStatus
-
-	CreateBy struct {
-		AccountID   int32
-		SessionID   string
-		StatementID string
-		CN          string
-	}
-
-	Points struct {
-		CreateAt     time.Time
-		DetermineAt  time.Time
-		WaitActiveAt time.Time
-		ActiveAt     time.Time
-	}
-
-	Lock struct {
-		WaitFor [][]byte
-	}
-}
-
-// Storage used to store the txn trace.
-type Storage interface {
-	NewWriteBatch() WriteBatch
-	Set(key, value []byte, sync bool) error
-	Write(wb WriteBatch, sync bool) error
-	Delete(key []byte, sync bool) error
-	// RangeDelete remove data in [start,end)
-	RangeDelete(start, end []byte, sync bool) error
-	Scan(start, end []byte, handleFunc func(key, value []byte) (bool, error)) error
-	PrefixScan(prefix []byte, handleFunc func(key, value []byte) (bool, error)) error
-	// Seek returns max(-inf, upperBound)
-	Seek(lowerBound []byte) ([]byte, []byte, error)
-	// SeekAndLT returns min[lowerBound, upperBound)
-	SeekAndLT(lowerBound, upperBound []byte) ([]byte, []byte, error)
-	// SeekLT returns max(-inf, upperBound)
-	SeekLT(upperBound []byte) ([]byte, []byte, error)
-	// SeekLTAndGE returns max[lowerBound, upperBound)
-	SeekLTAndGE(upperBound, lowerBound []byte) ([]byte, []byte, error)
-	Sync() error
-	Close() error
+// EntryFilter entry filter to hold the entries we care about, to reduce the
+// amount size of trace data.
+type EntryFilter interface {
+	// Filter returns true means the entry should be skipped.
+	Filter(entry *EntryData) bool
 }
