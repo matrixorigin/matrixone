@@ -57,7 +57,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -76,6 +76,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
+				ctr.skipProbe = true
+			}
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
@@ -91,11 +94,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+			if ctr.skipProbe {
+				vecused := make([]bool, len(bat.Vecs))
+				newvecs := make([]*vector.Vector, len(ap.Result))
+				for i, pos := range ap.Result {
+					vecused[pos] = true
+					newvecs[i] = bat.Vecs[pos]
+				}
+				for i := range bat.Vecs {
+					if !vecused[i] {
+						bat.Vecs[i].Free(proc.Mp())
+					}
+				}
+				bat.Vecs = newvecs
+				result.Batch = bat
+				anal.Output(bat, arg.GetIsLast())
+				return result, nil
+			}
 			if ctr.mp == nil {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}

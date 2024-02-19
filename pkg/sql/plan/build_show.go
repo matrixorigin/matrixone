@@ -175,7 +175,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -276,7 +277,16 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		for i, colId := range fk.Cols {
 			colNames[i] = colIdToName[colId]
 		}
-		_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+
+		var fkTableDef *TableDef
+
+		//fk self reference
+		if fk.ForeignTbl == 0 {
+			fkTableDef = tableDef
+		} else {
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+		}
+
 		fkColIdToName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
 			fkColIdToName[col.ColId] = col.Name

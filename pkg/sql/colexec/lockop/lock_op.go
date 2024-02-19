@@ -89,14 +89,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
-		return arg.children[0].Call(proc)
+		return arg.GetChildren(0).Call(proc)
 	}
 
 	if !arg.block {
-		return callNonBlocking(arg.info.Idx, proc, arg)
+		return callNonBlocking(arg.GetIdx(), proc, arg)
 	}
 
-	return callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
+	return callBlocking(arg.GetIdx(), proc, arg, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func callNonBlocking(
@@ -104,12 +104,12 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (vm.CallResult, error) {
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -135,7 +135,7 @@ func callBlocking(
 	isFirst bool,
 	isLast bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 

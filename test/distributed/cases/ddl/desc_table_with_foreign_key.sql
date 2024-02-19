@@ -14,6 +14,6 @@ use db2;
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int primary key, b varchar(5));
-create table t2(a int ,b varchar(5), c int, foreign key(c) references t1(a));
+create table t2(a int ,b varchar(5), c int, constraint `c1` foreign key(c) references t1(a));
 desc t2;
 show create table t2;

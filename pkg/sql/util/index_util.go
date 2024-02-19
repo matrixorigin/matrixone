@@ -33,6 +33,18 @@ var SerialWithoutCompacted = serialWithoutCompacted
 var CompactSingleIndexCol = compactSingleIndexCol
 var CompactPrimaryCol = compactPrimaryCol
 
+type PackerList struct {
+	ps []*types.Packer
+}
+
+func (list *PackerList) Free() {
+	for _, p := range list.ps {
+		if p != nil {
+			p.FreeMem()
+		}
+	}
+}
+
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string
 	if unique {
@@ -50,8 +62,10 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 
 // BuildUniqueKeyBatch used in test to validate
 // serialWithCompacted(), compactSingleIndexCol() and compactPrimaryCol()
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process, ps []*types.Packer) (*batch.Batch, int) {
+func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process, packers *PackerList) (*batch.Batch, int, error) {
 	var b *batch.Batch
+	var err error
+
 	if originTablePrimaryKey == "" {
 		b = &batch.Batch{
 			Attrs: make([]string, 1),
@@ -88,7 +102,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 			v := cIndexVecMap[part]
 			vs = append(vs, v)
 		}
-		b.Vecs[0], bitMap = serialWithCompacted(vs, proc, ps)
+		b.Vecs[0], bitMap, err = serialWithCompacted(vs, proc, packers)
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
@@ -97,7 +111,7 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				break
 			}
 		}
-		b.Vecs[0], bitMap, _ = compactSingleIndexCol(vec, proc)
+		b.Vecs[0], bitMap, err = compactSingleIndexCol(vec, proc)
 	}
 
 	if len(b.Attrs) > 1 {
@@ -107,11 +121,15 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 				vec = vecs[i]
 			}
 		}
-		b.Vecs[1], _ = compactPrimaryCol(vec, bitMap, proc)
+		b.Vecs[1], err = compactPrimaryCol(vec, bitMap, proc)
 	}
 
+	if err != nil {
+		b.Clean(proc.Mp())
+		return nil, -1, err
+	}
 	b.SetRowCount(b.Vecs[0].Length())
-	return b, b.RowCount()
+	return b, b.RowCount(), nil
 }
 
 // SerialWithCompacted have a similar function named Serial
@@ -122,26 +140,27 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3)]
 // result bitmap is [2]
-func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types.Packer) (*vector.Vector, *nulls.Nulls) {
+func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
 	// resolve vs
 	length := vs[0].Length()
 	vct := types.T_varchar.ToType()
 	val := make([][]byte, 0, length)
-	if length > cap(ps) {
-		for _, p := range ps {
+	if length > cap(packers.ps) {
+		for _, p := range packers.ps {
 			if p != nil {
 				p.FreeMem()
 			}
 		}
-		ps = types.NewPackerArray(length, proc.Mp())
+		packers.ps = types.NewPackerArray(length, proc.Mp())
 	}
 	defer func() {
 		for i := 0; i < length; i++ {
-			ps[i].Reset()
+			packers.ps[i].Reset()
 		}
 	}()
 	bitMap := new(nulls.Nulls)
 
+	ps := packers.ps
 	for _, v := range vs {
 		vNull := v.GetNulls()
 		hasNull := v.HasNull()
@@ -159,6 +178,15 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 			} else {
 				for i, b := range s {
 					ps[i].EncodeBool(b)
+				}
+			}
+		case types.T_bit:
+			s := vector.MustFixedCol[uint64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeUint64(b)
 				}
 			}
 		case types.T_int8:
@@ -447,9 +475,9 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 	}
 
 	vec := proc.GetVector(vct)
-	vector.AppendBytesList(vec, val, nil, proc.Mp())
+	err := vector.AppendBytesList(vec, val, nil, proc.Mp())
 
-	return vec, bitMap
+	return vec, bitMap, err
 }
 
 // serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
@@ -460,27 +488,28 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, ps []*types
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, ps []*types.Packer) (*vector.Vector, *nulls.Nulls, error) {
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
 	if len(vs) == 0 {
 		// return empty vector and empty bitmap
 		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
 	}
 
 	rowCount := vs[0].Length()
-	if rowCount > cap(ps) {
-		for _, p := range ps {
+	if rowCount > cap(packers.ps) {
+		for _, p := range packers.ps {
 			if p != nil {
 				p.FreeMem()
 			}
 		}
-		ps = types.NewPackerArray(rowCount, proc.Mp())
+		packers.ps = types.NewPackerArray(rowCount, proc.Mp())
 	}
 	defer func() {
 		for i := 0; i < rowCount; i++ {
-			ps[i].Reset()
+			packers.ps[i].Reset()
 		}
 	}()
 
+	ps := packers.ps
 	for _, v := range vs {
 		if v.IsConstNull() {
 			for i := 0; i < v.Length(); i++ {
@@ -521,6 +550,15 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 	case types.T_bool:
 		s := vector.MustFixedCol[bool](v)
 		ns := make([]bool, 0, length)
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_bit:
+		s := vector.MustFixedCol[uint64](v)
+		ns := make([]uint64, 0, len(s))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
@@ -599,7 +637,7 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_float32:
 		s := vector.MustFixedCol[float32](v)
 		ns := make([]float32, 0, len(s))
@@ -692,9 +730,9 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendBytesList(vec, ns, nil, proc.Mp())
+		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec, v.GetNulls(), nil
+	return vec, v.GetNulls(), err
 }
 
 func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) (*vector.Vector, error) {
@@ -715,6 +753,15 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 	case types.T_bool:
 		s := vector.MustFixedCol[bool](v)
 		ns := make([]bool, 0, length)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_bit:
+		s := vector.MustFixedCol[uint64](v)
+		ns := make([]uint64, 0)
 		for i, b := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
 				ns = append(ns, b)
@@ -883,7 +930,7 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 				ns = append(ns, b)
 			}
 		}
-		vector.AppendBytesList(vec, ns, nil, proc.Mp())
+		err = vector.AppendBytesList(vec, ns, nil, proc.Mp())
 	}
-	return vec, nil
+	return vec, err
 }

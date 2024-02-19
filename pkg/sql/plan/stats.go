@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -160,6 +160,9 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 			continue
 		}
 		switch info.DataTypes[i].Oid {
+		case types.T_bit:
+			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int8:
 			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
@@ -948,11 +951,11 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 	if node.Stats.Cost < 1 {
 		node.Stats.Cost = 1
 	}
-	node.Stats.BlockNum = int32(float64(node.Stats.BlockNum)*runtimeFilterSel) + 1
+	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !needStats(node.TableDef) {
+	if !InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
@@ -995,16 +998,18 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 	return false
 }
 
-func needStats(tableDef *TableDef) bool {
+func InternalTable(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false
 	}
-	switch tableDef.Name {
-	case "sys_async_task", "sys_cron_task":
+	if strings.HasPrefix(tableDef.Name, "sys_") {
 		return false
 	}
-	return !strings.HasPrefix(tableDef.Name, "mo_")
+	if strings.HasPrefix(tableDef.Name, "mo_") {
+		return false
+	}
+	return true
 }
 
 func DefaultHugeStats() *plan.Stats {

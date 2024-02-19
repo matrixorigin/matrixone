@@ -135,6 +135,9 @@ func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
 	if node.BaseNode.MetaLoc.IsEmpty() {
 		return
 	}
+	if node.BaseNode.DeltaLoc.IsEmpty() {
+		return
+	}
 	if b.batches[blkMetaInsBatch] == nil {
 		b.batches[blkMetaInsBatch] = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	}

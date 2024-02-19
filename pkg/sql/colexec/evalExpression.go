@@ -876,8 +876,9 @@ func getConstZM(
 	proc *process.Process,
 ) (zm index.ZM, err error) {
 	c := expr.Expr.(*plan.Expr_Lit)
+	typ := expr.Typ
 	if c.Lit.GetIsnull() {
-		zm = index.NewZM(types.T(expr.Typ.Id), expr.Typ.Scale)
+		zm = index.NewZM(types.T(typ.Id), typ.Scale)
 		return
 	}
 	switch c.Lit.GetValue().(type) {
@@ -939,17 +940,17 @@ func getConstZM(
 		index.UpdateZM(zm, types.EncodeInt64(&v))
 	case *plan.Literal_Decimal64Val:
 		v := c.Lit.GetDecimal64Val()
-		zm = index.NewZM(types.T_decimal64, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal64, typ.Scale)
 		d64 := types.Decimal64(v.A)
 		index.UpdateZM(zm, types.EncodeDecimal64(&d64))
 	case *plan.Literal_Decimal128Val:
 		v := c.Lit.GetDecimal128Val()
-		zm = index.NewZM(types.T_decimal128, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal128, typ.Scale)
 		d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
 		index.UpdateZM(zm, types.EncodeDecimal128(&d128))
 	case *plan.Literal_Timestampval:
 		v := c.Lit.GetTimestampval()
-		scale := expr.Typ.Scale
+		scale := typ.Scale
 		if scale < 0 || scale > 6 {
 			err = moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			return

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -40,7 +41,7 @@ type IterInfo struct {
 	IterID ID
 }
 
-func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte) (readers []engine.Reader, err error) {
+func (t *Table) NewReader(ctx context.Context, parallel int, expr *plan.Expr, bytes []byte, _ bool) (readers []engine.Reader, err error) {
 	readers = make([]engine.Reader, parallel)
 	shardIDs := ShardIdSlice(bytes)
 
@@ -173,6 +174,16 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 		return resp.Batch, nil
 	}
 
+}
+
+func (t *TableReader) SetFilterZM(objectio.ZoneMap) {
+}
+
+func (t *TableReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (t *TableReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
 func (t *TableReader) Close() error {

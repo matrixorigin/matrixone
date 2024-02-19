@@ -177,6 +177,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes))
 	case types.T_bool:
 		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
+	case types.T_bit:
+		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
 	case types.T_int8:
 		row[i] = vector.GetFixedAt[int8](vec, rowIndex)
 	case types.T_uint8:

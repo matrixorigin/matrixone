@@ -16,6 +16,8 @@ package memoryengine
 
 import (
 	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,6 +36,11 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) ReplacePlan(execPlan *pb.Execute) (*pb.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
