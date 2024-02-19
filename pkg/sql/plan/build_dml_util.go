@@ -16,10 +16,11 @@ package plan
 
 import (
 	"context"
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1586,7 +1587,7 @@ func makeInsertPlan(
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
-							Typ: *DeepCopyType(pkTyp),
+							Typ: *pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									Name: tableDef.Pkey.PkeyColName,
@@ -1638,7 +1639,7 @@ func makeInsertPlan(
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
-							Typ: *DeepCopyType(pkTyp),
+							Typ: *pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
