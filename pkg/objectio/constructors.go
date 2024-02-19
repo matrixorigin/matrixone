@@ -19,14 +19,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fileservice.CacheData, error)
+type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (memorycache.CacheData, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fileservice.CacheData, err error) {
+	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
 			if err != nil {

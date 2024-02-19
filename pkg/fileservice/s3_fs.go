@@ -44,6 +44,7 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -105,6 +106,11 @@ func NewS3FS(
 			return nil, err
 		}
 	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
 
 	return fs, nil
 }
@@ -126,7 +132,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -732,7 +738,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(); err != nil {
+		allocator := s.allocator
+		if vector.Policy.Any(SkipMemoryCache) {
+			s.allocator = DefaultCacheDataAllocator
+		}
+
+		if err = entry.setCachedData(allocator); err != nil {
 			return err
 		}
 

@@ -18,16 +18,18 @@ import (
 	"bytes"
 	"io"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 )
 
-func (i *IOEntry) setCachedData() error {
+func (i *IOEntry) setCachedData(allocator CacheDataAllocator) error {
 	if i.ToCacheData == nil {
 		return nil
 	}
 	if len(i.Data) == 0 {
 		return nil
 	}
-	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, DefaultCacheDataAllocator)
+	bs, err := i.ToCacheData(bytes.NewReader(i.Data), i.Data, allocator)
 	if err != nil {
 		return err
 	}
@@ -58,7 +60,7 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 	if i.ReadCloserForRead != nil {
 		*i.ReadCloserForRead = io.NopCloser(bytes.NewReader(i.Data))
 	}
-	if err := i.setCachedData(); err != nil {
+	if err := i.setCachedData(DefaultCacheDataAllocator); err != nil {
 		return err
 	}
 
@@ -67,7 +69,7 @@ func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 	return nil
 }
 
-func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error) {
+func CacheOriginalData(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData memorycache.CacheData, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {

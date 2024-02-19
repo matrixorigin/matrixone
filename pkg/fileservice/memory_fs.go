@@ -32,6 +32,7 @@ import (
 type MemoryFS struct {
 	name string
 	sync.RWMutex
+	memCache        *MemCache
 	tree            *btree.BTreeG[*_MemFSEntry]
 	caches          []IOVectorCache
 	perfCounterSets []*perfcounter.CounterSet
@@ -47,7 +48,8 @@ func NewMemoryFS(
 ) (*MemoryFS, error) {
 
 	fs := &MemoryFS{
-		name: name,
+		name:     name,
+		memCache: NewMemCache(NewMemoryCache(1<<20, true, nil), nil),
 		tree: btree.NewBTreeG(func(a, b *_MemFSEntry) bool {
 			return a.FilePath < b.FilePath
 		}),
@@ -256,7 +258,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err := entry.setCachedData(m.memCache); err != nil {
 			return err
 		}
 

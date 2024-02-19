@@ -12,17 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
-
-import "sync/atomic"
-
-// RCBytes represents a reference counting data from cache
-// it is immutable, caller should not modify it and call Release after use
-type RCBytes struct {
-	d *Data
-	// the total size in the cache
-	size *atomic.Int64
-}
+package memorycache
 
 func (r RCBytes) Release() {
 	r.d.release(r.size)
@@ -35,7 +25,7 @@ func (r RCBytes) Bytes() []byte {
 	return r.d.Buf()
 }
 
-func (r RCBytes) Slice(n int) RCBytes {
+func (r RCBytes) Slice(n int) CacheData {
 	r.d.Truncate(n)
 	return r
 }
