@@ -18,9 +18,7 @@ import (
 	"context"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"math"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -275,7 +273,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	c.TNRPCAdjust()
+	c.RPC.Adjust()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -285,13 +283,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
-}
-
-func (c *Config) TNRPCAdjust() {
-	if c.RPC.ServerWorkers == 0 {
-		c.RPC.ServerWorkers = int(math.Max(100, float64(8*runtime.NumCPU())))
-	}
-	c.RPC.Adjust()
 }
 
 func (c *Config) SetDefaultValue() {
