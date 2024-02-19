@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strconv"
 	"sync"
 
@@ -41,6 +43,11 @@ type compilerContext struct {
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	mu                   sync.Mutex
+}
+
+func (c *compilerContext) ReplacePlan(execPlan *pb.Execute) (*pb.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
