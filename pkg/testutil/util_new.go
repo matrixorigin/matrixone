@@ -47,7 +47,7 @@ func SetupAutoIncrService() {
 		runtime.SetupProcessLevelRuntime(rt)
 	}
 	rt.SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrservice.NewIncrService(
 			"",
 			incrservice.NewMemStore(),

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
@@ -625,6 +626,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
+				func(op client.TxnOperator) {
+					trace.GetService().TxnCreated(op)
+				},
+			}),
 		)
 		c = client.NewTxnClient(
 			sender,
@@ -726,13 +732,15 @@ func (s *service) initIncrService() {
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrService)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
+	s.initTxnTraceService()
+
 	rt := runtime.ProcessLevelRuntime()
 	s.bootstrapService = bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
@@ -757,6 +765,19 @@ func (s *service) bootstrap() error {
 			}
 		}
 	})
+}
+
+func (s *service) initTxnTraceService() {
+	rt := runtime.ProcessLevelRuntime()
+	ts, err := trace.NewService(
+		s.cfg.UUID,
+		s._txnClient,
+		rt.Clock(),
+		s.sqlExecutor)
+	if err != nil {
+		panic(err)
+	}
+	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
 }
 
 type locker struct {

@@ -48,6 +48,8 @@ var (
 
 	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
 	GetLatestBind         = strings.ToUpper("GetLatestBind")
+
+	HandleTxnTrace = strings.ToUpper("txn-trace")
 )
 
 var (
@@ -79,6 +81,7 @@ var (
 		SetProtocolVersionMethod: handleSetProtocolVersion,
 		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
 		GetLatestBind:            handleGetLatestBind,
+		HandleTxnTrace:           handleTxnTrace,
 	}
 )
 

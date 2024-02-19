@@ -22,39 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
-var (
-	db            = "mo_debug"
-	txnTable      = "txn_event"
-	txnEntryTable = "txn_entry_event"
-
-	tables = []string{
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			txn_id                varchar(50)  not null,
-			cn                    varchar(100) not null,
-			event_type            varchar(10)  not null,
-			txn_status			  varchar(10),
-			snapshot_ts_physical  bigint,
-			snapshot_ts_logical   int,
-			commit_ts_physical    bigint,
-			commit_ts_logical     int,
-			primary key(ts, txn_id)
-		);`, db, txnTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			cn                    varchar(100) not null
-			event_type            varchar(10)  not null,
-			table_id 	          bigint       not null,
-			txn_id                varchar(50),
-			row_data              varchar(500) not null,
-			committed_ts_physical bigint,
-			committed_ts_logical  int,
-			primary key(ts, cn)
-		);`, db, txnEntryTable),
-	}
-)
-
 type txnEvent struct {
 	ts         int64
 	eventType  string
@@ -100,12 +67,9 @@ func (e txnEvent) toSQL(cn string) string {
 							event_type,
 							txn_id, 
 							txn_status, 
-							snapshot_ts_physical, 
-							snapshot_ts_logical, 
-							commit_ts_physical, 
-							commit_ts_logical, 
-							statement) values (%d, %s, %s, %x, %s, %d, %d, %d, %d, %s)`,
-		txnTable,
+							snapshot_ts,
+							commit_ts) values (%d, '%s', '%s', '%x', '%s', '%d-%d', '%d-%d')`,
+		TxnTable,
 		e.ts,
 		cn,
 		e.eventType,
@@ -115,30 +79,33 @@ func (e txnEvent) toSQL(cn string) string {
 		e.snapshotTS.LogicalTime,
 		e.commitTS.PhysicalTime,
 		e.commitTS.LogicalTime,
-		"",
 	)
 }
 
 type entryEvent struct {
-	ts          int64
-	eventType   string
-	tableID     uint64
-	txnID       []byte
-	row         []byte
-	committedAt timestamp.Timestamp
+	ts         int64
+	eventType  string
+	entryType  string
+	tableID    uint64
+	txnID      []byte
+	row        []byte
+	commitTS   timestamp.Timestamp
+	snapshotTS timestamp.Timestamp
 }
 
 func newApplyLogtailEvent(
 	ts int64,
 	tableID uint64,
+	entryType string,
 	row []byte,
-	committedAt timestamp.Timestamp) entryEvent {
+	commitTS timestamp.Timestamp) entryEvent {
 	return entryEvent{
-		ts:          ts,
-		tableID:     tableID,
-		row:         row,
-		committedAt: committedAt,
-		eventType:   "apply",
+		ts:        ts,
+		tableID:   tableID,
+		entryType: entryType,
+		row:       row,
+		commitTS:  commitTS,
+		eventType: "apply",
 	}
 }
 
@@ -146,13 +113,33 @@ func newCommitEntryEvent(
 	ts int64,
 	txnID []byte,
 	tableID uint64,
+	entryType string,
 	row []byte) entryEvent {
 	return entryEvent{
 		ts:        ts,
 		tableID:   tableID,
+		entryType: entryType,
 		txnID:     txnID,
 		row:       row,
 		eventType: "commit",
+	}
+}
+
+func newReadEntryEvent(
+	ts int64,
+	txnID []byte,
+	tableID uint64,
+	entryType string,
+	row []byte,
+	snapshotTS timestamp.Timestamp) entryEvent {
+	return entryEvent{
+		ts:         ts,
+		tableID:    tableID,
+		entryType:  entryType,
+		txnID:      txnID,
+		row:        row,
+		eventType:  "read",
+		snapshotTS: snapshotTS,
 	}
 }
 
@@ -161,19 +148,23 @@ func (e entryEvent) toSQL(cn string) string {
 							ts, 
 							cn, 
 							event_type,
+							entry_type,
 							table_id,
 							txn_id,  
 							row_data,
-							committed_ts_physical, 
-							committed_ts_logical) values (%d, %s, %s, %d, %x, %s, %d, %d)`,
-		txnEntryTable,
+							committed_ts,
+							snapshot_ts) values (%d, '%s', '%s', '%s', %d, '%x', '%s', '%d-%d', '%d-%d')`,
+		TxnEntryTable,
 		e.ts,
 		cn,
 		e.eventType,
+		e.entryType,
 		e.tableID,
 		e.txnID,
 		e.row,
-		e.committedAt.PhysicalTime,
-		e.committedAt.LogicalTime,
+		e.commitTS.PhysicalTime,
+		e.commitTS.LogicalTime,
+		e.snapshotTS.PhysicalTime,
+		e.snapshotTS.LogicalTime,
 	)
 }

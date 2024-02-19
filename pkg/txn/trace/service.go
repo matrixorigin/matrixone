@@ -16,15 +16,20 @@ package trace
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -43,9 +48,8 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		databaseCreated bool
-		enable          bool
-		entryFilters    []EntryFilter
+		enable       bool
+		entryFilters []EntryFilter
 	}
 
 	options struct {
@@ -84,6 +88,12 @@ func NewService(cn string,
 
 func (s *service) TxnCreated(op client.TxnOperator) {
 	if op.Txn().DisableTrace {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.mu.enable {
 		return
 	}
 
@@ -128,7 +138,7 @@ func (s *service) CommitEntries(
 	entries []*api.Entry) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if !s.mu.enable || len(s.mu.entryFilters) == 0 {
 		return
 	}
 
@@ -138,12 +148,14 @@ func (s *service) CommitEntries(
 	defer func() {
 		entryData.close()
 	}()
+
 	n := 0
 	for _, entry := range entries {
 		if entryData == nil {
 			entryData = newEntryData(entry, -1, ts)
 		} else {
 			entryData.reset()
+			entryData.init(entry, -1, ts)
 		}
 
 		skipped := true
@@ -174,12 +186,45 @@ func (s *service) CommitEntries(
 	s.closeBufferC <- buf
 }
 
+func (s *service) TxnRead(
+	txnID []byte,
+	snapshotTS timestamp.Timestamp,
+	tableID uint64,
+	columns []string,
+	bat *batch.Batch) {
+	entryData := newReadEntryData(tableID, snapshotTS, bat, columns, time.Now().UnixNano())
+	defer func() {
+		entryData.close()
+	}()
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(entryData) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		entryData.close()
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	entryData.createRead(
+		txnID,
+		buf,
+		func(e entryEvent) {
+			s.entryC <- e
+		})
+	s.closeBufferC <- buf
+}
+
 func (s *service) ApplyLogtail(
 	entry *api.Entry,
 	commitTSIndex int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if !s.mu.enable || len(s.mu.entryFilters) == 0 {
 		return
 	}
 
@@ -209,13 +254,14 @@ func (s *service) ApplyLogtail(
 	s.closeBufferC <- buf
 }
 
-func (s *service) Enable() {
+func (s *service) Enable() error {
+	if err := s.RefreshFilters(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.mu.databaseCreated {
-
-	}
 	s.mu.enable = true
+	return nil
 }
 
 func (s *service) Disable() {
@@ -224,16 +270,131 @@ func (s *service) Disable() {
 	s.mu.enable = false
 }
 
-func (s *service) AddEntryFilters(filters []EntryFilter) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mu.entryFilters = append(s.mu.entryFilters, filters...)
+func (s *service) AddEntryFilter(name string, columns []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txn.Use("mo_catalog")
+			res, err := txn.Exec(fmt.Sprintf("select rel_id from mo_tables where relname = '%s'", name), executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			defer res.Close()
+
+			var tables []uint64
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				tables = append(tables, vector.MustFixedCol[uint64](cols[0])...)
+				return true
+			})
+			if len(tables) == 0 {
+				return moerr.NewNoSuchTableNoCtx("", name)
+			}
+
+			txn.Use(DebugDB)
+			for _, id := range tables {
+				r, err := txn.Exec(getEntryFilterSQL(id, name, columns), executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				r.Close()
+			}
+			return nil
+		},
+		executor.Options{}.
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied().
+			WithDisableLock().
+			WithDisableTrace())
+	if err != nil {
+		return err
+	}
+
+	return s.RefreshFilters()
 }
 
-func (s *service) ClearEntryFilters() {
+func (s *service) ClearFilters() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txn.Use(DebugDB)
+			res, err := txn.Exec(
+				fmt.Sprintf("truncate table %s",
+					TraceEntryFilterTable),
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		},
+		executor.Options{}.
+			WithDisableLock().
+			WithDisableTrace().
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied())
+	if err != nil {
+		return err
+	}
+
+	return s.RefreshFilters()
+}
+
+func (s *service) RefreshFilters() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var filters []EntryFilter
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txn.Use(DebugDB)
+			res, err := txn.Exec(
+				fmt.Sprintf("select table_id, columns from %s",
+					TraceEntryFilterTable),
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			defer res.Close()
+
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					id := vector.MustFixedCol[uint64](cols[0])[i]
+					columns := cols[1].GetStringAt(i)
+					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
+				}
+				return true
+			})
+			return nil
+		},
+		executor.Options{}.
+			WithDisableLock().
+			WithDisableTrace().
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied())
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.entryFilters = s.mu.entryFilters[:0]
+	s.mu.entryFilters = filters
+	return nil
+}
+
+func (s *service) Close() {
+	s.stopper.Stop()
+	close(s.txnEventC)
+	close(s.entryC)
+	close(s.closeBufferC)
 }
 
 func (s *service) handleEvents(ctx context.Context) {
@@ -249,6 +410,7 @@ func (s *service) handleEvents(ctx context.Context) {
 		}
 		defer func() {
 			txnEvents = txnEvents[:0]
+			entryEvents = entryEvents[:0]
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -274,7 +436,7 @@ func (s *service) handleEvents(ctx context.Context) {
 				return nil
 			},
 			executor.Options{}.
-				WithDatabase(db).
+				WithDatabase(DebugDB).
 				WithDisableTrace().
 				WithDisableLock())
 		if err != nil {
@@ -304,33 +466,15 @@ func (s *service) handleEvents(ctx context.Context) {
 	}
 }
 
-func (s *service) mustCreateDatabaseLocked() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-	defer cancel()
-	now, _ := s.clock.Now()
-	s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			_, err := txn.Exec("show databases", executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-
-			return nil
-		},
-		executor.Options{}.
-			WithDatabase(db).
-			WithMinCommittedTS(now))
-}
-
 // EntryData entry data
 type EntryData struct {
-	id            uint64
-	at            int64
-	entryType     api.Entry_EntryType
-	columns       []string
-	vecs          []*vector.Vector
-	commitTSIndex int
+	id         uint64
+	at         int64
+	snapshotTS timestamp.Timestamp
+	entryType  string
+	columns    []string
+	vecs       []*vector.Vector
+	commitVec  *vector.Vector
 }
 
 func newEntryData(
@@ -338,19 +482,44 @@ func newEntryData(
 	commitTSIndex int,
 	at int64) *EntryData {
 	l := reuse.Alloc[EntryData](nil)
+	l.init(entry, commitTSIndex, at)
+	return l
+}
+
+func newReadEntryData(
+	tableID uint64,
+	snapshotTS timestamp.Timestamp,
+	bat *batch.Batch,
+	columns []string,
+	at int64) *EntryData {
+	l := reuse.Alloc[EntryData](nil)
+	l.at = at
+	l.snapshotTS = snapshotTS
+	l.id = tableID
+	l.entryType = "read"
+	l.columns = append(l.columns, columns...)
+	l.vecs = append(l.vecs, bat.Vecs...)
+	return l
+}
+
+func (l *EntryData) init(
+	entry *api.Entry,
+	commitTSIndex int,
+	at int64) {
 	l.at = at
 	l.id = entry.TableId
-	l.commitTSIndex = commitTSIndex
+	l.entryType = entry.EntryType.String()
 	l.columns = append(l.columns, entry.Bat.Attrs...)
-	for _, vec := range entry.Bat.Vecs {
+	for i, vec := range entry.Bat.Vecs {
 		v, err := vector.ProtoVectorToVector(vec)
 		if err != nil {
 			panic(err)
 		}
 		l.vecs = append(l.vecs, v)
+		if commitTSIndex == i {
+			l.commitVec = v
+		}
 	}
-	l.entryType = entry.EntryType
-	return l
 }
 
 func (l *EntryData) reset() {
@@ -359,10 +528,11 @@ func (l *EntryData) reset() {
 	}
 
 	l.id = 0
-	l.commitTSIndex = -1
+	l.commitVec = nil
 	l.columns = l.columns[:0]
 	l.vecs = l.vecs[:0]
-	l.entryType = api.Entry_EntryType(-1)
+	l.entryType = ""
+	l.snapshotTS = timestamp.Timestamp{}
 }
 
 func (l *EntryData) close() {
@@ -376,21 +546,22 @@ func (l *EntryData) createApply(
 		return
 	}
 
+	dst := buf.alloc(20)
 	rows := l.vecs[0].Length()
-	commitTS := vector.MustFixedCol[types.TS](l.vecs[l.commitTSIndex])
+	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
 		for col, name := range l.columns {
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			writeValue(columnsData, row, buf)
+			writeValue(columnsData, row, buf, dst)
 			if col != len(l.columns)-1 {
 				buf.buf.WriteString(", ")
 			}
 		}
 		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(newApplyLogtailEvent(l.at, l.id, data, commitTS[row].ToTimestamp()))
+		fn(newApplyLogtailEvent(l.at, l.id, l.entryType, data, commitTS[row].ToTimestamp()))
 	}
 }
 
@@ -402,6 +573,7 @@ func (l *EntryData) createCommit(
 		return
 	}
 
+	dst := buf.alloc(20)
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
@@ -409,13 +581,39 @@ func (l *EntryData) createCommit(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			writeValue(columnsData, row, buf)
+			writeValue(columnsData, row, buf, dst)
 			if col != len(l.columns)-1 {
 				buf.buf.WriteString(", ")
 			}
 		}
 		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(newCommitEntryEvent(l.at, txnID, l.id, data))
+		fn(newCommitEntryEvent(l.at, txnID, l.id, l.entryType, data))
+	}
+}
+
+func (l *EntryData) createRead(
+	txnID []byte,
+	buf *buffer,
+	fn func(e entryEvent)) {
+	if len(l.vecs) == 0 {
+		return
+	}
+
+	dst := buf.alloc(20)
+	rows := l.vecs[0].Length()
+	for row := 0; row < rows; row++ {
+		idx := buf.buf.GetWriteIndex()
+		for col, name := range l.columns {
+			columnsData := l.vecs[col]
+			buf.buf.WriteString(name)
+			buf.buf.WriteString(":")
+			writeValue(columnsData, row, buf, dst)
+			if col != len(l.columns)-1 {
+				buf.buf.WriteString(", ")
+			}
+		}
+		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+		fn(newReadEntryEvent(l.at, txnID, l.id, l.entryType, data, l.snapshotTS))
 	}
 }
 
@@ -445,4 +643,15 @@ func (b buffer) alloc(n int) []byte {
 	idx := b.buf.GetWriteIndex()
 	b.buf.SetWriteIndex(idx + n)
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func getEntryFilterSQL(
+	id uint64,
+	name string,
+	columns []string) string {
+	return fmt.Sprintf("insert into %s (table_id, table_name, columns) values (%d, '%s', '%s')",
+		TraceEntryFilterTable,
+		id,
+		name,
+		strings.Join(columns, ","))
 }

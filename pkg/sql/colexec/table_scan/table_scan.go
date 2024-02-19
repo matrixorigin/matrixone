@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -84,6 +85,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if bat.IsEmpty() {
 			continue
 		}
+
+		trace.GetService().TxnRead(
+			proc.TxnOperator.Txn().ID,
+			proc.TxnOperator.Txn().SnapshotTS,
+			arg.TableID,
+			arg.Attrs,
+			bat)
 
 		bat.Cnt = 1
 		anal.S3IOByte(bat)

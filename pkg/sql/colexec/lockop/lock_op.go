@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -30,9 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	tracePb "github.com/matrixorigin/matrixone/pkg/pb/trace"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -448,7 +445,6 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
-	startAt := time.Now()
 	result, err := lockService.Lock(
 		ctx,
 		tableID,
@@ -458,17 +454,6 @@ func doLock(
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
-
-	trace.GetService().TxnAcquireLock(
-		txn.ID,
-		tracePb.LockEvent{
-			TableID:  tableID,
-			Rows:     rows,
-			Options:  options,
-			Result:   result,
-			LockAt:   startAt.UnixNano(),
-			LockedAt: time.Now().UnixNano(),
-		})
 
 	// add bind locks
 	if err := txnOp.AddLockTable(result.LockedOn); err != nil {

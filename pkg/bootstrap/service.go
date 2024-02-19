@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -153,7 +154,15 @@ var (
 		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
 			catalog.MOTaskDB, time.Now().UnixNano()),
 	}
+
+	initSQLs []string
 )
+
+func init() {
+	initSQLs = append(initSQLs, step1InitSQLs...)
+	initSQLs = append(initSQLs, step2InitSQLs...)
+	initSQLs = append(initSQLs, trace.InitSQLs...)
+}
 
 type service struct {
 	lock    Locker
@@ -257,17 +266,13 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 }
 
 func (s *service) execBootstrap(ctx context.Context) error {
-	if err := s.exec.ExecTxn(ctx, execFunc(step1InitSQLs), executor.Options{}); err != nil {
+	opts := executor.Options{}.
+		WithMinCommittedTS(s.now()).
+		WithDisableTrace().
+		WithWaitCommittedLogApplied()
+	if err := s.exec.ExecTxn(ctx, execFunc(initSQLs), opts); err != nil {
 		return err
 	}
-	getLogger().Info("bootstrap mo step 1 completed")
-
-	// make sure txn start at now, and make sure can see the data of step1
-	opts := executor.Options{}.WithMinCommittedTS(s.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
-	if err := s.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
-		return err
-	}
-	getLogger().Info("bootstrap mo step 2 completed")
 
 	if s.client != nil {
 		getLogger().Info("wait bootstrap logtail applied")

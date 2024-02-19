@@ -14,14 +14,23 @@
 
 package trace
 
-// NewKeepEntryFilter returns a filter that only keeps the specified table and columns.
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+)
+
+// NewKeepTableFilter returns a filter that only keeps the specified table and columns.
 // Note: always keep pk column if pk index is specified.
-func NewKeepEntryFilter(
-	keepTableID uint64,
-	keepColumns []string) EntryFilter {
-	f := &tableEntryFilter{id: keepTableID}
+func NewKeepTableFilter(
+	id uint64,
+	column []string) EntryFilter {
+	f := &tableEntryFilter{id: id}
 	f.columns = make(map[string]struct{})
-	for _, c := range keepColumns {
+	for _, c := range column {
+		if c == "" {
+			continue
+		}
 		f.columns[c] = struct{}{}
 	}
 	return f
@@ -36,32 +45,39 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 	if entry.id != f.id {
 		return true
 	}
-
-	if len(f.columns) > 0 {
-		entry.columns = entry.columns[:0]
-		entry.vecs = entry.vecs[:0]
+	// only insert filter columns
+	if len(f.columns) > 0 &&
+		(entry.entryType == api.Entry_Insert.String() ||
+			entry.entryType == "read") {
+		newColumns := entry.columns[:0]
+		newVecs := entry.vecs[:0]
 		for i, attr := range entry.columns {
 			_, ok := f.columns[attr]
 			if ok {
-				entry.columns = append(entry.columns, attr)
-				entry.vecs = append(entry.vecs, entry.vecs[i])
+				newColumns = append(newColumns, attr)
+				newVecs = append(newVecs, entry.vecs[i])
 			}
 		}
+		entry.columns = newColumns
+		entry.vecs = newVecs
+	}
+	if entry.commitVec != nil &&
+		entry.entryType == api.Entry_Delete.String() {
+		newColumns := entry.columns[:0]
+		newVecs := entry.vecs[:0]
+
+		newColumns = append(newColumns, "__mo_rowid")
+		newVecs = append(newVecs, entry.vecs[0])
+
+		newColumns = append(newColumns, "pk")
+		newVecs = append(newVecs, entry.vecs[2])
+
+		entry.columns = newColumns
+		entry.vecs = newVecs
 	}
 	return false
 }
 
-// NewSkipTableFilter returns a filter that skip all table's filter.
-func NewSkipTableFilter(
-	keepTableID uint64) EntryFilter {
-	f := &skipTableEntryFilter{id: keepTableID}
-	return f
-}
-
-type skipTableEntryFilter struct {
-	id uint64
-}
-
-func (f *skipTableEntryFilter) Filter(entry *EntryData) bool {
-	return entry.id == f.id
+func (f *tableEntryFilter) Name() string {
+	return fmt.Sprintf("table[%d]: %+v\n", f.id, f.columns)
 }

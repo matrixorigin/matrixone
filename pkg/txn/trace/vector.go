@@ -25,8 +25,8 @@ import (
 func writeValue(
 	vec *vector.Vector,
 	row int,
-	buf *buffer) {
-	dst := buf.alloc(20)
+	buf *buffer,
+	dst []byte) {
 	t := vec.GetType()
 	switch t.Oid {
 	case types.T_bool:
@@ -88,10 +88,19 @@ func writeValue(
 		v := vector.MustFixedCol[types.Uuid](vec)[row]
 		buf.buf.MustWrite(v[:])
 	case types.T_char, types.T_varchar, types.T_binary:
-		buf.buf.MustWrite(vec.GetBytesAt(row))
+		data := vec.GetBytesAt(row)
+		buf.buf.MustWrite(data)
 	case types.T_enum:
 		v := vector.MustFixedCol[types.Enum](vec)[row]
 		buf.buf.MustWrite(uintToString(dst, uint64(v)))
+	case types.T_Rowid:
+		v := vector.MustFixedCol[types.Rowid](vec)[row]
+		buf.buf.WriteString(v.String())
+	case types.T_TS:
+		v := vector.MustFixedCol[types.TS](vec)[row]
+		buf.buf.MustWrite(intToString(dst, int64(v.Physical())))
+		buf.buf.WriteString("-")
+		buf.buf.MustWrite(intToString(dst, int64(v.Logical())))
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
