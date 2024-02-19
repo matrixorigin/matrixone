@@ -16,6 +16,8 @@ package cnservice
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -41,10 +43,17 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithTaskStorageFactory setup the special task strorage factory
+// WithTaskStorageFactory setup the special task storage factory
 func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	return func(s *service) {
 		s.task.storageFactory = factory
+	}
+}
+
+// WithBootstrapOptions setup bootstrap options
+func WithBootstrapOptions(options ...bootstrap.Option) Option {
+	return func(s *service) {
+		s.options.bootstrapOptions = options
 	}
 }
 

@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
 		tasks     []task.AsyncTask
-		workingCN []string
+		workingCN map[string]struct{}
 
 		expected map[uint64]struct{}
 	}{
@@ -57,7 +57,7 @@ func TestGetExpiredTasks(t *testing.T) {
 				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 			},
-			workingCN: []string{"b"},
+			workingCN: map[string]struct{}{"b": {}},
 
 			expected: map[uint64]struct{}{1: {}},
 		},
@@ -67,7 +67,7 @@ func TestGetExpiredTasks(t *testing.T) {
 				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().Add(-taskSchedulerDefaultTimeout - 1).UnixMilli()},
 				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 			},
-			workingCN: []string{"a", "b"},
+			workingCN: map[string]struct{}{"a": {}, "b": {}},
 
 			expected: map[uint64]struct{}{1: {}},
 		},
@@ -75,8 +75,8 @@ func TestGetExpiredTasks(t *testing.T) {
 
 	for _, c := range cases {
 		_, results := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
-		for _, task := range results {
-			_, ok := c.expected[task.ID]
+		for _, asyncTask := range results {
+			_, ok := c.expected[asyncTask.ID]
 			assert.True(t, ok)
 		}
 	}
@@ -85,7 +85,7 @@ func TestGetExpiredTasks(t *testing.T) {
 func TestGetCNOrderedMap(t *testing.T) {
 	cases := []struct {
 		tasks     []task.AsyncTask
-		workingCN []string
+		workingCN map[string]struct{}
 
 		expected *cnMap
 	}{
@@ -100,7 +100,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()}},
-			workingCN: []string{"a", "b"},
+			workingCN: map[string]struct{}{"a": {}, "b": {}},
 
 			expected: &cnMap{
 				m:           map[string]uint32{"a": 1, "b": 2},
@@ -113,7 +113,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()}},
-			workingCN: []string{"a", "b"},
+			workingCN: map[string]struct{}{"a": {}, "b": {}},
 
 			expected: &cnMap{
 				m:           map[string]uint32{"a": 3, "b": 1},
