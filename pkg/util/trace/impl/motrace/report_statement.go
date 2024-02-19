@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -571,6 +572,8 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// duration is filled in s.MarkResponseAt()
+		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
 		if err != nil {
 			outBytes += ErrorPkgConst + int64(len(err.Error()))
 		}
@@ -585,6 +588,10 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes
 			s.Report(ctx)
 		}
 	}
+}
+
+func addStatementDurationCounter(tenant, querytype string, duration time.Duration) {
+	metric.StatementDuration(tenant, querytype).Add(float64(duration))
 }
 
 type StatementInfoStatus int
