@@ -39,7 +39,7 @@ func TestBootstrap(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
+	b := NewService(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
@@ -68,7 +68,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
+	b := NewService(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
@@ -97,8 +97,10 @@ func TestBootstrapWithWait(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	b := NewBootstrapper(
-		&memLocker{id: 1},
+	b := NewService(
+		&memLocker{ids: map[string]uint64{
+			bootstrapKey: 1,
+		}},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
 		exec)
@@ -111,12 +113,18 @@ func TestBootstrapWithWait(t *testing.T) {
 
 type memLocker struct {
 	sync.Mutex
-	id uint64
+	ids map[string]uint64
 }
 
-func (l *memLocker) Get(ctx context.Context) (bool, error) {
+func (l *memLocker) Get(
+	ctx context.Context,
+	key string) (bool, error) {
 	l.Lock()
 	defer l.Unlock()
-	l.id++
-	return l.id == 1, nil
+	if l.ids == nil {
+		l.ids = make(map[string]uint64)
+	}
+
+	l.ids[key]++
+	return l.ids[key] == 1, nil
 }
