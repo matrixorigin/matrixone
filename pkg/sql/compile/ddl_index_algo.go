@@ -16,12 +16,13 @@ package compile
 
 import (
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strconv"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
@@ -101,7 +102,7 @@ func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryData
 	}
 
 	var totalCnt int64
-	rs.ReadRows(func(cols []*vector.Vector) bool {
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
 		return false
 	})
