@@ -264,7 +264,7 @@ split_part(s1, delim, 3)    split_part(s1, delim, 4)
 iHHDIUWH*&*(UIJCSi    f
 null    null
 null    null
-null    &&n e89__+&&
+    &&n e89__+&&
 SELECT split_part(s1,delim,count1) FROM split_part_02 WHERE count2 IS NOT NULL;
 split_part(s1, delim, count1)
 
@@ -322,7 +322,7 @@ reverse(split_part(s1, delim, 3))
 iSCJIU(*&*HWUIDHHi
 null
 null
-null
+
 DROP TABLE IF EXISTS split_part_03;
 DROP TABLE IF EXISTS split_part_04;
 CREATE TABLE split_part_03(
