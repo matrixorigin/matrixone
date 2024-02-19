@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -200,6 +201,14 @@ type Transaction struct {
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
 	pkCount              int
+}
+
+// returns the offset of previous statement, or 0 if there is no previous statement
+func (txn *Transaction) getWriteOffset() int {
+	if txn.statementID > 0 {
+		return txn.statements[txn.statementID-1]
+	}
+	return 0
 }
 
 type Pos struct {
@@ -525,8 +534,6 @@ type txnTable struct {
 	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
@@ -543,6 +550,10 @@ type txnTable struct {
 	proc atomic.Pointer[process.Process]
 
 	createByStatementID int
+}
+
+func (tbl *txnTable) getTableWriteOffset() int {
+	return tbl.db.txn.getWriteOffset()
 }
 
 type column struct {
