@@ -634,9 +634,6 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
 	ret := make([]string, 0)
 	for _, fkey := range fkeys {
-		if !fkey.IsReady {
-			continue
-		}
 		if fkey.ForeignTbl != 0 {
 			continue
 		}

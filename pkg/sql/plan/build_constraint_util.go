@@ -326,51 +326,6 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func isNewCodeReadOldData(fkey *plan.ForeignKeyDef) bool {
-	if !fkey.IsReady &&
-		len(fkey.ParentDbName) == 0 &&
-		len(fkey.ParentTblName) == 0 &&
-		len(fkey.ParentCols) == 0 {
-		return true
-	}
-	return false
-}
-
-func rebuildFkey(ctx CompilerContext, dbName string, tableDef *plan.TableDef) error {
-	needRebuild := make([]*plan.ForeignKeyDef, 0)
-	for _, fkey := range tableDef.Fkeys {
-		if fkey.IsReady {
-			continue
-		}
-		if !isNewCodeReadOldData(fkey) {
-			needRebuild = append(needRebuild, fkey)
-		}
-	}
-	if len(needRebuild) == 0 {
-		return nil
-	}
-
-	//1. yield fk data &  check fk col valid
-	fkDataArr := make([]*FkData, 0)
-	for _, fkey := range needRebuild {
-		fkData, err := getForeignKeyData2(ctx, tableDef, fkey)
-		if err != nil {
-			return err
-		}
-		if !fkData.Def.IsReady {
-			return moerr.NewInternalError(ctx.GetContext(), "foreign key is not ready")
-		}
-		fkDataArr = append(fkDataArr, fkData)
-	}
-
-	//2. update constraint
-	err := ctx.UpdateFKConstraint(dbName, tableDef.Name, fkDataArr)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		typ:       typ,

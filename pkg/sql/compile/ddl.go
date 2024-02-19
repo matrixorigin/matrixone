@@ -881,160 +881,257 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	//fkDbs := qry.GetFkDbs()
-	//if len(fkDbs) > 0 {
-	//	fkTables := qry.GetFkTables()
-	//	//get the relation of created table above again.
-	//	//due to the colId may be changed.
-	//	newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
-	//	if err != nil {
-	//		getLogger().Info("createTable",
-	//			zap.String("databaseName", c.db),
-	//			zap.String("tableName", qry.GetTableDef().GetName()),
-	//			zap.Error(err),
-	//		)
-	//		return err
-	//	}
-	//	tblId := newRelation.GetTableID(c.ctx)
-	//
-	//	newTableDef, err := newRelation.TableDefs(c.ctx)
-	//	if err != nil {
-	//		getLogger().Info("createTable",
-	//			zap.String("databaseName", c.db),
-	//			zap.String("tableName", qry.GetTableDef().GetName()),
-	//			zap.Error(err),
-	//		)
-	//		return err
-	//	}
-	//	//get the columnId of the column from newTableDef
-	//	var colNameToId = make(map[string]uint64)
-	//	var oldCt *engine.ConstraintDef
-	//	for _, def := range newTableDef {
-	//		if attr, ok := def.(*engine.AttributeDef); ok {
-	//			colNameToId[attr.Attr.Name] = attr.Attr.ID
-	//		}
-	//		if ct, ok := def.(*engine.ConstraintDef); ok {
-	//			oldCt = ct
-	//		}
-	//	}
-	//	colId2Name := make(map[uint64]string)
-	//	for _, col := range planCols {
-	//		colId2Name[col.ColId] = col.Name
-	//	}
-	//	//1. update fk info in child table.
-	//	//column ids of column names in child table have changed after
-	//	//the table is created by engine.Database.Create.
-	//	//refresh column ids of column names in child table.
-	//	newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
-	//	for i, fkey := range qry.GetTableDef().Fkeys {
-	//		newDef := &plan.ForeignKeyDef{
-	//			Name:          fkey.Name,
-	//			Cols:          make([]uint64, len(fkey.Cols)),
-	//			ForeignTbl:    fkey.ForeignTbl,
-	//			ForeignCols:   make([]uint64, len(fkey.ForeignCols)),
-	//			OnDelete:      fkey.OnDelete,
-	//			OnUpdate:      fkey.OnUpdate,
-	//			IsReady:       fkey.IsReady,
-	//			ParentDbName:  fkey.ParentDbName,
-	//			ParentTblName: fkey.ParentTblName,
-	//			ParentCols:    make([]string, len(fkey.ParentCols)),
-	//		}
-	//		copy(newDef.ForeignCols, fkey.ForeignCols)
-	//		copy(newDef.ParentCols, fkey.ParentCols)
-	//		if fkey.IsReady {
-	//			//if it is fk self, the parent table is same as the child table.
-	//			//refresh the ForeignCols also.
-	//			if fkey.ForeignTbl == 0 {
-	//				for j, colId := range fkey.ForeignCols {
-	//					//old colId -> colName
-	//					colName := colId2Name[colId]
-	//					//colName -> new colId
-	//					newDef.ForeignCols[j] = colNameToId[colName]
-	//				}
-	//			} else {
-	//				copy(newDef.ForeignCols, fkey.ForeignCols)
-	//			}
-	//		}
-	//
-	//		//refresh child table column id
-	//		for idx, colName := range qry.GetFkCols()[i].Cols {
-	//			newDef.Cols[idx] = colNameToId[colName]
-	//		}
-	//		newFkeys[i] = newDef
-	//	}
-	//	// remove old fk settings
-	//	newCt, err := MakeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
-	//		Fkeys: newFkeys,
-	//	})
-	//	if err != nil {
-	//		getLogger().Info("createTable",
-	//			zap.String("databaseName", c.db),
-	//			zap.String("tableName", qry.GetTableDef().GetName()),
-	//			zap.Error(err),
-	//		)
-	//		return err
-	//	}
-	//	err = newRelation.UpdateConstraint(c.ctx, newCt)
-	//	if err != nil {
-	//		getLogger().Info("createTable",
-	//			zap.String("databaseName", c.db),
-	//			zap.String("tableName", qry.GetTableDef().GetName()),
-	//			zap.Error(err),
-	//		)
-	//		return err
-	//	}
-	//
-	//	//2. need to append TableId to parent's TableDef.RefChildTbls
-	//	for i, fkTableName := range fkTables {
-	//		fkDbName := fkDbs[i]
-	//		fkey := qry.GetTableDef().Fkeys[i]
-	//		if !fkey.IsReady {
-	//			continue
-	//		}
-	//		if fkey.ForeignTbl == 0 {
-	//			//fk self refer
-	//			//add current table to parent's children table
-	//			err = AddRefChildTbl(c.ctx, newRelation, 0)
-	//			if err != nil {
-	//				getLogger().Info("createTable",
-	//					zap.String("databaseName", c.db),
-	//					zap.String("tableName", qry.GetTableDef().GetName()),
-	//					zap.Error(err),
-	//				)
-	//				return err
-	//			}
-	//			continue
-	//		}
-	//		fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
-	//		if err != nil {
-	//			getLogger().Info("createTable",
-	//				zap.String("databaseName", c.db),
-	//				zap.String("tableName", qry.GetTableDef().GetName()),
-	//				zap.Error(err),
-	//			)
-	//			return err
-	//		}
-	//		fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
-	//		if err != nil {
-	//			getLogger().Info("createTable",
-	//				zap.String("databaseName", c.db),
-	//				zap.String("tableName", qry.GetTableDef().GetName()),
-	//				zap.Error(err),
-	//			)
-	//			return err
-	//		}
-	//		//add current table to parent's children table
-	//		err = AddRefChildTbl(c.ctx, fkRelation, tblId)
-	//		if err != nil {
-	//			getLogger().Info("createTable",
-	//				zap.String("databaseName", c.db),
-	//				zap.String("tableName", qry.GetTableDef().GetName()),
-	//				zap.Error(err),
-	//			)
-	//			return err
-	//		}
-	//	}
-	//}
+	// handle fk that refers to others tables
+	fkDbs := qry.GetFkDbs()
+	if len(fkDbs) > 0 {
+		fkTables := qry.GetFkTables()
+		//get the relation of created table above again.
+		//due to the colId may be changed.
+		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		tblId := newRelation.GetTableID(c.ctx)
+
+		newTableDef, err := newRelation.TableDefs(c.ctx)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		//get the columnId of the column from newTableDef
+		var colNameToId = make(map[string]uint64)
+		var oldCt *engine.ConstraintDef
+		for _, def := range newTableDef {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+			}
+		}
+		//old colId -> colName
+		colId2Name := make(map[uint64]string)
+		for _, col := range planCols {
+			colId2Name[col.ColId] = col.Name
+		}
+		//1. update fk info in child table.
+		//column ids of column names in child table have changed after
+		//the table is created by engine.Database.Create.
+		//refresh column ids of column names in child table.
+		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
+		for i, fkey := range qry.GetTableDef().Fkeys {
+			newDef := &plan.ForeignKeyDef{
+				Name:        fkey.Name,
+				Cols:        make([]uint64, len(fkey.Cols)),
+				ForeignTbl:  fkey.ForeignTbl,
+				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:    fkey.OnDelete,
+				OnUpdate:    fkey.OnUpdate,
+			}
+			copy(newDef.ForeignCols, fkey.ForeignCols)
+
+			//if it is fk self, the parent table is same as the child table.
+			//refresh the ForeignCols also.
+			if fkey.ForeignTbl == 0 {
+				for j, colId := range fkey.ForeignCols {
+					//old colId -> colName
+					colName := colId2Name[colId]
+					//colName -> new colId
+					newDef.ForeignCols[j] = colNameToId[colName]
+				}
+			} else {
+				copy(newDef.ForeignCols, fkey.ForeignCols)
+			}
+
+			//refresh child table column id
+			for idx, colName := range qry.GetFkCols()[i].Cols {
+				newDef.Cols[idx] = colNameToId[colName]
+			}
+			newFkeys[i] = newDef
+		}
+		// remove old fk settings
+		newCt, err := MakeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
+			Fkeys: newFkeys,
+		})
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		err = newRelation.UpdateConstraint(c.ctx, newCt)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+
+		//2. need to append TableId to parent's TableDef.RefChildTbls
+		for i, fkTableName := range fkTables {
+			fkDbName := fkDbs[i]
+			fkey := qry.GetTableDef().Fkeys[i]
+			if fkey.ForeignTbl == 0 {
+				//fk self refer
+				//add current table to parent's children table
+				err = AddRefChildTbl(c.ctx, newRelation, 0)
+				if err != nil {
+					getLogger().Info("createTable",
+						zap.String("databaseName", c.db),
+						zap.String("tableName", qry.GetTableDef().GetName()),
+						zap.Error(err),
+					)
+					return err
+				}
+				continue
+			}
+			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+			//add current table to parent's children table
+			err = AddRefChildTbl(c.ctx, fkRelation, tblId)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		}
+	}
+
+	// handle fk forward reference
+	fkRefersToMe := qry.GetFksReferToMe()
+	if len(fkRefersToMe) > 0 {
+		//1. get the relation of created table above again.
+		//get the relation of created table above again.
+		//due to the colId may be changed.
+		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		tblId := newRelation.GetTableID(c.ctx)
+
+		newTableDef, err := newRelation.TableDefs(c.ctx)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		//get the columnId of the column from newTableDef
+		var colNameToId = make(map[string]uint64)
+		for _, def := range newTableDef {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				colNameToId[attr.Attr.Name] = attr.Attr.ID
+			}
+		}
+		//1.1 update the column id of the column names in this table.
+		//2. update fk info in the child table.
+		for _, info := range fkRefersToMe {
+			//update foreignCols in fk
+			newDef := &plan.ForeignKeyDef{
+				Name:        info.Def.Name,
+				Cols:        make([]uint64, len(info.Def.Cols)),
+				ForeignTbl:  tblId,
+				ForeignCols: make([]uint64, len(info.Def.ForeignCols)),
+				OnDelete:    info.Def.OnDelete,
+				OnUpdate:    info.Def.OnUpdate,
+			}
+			//child table column ids of the child table
+			copy(newDef.Cols, info.Def.Cols)
+			//parent table column ids of the parent table
+			for j, colReferred := range info.ColsReferred.Cols {
+				//colName -> new colId
+				if id, has := colNameToId[colReferred]; has {
+					newDef.ForeignCols[j] = id
+				} else {
+					err := moerr.NewInternalError(c.ctx, "no column %s", colReferred)
+					getLogger().Info("createTable",
+						zap.String("databaseName", c.db),
+						zap.String("tableName", qry.GetTableDef().GetName()),
+						zap.Error(err),
+					)
+					return err
+				}
+			}
+
+			// add the fk def into the child table
+			childDb, err := c.e.Database(c.ctx, info.Db, c.proc.TxnOperator)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+			childTable, err := childDb.Relation(c.ctx, info.Table, nil)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+			err = AddFkey(c.ctx, childTable, newDef)
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+			// add the child table id -- tblId into the current table -- refChildDef
+			err = AddRefChildTbl(c.ctx, newRelation, childTable.GetTableID(c.ctx))
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		}
+	}
 
 	// build index table
 	for _, def := range qry.IndexTables {
@@ -1564,6 +1661,35 @@ func AddRefChildTbl(ctx context.Context, fkRelation engine.Relation, tblId uint6
 	}
 	oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
 	newCt, err := MakeNewCreateConstraint(oldCt, oldRefChildDef)
+	if err != nil {
+		return err
+	}
+	return fkRelation.UpdateConstraint(ctx, newCt)
+}
+
+func AddFkey(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
+	fkTableDef, err := fkRelation.TableDefs(ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	var oldFkeys *engine.ForeignKeyDef
+	for _, def := range fkTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			for _, ct := range oldCt.Cts {
+				if old, ok := ct.(*engine.ForeignKeyDef); ok {
+					oldFkeys = old
+				}
+			}
+			break
+		}
+	}
+	if oldFkeys == nil {
+		oldFkeys = &engine.ForeignKeyDef{}
+	}
+	oldFkeys.Fkeys = append(oldFkeys.Fkeys, fkey)
+	newCt, err := MakeNewCreateConstraint(oldCt, oldFkeys)
 	if err != nil {
 		return err
 	}

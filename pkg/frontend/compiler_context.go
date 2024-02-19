@@ -87,19 +87,14 @@ func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
 	for i, fkData := range fkDatas {
 		fkey := fkData.Def
 		newDef := &plan.ForeignKeyDef{
-			Name:          fkey.Name,
-			Cols:          make([]uint64, len(fkey.Cols)),
-			ForeignTbl:    fkey.ForeignTbl,
-			ForeignCols:   make([]uint64, len(fkey.ForeignCols)),
-			OnDelete:      fkey.OnDelete,
-			OnUpdate:      fkey.OnUpdate,
-			IsReady:       fkey.IsReady,
-			ParentDbName:  fkey.ParentDbName,
-			ParentTblName: fkey.ParentTblName,
-			ParentCols:    make([]string, len(fkey.ParentCols)),
+			Name:        fkey.Name,
+			Cols:        make([]uint64, len(fkey.Cols)),
+			ForeignTbl:  fkey.ForeignTbl,
+			ForeignCols: make([]uint64, len(fkey.ForeignCols)),
+			OnDelete:    fkey.OnDelete,
+			OnUpdate:    fkey.OnUpdate,
 		}
 		copy(newDef.ForeignCols, fkey.ForeignCols)
-		copy(newDef.ParentCols, fkey.ParentCols)
 		for idx, colName := range fkData.Cols.Cols {
 			newDef.Cols[idx] = colNameToId[colName]
 		}
