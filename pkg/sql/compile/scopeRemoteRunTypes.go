@@ -539,17 +539,17 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	for {
 		select {
 		case <-getCtx.Done():
-			colexec.Srv.GetProcByUuid(uid, true)
+			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
 
 		case <-receiver.ctx.Done():
-			colexec.Srv.GetProcByUuid(uid, true)
+			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, nil
 
 		default:
-			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
+			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
 				// it's bad to call the Gosched() here.
 				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
 				runtime.Gosched()
