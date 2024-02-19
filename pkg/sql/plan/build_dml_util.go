@@ -112,9 +112,22 @@ type deleteNodeInfo struct {
 
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
-	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
+	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	checkInsertPkDup bool, pkFilterExpr []*Expr, newPartitionExpr *Expr, isInsertWithoutAutoPkCol bool) error {
+	checkInsertPkDup bool, isInsertWithoutAutoPkCol bool) error {
+
+	pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, tableDef)
+	if err != nil {
+		return  err
+	}
+	var pkFilterExpr []*Expr
+	var newPartitionExpr *Expr
+	if CNPrimaryCheck && len(pkPosInValues) > 0 {
+		pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
+		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
+		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
+		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+	}
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -124,8 +137,9 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := appendInsertPlanWithRelateIndexTable(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
-	return err
+	return appendInsertPlanWithRelateIndexTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef, 
+		0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, 
+		newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
 }
 
 // buildUpdatePlans  build update plan.
@@ -202,8 +216,10 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = appendInsertPlanWithRelateIndexTable(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil)
+	err = appendInsertPlanWithRelateIndexTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, 
+		updatePlanCtx.updateColLength, sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup,
+		 updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil,
+	)
 	return err
 }
 
@@ -1156,23 +1172,10 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 
 // appendInsertPlanWithRelateIndexTable build insert plan for one table and its related index table
 func appendInsertPlanWithRelateIndexTable(
-	ctx CompilerContext,
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	objRef *ObjectRef,
-	tableDef *TableDef,
-	updateColLength int,
-	sourceStep int32,
-	addAffectedRows bool,
-	isFkRecursionCall bool,
-	checkInsertPkDup bool,
-	updatePkCol bool,
-	pkFilterExprs []*Expr,
-	partitionExpr *Expr,
-	isInsertWithoutAutoPkCol bool,
-	checkInsertPkDupForHiddenIndexTable bool,
-	indexSourceColTypes []*plan.Type,
-	fuzzymessage *OriginTableMessageForFuzzy,
+	stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef,
+	tableDef *TableDef, updateColLength int, sourceStep int32, addAffectedRows bool, isFkRecursionCall bool,
+	checkInsertPkDup bool, updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, isInsertWithoutAutoPkCol bool,
+	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -1203,12 +1206,27 @@ func appendInsertPlanWithRelateIndexTable(
 					return err
 				}
 
+				var pkFilterExprForHiddenTable []*Expr
 				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
 
 				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
 				// with the primary key of the hidden table as the unique key.
 				// package contains some information needed by the fuzzy filter to run background SQL.
 				if indexdef.GetUnique() {
+					_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
+					// remove row_id
+					for i, colVal := range idxTableDef.Cols {
+						if colVal.Name == catalog.Row_ID {
+							idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
+							break
+						}
+					}
+					pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, idxTableDef)
+					if err != nil {
+						return  err
+					}
+					pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
+
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
@@ -1230,7 +1248,7 @@ func appendInsertPlanWithRelateIndexTable(
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = appendOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
+				err = appendOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, pkFilterExprForHiddenTable, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
 				if err != nil {
 					return err
 				}

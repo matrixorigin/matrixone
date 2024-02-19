@@ -87,19 +87,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
-	pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, tableDef)
-	if err != nil {
-		return nil, err
-	}
-	var pkFilterExprs []*Expr
-	// var pkPosInValues map[int]int
-	var newPartitionExpr *Expr
-	if CNPrimaryCheck && len(pkPosInValues) > 0 {
-		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
-		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
-		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
-	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	objRef := tblInfo.objRef[0]
@@ -262,7 +249,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans( ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -344,6 +331,7 @@ func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef
 			}
 		}
 	default:
+		// TODO(jensenojs):need to support more type, such as load or update ?
 		return pkPosInValues, nil
 	}
 	return pkPosInValues, nil
