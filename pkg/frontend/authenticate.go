@@ -837,6 +837,11 @@ var (
 		"query_result_timeout":   0,
 		"lower_case_table_names": 0,
 	}
+	sysAccountTables = map[string]struct{}{
+		catalog.MOVersionTable:       {},
+		catalog.MOUpgradeTable:       {},
+		catalog.MOUpgradeTenantTable: {},
+	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
 		"mo_database":                 0,
@@ -2035,6 +2040,10 @@ func isIndexTable(name string) bool {
 // isClusterTable decides a table is the cluster table or not
 func isClusterTable(dbName, name string) bool {
 	if dbName == moCatalog {
+		if _, ok := sysAccountTables[name]; ok {
+			return false
+		}
+
 		//if it is neither among the tables nor the index table,
 		//it is the cluster table.
 		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {

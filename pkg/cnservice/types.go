@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/cacheservice"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -71,6 +73,8 @@ type Service interface {
 	ID() string
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
+	GetSQLExecutor() executor.SQLExecutor
+	GetBootstrapService() bootstrap.Service
 	WaitSystemInitCompleted(ctx context.Context) error
 }
 
@@ -551,6 +555,7 @@ type service struct {
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
 	_hakeeperClient        logservice.CNHAKeeperClient
+	hakeeperConnected      chan struct{}
 	initTxnSenderOnce      sync.Once
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
@@ -563,11 +568,13 @@ type service struct {
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
+	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to send query request between CN services.
 	queryService queryservice.QueryService
 	// udfService is used to handle non-sql udf
-	udfService udf.Service
+	udfService       udf.Service
+	bootstrapService bootstrap.Service
 
 	stopper     *stopper.Stopper
 	aicm        *defines.AutoIncrCacheManager
@@ -584,6 +591,10 @@ type service struct {
 	gossipNode  *gossip.Node
 	cacheServer cacheservice.CacheService
 	config      *util.ConfigData
+
+	options struct {
+		bootstrapOptions []bootstrap.Option
+	}
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
