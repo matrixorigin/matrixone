@@ -124,7 +124,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
+	err := appendInsertPlanWithRelateIndexTable(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
 	return err
 }
 
@@ -202,7 +202,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
+	err = appendInsertPlanWithRelateIndexTable(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
 		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil)
 	return err
 }
@@ -429,7 +429,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil)
+						err = appendOneInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil)
 						if err != nil {
 							return err
 						}
@@ -551,7 +551,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, masterObjRef, insertEntriesTableDef,
+						err = appendOneInsertPlan(ctx, builder, bindCtx, masterObjRef, insertEntriesTableDef,
 							1, preUKStep, false, false,
 							false, true, nil, nil,
 							false, false, nil, nil)
@@ -665,7 +665,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertEntriesTableDef.Cols = append(insertEntriesTableDef.Cols, DeepCopyColDef(col))
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, entriesObjRef, insertEntriesTableDef,
+						err = appendOneInsertPlan(ctx, builder, bindCtx, entriesObjRef, insertEntriesTableDef,
 							1, preUKStep, false, false,
 							false, true, nil, nil,
 							false, false, nil, nil)
@@ -1154,22 +1154,8 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 	return lastNodeId
 }
 
-// makeInsertPlan  build insert plan for one table
-/**
-[o]sink_scan -> lock(retry when err) -> insert
-[u1]sink_scan -> preinsert_uk -> sink
-	[u1]sink_scan -> lock -> insert
-	[u1]sink_scan -> group_by -> filter      // check pk by insert rows
-	[u1]sink_scan -> join（u1） -> filter      // check pk by rows in origin table
-[u2]sink_scan -> preinsert_uk -> sink
-	[u2]sink_scan -> lock -> insert
-	[u2]sink_scan -> group_by -> filter      // check pk by insert rows
-	[u2]sink_scan -> join（u2） -> filter      // check pk by rows in origin table
-[o]sink_scan -> group_by -> filter      // check pk by insert rows
-[o]sink_scan -> join（o） -> filter      // check pk by rows in origin table
-[o]sink_scan -> join(join fk) -> filter  // check foreign key
-*/
-func makeInsertPlan(
+// appendInsertPlanWithRelateIndexTable build insert plan for one table and its related index table
+func appendInsertPlanWithRelateIndexTable(
 	ctx CompilerContext,
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -1244,7 +1230,7 @@ func makeInsertPlan(
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
+				err = appendOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
 				if err != nil {
 					return err
 				}
@@ -1282,7 +1268,7 @@ func makeInsertPlan(
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes, fuzzymessage)
+				err = appendOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes, fuzzymessage)
 				if err != nil {
 					return err
 				}
@@ -1322,7 +1308,7 @@ func makeInsertPlan(
 			for i := range tableDef.Cols {
 				colTypes[i] = tableDef.Cols[i].Typ
 			}
-			err = makeOneInsertPlan(ctx, builder, bindCtx, idxRefs[2], idxTableDefs[2], 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes, fuzzymessage)
+			err = appendOneInsertPlan(ctx, builder, bindCtx, idxRefs[2], idxTableDefs[2], 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, false, colTypes, fuzzymessage)
 			if err != nil {
 				return err
 			}
@@ -1334,10 +1320,16 @@ func makeInsertPlan(
 		}
 	}
 
-	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, checkInsertPkDup, updatePkCol, pkFilterExprs, partitionExpr, isInsertWithoutAutoPkCol, checkInsertPkDupForHiddenIndexTable, indexSourceColTypes, fuzzymessage)
+	return appendOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, checkInsertPkDup, updatePkCol, pkFilterExprs, partitionExpr, isInsertWithoutAutoPkCol, checkInsertPkDupForHiddenIndexTable, indexSourceColTypes, fuzzymessage)
 }
 
-func makeOneInsertPlan(
+
+// appendOneInsertPlan generates plan branch for insert one table
+// sink_scan -> lock -> insert
+// sink_scan -> join -> filter (if table have fk. then append join node & filter node)
+// sink_scan -> Fuzzyfilter -- (if need to check pk duplicate)
+// table_scan -----^
+func appendOneInsertPlan(
 	ctx CompilerContext,
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -1376,13 +1368,17 @@ func makeOneInsertPlan(
 	return nil
 }
 
-// make plan : sink_scan -> lock -> insert
+// appendPureInsertBranch appends the pure insert branch to the query builder.
+// It includes the sink scan node, project node (if necessary), and insert node.
+// The last node ID of the branch is returned.
 func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, sourceStep int32, addAffectedRows bool) {
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+
 	// Get table partition information
 	paritionTableIds, paritionTableNames := getPartTableIdsAndNames(ctx, objRef, tableDef)
 	partitionIdx := -1
-	// append project node
+
+	// append project node if necessary
 	projectProjection := getProjectionByLastNode(builder, lastNodeId)
 	if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
 		if len(projectProjection) > len(tableDef.Cols) {

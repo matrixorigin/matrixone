@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,7 +77,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +87,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
+	pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, tableDef)
+	if err != nil {
+		return nil, err
+	}
 	var pkFilterExprs []*Expr
+	// var pkPosInValues map[int]int
 	var newPartitionExpr *Expr
 	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
@@ -277,7 +283,73 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}, err
 }
 
-func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkPosInValues map[int]int) []*Expr {
+func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) (map[int]int, error) {
+	pkPosInValues := make(map[int]int)
+	insertColumns, err := getInsertColsFromStmt(ctx, stmt, tableDef)
+	if err != nil {
+		return pkPosInValues, err
+	}
+
+	switch slt := stmt.Rows.Select.(type) {
+	case *tree.ValuesClause:
+		if CNPrimaryCheck {
+			CanUsePkFilter := false
+
+			if len(tableDef.Pkey.Names) == 1 {
+				for i, name := range insertColumns {
+					if name == tableDef.Pkey.PkeyColName {
+						typ := tableDef.Cols[i].Typ
+						switch typ.Id {
+						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						}
+					}
+				}
+			}
+
+			if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
+				CanUsePkFilter = true
+			}
+
+			if CanUsePkFilter {
+				if len(tableDef.Pkey.Names) == 1 {
+					for idx, name := range insertColumns {
+						if name == tableDef.Pkey.PkeyColName {
+							pkPosInValues[idx] = 0
+							break
+						}
+					}
+				} else {
+					pkNameMap := make(map[string]int)
+					for pkIdx, pkName := range tableDef.Pkey.Names {
+						pkNameMap[pkName] = pkIdx
+					}
+					for idx, name := range insertColumns {
+						if pkIdx, ok := pkNameMap[name]; ok {
+							pkPosInValues[idx] = pkIdx
+						}
+					}
+				}
+				// one of pk cols is incr col and this col was not in values.
+				// we can not use the values of other cols as filterExpr.
+				if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+					pkPosInValues = make(map[int]int)
+				}
+			}
+		}
+	default:
+		return pkPosInValues, nil
+	}
+	return pkPosInValues, nil
+}
+
+func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkPosInValues map[int]int) (pkFilterExprs []*Expr) {
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil
 	}
