@@ -149,15 +149,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		//defer rel.Unlock()
 		//rel.proc = p
 		rel.proc.Store(p)
-		rel.updateWriteOffset()
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(key); ok {
 		//v.(*txnTable).proc = p
 		v.(*txnTable).proc.Store(p)
-		tbl := v.(*txnTable)
-		tbl.updateWriteOffset()
 		return v.(*txnTable), nil
 	}
 
@@ -212,7 +209,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		lastTS: txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
-	tbl.updateWriteOffset()
 
 	db.txn.tableCache.tableMap.Store(key, tbl)
 	return tbl, nil

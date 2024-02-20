@@ -768,3 +768,12 @@ func (txn *Transaction) clearTableCache() {
 		return true
 	})
 }
+
+func (txn *Transaction) getWriteOffset() int {
+	if txn.statementID > 0 {
+		txn.Lock()
+		defer txn.Unlock()
+		return txn.statements[txn.statementID-1]
+	}
+	return 0
+}
