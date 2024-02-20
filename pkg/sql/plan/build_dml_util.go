@@ -116,13 +116,16 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
 	checkInsertPkDup bool, isInsertWithoutAutoPkCol bool) error {
 
-	pkPosInValues, err := getPkPosInValues(builder.GetContext(), stmt, tableDef)
+	insertColsName, err := getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
 	if err != nil {
 		return err
 	}
+
+	// try to build pk filter epxr for origin table
 	var pkFilterExpr []*Expr
 	var newPartitionExpr *Expr
-	if CNPrimaryCheck && len(pkPosInValues) > 0 {
+	if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsName) {
+		pkPosInValues := getPkPosInValues(tableDef, insertColsName)
 		pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
@@ -1224,25 +1227,34 @@ func appendInsertPlanWithRelateIndexTable(
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
-					partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
-					set := make(map[string]int)
+
+					uniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
+					uniqueColsName := make([]string, len(indexdef.Parts))
+					uniqueColsMap := make(map[string]int)
 					for i, n := range indexdef.Parts {
-						set[n] = i
+						uniqueColsMap[n] = i
 					}
 					for _, c := range tableDef.Cols { // sort
-						if i, ok := set[c.Name]; ok {
-							partialUniqueCols[i] = c
+						if i, ok := uniqueColsMap[c.Name]; ok {
+							uniqueCols[i] = c
+							uniqueColsName[i] = c.Name
 						}
 					}
-					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
+					originTableMessageForFuzzy.ParentUniqueCols = uniqueCols
 
-					pkPosInValues, err := getPkPosInValues(builder.GetContext(), stmt, idxTableDef)
-					if err != nil {
-						return err
-					}
-					if len(pkPosInValues) > 0 {
-						pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
-					}
+					// uniqueCanUsePkFilter := true
+					// insertColsNameFromStmt, _ := getInsertColsFromStmt(ctx, stmt, tableDef)
+					// for _, c := range insertColsNameFromStmt {
+					// 	if _, ok := uniqueColsMap[c]; !ok {
+					// 		uniqueCanUsePkFilter = false
+					// 	}
+					// }
+
+					// try to build pk filter epxr for hidden table created by unique key
+					// if uniqueCanUsePkFilter && canUsePkFilter(builder, ctx, stmt, tableDef, uniqueColsName) {
+					// 	pkPosInValues := getPkPosInValues(tableDef, uniqueColsName)
+					// 	pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
+					// }
 				}
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
