@@ -32,6 +32,7 @@ func NewCache(
 	setFunc := func(key cache.CacheKey, value *Data) {
 		var r RCBytes
 
+		value.acquire()
 		if postSet != nil {
 			r.d = value
 			r.size = &c.size
@@ -41,6 +42,7 @@ func NewCache(
 	getFunc := func(key cache.CacheKey, value *Data) {
 		var r RCBytes
 
+		value.acquire()
 		if postGet != nil {
 			r.d = value
 			r.size = &c.size
@@ -73,7 +75,6 @@ func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (CacheData, bool) {
 	if ok { // find the value, set the value to the return value
 		r.d = v
 		r.size = &c.size
-		r.d.acquire()
 	}
 	return r, ok
 }
@@ -83,7 +84,6 @@ func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) er
 		return nil
 	}
 	if r, ok := value.(RCBytes); ok {
-		r.d.acquire()
 		c.l.Set(ctx, key, r.d)
 	}
 	return nil

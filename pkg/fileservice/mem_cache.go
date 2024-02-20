@@ -74,8 +74,6 @@ func NewMemoryCache(
 	}
 
 	postEvictFn := func(key CacheKey, value memorycache.CacheData) {
-		value.Release()
-
 		if overlapChecker != nil {
 			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
