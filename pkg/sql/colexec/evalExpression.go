@@ -1056,6 +1056,26 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "isnull", "is_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+			case "isnotnull", "is_not_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
