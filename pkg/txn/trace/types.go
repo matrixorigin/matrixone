@@ -68,7 +68,7 @@ var (
 func GetService() Service {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnTraceService)
 	if !ok {
-		panic("txn trace service not found")
+		return nil
 	}
 	return v.(Service)
 }
