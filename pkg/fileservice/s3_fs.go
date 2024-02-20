@@ -64,7 +64,10 @@ func NewS3FS(
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
 	noCache bool,
+	noDefaultCredential bool,
 ) (*S3FS, error) {
+
+	args.NoDefaultCredentials = noDefaultCredential
 
 	fs := &S3FS{
 		name:            args.Name,
@@ -103,19 +106,6 @@ func NewS3FS(
 	}
 
 	return fs, nil
-}
-
-// NewS3FSOnMinio creates S3FS on minio server
-// this is needed because the URL scheme of minio server does not compatible with AWS'
-func NewS3FSOnMinio(
-	ctx context.Context,
-	args ObjectStorageArguments,
-	cacheConfig CacheConfig,
-	perfCounterSets []*perfcounter.CounterSet,
-	noCache bool,
-) (*S3FS, error) {
-	args.IsMinio = true
-	return NewS3FS(ctx, args, cacheConfig, perfCounterSets, noCache)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
