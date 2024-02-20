@@ -59,6 +59,8 @@ enum CmdMethod {
   // RemoveRemoteLockTable remove remote lock table on all cn
   RemoveRemoteLockTable = 14;
   GetLatestBind         = 15;
+  // UnsubscribeTable unsubscribes a table in logtail client.
+  UnsubscribeTable = 16;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -166,6 +168,7 @@ message Request {
 
   RemoveRemoteLockTableRequest  RemoveRemoteLockTable = 17;
   GetLatestBindRequest GetLatestBind = 18;
+  UnsubscribeTableRequest UnsubscribeTable = 19;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -207,6 +210,7 @@ message Response {
 
   RemoveRemoteLockTableResponse  RemoveRemoteLockTable = 17;
   GetLatestBindResponse          GetLatestBind         = 18;
+  UnsubscribeTableResponse UnsubscribeTable = 19;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -313,8 +317,6 @@ message GetCacheInfoResponse{
   repeated CacheInfo CacheInfoList = 1;
 }
 
-
-
 message RemoveRemoteLockTableRequest {
   uint32 GroupID = 1;
   uint64 TableID = 2;
@@ -332,4 +334,18 @@ message GetLatestBindRequest {
 
 message GetLatestBindResponse {
   string Bind = 1;
+}
+
+// UnsubscribeTableRequest is the request that unsubscribe a table from
+// logtail client.
+message UnsubscribeTableRequest {
+  // DatabaseID is the ID of the database.
+  uint64 DatabaseID = 1;
+  // TableID is the ID of the table.
+  uint64 TableID = 2;
+}
+
+// UnsubscribeTableResponse is the response of unsubscribe table request.
+message UnsubscribeTableResponse {
+  bool Success = 1;
 }
