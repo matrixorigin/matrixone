@@ -22,6 +22,9 @@ mo_ctl(dn, flush, d1.t2)
 select mo_ctl('dn', 'flush', 'd1.t3');
 mo_ctl(dn, flush, d1.t3)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(5);
+sleep(5)
+0
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
 QUERY PLAN
 Project
