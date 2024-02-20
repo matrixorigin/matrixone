@@ -274,6 +274,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 			newCols = append(newCols, col)
 		}
 	}
+	// note: the `rowId` column has been excluded from `TableDef` in the `insert` statement
 	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())

@@ -561,7 +561,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
-	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
@@ -708,4 +708,18 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) PushClient() *PushClient {
+	return &e.pClient
+}
+
+// TryToSubscribeTable implements the LogtailEngine interface.
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
+}
+
+// UnsubscribeTable implements the LogtailEngine interface.
+func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.PushClient().UnsubscribeTable(ctx, dbID, tbID)
 }

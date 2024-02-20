@@ -69,7 +69,7 @@ func TestHandleSetProtocolVersion(t *testing.T) {
 	id := uuid.New().String()
 	addr := "127.0.0.1:7777"
 	initRuntime([]string{id}, []string{addr})
-	requireVersionValue(t, 1)
+	requireVersionValue(t, defines.MORPCLatestVersion)
 	qs, err := queryservice.NewQueryService(id, addr, morpc.Config{})
 	require.NoError(t, err)
 	proc.QueryService = qs

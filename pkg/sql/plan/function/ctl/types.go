@@ -48,6 +48,7 @@ var (
 
 	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
 	GetLatestBind         = strings.ToUpper("GetLatestBind")
+	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
 )
 
 var (
@@ -79,6 +80,7 @@ var (
 		SetProtocolVersionMethod: handleSetProtocolVersion,
 		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
 		GetLatestBind:            handleGetLatestBind,
+		UnsubscribeTable:         handleUnsubscribeTable,
 	}
 )
 
