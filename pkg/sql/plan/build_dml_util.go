@@ -3877,8 +3877,7 @@ func makeDeleteFkSqlForDropTable(db, tbl string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' and table_name = '%s' or"+
-			" refer_db_name = '%s' and refer_table_name = '%s'", db, tbl, db, tbl))
+		"db_name = '%s' and table_name = '%s'", db, tbl))
 	return sb.String()
 }
 

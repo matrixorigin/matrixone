@@ -1303,15 +1303,37 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//
 	skip := false
-	if createTable.Database == catalog.MO_CATALOG {
-		switch createTable.TableDef.Name {
-		case catalog.MO_INDEXES,
-			catalog.MO_TABLE_PARTITIONS,
-			catalog.MOAutoIncrTable,
-			"mo_foreign_keys":
-			skip = true
-		}
+	switch createTable.Database {
+	case catalog.MO_CATALOG,
+		catalog.MO_SYSTEM,
+		catalog.MO_SYSTEM_METRICS,
+		"mo_task",
+		"information_schema",
+		"mysql":
+		skip = true
 	}
+	//if createTable.Database == catalog.MO_CATALOG {
+	//	switch createTable.TableDef.Name {
+	//	case catalog.MO_INDEXES,
+	//		catalog.MO_TABLE_PARTITIONS,
+	//		catalog.MOAutoIncrTable,
+	//		"mo_foreign_keys",
+	//		"mo_user",
+	//		"mo_account",
+	//		"mo_role",
+	//		"mo_user_grant",
+	//		"mo_role_grant",
+	//		"mo_role_privs",
+	//		"mo_user_defined_function",
+	//		"mo_mysql_compatibility_mode",
+	//		"mo_pubs",
+	//		"mo_stored_procedure",
+	//		"mo_stages":
+	//		skip = true
+	//	}
+	//} else if createTable.Database == catalog.MO_SYSTEM {
+	//	skip = true
+	//}
 
 	if !skip {
 		fks, err := getAllRefered(ctx, createTable.Database, createTable.TableDef.Name)
@@ -2032,7 +2054,11 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		if len(tableDef.RefChildTbls) > 0 {
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled && len(tableDef.RefChildTbls) > 0 {
 			//if all children tables are self reference, we can drop the table
 			if !HasFkSelfReferOnly(tableDef) {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
@@ -2082,6 +2108,15 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 					continue
 				}
 				dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
+			}
+		}
+
+		if tableDef.RefChildTbls != nil {
+			for _, childTbl := range tableDef.RefChildTbls {
+				if childTbl == 0 {
+					continue
+				}
+				dropTable.ChildTbls = append(dropTable.ChildTbls, childTbl)
 			}
 		}
 

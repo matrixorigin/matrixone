@@ -1728,6 +1728,40 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkRelation engine.Relation, tblId 
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
+func (s *Scope) removeParentTblIdInChildTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
+	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	var oldFkeys *engine.ForeignKeyDef
+	for _, def := range fkTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			for _, ct := range oldCt.Cts {
+				if old, ok := ct.(*engine.ForeignKeyDef); ok {
+					oldFkeys = old
+				}
+			}
+			break
+		}
+	}
+	if oldFkeys == nil {
+		oldFkeys = &engine.ForeignKeyDef{}
+	}
+	newFkeys := &engine.ForeignKeyDef{}
+	for _, fkey := range oldFkeys.Fkeys {
+		if fkey.ForeignTbl != tblId {
+			newFkeys.Fkeys = append(newFkeys.Fkeys, fkey)
+		}
+	}
+	newCt, err := MakeNewCreateConstraint(oldCt, newFkeys)
+	if err != nil {
+		return err
+	}
+	return fkRelation.UpdateConstraint(c.ctx, newCt)
+}
+
 // Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
 	var dbSource engine.Database
@@ -2009,6 +2043,21 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		err = s.removeRefChildTbl(c, fkRelation, tblId)
+		if err != nil {
+			return err
+		}
+	}
+
+	//remove parent table id from the child table (when foreign_key_checks is disabled)
+	for _, childTblId := range qry.ChildTbls {
+		if childTblId == 0 {
+			continue
+		}
+		_, _, childRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
+		if err != nil {
+			return err
+		}
+		err = s.removeParentTblIdInChildTable(c, childRelation, tblId)
 		if err != nil {
 			return err
 		}

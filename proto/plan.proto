@@ -1245,6 +1245,7 @@ message DropTable {
 	bool isView = 9;
 	TableDef table_def 	= 10;
 	repeated string DropSqls = 11;
+	repeated uint64 childTbls = 12;
 }
 
 message AlterView {
