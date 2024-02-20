@@ -18,9 +18,36 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
+
+var (
+	// cannot import catalog, because cycle import
+
+	completedPKColumnName = "__mo_cpkey_col"
+	rowIDColumn           = "__mo_rowid"
+	deletePKColumn        = "pk"
+
+	txnCreateEvent         = "created"
+	txnActiveEvent         = "active"
+	txnClosedEvent         = "closed"
+	txnUpdateSnapshotEvent = "update-snapshot"
+	txnCheckChangedEvent   = "check-changed"
+
+	entryApplyEvent  = "apply"
+	entryCommitEvent = "commit"
+	entryReadEvent   = "read"
+)
+
+func isCompletedPK(name string) bool {
+	return name == completedPKColumnName
+}
+
+func isDeletePKColumn(name string) bool {
+	return name == deletePKColumn
+}
 
 type txnEvent struct {
 	ts         int64
@@ -35,28 +62,28 @@ type txnEvent struct {
 }
 
 func newTxnCreated(txn txn.TxnMeta) txnEvent {
-	return newTxnEvent(txn, "created")
+	return newTxnEvent(txn, txnCreateEvent)
 }
 
 func newTxnActive(txn txn.TxnMeta) txnEvent {
-	return newTxnEvent(txn, "active")
+	return newTxnEvent(txn, txnActiveEvent)
 }
 
 func newTxnClosed(txn txn.TxnMeta) txnEvent {
-	return newTxnEvent(txn, "closed")
+	return newTxnEvent(txn, txnClosedEvent)
 }
 
 func newTxnSnapshotUpdated(txn txn.TxnMeta) txnEvent {
-	return newTxnEvent(txn, "snapshot-updated")
+	return newTxnEvent(txn, txnUpdateSnapshotEvent)
 }
 
-func newTxnChangedCheck(
+func newTxnCheckChanged(
 	txnID []byte,
 	from, to timestamp.Timestamp,
 	changed bool) txnEvent {
 	return txnEvent{
 		ts:        time.Now().UnixNano(),
-		eventType: "changed_check",
+		eventType: txnCheckChangedEvent,
 		txnID:     txnID,
 		from:      from,
 		to:        to,
@@ -108,7 +135,7 @@ func (e txnEvent) toSQL(cn string) string {
 type entryEvent struct {
 	ts         int64
 	eventType  string
-	entryType  string
+	entryType  api.Entry_EntryType
 	tableID    uint64
 	txnID      []byte
 	row        []byte
@@ -119,7 +146,7 @@ type entryEvent struct {
 func newApplyLogtailEvent(
 	ts int64,
 	tableID uint64,
-	entryType string,
+	entryType api.Entry_EntryType,
 	row []byte,
 	commitTS timestamp.Timestamp) entryEvent {
 	return entryEvent{
@@ -128,7 +155,7 @@ func newApplyLogtailEvent(
 		entryType: entryType,
 		row:       row,
 		commitTS:  commitTS,
-		eventType: "apply",
+		eventType: entryApplyEvent,
 	}
 }
 
@@ -136,7 +163,7 @@ func newCommitEntryEvent(
 	ts int64,
 	txnID []byte,
 	tableID uint64,
-	entryType string,
+	entryType api.Entry_EntryType,
 	row []byte) entryEvent {
 	return entryEvent{
 		ts:        ts,
@@ -144,7 +171,7 @@ func newCommitEntryEvent(
 		entryType: entryType,
 		txnID:     txnID,
 		row:       row,
-		eventType: "commit",
+		eventType: entryCommitEvent,
 	}
 }
 
@@ -152,7 +179,7 @@ func newReadEntryEvent(
 	ts int64,
 	txnID []byte,
 	tableID uint64,
-	entryType string,
+	entryType api.Entry_EntryType,
 	row []byte,
 	snapshotTS timestamp.Timestamp) entryEvent {
 	return entryEvent{
@@ -161,7 +188,7 @@ func newReadEntryEvent(
 		entryType:  entryType,
 		txnID:      txnID,
 		row:        row,
-		eventType:  "read",
+		eventType:  entryReadEvent,
 		snapshotTS: snapshotTS,
 	}
 }

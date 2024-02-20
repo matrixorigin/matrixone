@@ -51,14 +51,13 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 
 	// only insert filter columns
 	if len(f.columns) > 0 &&
-		(entry.entryType == api.Entry_Insert.String() ||
-			entry.entryType == "read") {
+		entry.needFilterColumns() {
 		newColumns := entry.columns[:0]
 		newVecs := entry.vecs[:0]
 		for i, attr := range entry.columns {
 			_, ok := f.columns[attr]
-			// keep row id for every
-			if ok || attr == "__mo_rowid" {
+			// keep row id and completed pk forever
+			if ok || attr == rowIDColumn || attr == completedPKColumnName {
 				newColumns = append(newColumns, attr)
 				newVecs = append(newVecs, entry.vecs[i])
 			}
@@ -66,15 +65,16 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 		entry.columns = newColumns
 		entry.vecs = newVecs
 	}
+
 	if entry.commitVec != nil &&
-		entry.entryType == api.Entry_Delete.String() {
+		entry.entryType == api.Entry_Delete {
 		newColumns := entry.columns[:0]
 		newVecs := entry.vecs[:0]
 
-		newColumns = append(newColumns, "__mo_rowid")
+		newColumns = append(newColumns, rowIDColumn)
 		newVecs = append(newVecs, entry.vecs[0])
 
-		newColumns = append(newColumns, "pk")
+		newColumns = append(newColumns, deletePKColumn)
 		newVecs = append(newVecs, entry.vecs[2])
 
 		entry.columns = newColumns

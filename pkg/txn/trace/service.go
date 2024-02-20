@@ -75,19 +75,21 @@ func NewService(cn string,
 		client:       client,
 		clock:        clock,
 		executor:     executor,
-		txnEventC:    make(chan txnEvent, 1024),
-		entryC:       make(chan entryEvent, 10240),
-		closeBufferC: make(chan *buffer, 10240),
+		txnEventC:    make(chan txnEvent, 100000),
+		entryC:       make(chan entryEvent, 100000),
+		closeBufferC: make(chan *buffer, 100000),
 	}
-	s.options.forceFlush = 10 * time.Second
+	s.options.forceFlush = 60 * time.Second
 	s.options.maxTxnBatch = 256
 	s.options.maxEntryBatch = 256
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	if err := s.stopper.RunTask(s.handleEvents); err != nil {
-		panic(err)
+	for i := 0; i < 2; i++ {
+		if err := s.stopper.RunTask(s.handleEvents); err != nil {
+			panic(err)
+		}
 	}
 	return s, nil
 }
@@ -204,7 +206,8 @@ func (s *service) CommitEntries(
 			buf,
 			func(e entryEvent) {
 				s.entryC <- e
-			})
+			},
+			&s.atomic.completedPKTables)
 		n++
 	}
 
@@ -253,7 +256,8 @@ func (s *service) TxnRead(
 		buf,
 		func(e entryEvent) {
 			s.entryC <- e
-		})
+		},
+		&s.atomic.completedPKTables)
 	s.closeBufferC <- buf
 }
 
@@ -286,7 +290,7 @@ func (s *service) ChangedCheck(
 	if skipped {
 		return
 	}
-	s.txnEventC <- newTxnChangedCheck(txnID, from, to, changed)
+	s.txnEventC <- newTxnCheckChanged(txnID, from, to, changed)
 }
 
 func (s *service) ApplyLogtail(
@@ -327,7 +331,8 @@ func (s *service) ApplyLogtail(
 		buf,
 		func(e entryEvent) {
 			s.entryC <- e
-		})
+		},
+		&s.atomic.completedPKTables)
 	s.closeBufferC <- buf
 }
 
@@ -554,7 +559,7 @@ type EntryData struct {
 	empty      bool
 	at         int64
 	snapshotTS timestamp.Timestamp
-	entryType  string
+	entryType  api.Entry_EntryType
 	columns    []string
 	vecs       []*vector.Vector
 	commitVec  *vector.Vector
@@ -579,10 +584,13 @@ func newReadEntryData(
 	l.at = at
 	l.snapshotTS = snapshotTS
 	l.id = tableID
-	l.entryType = "read"
 	l.columns = append(l.columns, columns...)
 	l.vecs = append(l.vecs, bat.Vecs...)
 	return l
+}
+
+func (l *EntryData) needFilterColumns() bool {
+	return !l.snapshotTS.IsEmpty() || l.entryType == api.Entry_Insert
 }
 
 func (l *EntryData) init(
@@ -591,7 +599,7 @@ func (l *EntryData) init(
 	at int64) {
 	l.at = at
 	l.id = entry.TableId
-	l.entryType = entry.EntryType.String()
+	l.entryType = entry.EntryType
 	l.columns = append(l.columns, entry.Bat.Attrs...)
 	for i, vec := range entry.Bat.Vecs {
 		v, err := vector.ProtoVectorToVector(vec)
@@ -615,7 +623,7 @@ func (l *EntryData) reset() {
 	l.commitVec = nil
 	l.columns = l.columns[:0]
 	l.vecs = l.vecs[:0]
-	l.entryType = ""
+	l.entryType = api.Entry_EntryType(-1)
 	l.snapshotTS = timestamp.Timestamp{}
 }
 
@@ -625,72 +633,74 @@ func (l *EntryData) close() {
 
 func (l *EntryData) createApply(
 	buf *buffer,
-	fn func(e entryEvent)) {
-	if len(l.vecs) == 0 {
-		return
-	}
-
-	dst := buf.alloc(20)
-	rows := l.vecs[0].Length()
+	fn func(e entryEvent),
+	completedPKTables *sync.Map) {
 	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
-	for row := 0; row < rows; row++ {
-		idx := buf.buf.GetWriteIndex()
-		for col, name := range l.columns {
-			columnsData := l.vecs[col]
-			buf.buf.WriteString(name)
-			buf.buf.WriteString(":")
-			if name == "__mo_cpkey_col" {
-				writeCompletedValue(columnsData, row, buf, dst)
-			} else {
-				writeValue(columnsData, row, buf, dst)
-			}
-			if col != len(l.columns)-1 {
-				buf.buf.WriteString(", ")
-			}
-		}
-		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(newApplyLogtailEvent(l.at, l.id, l.entryType, data, commitTS[row].ToTimestamp()))
-	}
+
+	l.writeToBuf(
+		buf,
+		func(data []byte, row int) entryEvent {
+			return newApplyLogtailEvent(
+				l.at,
+				l.id,
+				l.entryType,
+				data,
+				commitTS[row].ToTimestamp())
+		},
+		fn,
+		completedPKTables)
 }
 
 func (l *EntryData) createCommit(
 	txnID []byte,
 	buf *buffer,
-	fn func(e entryEvent)) {
-	if len(l.vecs) == 0 {
-		return
-	}
-
-	dst := buf.alloc(20)
-	rows := l.vecs[0].Length()
-	for row := 0; row < rows; row++ {
-		idx := buf.buf.GetWriteIndex()
-		for col, name := range l.columns {
-			columnsData := l.vecs[col]
-			buf.buf.WriteString(name)
-			buf.buf.WriteString(":")
-			if name == "__mo_cpkey_col" {
-				writeCompletedValue(columnsData, row, buf, dst)
-			} else {
-				writeValue(columnsData, row, buf, dst)
-			}
-			if col != len(l.columns)-1 {
-				buf.buf.WriteString(", ")
-			}
-		}
-		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(newCommitEntryEvent(l.at, txnID, l.id, l.entryType, data))
-	}
+	fn func(e entryEvent),
+	completedPKTables *sync.Map) {
+	l.writeToBuf(
+		buf,
+		func(data []byte, _ int) entryEvent {
+			return newCommitEntryEvent(
+				l.at,
+				txnID,
+				l.id,
+				l.entryType,
+				data)
+		},
+		fn,
+		completedPKTables)
 }
 
 func (l *EntryData) createRead(
 	txnID []byte,
 	buf *buffer,
-	fn func(e entryEvent)) {
+	fn func(e entryEvent),
+	completedPKTables *sync.Map) {
+	l.writeToBuf(
+		buf,
+		func(data []byte, row int) entryEvent {
+			return newReadEntryEvent(
+				l.at,
+				txnID,
+				l.id,
+				l.entryType,
+				data,
+				l.snapshotTS)
+		},
+		fn,
+		completedPKTables)
+}
+
+func (l *EntryData) writeToBuf(
+	buf *buffer,
+	factory func([]byte, int) entryEvent,
+	fn func(e entryEvent),
+	completedPKTables *sync.Map) {
 	if len(l.vecs) == 0 {
 		return
 	}
 
+	_, ok := completedPKTables.Load(l.id)
+	isCompletedPKTable := false
 	dst := buf.alloc(20)
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
@@ -699,8 +709,9 @@ func (l *EntryData) createRead(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			if name == "__mo_cpkey_col" {
+			if isCompletedPK(name) || (ok && l.entryType == api.Entry_Delete && isDeletePKColumn(name)) {
 				writeCompletedValue(columnsData, row, buf, dst)
+				isCompletedPKTable = true
 			} else {
 				writeValue(columnsData, row, buf, dst)
 			}
@@ -709,7 +720,10 @@ func (l *EntryData) createRead(
 			}
 		}
 		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(newReadEntryEvent(l.at, txnID, l.id, l.entryType, data, l.snapshotTS))
+		fn(factory(data, row))
+	}
+	if !ok && isCompletedPKTable {
+		completedPKTables.Store(l.id, true)
 	}
 }
 
