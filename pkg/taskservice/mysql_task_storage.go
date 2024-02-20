@@ -830,6 +830,9 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 	if _, err := db.Exec("use " + m.dbname); err != nil {
 		return errors.Join(err, db.Close())
 	}
+	if _, err := db.Exec("set session disable_txn_trace=1"); err != nil {
+		return errors.Join(err, db.Close())
+	}
 	return nil
 }
 

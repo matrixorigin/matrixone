@@ -29,6 +29,9 @@ type txnEvent struct {
 	txnStatus  string
 	snapshotTS timestamp.Timestamp
 	commitTS   timestamp.Timestamp
+
+	from, to timestamp.Timestamp
+	changed  bool
 }
 
 func newTxnCreated(txn txn.TxnMeta) txnEvent {
@@ -45,6 +48,20 @@ func newTxnClosed(txn txn.TxnMeta) txnEvent {
 
 func newTxnSnapshotUpdated(txn txn.TxnMeta) txnEvent {
 	return newTxnEvent(txn, "snapshot-updated")
+}
+
+func newTxnChangedCheck(
+	txnID []byte,
+	from, to timestamp.Timestamp,
+	changed bool) txnEvent {
+	return txnEvent{
+		ts:        time.Now().UnixNano(),
+		eventType: "changed_check",
+		txnID:     txnID,
+		from:      from,
+		to:        to,
+		changed:   changed,
+	}
 }
 
 func newTxnEvent(
@@ -68,7 +85,8 @@ func (e txnEvent) toSQL(cn string) string {
 							txn_id, 
 							txn_status, 
 							snapshot_ts,
-							commit_ts) values (%d, '%s', '%s', '%x', '%s', '%d-%d', '%d-%d')`,
+							commit_ts,
+							check_changed) values (%d, '%s', '%s', '%x', '%s', '%d-%d', '%d-%d', '[%d-%d, %d-%d, %v]')`,
 		TxnTable,
 		e.ts,
 		cn,
@@ -79,6 +97,11 @@ func (e txnEvent) toSQL(cn string) string {
 		e.snapshotTS.LogicalTime,
 		e.commitTS.PhysicalTime,
 		e.commitTS.LogicalTime,
+		e.from.PhysicalTime,
+		e.from.LogicalTime,
+		e.to.PhysicalTime,
+		e.to.LogicalTime,
+		e.changed,
 	)
 }
 

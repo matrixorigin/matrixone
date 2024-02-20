@@ -40,7 +40,8 @@ var (
 			event_type            varchar(50)  not null,
 			txn_status			  varchar(10),
 			snapshot_ts           varchar(50),
-			commit_ts             varchar(50)
+			commit_ts             varchar(50),
+			check_changed		  varchar(100)
 		)`, DebugDB, TxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
@@ -77,6 +78,7 @@ type Service interface {
 	CommitEntries(txnID []byte, entries []*api.Entry)
 	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
 	TxnRead(txnID []byte, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
+	ChangedCheck(txnID []byte, tableID uint64, from, to timestamp.Timestamp, changed bool)
 
 	Enable() error
 	Disable()

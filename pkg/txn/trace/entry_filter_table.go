@@ -45,6 +45,10 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 	if entry.id != f.id {
 		return true
 	}
+	if entry == nil {
+		return false
+	}
+
 	// only insert filter columns
 	if len(f.columns) > 0 &&
 		(entry.entryType == api.Entry_Insert.String() ||

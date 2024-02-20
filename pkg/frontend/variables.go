@@ -3518,6 +3518,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
+	"disable_txn_trace": {
+		Name:              "disable_txn_trace",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("disable_txn_trace"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

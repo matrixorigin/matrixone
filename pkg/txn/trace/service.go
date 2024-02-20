@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
@@ -48,8 +49,12 @@ type service struct {
 
 	mu struct {
 		sync.RWMutex
-		enable       bool
 		entryFilters []EntryFilter
+		closed       bool
+	}
+
+	atomic struct {
+		enabled atomic.Bool
 	}
 
 	options struct {
@@ -91,9 +96,13 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 		return
 	}
 
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if s.mu.closed {
 		return
 	}
 
@@ -104,9 +113,13 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 }
 
 func (s *service) handleTxnActive(meta txn.TxnMeta) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if s.mu.closed {
 		return
 	}
 
@@ -114,9 +127,13 @@ func (s *service) handleTxnActive(meta txn.TxnMeta) {
 }
 
 func (s *service) handleTxnClosed(meta txn.TxnMeta) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if s.mu.closed {
 		return
 	}
 
@@ -124,9 +141,13 @@ func (s *service) handleTxnClosed(meta txn.TxnMeta) {
 }
 
 func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable {
+	if s.mu.closed {
 		return
 	}
 
@@ -136,9 +157,17 @@ func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
 func (s *service) CommitEntries(
 	txnID []byte,
 	entries []*api.Entry) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable || len(s.mu.entryFilters) == 0 {
+	if s.mu.closed {
+		return
+	}
+
+	if len(s.mu.entryFilters) == 0 {
 		return
 	}
 
@@ -192,6 +221,16 @@ func (s *service) TxnRead(
 	tableID uint64,
 	columns []string,
 	bat *batch.Batch) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
 	entryData := newReadEntryData(tableID, snapshotTS, bat, columns, time.Now().UnixNano())
 	defer func() {
 		entryData.close()
@@ -219,12 +258,48 @@ func (s *service) TxnRead(
 	s.closeBufferC <- buf
 }
 
+func (s *service) ChangedCheck(
+	txnID []byte,
+	tableID uint64,
+	from, to timestamp.Timestamp,
+	changed bool) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(nil) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		return
+	}
+	s.txnEventC <- newTxnChangedCheck(txnID, from, to, changed)
+}
+
 func (s *service) ApplyLogtail(
 	entry *api.Entry,
 	commitTSIndex int) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if !s.mu.enable || len(s.mu.entryFilters) == 0 {
+	if s.mu.closed {
+		return
+	}
+
+	if len(s.mu.entryFilters) == 0 {
 		return
 	}
 
@@ -260,14 +335,14 @@ func (s *service) Enable() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.enable = true
+	s.atomic.enabled.Store(true)
 	return nil
 }
 
 func (s *service) Disable() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.enable = false
+	s.atomic.enabled.Store(false)
 }
 
 func (s *service) AddEntryFilter(name string, columns []string) error {
@@ -392,6 +467,11 @@ func (s *service) RefreshFilters() error {
 
 func (s *service) Close() {
 	s.stopper.Stop()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.mu.closed = true
 	close(s.txnEventC)
 	close(s.entryC)
 	close(s.closeBufferC)
