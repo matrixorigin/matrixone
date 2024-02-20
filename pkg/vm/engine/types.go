@@ -667,7 +667,17 @@ type Database interface {
 	GetCreateSql(context.Context) string
 }
 
+type LogtailEngine interface {
+	// TryToSubscribeTable tries to subscribe a table.
+	TryToSubscribeTable(context.Context, uint64, uint64) error
+	// UnsubscribeTable unsubscribes a table from logtail client.
+	UnsubscribeTable(context.Context, uint64, uint64) error
+}
+
 type Engine interface {
+	// LogtailEngine has some actions for logtail.
+	LogtailEngine
+
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
 
