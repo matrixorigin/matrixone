@@ -17,6 +17,8 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -34,6 +36,10 @@ var (
 
 func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	s.adjustUpgrade()
+
+	// upgrade framework execute after system init completed, include: System
+	// tenant initialization
+	s.waitSysInitCompleted(ctx)
 
 	// MO's upgrade framework is automated, requiring no manual execution of any
 	// upgrade commands, and supports cross-version upgrades. All upgrade processes
@@ -57,6 +63,7 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
+	fmt.Printf("----------------wuxiliang2----------------begin upgrade-------------------------------")
 
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
@@ -94,7 +101,10 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			if len(s.handles) == 1 {
 				getUpgradeLogger().Info("init upgrade framework",
 					zap.String("final-version", final.Version))
-				return s.handles[0].Prepare(ctx, txn, true)
+				err := s.handles[0].Prepare(ctx, txn, true)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Deploy mo first time without 1.2.0, init framework first.
@@ -374,6 +384,7 @@ func (s *service) performUpgrade(
 	return true, nil
 }
 
+// doUpgrade Corresponding to one upgrade step in a version upgrade
 func (s *service) doUpgrade(
 	ctx context.Context,
 	upgrade versions.VersionUpgrade,
@@ -494,3 +505,83 @@ func (s *service) adjustUpgrade() {
 		zap.Int("upgrade-tenant-tasks", s.upgrade.upgradeTenantTasks),
 		zap.Int("tenant-batch", s.upgrade.upgradeTenantBatch))
 }
+
+func (s *service) waitSysInitCompleted(ctx context.Context) {
+	defer getUpgradeLogger().Info("upgrade service wait system init completed")
+
+	startAt := time.Now()
+	getUpgradeLogger().Debug("wait all init task completed task started")
+
+	querySysInitAsyncTask := func(ctx context.Context) (bool, error) {
+		opts := executor.Options{}.
+			WithDatabase(catalog.MOTaskDB).
+			WithMinCommittedTS(s.now()).
+			WithWaitCommittedLogApplied()
+
+		sql := fmt.Sprintf(selectSysInitAsyncTask, task.TaskCode_SystemInit, task.TaskStatus_Completed)
+		res, err := s.exec.Exec(ctx, sql, opts)
+		if err != nil {
+			return false, err
+		}
+		defer res.Close()
+
+		rowCount := 0
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			rowCount = rows
+			return true
+		})
+
+		if rowCount > 0 {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	wait := func() {
+		time.Sleep(time.Second)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			getUpgradeLogger().Debug("wait all init task completed task stopped")
+			return
+		default:
+			isCompleted, err := querySysInitAsyncTask(ctx)
+			if err != nil {
+				getUpgradeLogger().Error("wait all init task completed failed", zap.Error(err))
+				break
+			}
+
+			if isCompleted {
+				getUpgradeLogger().Debug("waiting all init task completed")
+				fmt.Printf("-------------wuxiliang1----------upgrade service wait system init completed--------------------------------")
+				return
+			}
+		}
+		wait()
+		if time.Since(startAt) > defaultSystemInitTimeout {
+			panic("wait system init timeout")
+		}
+	}
+}
+
+const (
+	selectSysInitAsyncTask = `select 
+    						task_id,
+							task_metadata_id,
+							task_metadata_executor,
+							task_metadata_context,
+							task_metadata_option,
+							task_parent_id,
+							task_status,
+							task_runner,
+							task_epoch,
+							last_heartbeat,
+							result_code,
+							error_msg,
+							create_at,
+							end_at 
+						from sys_async_task where task_metadata_executor = %d and task_status = %d`
+
+	defaultSystemInitTimeout = time.Minute * 5
+)

@@ -279,8 +279,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			}
 
 			for {
-				if hasUpgradeTenants, err := fn(); err != nil ||
-					hasUpgradeTenants {
+				if hasUpgradeTenants, err := fn(); err != nil || hasUpgradeTenants {
 					continue
 				}
 				break

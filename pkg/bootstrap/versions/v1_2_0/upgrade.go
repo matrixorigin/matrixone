@@ -16,7 +16,7 @@ package v1_2_0
 
 import (
 	"context"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -69,7 +69,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-
+	for _, upgItem := range upgClusterList {
+		err := upgItem.Upgrade(txn, upgItem.UpgType, upgItem.UpgResource)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -78,7 +83,15 @@ func (v *versionHandle) createFrameworkTables(
 	final bool) error {
 	values := versions.FrameworkInitSQLs
 	if final {
-		values = append(values, v.metadata.GetInsertSQL(versions.StateReady))
+		//values = append(values, v.metadata.GetInsertSQL(versions.StateReady))
+		// Based on the new upgrade framework code originating from v1.2.0, the first upgrade of the new upgrade framework
+		// must be based on v1.1. x version
+		sql := fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
+			catalog.MOVersionTable,
+			v.metadata.MinUpgradeVersion,
+			versions.StateReady,
+		)
+		values = append(values, sql)
 	}
 
 	for _, sql := range values {
