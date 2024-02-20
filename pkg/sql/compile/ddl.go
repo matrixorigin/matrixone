@@ -1112,12 +1112,29 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
 		nil)
+	if err != nil {
+		return err
+	}
+
+	stmt := c.stmt.(*tree.CreateTable)
+	if stmt.IsAsSelect {
+		getLogger().Info("createTable", zap.String("CreateAsSelectSql", qry.CreateAsSelectSql))
+		if err = c.runSql(qry.CreateAsSelectSql); err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+	}
+	return nil
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
