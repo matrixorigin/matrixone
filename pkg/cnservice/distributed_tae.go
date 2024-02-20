@@ -51,7 +51,7 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	colexec.Srv = colexec.NewServer(hakeeper)
+	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
 	blockio.Start()

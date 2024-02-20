@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"sync/atomic"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -22,23 +24,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var Srv *Server
+// FIXME: shit design
+var srv atomic.Pointer[Server]
 
 const (
 	TxnWorkSpaceIdType = 1
 	CnBlockIdType      = 2
 )
 
+func Get() *Server {
+	return srv.Load()
+}
+
+func Set(s *Server) {
+	srv.Store(s)
+}
+
 func NewServer(client logservice.CNHAKeeperClient) *Server {
-	if Srv != nil {
-		return Srv
+	s := Get()
+	if s != nil {
+		return s
 	}
-	Srv = &Server{
+	s = &Server{
 		hakeeper:      client,
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
 	}
-	return Srv
+	Set(s)
+	return s
 }
 
 // GetProcByUuid used the uuid to get a process from the srv.

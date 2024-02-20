@@ -570,7 +570,7 @@ func (txn *Transaction) WriteFileLocked(
 	} else {
 		// get uuid string
 		if typ == INSERT {
-			colexec.Srv.PutCnSegment(&sid, colexec.CnBlockIdType)
+			colexec.Get().PutCnSegment(&sid, colexec.CnBlockIdType)
 			txn.insertPosForCNBlock(
 				bat.GetVector(0),
 				accountId,
@@ -616,7 +616,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(uid) == colexec.CnBlockIdType {
+		if colexec.Get() != nil && colexec.Get().GetCnSegmentType(uid) == colexec.CnBlockIdType {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -636,6 +636,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
+	//Delete rows belongs to uncommitted raw data batch in txn's workspace.
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 	sels = sels[:0]
 	for k, rowid := range rowids {
@@ -643,6 +644,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 			sels = append(sels, int64(k))
 		}
 	}
+	//Shrink the batch to retain sels.
 	bat.Shrink(sels)
 	txn.proc.Mp().PutSels(sels)
 	return bat
@@ -992,7 +994,7 @@ func (txn *Transaction) delTransaction() {
 		//    16        2          2
 		segmentnames = append(segmentnames, *blkId.Segment())
 	}
-	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	colexec.Get().DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true

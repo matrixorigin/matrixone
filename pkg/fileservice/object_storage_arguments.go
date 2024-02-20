@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ type ObjectStorageArguments struct {
 	KeyPrefix            string `toml:"key-prefix"`
 	SharedConfigProfile  string `toml:"shared-config-profile"`
 	NoDefaultCredentials bool   `toml:"no-default-credentials"`
+	NoBucketValidation   bool   `toml:"no-bucket-validation"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -66,40 +68,52 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 
 		switch strings.ToLower(key) {
 
-		case "bearer-token":
-			o.BearerToken = value
-		case "bucket":
-			o.Bucket = value
-		case "endpoint":
-			o.Endpoint = value
-		case "external-id":
-			o.ExternalID = value
-		case "is-minio", "minio":
-			o.IsMinio = value != "false" && value != "0"
-		case "key", "key-id":
-			o.KeyID = value
 		case "name":
 			o.Name = value
 		case "prefix", "key-prefix":
 			o.KeyPrefix = value
-		case "ram-role":
-			o.RAMRole = value
-		case "region":
-			o.Region = value
-		case "role-arn":
-			o.RoleARN = value
-		case "role-session-name":
-			o.RoleSessionName = value
-		case "secret", "key-secret", "secret-id":
-			o.KeySecret = value
-		case "security-token":
-			o.SecurityToken = value
 		case "shared-config-profile":
 			o.SharedConfigProfile = value
-		case "token", "session-token":
-			o.SessionToken = value
+		case "no-bucket-validation":
+			b, err := strconv.ParseBool(value)
+			if err == nil {
+				o.NoBucketValidation = b
+			}
+		case "no-default-credentials":
+			b, err := strconv.ParseBool(value)
+			if err == nil {
+				o.NoDefaultCredentials = b
+			}
+
+		case "bucket":
+			o.Bucket = value
+		case "endpoint":
+			o.Endpoint = value
+		case "is-minio", "minio":
+			o.IsMinio = value != "false" && value != "0"
+		case "region":
+			o.Region = value
 		case "cert-files":
 			o.CertFiles = strings.Split(value, ",")
+
+		case "role-arn":
+			o.RoleARN = value
+		case "bearer-token":
+			o.BearerToken = value
+		case "external-id":
+			o.ExternalID = value
+		case "key", "key-id":
+			o.KeyID = value
+		case "secret", "key-secret", "secret-id":
+			o.KeySecret = value
+		case "ram-role":
+			o.RAMRole = value
+		case "role-session-name":
+			o.RoleSessionName = value
+		case "security-token":
+			o.SecurityToken = value
+		case "token", "session-token":
+			o.SessionToken = value
 
 		default:
 			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
