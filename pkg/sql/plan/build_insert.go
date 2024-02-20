@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -274,7 +275,12 @@ func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef
 	pkPosInValues := make(map[int]int)
 	insertColumns, err := getInsertColsFromStmt(ctx, stmt, tableDef)
 	if err != nil {
-		return pkPosInValues, err
+		// handle the hidden table for unique key
+		if strings.HasPrefix(tableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+			insertColumns = []string{catalog.IndexTableIndexColName}
+		} else {
+			return pkPosInValues, err
+		}
 	}
 
 	switch slt := stmt.Rows.Select.(type) {

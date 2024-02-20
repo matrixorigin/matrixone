@@ -1225,7 +1225,9 @@ func appendInsertPlanWithRelateIndexTable(
 					if err != nil {
 						return  err
 					}
-					pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
+					if len(pkPosInValues) > 0 {
+						pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
+					}
 
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
