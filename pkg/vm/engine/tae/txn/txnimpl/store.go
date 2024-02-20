@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+var (
+	_tracerPool = sync.Pool{
+		New: func() any {
+			return &txnTracer{}
+		},
+	}
+)
+
+func getTracer() *txnTracer {
+	return _tracerPool.Get().(*txnTracer)
+}
+
+func putTracer(tracer *txnTracer) {
+	tracer.task = nil
+	tracer.state = 0
+	_tracerPool.Put(tracer)
+}
+
+type txnTracer struct {
+	state uint8
+	task  *trace.Task
+}
+
+func (tracer *txnTracer) Trigger(state uint8) {
+	switch state {
+	case 0: // start preparing wait
+		_, tracer.task = trace.NewTask(context.Background(), "PreparingWait")
+	case 1: // end preparing wait and start preparing
+		if tracer.task != nil && tracer.state == 0 {
+			tracer.task.End()
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "Preparing")
+		tracer.state = 1
+	case 2: // end preparing and start prepare wal wait
+		if tracer.task != nil && tracer.state == 1 {
+			tracer.task.End()
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "PrepareWalWait")
+		tracer.state = 2
+	case 3: // end prepare wal wait and start prepare wal
+		if tracer.task != nil && tracer.state == 2 {
+			tracer.task.End()
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "PrepareWal")
+		tracer.state = 3
+	case 4: // end prepare wal and start prepared wait
+		if tracer.task != nil && tracer.state == 3 {
+			tracer.task.End()
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "PreparedWait")
+		tracer.state = 4
+	case 5: // end prepared wait and start prepared
+		if tracer.task != nil && tracer.state == 4 {
+			tracer.task.End()
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "Prepared")
+		tracer.state = 5
+	}
+}
+
+func (tracer *txnTracer) Stop() {
+	if tracer.task != nil && tracer.state == 5 {
+		tracer.task.End()
+	}
+	tracer.task = nil
+	tracer.state = 0
+}
+
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
@@ -55,6 +124,7 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
+	tracer      *txnTracer
 
 	wg sync.WaitGroup
 }
@@ -89,6 +159,30 @@ func newStore(
 		dataFactory: dataFactory,
 		wg:          sync.WaitGroup{},
 	}
+}
+
+func (store *txnStore) StartTrace() {
+	if store.IsReadonly() || store.GetTransactionType() == txnif.TxnType_Heartbeat {
+		return
+	}
+	store.tracer = getTracer()
+	store.tracer.Trigger(0)
+}
+
+func (store *txnStore) EndTrace() {
+	if store.tracer == nil {
+		return
+	}
+	tracer := store.tracer
+	store.tracer = nil
+	putTracer(tracer)
+}
+
+func (store *txnStore) TriggerTrace(state uint8) {
+	if store.tracer == nil {
+		return
+	}
+	store.tracer.Trigger(state)
 }
 
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
