@@ -116,9 +116,9 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
 	checkInsertPkDup bool, isInsertWithoutAutoPkCol bool) error {
 
-	pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, tableDef)
+	pkPosInValues, err := getPkPosInValues(builder.GetContext(), stmt, tableDef)
 	if err != nil {
-		return  err
+		return err
 	}
 	var pkFilterExpr []*Expr
 	var newPartitionExpr *Expr
@@ -135,10 +135,10 @@ func buildInsertPlans(
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
-	// make insert plans
+	// make insert plans for origin table and related index table
 	insertBindCtx := NewBindContext(builder, nil)
-	return appendInsertPlanWithRelateIndexTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef, 
-		0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, 
+	return appendInsertPlanWithRelateIndexTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
+		0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr,
 		newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
 }
 
@@ -216,9 +216,9 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = appendInsertPlanWithRelateIndexTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, 
+	err = appendInsertPlanWithRelateIndexTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup,
-		 updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil,
+		updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil,
 	)
 	return err
 }
@@ -1221,14 +1221,6 @@ func appendInsertPlanWithRelateIndexTable(
 							break
 						}
 					}
-					pkPosInValues, err := getpkPosInValues(builder.GetContext(), stmt, idxTableDef)
-					if err != nil {
-						return  err
-					}
-					if len(pkPosInValues) > 0 {
-						pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
-					}
-
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
@@ -1243,6 +1235,14 @@ func appendInsertPlanWithRelateIndexTable(
 						}
 					}
 					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
+
+					pkPosInValues, err := getPkPosInValues(builder.GetContext(), stmt, idxTableDef)
+					if err != nil {
+						return err
+					}
+					if len(pkPosInValues) > 0 {
+						pkFilterExprForHiddenTable = getPkValueExpr(builder, ctx, idxTableDef, pkPosInValues)
+					}
 				}
 
 				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
@@ -1343,7 +1343,6 @@ func appendInsertPlanWithRelateIndexTable(
 	return appendOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, checkInsertPkDup, updatePkCol, pkFilterExprs, partitionExpr, isInsertWithoutAutoPkCol, checkInsertPkDupForHiddenIndexTable, indexSourceColTypes, fuzzymessage)
 }
 
-
 // appendOneInsertPlan generates plan branch for insert one table
 // sink_scan -> lock -> insert
 // sink_scan -> join -> filter (if table have fk. then append join node & filter node)
@@ -1367,7 +1366,7 @@ func appendOneInsertPlan(
 	checkInsertPkDupForHiddenIndexTable bool,
 	indexSourceColTypes []*plan.Type,
 	fuzzymessage *OriginTableMessageForFuzzy,
-) (err error){
+) (err error) {
 
 	// make plan : sink_scan -> lock -> insert
 	appendPureInsertBranch(ctx, builder, bindCtx, objRef, tableDef, sourceStep, addAffectedRows)

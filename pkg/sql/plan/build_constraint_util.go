@@ -356,30 +356,6 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 	return tblInfo, nil
 }
 
-func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) ([]string, error) {
-	var insertColumns []string
-	colToIdx := make(map[string]int)
-	for i, col := range tableDef.Cols {
-		colToIdx[col.Name] = i
-	}
-	if stmt.Columns == nil {
-		for _, col := range tableDef.Cols {
-			if col.Name != catalog.FakePrimaryKeyColName {
-				insertColumns = append(insertColumns, col.Name)
-			}
-		}
-	} else {
-		for _, column := range stmt.Columns {
-			colName := string(column)
-			if _, ok := colToIdx[colName]; !ok {
-				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
-			}
-			insertColumns = append(insertColumns, colName)
-		}
-	}
-	return insertColumns, nil
-}
-
 func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, bool, error) {
 	var err error
 	var syntaxHasColumnNames bool

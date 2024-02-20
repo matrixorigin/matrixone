@@ -250,7 +250,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans( ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -271,14 +271,134 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}, err
 }
 
-func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) (map[int]int, error) {
-	pkPosInValues := make(map[int]int)
-	insertColumns, err := getInsertColsFromStmt(ctx, stmt, tableDef)
-	if err != nil {
-		// handle the hidden table for unique key
-		if strings.HasPrefix(tableDef.Name, catalog.UniqueIndexTableNamePrefix) {
-			insertColumns = []string{catalog.IndexTableIndexColName}
+// getInsertColsFromStmt retrieves the list of column names to be inserted into a table
+// based on the given INSERT statement and table definition.
+// If the INSERT statement does not specify the columns, all columns except the fake primary key column
+// will be included in the list.
+// If the INSERT statement specifies the columns, it validates the column names against the table definition
+// and returns an error if any of the column names are invalid.
+// The function returns the list of insert columns and an error, if any.
+func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) ([]string, error) {
+	var insertColumns []string
+	colToIdx := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		colToIdx[col.Name] = i
+	}
+	if stmt.Columns == nil {
+		for _, col := range tableDef.Cols {
+			if col.Name != catalog.FakePrimaryKeyColName {
+				insertColumns = append(insertColumns, col.Name)
+			}
+		}
+	} else {
+		for _, column := range stmt.Columns {
+			colName := string(column)
+			if _, ok := colToIdx[colName]; !ok {
+				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
+			}
+			insertColumns = append(insertColumns, colName)
+		}
+	}
+	return insertColumns, nil
+}
+
+
+// ifCanTryPkFilter checks if the primary key filter can be used for the given insert statement.
+// It returns true if the primary key filter can be used, otherwise it returns false.
+// The primary key filter can be used if the following conditions are met:
+// 1. CNPrimaryCheck is true.
+// 2. The insert statement is INSERT VALUES INTO ...
+// 3. the pk values inserted contains no nil (for auto increment pk, it is allowed to insert nil)
+// (The following constraints are for performance considerations and may be outdated)
+//  4.1 for single priamry key and the type of pk is number type, the number of rows being inserted is less than or equal to 20_000
+//  4.2 otherwise : the number of rows being inserted is less than or equal to defaultmaxRowThenUnusePkFilterExpr
+// Otherwise, the primary key filter cannot be used.
+// 
+func ifCanTryPkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string) bool {
+	if !CNPrimaryCheck {
+		// break condition 1
+		return false
+	}
+
+	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
+		// break condition 2
+		return false
+	}
+
+	pkPos, pkTyp := getPkPos(tableDef, true)
+	if pkPos == -1 {
+		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+			return false
+		}
+	} else if pkTyp.AutoIncr {
+		var bat *batch.Batch
+		proc := ctx.GetProcess()
+		node := builder.qry.Nodes[0]
+		if builder.isPrepareStatement {
+			bat = proc.GetPrepareBatch()
 		} else {
+			bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+		}
+
+		// if pk col is incr col and this col has at least one values is null, then can not use pk filter
+		pkVec := bat.Vecs[pkPos]
+		if nulls.Any(pkVec.GetNulls()) {
+			// break conditon 3
+			return false
+		}
+	}
+
+	// the reason
+	isCompound := len(insertColsName) > 1
+
+	switch slt := stmt.Rows.Select.(type) {
+	case *tree.ValuesClause:
+			if !isCompound {
+				for i, name := range insertColsName {
+					if name == tableDef.Pkey.PkeyColName {
+						typ := tableDef.Cols[i].Typ
+						switch typ.Id {
+						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+							if len(slt.Rows) > 20_000 {
+								// break condition 4.1
+								return false
+							}
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
+							if len(slt.Rows) > 20_000 {
+								// break condition 4.1
+								return false
+							}
+						default:
+						}
+					}
+				}
+			} else {
+				if len(slt.Rows) > defaultmaxRowThenUnusePkFilterExpr {
+					// break condition 4.2
+					return false
+				}
+			}
+	default:
+		// TODO(jensenojs):need to support more type, such as load or update ?
+		return false
+	}
+
+	return true
+}
+
+func getPkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) (map[int]int, error) {
+	pkPosInValues := make(map[int]int)
+	ifUsePkFilter := false
+	isCompoundPK := len(tableDef.Pkey.Names) > 1 
+	var insertColsName []string
+	var err error
+
+	if strings.HasPrefix(tableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+		// 
+
+	} else {
+		insertColsName, err = getInsertColsFromStmt(ctx, stmt, tableDef)
+		if err != nil {
 			return pkPosInValues, err
 		}
 	}
@@ -286,33 +406,32 @@ func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef
 	switch slt := stmt.Rows.Select.(type) {
 	case *tree.ValuesClause:
 		if CNPrimaryCheck {
-			CanUsePkFilter := false
 
-			if len(tableDef.Pkey.Names) == 1 {
-				for i, name := range insertColumns {
+			if !isCompoundPK {
+				for i, name := range insertColsName {
 					if name == tableDef.Pkey.PkeyColName {
 						typ := tableDef.Cols[i].Typ
 						switch typ.Id {
 						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
 							if len(slt.Rows) < 20000 {
-								CanUsePkFilter = true
+								ifUsePkFilter = true
 							}
 						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
 							if len(slt.Rows) < 20000 {
-								CanUsePkFilter = true
+								ifUsePkFilter = true
 							}
 						}
 					}
 				}
+			} else {
+				if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
+					ifUsePkFilter = true
+				}
 			}
 
-			if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
-				CanUsePkFilter = true
-			}
-
-			if CanUsePkFilter {
-				if len(tableDef.Pkey.Names) == 1 {
-					for idx, name := range insertColumns {
+			if ifUsePkFilter {
+				if !isCompoundPK {
+					for idx, name := range insertColsName {
 						if name == tableDef.Pkey.PkeyColName {
 							pkPosInValues[idx] = 0
 							break
@@ -323,7 +442,7 @@ func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef
 					for pkIdx, pkName := range tableDef.Pkey.Names {
 						pkNameMap[pkName] = pkIdx
 					}
-					for idx, name := range insertColumns {
+					for idx, name := range insertColsName {
 						if pkIdx, ok := pkNameMap[name]; ok {
 							pkPosInValues[idx] = pkIdx
 						}
@@ -331,13 +450,12 @@ func getpkPosInValues(ctx context.Context, stmt *tree.Insert, tableDef *TableDef
 				}
 				// one of pk cols is incr col and this col was not in values.
 				// we can not use the values of other cols as filterExpr.
-				if len(tableDef.Pkey.Names) != len(pkPosInValues) {
-					pkPosInValues = make(map[int]int)
-				}
+				// if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+				// 	pkPosInValues = make(map[int]int)
+				// }
 			}
 		}
 	default:
-		// TODO(jensenojs):need to support more type, such as load or update ?
 		return pkPosInValues, nil
 	}
 	return pkPosInValues, nil
