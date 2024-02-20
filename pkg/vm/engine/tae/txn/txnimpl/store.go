@@ -68,36 +68,37 @@ type txnTracer struct {
 func (tracer *txnTracer) Trigger(state uint8) {
 	switch state {
 	case 0: // start preparing wait
-		_, tracer.task = trace.NewTask(context.Background(), "PreparingWait")
+		_, tracer.task = trace.NewTask(context.Background(), "1-PreparingWait")
+		tracer.state = 0
 	case 1: // end preparing wait and start preparing
 		if tracer.task != nil && tracer.state == 0 {
 			tracer.task.End()
 		}
-		_, tracer.task = trace.NewTask(context.Background(), "Preparing")
+		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
 		tracer.state = 1
 	case 2: // end preparing and start prepare wal wait
 		if tracer.task != nil && tracer.state == 1 {
 			tracer.task.End()
 		}
-		_, tracer.task = trace.NewTask(context.Background(), "PrepareWalWait")
+		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
 		tracer.state = 2
 	case 3: // end prepare wal wait and start prepare wal
 		if tracer.task != nil && tracer.state == 2 {
 			tracer.task.End()
 		}
-		_, tracer.task = trace.NewTask(context.Background(), "PrepareWal")
+		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
 		tracer.state = 3
 	case 4: // end prepare wal and start prepared wait
 		if tracer.task != nil && tracer.state == 3 {
 			tracer.task.End()
 		}
-		_, tracer.task = trace.NewTask(context.Background(), "PreparedWait")
+		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
 		tracer.state = 4
 	case 5: // end prepared wait and start prepared
 		if tracer.task != nil && tracer.state == 4 {
 			tracer.task.End()
 		}
-		_, tracer.task = trace.NewTask(context.Background(), "Prepared")
+		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
 		tracer.state = 5
 	}
 }
@@ -166,7 +167,7 @@ func (store *txnStore) StartTrace() {
 		return
 	}
 	store.tracer = getTracer()
-	store.tracer.Trigger(0)
+	store.tracer.Trigger(txnif.TraceStart)
 }
 
 func (store *txnStore) EndTrace() {
@@ -175,6 +176,7 @@ func (store *txnStore) EndTrace() {
 	}
 	tracer := store.tracer
 	store.tracer = nil
+	tracer.Stop()
 	putTracer(tracer)
 }
 
