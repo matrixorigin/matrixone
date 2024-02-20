@@ -486,6 +486,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePreparing)
 		t0 := time.Now()
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
@@ -517,6 +519,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
+		store.TriggerTrace(txnif.TracePrepareWalWait)
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
@@ -536,6 +539,8 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepareWal)
 		var t1, t2, t3, t4, t5 time.Time
 		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
@@ -562,6 +567,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 		}
 
 		t4 = time.Now()
+		store.TriggerTrace(txnif.TracePreapredWait)
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
@@ -592,6 +598,8 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepared)
 		mgr.workers.Submit(func() {
 			//Notice that WaitPrepared do nothing when op is OpRollback
 			t0 := time.Now()
