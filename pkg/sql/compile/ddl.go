@@ -1122,8 +1122,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	stmt := c.stmt.(*tree.CreateTable)
-	if stmt.IsAsSelect {
+	if stmt, ok := c.stmt.(*tree.CreateTable); ok && stmt.IsAsSelect {
 		getLogger().Info("createTable", zap.String("CreateAsSelectSql", qry.CreateAsSelectSql))
 		if err = c.runSql(qry.CreateAsSelectSql); err != nil {
 			getLogger().Info("createTable",
