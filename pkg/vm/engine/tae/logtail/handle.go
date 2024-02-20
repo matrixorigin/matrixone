@@ -560,7 +560,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS,
 
 	for _, node := range mvccNodes {
 		metaNode := node
-		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.IsAborted() {
+		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.BaseNode.DeltaLoc.IsEmpty() && !metaNode.IsAborted() {
 			b.appendBlkMeta(e, metaNode)
 		}
 	}

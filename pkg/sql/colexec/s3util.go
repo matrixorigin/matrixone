@@ -446,6 +446,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+		case types.T_bit:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
@@ -570,7 +572,7 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	obj := Srv.GenerateObject()
+	obj := Get().GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err

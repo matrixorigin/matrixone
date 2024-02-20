@@ -543,6 +543,21 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 	}
 	var left int
 	switch vec.GetType().Oid {
+	case types.T_bit:
+		col := vector.MustFixedCol[uint64](vec)
+		if expr == nil {
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], genericGreater[uint64])
+		} else {
+			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], genericGreater[uint64])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], genericGreater[uint64])
+			}
+		}
 	case types.T_int8:
 		col := vector.MustFixedCol[int8](vec)
 		if expr == nil {
@@ -861,6 +876,21 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	}
 	var right int
 	switch vec.GetType().Oid {
+	case types.T_bit:
+		col := vector.MustFixedCol[uint64](vec)
+		if expr == nil {
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
+		} else {
+			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], genericGreater[uint64])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], genericGreater[uint64])
+			}
+		}
 	case types.T_int8:
 		col := vector.MustFixedCol[int8](vec)
 		if expr == nil {

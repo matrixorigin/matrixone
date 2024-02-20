@@ -347,7 +347,7 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
@@ -763,7 +763,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM
+%token <str> BACKUP FILESYSTEM PARALLELISM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -897,12 +897,13 @@ normal_stmt:
 |   backup_stmt
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
 		$$ = &tree.BackupStart{
 		    Timestamp: $2,
 		    IsS3 : false,
 		    Dir: $4,
+            Parallelism: $6,
 		}
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
@@ -2634,6 +2635,36 @@ explain_stmt:
             explainStmt.Options = $3
             $$ = explainStmt
         }
+    }
+|   explain_sym FORCE execute_stmt
+{
+    $$ = tree.NewExplainStmt($3, "text")
+}
+|   explain_sym VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainStmt($4, "text")
+        optionElem := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($4, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($5, "text")
+        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 
 explain_option_key:
@@ -6423,6 +6454,10 @@ using_opt:
     {
 	$$ = tree.INDEX_TYPE_IVFFLAT
     }
+|   USING MASTER
+    {
+	$$ = tree.INDEX_TYPE_MASTER
+    }
 |   USING HASH
     {
         $$ = tree.INDEX_TYPE_HASH
@@ -7563,6 +7598,8 @@ index_def:
             	keyTyp = tree.INDEX_TYPE_BTREE
 	    case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	    case "master":
+	    	keyTyp = tree.INDEX_TYPE_MASTER
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7594,6 +7631,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BTREE
 	     case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	     case "master":
+        	keyTyp = tree.INDEX_TYPE_MASTER
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7736,6 +7775,7 @@ index_type:
 |   RTREE
 |   ZONEMAP
 |   IVFFLAT
+|   MASTER
 |   BSI
 
 insert_method_options:
@@ -10968,6 +11008,7 @@ non_reserved_keyword:
 |   STAGES
 |   BACKUP
 |   FILESYSTEM
+|   PARALLELISM
 |	VALUE
 |	REFERENCE
 |	MODIFY
@@ -10979,6 +11020,7 @@ non_reserved_keyword:
 |	BOOLEAN
 |   BTREE
 |	IVFFLAT
+|	MASTER
 |	COALESCE
 |	CONNECT
 |	CIPHER
