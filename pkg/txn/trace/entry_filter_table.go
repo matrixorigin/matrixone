@@ -57,7 +57,8 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 		newVecs := entry.vecs[:0]
 		for i, attr := range entry.columns {
 			_, ok := f.columns[attr]
-			if ok {
+			// keep row id for every
+			if ok || attr == "__mo_rowid" {
 				newColumns = append(newColumns, attr)
 				newVecs = append(newVecs, entry.vecs[i])
 			}

@@ -54,7 +54,8 @@ type service struct {
 	}
 
 	atomic struct {
-		enabled atomic.Bool
+		enabled           atomic.Bool
+		completedPKTables sync.Map // uint64 -> bool
 	}
 
 	options struct {
@@ -195,7 +196,6 @@ func (s *service) CommitEntries(
 			}
 		}
 		if skipped {
-			entryData.close()
 			continue
 		}
 
@@ -244,7 +244,6 @@ func (s *service) TxnRead(
 		}
 	}
 	if skipped {
-		entryData.close()
 		return
 	}
 
@@ -274,8 +273,12 @@ func (s *service) ChangedCheck(
 	}
 
 	skipped := true
+	l := reuse.Alloc[EntryData](nil)
+	defer l.close()
+	l.id = tableID
+	l.empty = true
 	for _, f := range s.mu.entryFilters {
-		if !f.Filter(nil) {
+		if !f.Filter(l) {
 			skipped = false
 			break
 		}
@@ -316,7 +319,6 @@ func (s *service) ApplyLogtail(
 		}
 	}
 	if skipped {
-		entryData.close()
 		return
 	}
 
@@ -549,6 +551,7 @@ func (s *service) handleEvents(ctx context.Context) {
 // EntryData entry data
 type EntryData struct {
 	id         uint64
+	empty      bool
 	at         int64
 	snapshotTS timestamp.Timestamp
 	entryType  string
@@ -608,6 +611,7 @@ func (l *EntryData) reset() {
 	}
 
 	l.id = 0
+	l.empty = false
 	l.commitVec = nil
 	l.columns = l.columns[:0]
 	l.vecs = l.vecs[:0]
@@ -635,7 +639,11 @@ func (l *EntryData) createApply(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			writeValue(columnsData, row, buf, dst)
+			if name == "__mo_cpkey_col" {
+				writeCompletedValue(columnsData, row, buf, dst)
+			} else {
+				writeValue(columnsData, row, buf, dst)
+			}
 			if col != len(l.columns)-1 {
 				buf.buf.WriteString(", ")
 			}
@@ -661,7 +669,11 @@ func (l *EntryData) createCommit(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			writeValue(columnsData, row, buf, dst)
+			if name == "__mo_cpkey_col" {
+				writeCompletedValue(columnsData, row, buf, dst)
+			} else {
+				writeValue(columnsData, row, buf, dst)
+			}
 			if col != len(l.columns)-1 {
 				buf.buf.WriteString(", ")
 			}
@@ -687,7 +699,11 @@ func (l *EntryData) createRead(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			writeValue(columnsData, row, buf, dst)
+			if name == "__mo_cpkey_col" {
+				writeCompletedValue(columnsData, row, buf, dst)
+			} else {
+				writeValue(columnsData, row, buf, dst)
+			}
 			if col != len(l.columns)-1 {
 				buf.buf.WriteString(", ")
 			}

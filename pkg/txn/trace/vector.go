@@ -22,11 +22,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func writeCompletedValue(
+	vec *vector.Vector,
+	row int,
+	buf *buffer,
+	dst []byte) {
+	tuples, _, _, err := types.DecodeTuple(vec.GetBytesAt(row))
+	if err != nil {
+		panic(err)
+	}
+	buf.buf.WriteString("[")
+	for i, t := range tuples {
+		switch v := t.(type) {
+		case bool:
+			if v {
+				buf.buf.WriteString("true")
+			} else {
+				buf.buf.WriteString("false")
+			}
+		case int8:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case int16:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case int32:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case int64:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case uint8:
+			buf.buf.MustWrite(uintToString(dst, uint64(v)))
+		case uint16:
+			buf.buf.MustWrite(uintToString(dst, uint64(v)))
+		case uint32:
+			buf.buf.MustWrite(uintToString(dst, uint64(v)))
+		case uint64:
+			buf.buf.MustWrite(uintToString(dst, uint64(v)))
+		case float32:
+			buf.buf.MustWrite(floatToString(dst, float64(v)))
+		case float64:
+			buf.buf.MustWrite(floatToString(dst, float64(v)))
+		case []byte:
+			buf.buf.MustWrite(v)
+		case types.Date:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case types.Time:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case types.Datetime:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case types.Timestamp:
+			buf.buf.MustWrite(intToString(dst, int64(v)))
+		case types.Decimal64:
+			buf.buf.MustWrite(uintToString(dst, uint64(v)))
+		default:
+			buf.buf.WriteString(fmt.Sprintf("%v", t))
+		}
+		if i < len(tuples)-1 {
+			buf.buf.WriteString(",")
+		}
+	}
+	buf.buf.WriteString("]")
+}
+
 func writeValue(
 	vec *vector.Vector,
 	row int,
 	buf *buffer,
 	dst []byte) {
+
 	t := vec.GetType()
 	switch t.Oid {
 	case types.T_bool:
