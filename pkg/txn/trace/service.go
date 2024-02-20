@@ -59,9 +59,8 @@ type service struct {
 	}
 
 	options struct {
-		forceFlush    time.Duration
-		maxTxnBatch   int
-		maxEntryBatch int
+		forceFlush time.Duration
+		flushBatch int
 	}
 }
 
@@ -80,16 +79,13 @@ func NewService(cn string,
 		closeBufferC: make(chan *buffer, 100000),
 	}
 	s.options.forceFlush = 60 * time.Second
-	s.options.maxTxnBatch = 256
-	s.options.maxEntryBatch = 256
+	s.options.flushBatch = 512
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	for i := 0; i < 2; i++ {
-		if err := s.stopper.RunTask(s.handleEvents); err != nil {
-			panic(err)
-		}
+	if err := s.stopper.RunTask(s.handleEvents); err != nil {
+		panic(err)
 	}
 	return s, nil
 }
@@ -488,8 +484,8 @@ func (s *service) handleEvents(ctx context.Context) {
 	ticker := time.NewTicker(s.options.forceFlush)
 	defer ticker.Stop()
 
-	txnEvents := make([]txnEvent, 0, s.options.maxTxnBatch)
-	entryEvents := make([]entryEvent, 0, s.options.maxEntryBatch)
+	txnEvents := make([]txnEvent, 0, s.options.flushBatch)
+	entryEvents := make([]entryEvent, 0, s.options.flushBatch)
 
 	flush := func() {
 		if len(txnEvents) == 0 {
@@ -531,6 +527,10 @@ func (s *service) handleEvents(ctx context.Context) {
 		}
 	}
 
+	isFull := func() bool {
+		return len(txnEvents)+len(entryEvents) >= s.options.flushBatch
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -539,12 +539,12 @@ func (s *service) handleEvents(ctx context.Context) {
 			flush()
 		case e := <-s.txnEventC:
 			txnEvents = append(txnEvents, e)
-			if len(txnEvents) >= s.options.maxTxnBatch {
+			if isFull() {
 				flush()
 			}
 		case e := <-s.entryC:
 			entryEvents = append(entryEvents, e)
-			if len(entryEvents) >= s.options.maxEntryBatch {
+			if isFull() {
 				flush()
 			}
 		case buf := <-s.closeBufferC:
