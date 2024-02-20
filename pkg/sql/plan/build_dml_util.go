@@ -116,20 +116,24 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
 	checkInsertPkDup bool, isInsertWithoutAutoPkCol bool) error {
 
-	insertColsName, err := getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
-	if err != nil {
-		return err
-	}
-
-	// try to build pk filter epxr for origin table
+	var err error
+	var insertColsName []string
 	var pkFilterExpr []*Expr
 	var newPartitionExpr *Expr
-	if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsName) {
-		pkPosInValues := getPkPosInValues(tableDef, insertColsName)
-		pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
-		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
-		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+	if stmt != nil {
+		insertColsName, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
+		if err != nil {
+			return err
+		}
+
+		// try to build pk filter epxr for origin table
+		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsName) {
+			pkPosInValues := getPkPosInValues(tableDef, insertColsName)
+			pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
+			// The insert statement subplan with a primary key has undergone manual column pruning in advance,
+			// so the partition expression needs to be remapped and judged whether partition pruning can be performed
+			newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+		}
 	}
 
 	// add plan: -> preinsert -> sink
