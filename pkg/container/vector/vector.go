@@ -3601,7 +3601,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3612,7 +3613,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3623,7 +3625,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3634,7 +3637,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3645,7 +3649,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3656,7 +3661,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3667,7 +3673,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3678,7 +3685,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3689,7 +3697,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3700,7 +3709,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3732,7 +3742,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3743,7 +3754,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3754,7 +3766,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3765,7 +3778,8 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3778,7 +3792,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3791,7 +3806,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3804,7 +3820,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3817,7 +3834,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 	case types.T_Rowid:
@@ -3829,7 +3847,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Equal(b)
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3842,7 +3861,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3861,7 +3881,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 
@@ -3880,7 +3901,8 @@ func (v *Vector) InplaceSortAndCompact() {
 			) == 0
 		})
 		if len(newCol) != len(col) {
-			v.Reset(v.typ)
+			v.CleanOnlyData()
+			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
 	}
