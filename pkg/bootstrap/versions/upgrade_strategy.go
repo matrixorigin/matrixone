@@ -163,7 +163,6 @@ func AddColumn(txn executor.TxnExecutor, newCol *plan.ColDef, schema string, tab
 		return false, err
 	}
 
-	// 检查是否具有状态
 	if (colState & NameSame) != 0 {
 		return true, nil
 	} else {
@@ -188,7 +187,6 @@ func DropColumn(txn executor.TxnExecutor, targetCol *plan.ColDef, schema string,
 		return false, err
 	}
 
-	// 检查是否具有状态
 	if (colState & NameSame) != 0 {
 		// ADD [COLUMN] col_name column_definition
 		sql := fmt.Sprintf("alter table `%s`.`%s` drop column `%s`", schema, tableName, targetCol.Name)
@@ -212,7 +210,6 @@ func ModifyColumn(txn executor.TxnExecutor, newCol *plan.ColDef, schema string, 
 		return false, err
 	}
 
-	// 检查是否具有状态
 	if (colState & NameSame) != 0 {
 		if (colState&TypeSame) != 0 && (colState&PrecisionSame) != 0 {
 			return true, nil
@@ -248,8 +245,7 @@ func ChangeColumn(txn executor.TxnExecutor, oldCol *plan.ColDef, newCol *plan.Co
 	if err != nil {
 		return false, err
 	}
-
-	// 检查是否具有状态
+	
 	if (colState & NameSame) != 0 {
 		if (colState&TypeSame) != 0 && (colState&PrecisionSame) != 0 {
 			return true, nil
