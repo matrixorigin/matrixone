@@ -37,7 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -111,7 +111,7 @@ func CnServerMessageHandler(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	cli client.TxnClient,
@@ -133,7 +133,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryClient, hakeeper, udfService, cli, aicm)
 
 	// rebuild pipeline to run and send the query result back.
 	err = cnMessageHandle(&receiver)
