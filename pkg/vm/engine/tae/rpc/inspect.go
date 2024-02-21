@@ -495,6 +495,22 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+
+		schema := c.blk.GetSchema()
+		if schema.HasSortKey() {
+			zm, err := c.blk.GetPKZoneMap(context.Background(), c.blk.GetBlockData().GetFs().Service)
+			var zmstr string
+			if err != nil {
+				zmstr = err.Error()
+			} else if c.verbose <= common.PPL1 {
+				zmstr = zm.String()
+			} else if c.verbose == common.PPL2 {
+				zmstr = zm.StringForCompose()
+			} else {
+				zmstr = zm.StringForHex()
+			}
+			b.WriteString(fmt.Sprintf("sort key zm: %v\n", zmstr))
+		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
