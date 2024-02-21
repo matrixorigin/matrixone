@@ -3719,21 +3719,36 @@ func (v *Vector) InplaceSortAndCompact() {
 		sort.Slice(col, func(i, j int) bool {
 			return col[i] < col[j]
 		})
-		slices.Compact(col)
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
 
 	case types.T_float64:
 		col := MustFixedCol[float64](v)
 		sort.Slice(col, func(i, j int) bool {
 			return col[i] < col[j]
 		})
-		slices.Compact(col)
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
 
 	case types.T_date:
 		col := MustFixedCol[types.Date](v)
 		sort.Slice(col, func(i, j int) bool {
 			return col[i] < col[j]
 		})
-		slices.Compact(col)
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
 
 	case types.T_datetime:
 		col := MustFixedCol[types.Datetime](v)
@@ -3817,7 +3832,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return col[i].Less(col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
-			return a.Compare(b) == 0
+			return a.Equal(b)
 		})
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
