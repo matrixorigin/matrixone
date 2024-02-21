@@ -25,9 +25,7 @@ const (
 	GroupNotMatched = 0
 )
 
-func init() {
-}
-
+// AggFuncExec is an interface to do execution for aggregation.
 type AggFuncExec interface {
 	// Init initialize the aggregation.
 	// Init()
@@ -36,6 +34,8 @@ type AggFuncExec interface {
 
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
+
+	// GrowGroup(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
