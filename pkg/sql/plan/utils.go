@@ -1885,3 +1885,80 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	}
 	return true
 }
+
+func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
+	inExpr := &plan.Expr{
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: left.Typ.NotNullable,
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.InFunctionEncodedID,
+					ObjName: function.InFunctionName,
+				},
+				Args: []*plan.Expr{
+					left,
+					{
+						Typ: &plan.Type{
+							Id: int32(types.T_tuple),
+						},
+						Expr: &plan.Expr_Vec{
+							Vec: &plan.LiteralVec{
+								Len:  length,
+								Data: data,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return inExpr
+}
+
+// FillValuesOfParamsInPlan replaces the params by their values
+func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	copied := preparePlan
+
+	switch pp := copied.Plan.(type) {
+	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+
+	case *plan.Plan_Ddl:
+		if pp.Ddl.Query != nil {
+			err := replaceParamVals(ctx, preparePlan, paramVals)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+	case *plan.Plan_Query:
+		err := replaceParamVals(ctx, preparePlan, paramVals)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return copied, nil
+}
+
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
+	params := make([]*Expr, len(paramVals))
+	for i, val := range paramVals {
+		pc := &plan.Literal{}
+		pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
+		params[i] = &plan.Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: pc,
+			},
+		}
+	}
+	paramRule := NewResetParamRefRule(ctx, params)
+	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
+	err := VisitQuery.Visit(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}

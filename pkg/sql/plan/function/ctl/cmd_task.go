@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -67,7 +67,7 @@ func handleTask(proc *process.Process,
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := transferTaskToCN(proc.QueryService, target, taskCode)
+	resp, err := transferTaskToCN(proc.QueryClient, target, taskCode)
 	if err != nil {
 		return Result{}, err
 	}
@@ -91,16 +91,16 @@ func checkRunTaskParameter(param string) (string, int32, error) {
 	return args[0], taskCode, nil
 }
 
-func transferTaskToCN(qs queryservice.QueryService, target string, taskCode int32) (resp *querypb.Response, err error) {
+func transferTaskToCN(qc qclient.QueryClient, target string, taskCode int32) (resp *querypb.Response, err error) {
 	clusterservice.GetMOCluster().GetCNService(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
-			req := qs.NewRequest(querypb.CmdMethod_RunTask)
+			req := qc.NewRequest(querypb.CmdMethod_RunTask)
 			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			resp, err = qc.SendMessage(ctx, cn.QueryAddress, req)
 			return true
 		})
 	return

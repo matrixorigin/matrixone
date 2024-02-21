@@ -156,7 +156,7 @@ func newTNService(
 
 // buildTNConfig builds configuration for a tn service.
 func buildTNConfig(
-	index int, opt Options, address serviceAddresses,
+	index int, opt Options, address *serviceAddresses,
 ) *tnservice.Config {
 	uid, _ := uuid.NewV7()
 	cfg := &tnservice.Config{

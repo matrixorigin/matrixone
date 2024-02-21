@@ -22,14 +22,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
 
 const JsonIdent = "    "
 
 type CNInstance struct {
-	TxnClient   client.TxnClient
-	LockService lockservice.LockService
+	TxnClient     client.TxnClient
+	LockService   lockservice.LockService
+	logtailClient *disttae.PushClient
 }
 
 type Server struct {
@@ -81,6 +83,16 @@ func (s *Server) SetLockService(uuid string, l lockservice.LockService) {
 	s.mu.CNInstances[uuid].LockService = l
 }
 
+func (s *Server) SetLogTailClient(uuid string, c *disttae.PushClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.mu.CNInstances[uuid]
+	if !ok {
+		s.mu.CNInstances[uuid] = &CNInstance{}
+	}
+	s.mu.CNInstances[uuid].logtailClient = c
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	data, err := s.Dump()
 	if err != nil {
@@ -88,7 +100,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Write(data)
-
 }
 
 func (s *Server) Dump() ([]byte, error) {
@@ -96,10 +107,10 @@ func (s *Server) Dump() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.LogtailServer != nil {
-		status.fillLogtail(s.mu.LogtailServer)
+		status.LogtailServerStatus.fill(s.mu.LogtailServer)
 	}
 	if s.mu.HAKeeperClient != nil {
-		status.fillHAKeeper(s.mu.HAKeeperClient)
+		status.HAKeeperStatus.fill(s.mu.HAKeeperClient)
 	}
 	status.fillCNStatus(s.mu.CNInstances)
 	return json.MarshalIndent(status, "", JsonIdent)

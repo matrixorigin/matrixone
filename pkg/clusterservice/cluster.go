@@ -29,11 +29,19 @@ import (
 
 // GetMOCluster get mo cluster from process level runtime
 func GetMOCluster() MOCluster {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
-	if !ok {
-		panic("no mocluster service")
+	timeout := time.Second * 10
+	now := time.Now()
+	for {
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+		if !ok {
+			if time.Since(now) > timeout {
+				panic("no mocluster service")
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+		return v.(MOCluster)
 	}
-	return v.(MOCluster)
 }
 
 // Option options for create cluster

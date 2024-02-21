@@ -1588,7 +1588,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tblName := tqry.GetTable()
 	oldId := tqry.GetTableId()
 	keepAutoIncrement := false
-	affectedRows := int64(0)
+	affectedRows := uint64(0)
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {

@@ -31,8 +31,11 @@ const (
 )
 
 func TestClusterStart(t *testing.T) {
-	// FIXME: too many components goroutine leak.
-	// defer leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
 	ctx := context.Background()
 
 	// initialize cluster

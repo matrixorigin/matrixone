@@ -23,7 +23,7 @@ import (
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
 
-	subscribeRecord.m = make(map[subscribeID]tableSubscribeStatus)
+	subscribeRecord.m = make(map[SubTableID]SubTableStatus)
 	require.Equal(t, 0, len(subscribeRecord.m))
 
 	tbls := []struct {

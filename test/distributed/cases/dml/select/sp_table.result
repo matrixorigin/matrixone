@@ -22,7 +22,10 @@ mo_stored_procedure    r
 mo_table_partitions    r
 mo_tables    r
 mo_transactions    v
+mo_upgrade    r
+mo_upgrade_tenant    r
 mo_user    r
 mo_user_defined_function    r
 mo_user_grant    r
 mo_variables    v
+mo_version    r

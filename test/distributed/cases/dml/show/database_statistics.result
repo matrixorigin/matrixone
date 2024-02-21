@@ -9,7 +9,7 @@ Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-22
+25
 show table_number from system_metrics;
 Number of tables in system_metrics
 20
@@ -82,7 +82,7 @@ Number of columns in mo_user
 11
 show column_number from mo_account;
 Number of columns in mo_account
-7
+8
 show column_number from mo_role;
 Number of columns in mo_role
 6

@@ -61,7 +61,8 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.JoinMap
+	mp        *hashmap.JoinMap
+	skipProbe bool
 }
 
 type Argument struct {

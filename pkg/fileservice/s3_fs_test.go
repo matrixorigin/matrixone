@@ -1019,6 +1019,25 @@ func TestNewS3FSFromSpec(t *testing.T) {
 			_ = fs
 
 		})
+
+		t.Run(kase.Name+" bad bucket", func(t *testing.T) {
+
+			args := kase.ObjectStorageArguments
+			args.Bucket = args.Bucket + "foobarbaz"
+			ctx := context.Background()
+			_, err := NewS3FS(
+				ctx,
+				args,
+				DisabledCacheConfig,
+				nil,
+				true,
+				false,
+			)
+			if err == nil {
+				t.Fatal("should fail")
+			}
+
+		})
 	}
 
 }

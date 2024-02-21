@@ -16,52 +16,38 @@ package fileservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
-	gpb "github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-// KeyRouter is an interface manages the remote cache information.
-type KeyRouter interface {
-	// Target returns the remote cache server service address of
-	// the cache key. If the cache do not exist in any node, it
-	// returns empty string.
-	Target(k CacheKey) string
+type TargetCacheKeys map[string][]*query.RequestCacheKey
 
-	// AddItem pushes a cache key item into a queue with a local
-	// cache server service address in the item. Gossip will take
-	// all the items and send them to other nodes in gossip cluster.
-	AddItem(key CacheKey, operation gpb.Operation)
-}
-
-type TargetCacheKeys map[string][]*pb.RequestCacheKey
-
-type KeyRouterFactory func() KeyRouter
+type KeyRouterFactory[T comparable] func() client.KeyRouter[T]
 
 // RemoteCache is the cache for remote read.
 type RemoteCache struct {
-	// cacheClient sends the cache request to cache server.
-	cacheClient client.CacheClient
+	// client sends the cache request to query server.
+	client client.QueryClient
 	// keyRouterFactory is used to set the keyRouter async.
-	keyRouterFactory KeyRouterFactory
+	keyRouterFactory KeyRouterFactory[query.CacheKey]
 	// keyRouter is used to find out which node we should send
 	// cache request to.
-	keyRouter KeyRouter
+	keyRouter client.KeyRouter[query.CacheKey]
 	// We only init the key router for the first time.
 	init sync.Once
 }
 
 var _ IOVectorCache = new(RemoteCache)
 
-func NewRemoteCache(client client.CacheClient, factory KeyRouterFactory) *RemoteCache {
+func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.CacheKey]) *RemoteCache {
 	return &RemoteCache{
-		cacheClient:      client,
+		client:           client,
 		keyRouterFactory: factory,
 	}
 }
@@ -113,31 +99,31 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if _, ok := targetCacheKeys[target]; !ok {
-			targetCacheKeys[target] = make([]*pb.RequestCacheKey, 0)
+			targetCacheKeys[target] = make([]*query.RequestCacheKey, 0)
 		}
-		targetCacheKeys[target] = append(targetCacheKeys[target], &pb.RequestCacheKey{
+		targetCacheKeys[target] = append(targetCacheKeys[target], &query.RequestCacheKey{
 			Index:    int32(i),
 			CacheKey: &cacheKey,
 		})
 	}
 
 	for target, key := range targetCacheKeys {
-		req := r.cacheClient.NewRequest(pb.CmdMethod_RemoteRead)
-		req.RemoteReadRequest = &pb.RemoteReadRequest{
+		req := r.client.NewRequest(query.CmdMethod_GetCacheData)
+		req.GetCacheDataRequest = &query.GetCacheDataRequest{
 			RequestCacheKey: key,
 		}
 
 		func(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(ctx, time.Second*2)
 			defer cancel()
-			resp, err := r.cacheClient.SendMessage(ctx, target, req)
+			resp, err := r.client.SendMessage(ctx, target, req)
 			if err != nil {
 				// Do not return error here to read data from local storage.
 				return
 			}
-			defer r.cacheClient.Release(resp)
-			if resp.RemoteReadResponse != nil {
-				for _, cacheData := range resp.RemoteReadResponse.ResponseCacheData {
+			defer r.client.Release(resp)
+			if resp.GetCacheDataResponse != nil {
+				for _, cacheData := range resp.GetCacheDataResponse.ResponseCacheData {
 					numRead++
 					idx := int(cacheData.Index)
 					if cacheData.Hit {
@@ -165,15 +151,12 @@ func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 }
 
 func HandleRemoteRead(
-	ctx context.Context, fs FileService, req *pb.Request, resp *pb.CacheResponse,
+	ctx context.Context, fs FileService, req *query.Request, resp *query.WrappedResponse,
 ) error {
-	if req.RemoteReadRequest == nil {
+	if req.GetCacheDataRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
-	if len(req.RemoteReadRequest.RequestCacheKey) == 0 {
-		return nil
-	}
-	first := req.RemoteReadRequest.RequestCacheKey[0].CacheKey
+	first := req.GetCacheDataRequest.RequestCacheKey[0].CacheKey
 	if first == nil { // We cannot get the first one.
 		return nil
 	}
@@ -181,27 +164,28 @@ func HandleRemoteRead(
 	ioVec := &IOVector{
 		FilePath: first.Path,
 	}
-	ioVec.Entries = make([]IOEntry, len(req.RemoteReadRequest.RequestCacheKey))
-	for i, k := range req.RemoteReadRequest.RequestCacheKey {
+	ioVec.Entries = make([]IOEntry, len(req.GetCacheDataRequest.RequestCacheKey))
+	for i, k := range req.GetCacheDataRequest.RequestCacheKey {
 		ioVec.Entries[i].Offset = k.CacheKey.Offset
 		ioVec.Entries[i].Size = k.CacheKey.Sz
 	}
 	if err := fs.ReadCache(ctx, ioVec); err != nil {
 		return err
 	}
-	respData := make([]*pb.ResponseCacheData, len(req.RemoteReadRequest.RequestCacheKey))
-	for i, k := range req.RemoteReadRequest.RequestCacheKey {
+	respData := make([]*query.ResponseCacheData, len(req.GetCacheDataRequest.RequestCacheKey))
+	for i, k := range req.GetCacheDataRequest.RequestCacheKey {
 		var data []byte
 		if ioVec.Entries[i].CachedData != nil {
 			data = ioVec.Entries[i].CachedData.Bytes()
 		}
-		respData[i] = &pb.ResponseCacheData{
+		respData[i] = &query.ResponseCacheData{
 			Index: k.Index,
 			Hit:   ioVec.Entries[i].fromCache != nil,
 			Data:  data,
 		}
 	}
-	resp.RemoteReadResponse = &pb.RemoteReadResponse{
+
+	resp.GetCacheDataResponse = &query.GetCacheDataResponse{
 		ResponseCacheData: respData,
 	}
 	resp.ReleaseFunc = func() { ioVec.Release() }

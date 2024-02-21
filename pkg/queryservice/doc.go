@@ -89,4 +89,4 @@ The gossip nodes in cluster works:
 
 */
 
-package cacheservice
+package queryservice

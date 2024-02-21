@@ -57,7 +57,8 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys []*vector.Vector
+	uniqueJoinKeys  []*vector.Vector
+	runtimeFilterIn bool
 }
 
 type Argument struct {

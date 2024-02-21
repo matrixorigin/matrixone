@@ -35,15 +35,16 @@ type TxnClientStatus struct {
 	LatestTS timestamp.Timestamp `json:"latest_ts"`
 }
 
-func (s *Status) fillTxnClient(cnStatus *CNStatus, txnClient client.TxnClient) {
-	st := txnClient.GetState()
-	cnStatus.TxnClientStatus = TxnClientStatus{
-		State:              st.State,
-		UserTxnNum:         st.Users,
-		ActiveTxns:         st.ActiveTxns,
-		ActiveTxnCount:     len(st.ActiveTxns),
-		WaitActiveTxns:     st.WaitActiveTxns,
-		WaitActiveTxnCount: len(st.WaitActiveTxns),
-		LatestTS:           st.LatestTS,
+func (s *TxnClientStatus) fill(txnClient client.TxnClient) {
+	if txnClient == nil {
+		return
 	}
+	st := txnClient.GetState()
+	s.State = st.State
+	s.UserTxnNum = st.Users
+	s.ActiveTxns = st.ActiveTxns
+	s.ActiveTxnCount = len(st.ActiveTxns)
+	s.WaitActiveTxns = st.WaitActiveTxns
+	s.WaitActiveTxnCount = len(st.WaitActiveTxns)
+	s.LatestTS = st.LatestTS
 }

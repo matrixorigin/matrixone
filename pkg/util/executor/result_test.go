@@ -47,7 +47,7 @@ func TestReadRows(t *testing.T) {
 	var col1 []int32
 	var col2 [][]byte
 	var cols2WithString []string
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		col1 = append(col1, GetFixedRows[int32](cols[0])...)
 		col2 = append(col2, GetBytesRows(cols[1])...)
 		cols2WithString = append(cols2WithString, GetStringRows(cols[1])...)

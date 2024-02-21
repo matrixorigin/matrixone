@@ -19,16 +19,23 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"go.uber.org/zap"
 )
 
 var (
-	logger *log.MOLogger
-	once   sync.Once
+	logger        *log.MOLogger
+	upgradeLogger *log.MOLogger
+	once          sync.Once
 )
 
 func getLogger() *log.MOLogger {
 	once.Do(initLogger)
 	return logger
+}
+
+func getUpgradeLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return upgradeLogger
 }
 
 func initLogger() {
@@ -37,4 +44,5 @@ func initLogger() {
 		rt = runtime.DefaultRuntime()
 	}
 	logger = rt.Logger()
+	upgradeLogger = logger.With(zap.String("module", "upgrade-framework"))
 }

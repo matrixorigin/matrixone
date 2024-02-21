@@ -18,8 +18,10 @@ syntax = "proto3";
 package gossip;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/gossip";
 
+import "google/protobuf/any.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
-import "cache.proto";
+import "query.proto";
+import "statsinfo.proto";
 
 enum Operation {
   Unknown = 0;
@@ -27,8 +29,40 @@ enum Operation {
   Delete = 2;
 }
 
+message GossipData {
+  oneof Data {
+    CacheKeyItem CacheKeyItem = 1;
+    StatsInfoKeyItem StatsInfoKeyItem = 2;
+  }
+}
+
+// CacheKeyItem is the item of cache key for data in file-service.
 message CacheKeyItem {
   Operation Operation = 1;
-  cache.CacheKey CacheKey = 2 [(gogoproto.nullable) = false];
+  query.CacheKey CacheKey = 2 [(gogoproto.nullable) = false];
   string TargetAddress = 3;
+}
+
+message StatsInfoKeyItem {
+  Operation Operation = 1;
+  statsinfo.StatsInfoKey StatsInfoKey = 2 [(gogoproto.nullable) = false];
+  string TargetAddress = 3;
+}
+
+message LocalState {
+  query.CacheKeys CacheKeys = 1 [(gogoproto.nullable) = false];
+  statsinfo.StatsInfoKeys StatsInfoKeys = 2 [(gogoproto.nullable) = false];
+}
+
+message TargetState {
+  map<string, LocalState> Data = 1;
+}
+
+message CommonItem {
+  Operation Operation = 1;
+  string TargetAddress = 2;
+  oneof Key {
+    query.CacheKey CacheKey = 3;
+    statsinfo.StatsInfoKey StatsInfoKey = 4;
+  }
 }

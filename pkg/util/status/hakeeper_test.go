@@ -67,7 +67,7 @@ func TestFillHAKeeper(t *testing.T) {
 		client.addCNStore()
 		client.addDeletedCNStore()
 	}
-	status.fillHAKeeper(&client)
+	status.HAKeeperStatus.fill(&client)
 	assert.Equal(t, 10, len(status.HAKeeperStatus.Nodes))
 	assert.Equal(t, 10, len(status.HAKeeperStatus.DeletedNodes))
 }

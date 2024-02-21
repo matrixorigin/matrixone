@@ -16,7 +16,6 @@ package plan
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
 )

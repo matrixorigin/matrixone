@@ -26,6 +26,10 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
 		return true
 
+	case *plan.Expr_F:
+		fn := expr.GetF()
+		return fn.Func.ObjName == "cast" && isRuntimeConstExpr(fn.Args[0])
+
 	default:
 		return false
 	}

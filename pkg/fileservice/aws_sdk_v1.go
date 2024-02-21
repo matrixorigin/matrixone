@@ -141,12 +141,14 @@ func NewAwsSDKv1(
 		zap.Any("arguments", args),
 	)
 
-	// head bucket to validate
-	_, err = client.HeadBucket(&s3.HeadBucketInput{
-		Bucket: ptrTo(args.Bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	if !args.NoBucketValidation {
+		// head bucket to validate
+		_, err = client.HeadBucket(&s3.HeadBucketInput{
+			Bucket: ptrTo(args.Bucket),
+		})
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+		}
 	}
 
 	return &AwsSDKv1{

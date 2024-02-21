@@ -223,30 +223,33 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_indexes
+mo_database
+mo_tables
+mo_columns
 mo_table_partitions
 mo_user
-mo_account
 mo_role
 mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
-mo_sessions
-mo_configurations
-mo_stored_procedure
-mo_stages
 mo_mysql_compatibility_mode
 mo_pubs
-mo_database
-mo_columns
-mo_tables
+mo_stored_procedure
+mo_stages
+mo_sessions
+mo_configurations
 mo_locks
 mo_variables
 mo_transactions
 mo_cache
+mo_version
+mo_upgrade
+mo_upgrade_tenant
+mo_account
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-22
+25
 show column_number from mo_database;
 Number of columns in mo_database
 9

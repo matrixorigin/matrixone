@@ -24,6 +24,7 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	function "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -226,20 +227,6 @@ func (mr *MockCompilerContext2MockRecorder) GetRootSql() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRootSql", reflect.TypeOf((*MockCompilerContext2)(nil).GetRootSql))
 }
 
-// GetStatsCache mocks base method.
-func (m *MockCompilerContext2) GetStatsCache() *StatsCache {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetStatsCache")
-	ret0, _ := ret[0].(*StatsCache)
-	return ret0
-}
-
-// GetStatsCache indicates an expected call of GetStatsCache.
-func (mr *MockCompilerContext2MockRecorder) GetStatsCache() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStatsCache", reflect.TypeOf((*MockCompilerContext2)(nil).GetStatsCache))
-}
-
 // GetSubscriptionMeta mocks base method.
 func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
 	m.ctrl.T.Helper()
@@ -282,6 +269,22 @@ func (m *MockCompilerContext2) IsPublishing(dbName string) (bool, error) {
 func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPublishing", reflect.TypeOf((*MockCompilerContext2)(nil).IsPublishing), dbName)
+}
+
+// ReplacePlan mocks base method.
+func (m *MockCompilerContext2) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReplacePlan", execPlan)
+	ret0, _ := ret[0].(*plan.Plan)
+	ret1, _ := ret[1].(tree.Statement)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ReplacePlan indicates an expected call of ReplacePlan.
+func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplacePlan", reflect.TypeOf((*MockCompilerContext2)(nil).ReplacePlan), execPlan)
 }
 
 // Resolve mocks base method.
@@ -384,11 +387,12 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *plan.ObjectRef) bool {
+func (m *MockCompilerContext2) Stats(obj *plan.ObjectRef) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", obj)
-	ret0, _ := ret[0].(bool)
-	return ret0
+	ret0, _ := ret[0].(*statsinfo.StatsInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -217,6 +218,18 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	id, err := e.idGenerator.NewIDByKey(ctx, key)
 	return uint64(id), err
+}
+
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return nil
 }
 
 func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {

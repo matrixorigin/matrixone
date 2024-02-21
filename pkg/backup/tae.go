@@ -84,7 +84,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	}
 
 	var retByts [][][]byte
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		retByts = append(retByts, executor.GetBytesRows(cols[0]))
 		return true
 	})
