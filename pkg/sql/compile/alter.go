@@ -207,16 +207,9 @@ func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColD
 			return err
 		}
 	}
-	childTableDef, err := childRelation.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, childRelation)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range childTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok1 := ct.(*engine.ForeignKeyDef); ok1 {
@@ -256,22 +249,9 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map
 
 // restoreNewTableRefChildTbls Restore the original table's foreign key child table ids to the copy table definition
 func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64) error {
-	copyTableDef, err := copyRel.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, copyRel)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range copyTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
-	}
-
-	if oldCt == nil {
-		oldCt = &engine.ConstraintDef{
-			Cts: []engine.Constraint{},
-		}
 	}
 	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
 		Tables: refChildTbls,
@@ -286,16 +266,9 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	if err != nil {
 		return err
 	}
-	fatherTableDef, err := fatherRelation.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, fatherRelation)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range fatherTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {

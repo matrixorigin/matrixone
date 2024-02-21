@@ -36,7 +36,7 @@ type CompilerContext struct {
 	txnOp     client.TxnOperator
 }
 
-func (c *CompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+func (c *CompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
 	//TODO implement me
 	panic("implement me")
 }

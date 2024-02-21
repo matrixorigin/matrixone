@@ -55,9 +55,52 @@ type TxnCompilerContext struct {
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
-func (tcc *TxnCompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
-	
-	return nil, nil
+func (tcc *TxnCompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
+	txnCtx, txn, err := tcc.GetTxnHandler().GetTxn()
+	if err != nil {
+		return false, err
+	}
+	database, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
+	if err != nil {
+		return false, err
+	}
+
+	relations, err := database.Relations(txnCtx)
+	if err != nil {
+		return false, err
+	}
+	for _, rel := range relations {
+		relation, err := database.Relation(txnCtx, rel, nil)
+		if err != nil {
+			return false, err
+		}
+		yes, err := tcc.hasChildTables(txnCtx, relation)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (tcc *TxnCompilerContext) hasChildTables(ctx context.Context, fkRelation engine.Relation) (bool, error) {
+	oldCt, err := compile.GetConstraintDef(ctx, fkRelation)
+	if err != nil {
+		return false, err
+	}
+	for _, ct := range oldCt.Cts {
+		if def, ok := ct.(*engine.RefChildTableDef); ok {
+			for _, refTable := range def.Tables {
+				if refTable != 0 {
+					return true, nil
+				}
+			}
+			break
+		}
+	}
+	return false, nil
 }
 
 func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
@@ -120,7 +163,7 @@ func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
 		if err != nil {
 			return err
 		}
-		err = compile.AddRefChildTbl(txnCtx2, fkRelation, tblId)
+		err = compile.AddChildTblIdToParentTable(txnCtx2, fkRelation, tblId)
 		if err != nil {
 			return err
 		}

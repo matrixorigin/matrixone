@@ -42,7 +42,7 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
-func (m *MockCompilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+func (m *MockCompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
 	//TODO implement me
 	panic("implement me")
 }

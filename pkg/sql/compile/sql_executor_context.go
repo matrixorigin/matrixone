@@ -43,7 +43,7 @@ type compilerContext struct {
 	mu                   sync.Mutex
 }
 
-func (c *compilerContext) ResolveFKs(dbName, tblName string) ([][]string, error) {
+func (c *compilerContext) HasFKsReferToMe(dbName string) (bool, error) {
 	//TODO implement me
 	panic("implement me")
 }

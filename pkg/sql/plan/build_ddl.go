@@ -2241,14 +2241,20 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		}
 		dropDB.DatabaseId = databaseId
 
-		//TODO: check foreign keys exists or not
-		//hasFkeys, err := checkFkeys(ctx, string(stmt.Name))
-		//if err != nil {
-		//	return nil, err
-		//}
-		//if hasFkeys {
-		//	return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which has been referenced by foreign keys", dropDB.Database)
-		//}
+		//check foreign keys exists or not
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			me, err := ctx.HasFKsReferToMe(dropDB.Database)
+			if err != nil {
+				return nil, err
+			}
+			if me {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which has been referenced by foreign keys", dropDB.Database)
+			}
+		}
 	}
 
 	dropDB.UpdateSql = makeDeleteFkSqlForDropDatabase(dropDB.Database)
@@ -2263,14 +2269,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			},
 		},
 	}, nil
-}
-
-func checkFkeys(ctx CompilerContext, db string) (bool, error) {
-	_, err := ctx.ResolveFKs(db, "")
-	if err != nil {
-		return false, err
-	}
-	return false, nil
 }
 
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
@@ -2807,14 +2805,17 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 		case *tree.AlterTableName:
+			oldName := tableDef.Name
+			newName := string(opt.Name.ToTableName().ObjectName)
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterName{
 					AlterName: &plan.AlterTableName{
-						OldName: tableDef.Name,
-						NewName: string(opt.Name.ToTableName().ObjectName),
+						OldName: oldName,
+						NewName: newName,
 					},
 				},
 			}
+			updateSqls = append(updateSqls, makeRenameFkSqlForAlterTable(databaseName, oldName, newName))
 		case *tree.AlterAddCol:
 			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
 			if err != nil {

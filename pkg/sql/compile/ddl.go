@@ -81,14 +81,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	//TODO: if foreign_key_checks = 0 or 1
-	yes, err := s.hasFkeysReferToMe(c, dbName)
+	// whether foreign_key_checks = 0 or 1
+	err := s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
-	}
-	if yes {
-		return moerr.NewInternalError(c.ctx,
-			"can not drop database '%v' which has been referenced by foreign keys", dbName)
 	}
 
 	err = c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
@@ -118,30 +114,57 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) hasFkeysReferToMe(c *Compile, dbName string) (bool, error) {
+func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	database, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	relations, err := database.Relations(c.ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	for _, rel := range relations {
 		relation, err := database.Relation(c.ctx, rel, nil)
 		if err != nil {
-			return false, err
+			return err
 		}
-		yes, err := s.hasChildTables(c, relation)
+		tblId := relation.GetTableID(c.ctx)
+		fkeys, refChild, err := s.getFkDefs(c, relation)
 		if err != nil {
-			return false, err
+			return err
 		}
-		if yes {
-			return true, nil
+		//remove tblId from the parent table
+		for _, fkey := range fkeys.Fkeys {
+			if fkey.ForeignTbl == 0 {
+				continue
+			}
+
+			_, _, parentTable, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkey.ForeignTbl)
+			if err != nil {
+				return err
+			}
+			err = s.removeChildTblIdFromParentTable(c, parentTable, tblId)
+			if err != nil {
+				return err
+			}
+		}
+		//remove tblId from the child table
+		for _, childId := range refChild.Tables {
+			if childId == 0 {
+				continue
+			}
+			_, _, childTable, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childId)
+			if err != nil {
+				return err
+			}
+			err = s.removeParentTblIdFromChildTable(c, childTable, tblId)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	return false, nil
+	return nil
 }
 
 // Drop the old view, and create the new view.
@@ -247,7 +270,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	tblId := rel.GetTableID(c.ctx)
 
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
-	oldDefs, err := rel.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, rel)
 	if err != nil {
 		return err
 	}
@@ -279,22 +302,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			return retryErr
 		}
 	}
-
-	var oldCt *engine.ConstraintDef
 	newCt := &engine.ConstraintDef{
 		Cts: []engine.Constraint{},
-	}
-	for _, def := range oldDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
-	}
-
-	if oldCt == nil {
-		oldCt = &engine.ConstraintDef{
-			Cts: []engine.Constraint{},
-		}
 	}
 
 	//added fk in this alter table statement
@@ -729,7 +738,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
-		err = s.removeRefChildTbl(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -740,7 +749,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	for _, fkTblId := range addRefChildTbls {
 		if fkTblId == 0 {
 			//fk self refer
-			err = AddRefChildTbl(c.ctx, rel, fkTblId)
+			err = AddChildTblIdToParentTable(c.ctx, rel, fkTblId)
 			if err != nil {
 				return err
 			}
@@ -749,7 +758,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			err = AddRefChildTbl(c.ctx, fkRelation, tblId)
+			err = AddChildTblIdToParentTable(c.ctx, fkRelation, tblId)
 			if err != nil {
 				return err
 			}
@@ -943,15 +952,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
+		oldCt := GetConstraintDefFromTableDefs(newTableDef)
 		//get the columnId of the column from newTableDef
 		var colNameToId = make(map[string]uint64)
-		var oldCt *engine.ConstraintDef
 		for _, def := range newTableDef {
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				colNameToId[attr.Attr.Name] = attr.Attr.ID
-			}
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
 			}
 		}
 		//old colId -> colName
@@ -1023,7 +1030,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if fkey.ForeignTbl == 0 {
 				//fk self refer
 				//add current table to parent's children table
-				err = AddRefChildTbl(c.ctx, newRelation, 0)
+				err = AddChildTblIdToParentTable(c.ctx, newRelation, 0)
 				if err != nil {
 					getLogger().Info("createTable",
 						zap.String("databaseName", c.db),
@@ -1053,7 +1060,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			//add current table to parent's children table
-			err = AddRefChildTbl(c.ctx, fkRelation, tblId)
+			err = AddChildTblIdToParentTable(c.ctx, fkRelation, tblId)
 			if err != nil {
 				getLogger().Info("createTable",
 					zap.String("databaseName", c.db),
@@ -1147,7 +1154,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
-			err = AddFkey(c.ctx, childTable, newDef)
+			err = AddFkeyToRelation(c.ctx, childTable, newDef)
 			if err != nil {
 				getLogger().Info("createTable",
 					zap.String("databaseName", c.db),
@@ -1157,7 +1164,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			// add the child table id -- tblId into the current table -- refChildDef
-			err = AddRefChildTbl(c.ctx, newRelation, childTable.GetTableID(c.ctx))
+			err = AddChildTblIdToParentTable(c.ctx, newRelation, childTable.GetTableID(c.ctx))
 			if err != nil {
 				getLogger().Info("createTable",
 					zap.String("databaseName", c.db),
@@ -1453,16 +1460,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	ct := defs[0].(*engine.ConstraintDef)
 
-	tblDefs, err := r.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, r)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range tblDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
 	}
 	newCt, err := MakeNewCreateConstraint(oldCt, ct.Cts[0])
 	if err != nil {
@@ -1555,16 +1555,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	//1. build and update constraint def
-	tblDefs, err := r.TableDefs(c.ctx)
+	oldCt, err := GetConstraintDef(c.ctx, r)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range tblDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
 	}
 	newCt, err := makeNewDropConstraint(oldCt, qry.GetIndexName())
 	if err != nil {
@@ -1674,22 +1667,15 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 	return oldCt, nil
 }
 
-func AddRefChildTbl(ctx context.Context, fkRelation engine.Relation, tblId uint64) error {
-	fkTableDef, err := fkRelation.TableDefs(ctx)
+func AddChildTblIdToParentTable(ctx context.Context, fkRelation engine.Relation, tblId uint64) error {
+	oldCt, err := GetConstraintDef(ctx, fkRelation)
 	if err != nil {
 		return err
 	}
-	var oldCt *engine.ConstraintDef
 	var oldRefChildDef *engine.RefChildTableDef
-	for _, def := range fkTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			for _, ct := range oldCt.Cts {
-				if old, ok := ct.(*engine.RefChildTableDef); ok {
-					oldRefChildDef = old
-				}
-			}
-			break
+	for _, ct := range oldCt.Cts {
+		if old, ok := ct.(*engine.RefChildTableDef); ok {
+			oldRefChildDef = old
 		}
 	}
 	if oldRefChildDef == nil {
@@ -1703,22 +1689,15 @@ func AddRefChildTbl(ctx context.Context, fkRelation engine.Relation, tblId uint6
 	return fkRelation.UpdateConstraint(ctx, newCt)
 }
 
-func AddFkey(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
-	fkTableDef, err := fkRelation.TableDefs(ctx)
+func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
+	oldCt, err := GetConstraintDef(ctx, fkRelation)
 	if err != nil {
 		return err
 	}
-	var oldCt *engine.ConstraintDef
 	var oldFkeys *engine.ForeignKeyDef
-	for _, def := range fkTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			for _, ct := range oldCt.Cts {
-				if old, ok := ct.(*engine.ForeignKeyDef); ok {
-					oldFkeys = old
-				}
-			}
-			break
+	for _, ct := range oldCt.Cts {
+		if old, ok := ct.(*engine.ForeignKeyDef); ok {
+			oldFkeys = old
 		}
 	}
 	if oldFkeys == nil {
@@ -1732,20 +1711,13 @@ func AddFkey(ctx context.Context, fkRelation engine.Relation, fkey *plan.Foreign
 	return fkRelation.UpdateConstraint(ctx, newCt)
 }
 
-// removeRefChildTbl removes the tblId from the tableDef of fkRelation.
+// removeChildTblIdFromParentTable removes the tblId from the tableDef of fkRelation.
 // input the fkRelation as the parameter instead of retrieving it again
 // to embrace the fk self refer situation
-func (s *Scope) removeRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
-	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
+	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
 	if err != nil {
 		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range fkTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok := ct.(*engine.RefChildTableDef); ok {
@@ -1764,22 +1736,15 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkRelation engine.Relation, tblId 
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
-func (s *Scope) removeParentTblIdInChildTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
-	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+func (s *Scope) removeParentTblIdFromChildTable(c *Compile, fkRelation engine.Relation, tblId uint64) error {
+	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
 	if err != nil {
 		return err
 	}
-	var oldCt *engine.ConstraintDef
 	var oldFkeys *engine.ForeignKeyDef
-	for _, def := range fkTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			for _, ct := range oldCt.Cts {
-				if old, ok := ct.(*engine.ForeignKeyDef); ok {
-					oldFkeys = old
-				}
-			}
-			break
+	for _, ct := range oldCt.Cts {
+		if old, ok := ct.(*engine.ForeignKeyDef); ok {
+			oldFkeys = old
 		}
 	}
 	if oldFkeys == nil {
@@ -1798,29 +1763,27 @@ func (s *Scope) removeParentTblIdInChildTable(c *Compile, fkRelation engine.Rela
 	return fkRelation.UpdateConstraint(c.ctx, newCt)
 }
 
-func (s *Scope) hasChildTables(c *Compile, fkRelation engine.Relation) (bool, error) {
-	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+func (s *Scope) getFkDefs(c *Compile, fkRelation engine.Relation) (*engine.ForeignKeyDef, *engine.RefChildTableDef, error) {
+	var oldFkeys *engine.ForeignKeyDef
+	var oldRefChild *engine.RefChildTableDef
+	oldCt, err := GetConstraintDef(c.ctx, fkRelation)
 	if err != nil {
-		return false, err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range fkTableDef {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
+		return nil, nil, err
 	}
 	for _, ct := range oldCt.Cts {
-		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			for _, refTable := range def.Tables {
-				if refTable != 0 {
-					return true, nil
-				}
-			}
-			break
+		if old, ok := ct.(*engine.ForeignKeyDef); ok {
+			oldFkeys = old
+		} else if refChild, ok := ct.(*engine.RefChildTableDef); ok {
+			oldRefChild = refChild
 		}
 	}
-	return false, nil
+	if oldFkeys == nil {
+		oldFkeys = &engine.ForeignKeyDef{}
+	}
+	if oldRefChild == nil {
+		oldRefChild = &engine.RefChildTableDef{}
+	}
+	return oldFkeys, oldRefChild, nil
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
@@ -1930,16 +1893,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		fkTableDef, err := fkRelation.TableDefs(c.ctx)
+		oldCt, err := GetConstraintDef(c.ctx, fkRelation)
 		if err != nil {
 			return err
-		}
-		var oldCt *engine.ConstraintDef
-		for _, def := range fkTableDef {
-			if ct, ok := def.(*engine.ConstraintDef); ok {
-				oldCt = ct
-				break
-			}
 		}
 		for _, ct := range oldCt.Cts {
 			if def, ok := ct.(*engine.RefChildTableDef); ok {
@@ -2103,7 +2059,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 
-		err = s.removeRefChildTbl(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -2118,7 +2074,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = s.removeParentTblIdInChildTable(c, childRelation, tblId)
+		err = s.removeParentTblIdFromChildTable(c, childRelation, tblId)
 		if err != nil {
 			return err
 		}

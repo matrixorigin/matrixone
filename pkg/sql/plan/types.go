@@ -113,7 +113,7 @@ type CompilerContext interface {
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
 	UpdateFKConstraint(dbName, tblName string, fkData []*FkData) error
-	ResolveFKs(dbName, tblName string) ([][]string, error)
+	HasFKsReferToMe(dbName string) (bool, error)
 }
 
 type Optimizer interface {

@@ -3899,3 +3899,14 @@ func makeDeleteFkSqlForDropDatabase(db string) string {
 	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
 	return sb.String()
 }
+
+func makeRenameFkSqlForAlterTable(db, oldName, newName string) string {
+	sb := strings.Builder{}
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
+	return sb.String()
+}
