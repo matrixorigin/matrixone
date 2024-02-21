@@ -64,7 +64,7 @@ func NewMergeBlocksEntry(
 		createdBlkCnt[i] = totalCreatedBlkCnt
 		totalCreatedBlkCnt += obj.BlockCnt()
 	}
-	return &mergeBlocksEntry{
+	entry := &mergeBlocksEntry{
 		txn:                txn,
 		relation:           relation,
 		createdObjs:        createdObjs,
@@ -81,7 +81,7 @@ func NewMergeBlocksEntry(
 }
 
 func (entry *mergeBlocksEntry) prepareTransferPage() {
-	for i, blk := range entry.droppedBlks {
+	for i, blk := range entry.droppedObjs {
 		if entry.isSkipped(i) {
 			if len(entry.transMappings.Mappings[i]) != 0 {
 				panic("empty block do not match")
@@ -92,13 +92,15 @@ func (entry *mergeBlocksEntry) prepareTransferPage() {
 		if len(mapping) == 0 {
 			panic("cannot tranfer empty block")
 		}
-		tblEntry := blk.GetObject().GetTable()
+		tblEntry := blk.GetTable()
 		isTransient := !tblEntry.GetLastestSchema().HasPK()
 		id := blk.AsCommonID()
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range mapping {
-			blkid := entry.createdBlks[dst.Idx].ID
-			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+			objID := entry.createdObjs[dst.Idx].ID
+			blkOffset := dst.Idx
+			blkID := objectio.NewBlockidWithObjectID(&objID, uint16(blkOffset))
+			page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
 		}
 		entry.pageIds = append(entry.pageIds, id)
 		_ = entry.rt.TransferTable.AddPage(page)
@@ -165,7 +167,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		panic("cannot tranfer empty block")
 	}
 	dataBlock := dropped.GetBlockData()
-	tblEntry := dropped.GetObject().GetTable()
+	tblEntry := dropped.GetTable()
 
 	bat, _, err := dataBlock.CollectDeleteInRange(
 		entry.txn.GetContext(),
