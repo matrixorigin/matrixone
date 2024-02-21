@@ -219,6 +219,14 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return uint64(id), err
 }
 
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
 func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
 	var values []metadata.TNService
 	cluster.GetTNService(clusterservice.NewSelector(),
