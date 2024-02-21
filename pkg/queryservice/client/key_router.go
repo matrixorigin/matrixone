@@ -12,4 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cnservice
+package client
+
+import "github.com/matrixorigin/matrixone/pkg/pb/gossip"
+
+// KeyRouter is an interface manages the remote cache information.
+type KeyRouter[T comparable] interface {
+	// Target returns the remote cache server service address of
+	// the cache key. If the cache do not exist in any node, it
+	// returns empty string.
+	Target(k T) string
+
+	// AddItem pushes a item into a queue with a local
+	// cache server service address in the item. Gossip will take
+	// all the items and send them to other nodes in gossip cluster.
+	AddItem(item gossip.CommonItem)
+}
