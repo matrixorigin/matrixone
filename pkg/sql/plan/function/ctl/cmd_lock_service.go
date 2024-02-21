@@ -53,7 +53,7 @@ func handleRemoveRemoteLockTable(
 		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id + '-' + bind_version", parameter)
 	}
 
-	qs := proc.QueryService
+	qt := proc.QueryClient
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	mc.GetCNServiceWithoutWorkingState(
@@ -67,19 +67,19 @@ func handleRemoveRemoteLockTable(
 
 	total := 0
 	for _, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_RemoveRemoteLockTable)
+		req := qt.NewRequest(querypb.CmdMethod_RemoveRemoteLockTable)
 		req.RemoveRemoteLockTable = &querypb.RemoveRemoteLockTableRequest{
 			GroupID: accountID,
 			TableID: tableID,
 			Version: version,
 		}
 
-		resp, err := qs.SendMessage(ctx, addr, req)
+		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
 		total += int(resp.RemoveRemoteLockTable.Count)
-		qs.Release(resp)
+		qt.Release(resp)
 	}
 
 	return Result{
@@ -108,7 +108,7 @@ func handleGetLatestBind(
 		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s, use account_id + '-' + table_id", parameter)
 	}
 
-	qs := proc.QueryService
+	qt := proc.QueryClient
 	mc := clusterservice.GetMOCluster()
 	var addr string
 	mc.GetTNService(
@@ -120,17 +120,17 @@ func handleGetLatestBind(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	req := qs.NewRequest(querypb.CmdMethod_GetLatestBind)
+	req := qt.NewRequest(querypb.CmdMethod_GetLatestBind)
 	req.GetLatestBind = &querypb.GetLatestBindRequest{
 		GroupID: accountID,
 		TableID: tableID,
 	}
 
-	resp, err := qs.SendMessage(ctx, addr, req)
+	resp, err := qt.SendMessage(ctx, addr, req)
 	if err != nil {
 		return Result{}, err
 	}
-	defer qs.Release(resp)
+	defer qt.Release(resp)
 
 	return Result{
 		Method: GetLatestBind,

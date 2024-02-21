@@ -1037,6 +1037,7 @@ func dispatchSubscribeResponse(
 	receiveAt time.Time) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
+
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
 		// time check for issue #10833.
@@ -1317,6 +1318,9 @@ func updatePartitionOfPush(
 	defer func() {
 		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	// after consume the logtail, enqueue it to global stats.
+	defer func() { e.globalStats.enqueue(tl) }()
 
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()

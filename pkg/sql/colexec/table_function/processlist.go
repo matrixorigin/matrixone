@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,7 +48,7 @@ func processlistPrepare(proc *process.Process, arg *Argument) error {
 func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
-		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account, proc.QueryService)
+		sessions, err := fetchSessions(proc.Ctx, proc.SessionInfo.Account, proc.QueryClient)
 		if err != nil {
 			return false, err
 		}
@@ -168,7 +169,7 @@ func isSysTenant(tenant string) bool {
 }
 
 // fetchSessions get sessions all nodes which the tenant has privilege to access.
-func fetchSessions(ctx context.Context, tenant string, qs queryservice.QueryService) ([]*status.Session, error) {
+func fetchSessions(ctx context.Context, tenant string, qc qclient.QueryClient) ([]*status.Session, error) {
 	var nodes []string
 	sysTenant := isSysTenant(tenant)
 	clusterservice.GetMOCluster().GetCNService(clusterservice.NewSelector(),
@@ -181,7 +182,7 @@ func fetchSessions(ctx context.Context, tenant string, qs queryservice.QueryServ
 	var sessions []*status.Session
 
 	genRequest := func() *query.Request {
-		req := qs.NewRequest(query.CmdMethod_ShowProcessList)
+		req := qc.NewRequest(query.CmdMethod_ShowProcessList)
 		req.ShowProcessListRequest = &query.ShowProcessListRequest{
 			Tenant:    tenant,
 			SysTenant: sysTenant,
@@ -199,7 +200,7 @@ func fetchSessions(ctx context.Context, tenant string, qs queryservice.QueryServ
 		}
 	}
 
-	retErr = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, nil)
+	retErr = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, nil)
 
 	// Sort by session start time.
 	sort.Slice(sessions, func(i, j int) bool {
