@@ -168,13 +168,13 @@ func writeValue(
 }
 
 func uintToString(dst []byte, v uint64) []byte {
-	return strconv.AppendUint(nil, v, 10)
+	return AppendUint(dst[:0], v, 10)
 }
 
 func intToString(dst []byte, v int64) []byte {
-	return strconv.AppendInt(nil, v, 10)
+	return AppendInt(dst[:0], v, 10)
 }
 
 func floatToString(dst []byte, v float64) []byte {
-	return strconv.AppendFloat(nil, v, 'f', -1, 64)
+	return strconv.AppendFloat(dst[:0], v, 'f', -1, 64)
 }

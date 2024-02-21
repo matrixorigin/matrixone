@@ -15,9 +15,9 @@
 package trace
 
 import (
-	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -104,32 +104,18 @@ func newTxnEvent(
 	}
 }
 
-func (e txnEvent) toSQL(cn string) string {
-	return fmt.Sprintf(`insert into %s (
-							ts, 
-							cn, 
-							event_type,
-							txn_id, 
-							txn_status, 
-							snapshot_ts,
-							commit_ts,
-							check_changed) values (%d, '%s', '%s', '%x', '%s', '%d-%d', '%d-%d', '[%d-%d, %d-%d, %v]')`,
-		TxnTable,
-		e.ts,
-		cn,
-		e.eventType,
-		e.txnID,
-		e.txnStatus,
-		e.snapshotTS.PhysicalTime,
-		e.snapshotTS.LogicalTime,
-		e.commitTS.PhysicalTime,
-		e.commitTS.LogicalTime,
-		e.from.PhysicalTime,
-		e.from.LogicalTime,
-		e.to.PhysicalTime,
-		e.to.LogicalTime,
-		e.changed,
-	)
+func (e txnEvent) toCSVRecord(
+	cn string,
+	buf *buffer,
+	records []string) {
+	records[0] = buf.writeInt(e.ts)
+	records[1] = buf.writeHex(e.txnID)
+	records[2] = cn
+	records[3] = e.eventType
+	records[4] = e.txnStatus
+	records[5] = buf.writeTimestamp(e.snapshotTS)
+	records[6] = buf.writeTimestamp(e.commitTS)
+	records[7] = buf.writeBool(e.changed)
 }
 
 type entryEvent struct {
@@ -193,28 +179,24 @@ func newReadEntryEvent(
 	}
 }
 
-func (e entryEvent) toSQL(cn string) string {
-	return fmt.Sprintf(`insert into %s (
-							ts, 
-							cn, 
-							event_type,
-							entry_type,
-							table_id,
-							txn_id,  
-							row_data,
-							committed_ts,
-							snapshot_ts) values (%d, '%s', '%s', '%s', %d, '%x', '%s', '%d-%d', '%d-%d')`,
-		TxnEntryTable,
-		e.ts,
-		cn,
-		e.eventType,
-		e.entryType,
-		e.tableID,
-		e.txnID,
-		e.row,
-		e.commitTS.PhysicalTime,
-		e.commitTS.LogicalTime,
-		e.snapshotTS.PhysicalTime,
-		e.snapshotTS.LogicalTime,
-	)
+func (e entryEvent) toCSVRecord(
+	cn string,
+	buf *buffer,
+	records []string) {
+	records[0] = buf.writeInt(e.ts)
+	records[1] = cn
+	records[2] = e.eventType
+	records[3] = e.entryType.String()
+	records[4] = buf.writeUint(e.tableID)
+	records[5] = buf.writeHex(e.txnID)
+	records[6] = util.UnsafeBytesToString(e.row)
+	records[7] = buf.writeTimestamp(e.commitTS)
+	records[8] = buf.writeTimestamp(e.snapshotTS)
+}
+
+type csvEvent interface {
+	toCSVRecord(
+		cn string,
+		buf *buffer,
+		records []string)
 }

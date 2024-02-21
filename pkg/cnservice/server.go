@@ -770,10 +770,14 @@ func (s *service) bootstrap() error {
 func (s *service) initTxnTraceService() {
 	rt := runtime.ProcessLevelRuntime()
 	ts, err := trace.NewService(
+		s.options.traceDataPath,
 		s.cfg.UUID,
 		s._txnClient,
 		rt.Clock(),
-		s.sqlExecutor)
+		s.sqlExecutor,
+		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
+		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
+		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))
 	if err != nil {
 		panic(err)
 	}

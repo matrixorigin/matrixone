@@ -16,7 +16,11 @@ package trace
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,38 +42,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var (
-	eventWorkerNum = 10
-)
-
-type events struct {
-	txnC    chan txnEvent
-	entryC  chan entryEvent
-	bufferC chan *buffer
-}
-
-func newEvents() *events {
-	return &events{
-		txnC:    make(chan txnEvent, 10000),
-		entryC:  make(chan entryEvent, 10000),
-		bufferC: make(chan *buffer, 10000),
+func WithBufferSize(value int) Option {
+	return func(s *service) {
+		s.options.bufferSize = value
 	}
 }
 
-func (e *events) close() {
-	close(e.bufferC)
-	close(e.txnC)
-	close(e.entryC)
+func WithFlushBytes(value int) Option {
+	return func(s *service) {
+		s.options.flushBytes = value
+	}
+}
+
+func WithFlushDuration(value time.Duration) Option {
+	return func(s *service) {
+		s.options.flushDuration = value
+	}
 }
 
 type service struct {
-	cn       string
-	client   client.TxnClient
-	clock    clock.Clock
-	executor executor.SQLExecutor
-	stopper  *stopper.Stopper
-	events   []*events
-	seq      atomic.Uint64
+	cn        string
+	client    client.TxnClient
+	clock     clock.Clock
+	executor  executor.SQLExecutor
+	stopper   *stopper.Stopper
+	txnC      chan csvEvent
+	entryC    chan csvEvent
+	txnBufC   chan *buffer
+	entryBufC chan *buffer
+	seq       atomic.Uint64
+	dir       string
 
 	mu struct {
 		sync.RWMutex
@@ -82,37 +85,58 @@ type service struct {
 	}
 
 	options struct {
-		forceFlush time.Duration
-		flushBatch int
+		flushDuration time.Duration
+		flushBytes    int
+		bufferSize    int
 	}
 }
 
-func NewService(cn string,
+func NewService(
+	dataDir string,
+	cn string,
 	client client.TxnClient,
 	clock clock.Clock,
 	executor executor.SQLExecutor,
 	opts ...Option) (Service, error) {
+	fmt.Println(dataDir)
+	if err := os.RemoveAll(dataDir); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, err
+	}
+
 	s := &service{
 		stopper:  stopper.NewStopper("txn-trace"),
 		client:   client,
 		clock:    clock,
 		executor: executor,
+		dir:      dataDir,
 	}
-	s.options.forceFlush = 60 * time.Second
-	s.options.flushBatch = 512
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	for i := 0; i < eventWorkerNum; i++ {
-		e := newEvents()
-		s.events = append(s.events, e)
-		if err := s.stopper.RunTask(
-			func(ctx context.Context) {
-				s.handleEvents(ctx, e)
-			}); err != nil {
-			panic(err)
-		}
+	if s.options.flushDuration == 0 {
+		s.options.flushDuration = 60 * time.Second
+	}
+	if s.options.flushBytes == 0 {
+		s.options.flushBytes = 64 * 1024 * 1024
+	}
+	if s.options.bufferSize == 0 {
+		s.options.bufferSize = 100000
+	}
+
+	s.txnBufC = make(chan *buffer, s.options.bufferSize)
+	s.entryBufC = make(chan *buffer, s.options.bufferSize)
+	s.entryC = make(chan csvEvent, s.options.bufferSize)
+	s.txnC = make(chan csvEvent, s.options.bufferSize)
+
+	if err := s.stopper.RunTask(s.handleTxnEvents); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleEntryEvents); err != nil {
+		panic(err)
 	}
 	return s, nil
 }
@@ -131,7 +155,7 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	if s.mu.closed {
 		return
 	}
-	s.getEvents().txnC <- newTxnCreated(op.Txn())
+	s.txnC <- newTxnCreated(op.Txn())
 	op.AppendEventCallback(client.ActiveEvent, s.handleTxnActive)
 	op.AppendEventCallback(client.ClosedEvent, s.handleTxnClosed)
 	op.AppendEventCallback(client.SnapshotUpdatedEvent, s.handleTxnSnapshotUpdated)
@@ -148,7 +172,7 @@ func (s *service) handleTxnActive(meta txn.TxnMeta) {
 		return
 	}
 
-	s.getEvents().txnC <- newTxnActive(meta)
+	s.txnC <- newTxnActive(meta)
 }
 
 func (s *service) handleTxnClosed(meta txn.TxnMeta) {
@@ -162,7 +186,7 @@ func (s *service) handleTxnClosed(meta txn.TxnMeta) {
 		return
 	}
 
-	s.getEvents().txnC <- newTxnClosed(meta)
+	s.txnC <- newTxnClosed(meta)
 }
 
 func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
@@ -176,7 +200,7 @@ func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
 		return
 	}
 
-	s.getEvents().txnC <- newTxnSnapshotUpdated(meta)
+	s.txnC <- newTxnSnapshotUpdated(meta)
 }
 
 func (s *service) CommitEntries(
@@ -204,7 +228,6 @@ func (s *service) CommitEntries(
 	}()
 
 	n := 0
-	events := s.getEvents()
 	for _, entry := range entries {
 		if entryData == nil {
 			entryData = newEntryData(entry, -1, ts)
@@ -228,7 +251,7 @@ func (s *service) CommitEntries(
 			txnID,
 			buf,
 			func(e entryEvent) {
-				events.entryC <- e
+				s.entryC <- e
 			},
 			&s.atomic.completedPKTables)
 		n++
@@ -238,7 +261,7 @@ func (s *service) CommitEntries(
 		buf.close()
 		return
 	}
-	events.bufferC <- buf
+	s.entryBufC <- buf
 }
 
 func (s *service) TxnRead(
@@ -273,16 +296,15 @@ func (s *service) TxnRead(
 		return
 	}
 
-	events := s.getEvents()
 	buf := reuse.Alloc[buffer](nil)
 	entryData.createRead(
 		txnID,
 		buf,
 		func(e entryEvent) {
-			events.entryC <- e
+			s.entryC <- e
 		},
 		&s.atomic.completedPKTables)
-	events.bufferC <- buf
+	s.entryBufC <- buf
 }
 
 func (s *service) ChangedCheck(
@@ -314,7 +336,7 @@ func (s *service) ChangedCheck(
 	if skipped {
 		return
 	}
-	s.getEvents().txnC <- newTxnCheckChanged(txnID, from, to, changed)
+	s.txnC <- newTxnCheckChanged(txnID, from, to, changed)
 }
 
 func (s *service) ApplyLogtail(
@@ -350,15 +372,14 @@ func (s *service) ApplyLogtail(
 		return
 	}
 
-	events := s.getEvents()
 	buf := reuse.Alloc[buffer](nil)
 	entryData.createApply(
 		buf,
 		func(e entryEvent) {
-			events.entryC <- e
+			s.entryC <- e
 		},
 		&s.atomic.completedPKTables)
-	events.bufferC <- buf
+	s.entryBufC <- buf
 }
 
 func (s *service) Enable() error {
@@ -504,49 +525,109 @@ func (s *service) Close() {
 	defer s.mu.Unlock()
 
 	s.mu.closed = true
-	for _, e := range s.events {
-		e.close()
-	}
+	close(s.entryBufC)
+	close(s.entryC)
+	close(s.txnC)
+	close(s.txnBufC)
 }
 
-func (s *service) handleEvents(
+func (s *service) txnCSVFile() string {
+	return filepath.Join(s.dir, fmt.Sprintf("txn-%d.csv", s.seq.Add(1)))
+}
+
+func (s *service) entryCSVFile() string {
+	return filepath.Join(s.dir, fmt.Sprintf("entry-%d.csv", s.seq.Add(1)))
+}
+
+func (s *service) handleEntryEvents(ctx context.Context) {
+	s.handleEvent(
+		ctx,
+		s.entryCSVFile,
+		9,
+		TxnEntryTable,
+		s.entryC,
+		s.entryBufC)
+}
+
+func (s *service) handleTxnEvents(ctx context.Context) {
+	s.handleEvent(
+		ctx,
+		s.txnCSVFile,
+		8,
+		TxnTable,
+		s.txnC,
+		s.txnBufC)
+}
+
+func (s *service) handleEvent(
 	ctx context.Context,
-	events *events) {
-	ticker := time.NewTicker(s.options.forceFlush)
+	fileCreator func() string,
+	columns int,
+	tableName string,
+	csvC chan csvEvent,
+	bufferC chan *buffer) {
+	ticker := time.NewTicker(s.options.flushDuration)
 	defer ticker.Stop()
 
-	txnEvents := make([]txnEvent, 0, s.options.flushBatch)
-	entryEvents := make([]entryEvent, 0, s.options.flushBatch)
+	var w *csv.Writer
+	var f *os.File
+	records := make([]string, columns)
+	current := ""
+	sum := 0
+
+	buf := reuse.Alloc[buffer](nil)
+	defer buf.close()
+
+	open := func() {
+		if current != "" {
+			if err := os.Remove(current); err != nil {
+				panic(err)
+			}
+		}
+
+		current = fileCreator()
+
+		v, err := os.OpenFile(current, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
+		if err != nil {
+			panic(err)
+		}
+		f = v
+		w = csv.NewWriter(f)
+	}
+
+	bytes := func() int {
+		n := 0
+		for _, s := range records {
+			n += len(s)
+		}
+		return n
+	}
 
 	flush := func() {
-		if len(txnEvents) == 0 {
+		if sum == 0 {
 			return
 		}
-		defer func() {
-			txnEvents = txnEvents[:0]
-			entryEvents = entryEvents[:0]
-		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		w.Flush()
+		if err := w.Error(); err != nil {
+			panic(err)
+		}
+
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		err := s.executor.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				for _, e := range txnEvents {
-					res, err := txn.Exec(e.toSQL(s.cn), executor.StatementOption{})
-					if err != nil {
-						return err
-					}
-					res.Close()
+				sql := fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", current, tableName)
+				res, err := txn.Exec(sql, executor.StatementOption{})
+				if err != nil {
+					return err
 				}
-
-				for _, e := range entryEvents {
-					res, err := txn.Exec(e.toSQL(s.cn), executor.StatementOption{})
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
+				res.Close()
 				return nil
 			},
 			executor.Options{}.
@@ -556,37 +637,32 @@ func (s *service) handleEvents(
 		if err != nil {
 			panic(err)
 		}
+
+		sum = 0
+		open()
 	}
 
-	isFull := func() bool {
-		return len(txnEvents)+len(entryEvents) >= s.options.flushBatch
-	}
-
+	open()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			flush()
-		case e := <-events.txnC:
-			txnEvents = append(txnEvents, e)
-			if isFull() {
+		case e := <-csvC:
+			e.toCSVRecord(s.cn, buf, records)
+			if err := w.Write(records); err != nil {
+				panic(err)
+			}
+
+			sum += bytes()
+			if sum > s.options.flushBytes {
 				flush()
 			}
-		case e := <-events.entryC:
-			entryEvents = append(entryEvents, e)
-			if isFull() {
-				flush()
-			}
-		case buf := <-events.bufferC:
+		case buf := <-bufferC:
 			buf.close()
 		}
 	}
-}
-
-func (s *service) getEvents() *events {
-	n := s.seq.Add(1)
-	return s.events[n%uint64(len(s.events))]
 }
 
 // EntryData entry data
@@ -789,6 +865,42 @@ func (b buffer) alloc(n int) []byte {
 	idx := b.buf.GetWriteIndex()
 	b.buf.SetWriteIndex(idx + n)
 	return b.buf.RawSlice(idx, b.buf.GetWriteIndex())
+}
+
+func (b buffer) writeInt(v int64) string {
+	dst := b.alloc(20)
+	return util.UnsafeBytesToString(intToString(dst, v))
+}
+
+func (b buffer) writeUint(v uint64) string {
+	dst := b.alloc(20)
+	return util.UnsafeBytesToString(uintToString(dst, v))
+}
+
+func (b buffer) writeHex(src []byte) string {
+	if len(src) == 0 {
+		return ""
+	}
+	dst := b.alloc(hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return util.UnsafeBytesToString(dst)
+}
+
+func (b buffer) writeTimestamp(value timestamp.Timestamp) string {
+	dst := b.alloc(20)
+	dst2 := b.alloc(20)
+	idx := b.buf.GetWriteIndex()
+	b.buf.MustWrite(intToString(dst, value.PhysicalTime))
+	b.buf.MustWriteByte('-')
+	b.buf.MustWrite(uintToString(dst2, uint64(value.LogicalTime)))
+	return util.UnsafeBytesToString(b.buf.RawSlice(idx, b.buf.GetWriteIndex()))
+}
+
+func (b buffer) writeBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func getEntryFilterSQL(
