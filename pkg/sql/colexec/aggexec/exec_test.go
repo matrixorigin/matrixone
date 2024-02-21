@@ -14,7 +14,21 @@
 
 package aggexec
 
-import "testing"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"testing"
+)
+
+type testSingleAggPrivate1 struct{}
+
+func (t *testSingleAggPrivate1) init()                                                             {}
+func (t *testSingleAggPrivate1) fill(from int32, getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testSingleAggPrivate1) fillNull(getter aggGetter[int64], setter aggSetter[int64])         {}
+func (t *testSingleAggPrivate1) fills(value int32, isNull bool, count int, getter aggGetter[int64], setter aggSetter[int64]) {
+}
+func (t *testSingleAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
 
 func TestSingleAggFuncExec1(t *testing.T) {
+	executor := newSingleAggFuncExec1(types.T_int32.ToType(), types.T_int64.ToType()).(*singleAggFuncExec1[int32, int64])
+	_ = executor
 }

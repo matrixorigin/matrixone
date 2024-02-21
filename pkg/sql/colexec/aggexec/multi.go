@@ -55,7 +55,7 @@ func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vecto
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].eval(exec.ret.aggSet)
+	exec.groups[groupIndex].eval(exec.ret.aggGet, exec.ret.aggSet)
 
 	return nil
 }
@@ -67,6 +67,7 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 	}
 
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 	exec.ret.groupToSet = groupIndex
 	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
 		for _, arg := range exec.args {
@@ -74,7 +75,7 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 				return err
 			}
 		}
-		exec.groups[groupIndex].eval(setter)
+		exec.groups[groupIndex].eval(getter, setter)
 	}
 
 	return nil
@@ -83,6 +84,7 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	var err error
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 	for i, arg := range exec.args {
 		arg.prepare(vectors[i])
 	}
@@ -96,7 +98,7 @@ func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].eval(setter)
+			exec.groups[groupIdx].eval(getter, setter)
 
 		}
 		idx++
@@ -111,9 +113,10 @@ func (exec *multiAggFuncExec1[T]) SetPreparedResult(_ any, _ int) {
 
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 	for i, group := range exec.groups {
 		exec.ret.groupToSet = i
-		group.flush(setter)
+		group.flush(getter, setter)
 	}
 	return exec.ret.flush(), nil
 }
@@ -131,7 +134,7 @@ func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.V
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].eval(exec.ret.aggSet)
+	exec.groups[groupIndex].eval(exec.ret.aggGet, exec.ret.aggSet)
 
 	return nil
 }
@@ -143,6 +146,7 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 	}
 
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 	exec.ret.groupToSet = groupIndex
 	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
 		for _, arg := range exec.args {
@@ -150,7 +154,7 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 				return err
 			}
 		}
-		exec.groups[groupIndex].eval(setter)
+		exec.groups[groupIndex].eval(getter, setter)
 	}
 
 	return nil
@@ -159,6 +163,7 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	var err error
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 	for i, arg := range exec.args {
 		arg.prepare(vectors[i])
 	}
@@ -172,7 +177,7 @@ func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].eval(setter)
+			exec.groups[groupIdx].eval(getter, setter)
 
 		}
 		idx++
@@ -188,10 +193,11 @@ func (exec *multiAggFuncExec2) SetPreparedResult(_ any, _ int) {
 func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {
 	var err error
 	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
 
 	for i, group := range exec.groups {
 		exec.ret.groupToSet = i
-		if err = group.flush(setter); err != nil {
+		if err = group.flush(getter, setter); err != nil {
 			return nil, err
 		}
 	}
