@@ -310,7 +310,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 // NOTE : For hidden tables created by UNIQUE INDEX, the situation is more subtle.
 //  0. table contains primary key
 //  1. CNPrimaryCheck is true.
-//  2. The insert statement is INSERT VALUES INTO ...
+//  2. The insert statement is INSERT VALUES INTO and insert values contains primary key columns
 //  3. the pk values inserted contains no nil (for auto increment pk, it is allowed to insert nil)
 //  4. performance constraints: (maybe outdated)
 //     4.1 for single priamry key and the type of pk is number type, the number of rows being inserted is less than or equal to 20_000
@@ -324,6 +324,19 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 			return false // break condition 0
 		}
 	} else if pkTyp.AutoIncr {
+
+		found := false
+		for _, c := range insertColsName {
+			if c == tableDef.Pkey.PkeyColName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// insert values does not contain auto primary key columns
+			return false // break condition 2
+		}
+
 		var bat *batch.Batch
 		proc := ctx.GetProcess()
 		node := builder.qry.Nodes[0]
@@ -333,9 +346,9 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 			bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
 		}
 
-		// if pk col is incr col and this col has at least one values is null, then can not use pk filter
 		pkVec := bat.Vecs[pkPos]
 		if nulls.Any(pkVec.GetNulls()) {
+			// has at least one values is null, then can not use pk filter
 			return false // break conditon 3
 		}
 	}
