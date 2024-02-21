@@ -817,10 +817,10 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	}
 
 	// We should always make sure the current CN is contained in the cn list.
-	if c.proc == nil || c.proc.QueryService == nil {
+	if c.proc == nil || c.proc.QueryClient == nil {
 		return cnList, nil
 	}
-	cnID := c.proc.QueryService.ServiceID()
+	cnID := c.proc.QueryClient.ServiceID()
 	for _, node := range cnList {
 		if node.Id == cnID {
 			return cnList, nil

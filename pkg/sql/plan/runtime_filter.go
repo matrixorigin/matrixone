@@ -83,11 +83,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	statsCache := builder.compCtx.GetStatsCache()
-	if statsCache == nil {
-		return
-	}
-
 	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
 		leftTags[tag] = emptyStruct
