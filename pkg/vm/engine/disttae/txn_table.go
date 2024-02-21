@@ -1218,8 +1218,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
-	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
-	return tableDef
+	return tbl.tableDef
 }
 
 func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
