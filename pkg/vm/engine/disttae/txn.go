@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
