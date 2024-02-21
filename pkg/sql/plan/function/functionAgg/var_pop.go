@@ -303,7 +303,7 @@ func (s *VarianceDecimal) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 	var err error
 	s2 := priv2.(*VarianceDecimal)
 	s.Counts[groupNumber1] += s2.Counts[groupNumber2]
-	s.Sum[groupNumber1], err = s.Sum[groupNumber1].Add128(s.Sum[groupNumber2])
+	s.Sum[groupNumber1], err = s.Sum[groupNumber1].Add128(s2.Sum[groupNumber2])
 	if err != nil {
 		return result1, false, err
 	}
