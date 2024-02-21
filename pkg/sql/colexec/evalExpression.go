@@ -876,8 +876,9 @@ func getConstZM(
 	proc *process.Process,
 ) (zm index.ZM, err error) {
 	c := expr.Expr.(*plan.Expr_Lit)
+	typ := expr.Typ
 	if c.Lit.GetIsnull() {
-		zm = index.NewZM(types.T(expr.Typ.Id), expr.Typ.Scale)
+		zm = index.NewZM(types.T(typ.Id), typ.Scale)
 		return
 	}
 	switch c.Lit.GetValue().(type) {
@@ -939,17 +940,17 @@ func getConstZM(
 		index.UpdateZM(zm, types.EncodeInt64(&v))
 	case *plan.Literal_Decimal64Val:
 		v := c.Lit.GetDecimal64Val()
-		zm = index.NewZM(types.T_decimal64, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal64, typ.Scale)
 		d64 := types.Decimal64(v.A)
 		index.UpdateZM(zm, types.EncodeDecimal64(&d64))
 	case *plan.Literal_Decimal128Val:
 		v := c.Lit.GetDecimal128Val()
-		zm = index.NewZM(types.T_decimal128, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal128, typ.Scale)
 		d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
 		index.UpdateZM(zm, types.EncodeDecimal128(&d128))
 	case *plan.Literal_Timestampval:
 		v := c.Lit.GetTimestampval()
-		scale := expr.Typ.Scale
+		scale := typ.Scale
 		if scale < 0 || scale > 6 {
 			err = moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			return
@@ -1053,6 +1054,26 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "isnull", "is_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+			case "isnotnull", "is_not_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {

@@ -14,7 +14,26 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
+
+func init() {
+	reuse.CreatePool[DropStage](
+		func() *DropStage { return &DropStage{} },
+		func(d *DropStage) { d.reset() },
+		reuse.DefaultOptions[DropStage]().
+			WithEnableChecker())
+
+	reuse.CreatePool[AlterStage](
+		func() *AlterStage { return &AlterStage{} },
+		func(a *AlterStage) { a.reset() },
+		reuse.DefaultOptions[AlterStage]().
+			WithEnableChecker())
+
+}
 
 type CreateStage struct {
 	statementImpl
@@ -50,6 +69,10 @@ type DropStage struct {
 	Name        Identifier
 }
 
+func (node *DropStage) Free() {
+	reuse.Free[DropStage](node, nil)
+}
+
 func (node *DropStage) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop stage ")
 	if node.IfNotExists {
@@ -58,8 +81,21 @@ func (node *DropStage) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 }
 
+func (node *DropStage) reset() {
+	*node = DropStage{}
+}
+
 func (node *DropStage) GetStatementType() string { return "Drop Stage" }
 func (node *DropStage) GetQueryType() string     { return QueryTypeOth }
+
+func (node DropStage) TypeName() string { return "tree.DropStage" }
+
+func NewDropStage(ifNotExists bool, name Identifier) *DropStage {
+	dropStage := reuse.Alloc[DropStage](nil)
+	dropStage.IfNotExists = ifNotExists
+	dropStage.Name = name
+	return dropStage
+}
 
 type AlterStage struct {
 	statementImpl
@@ -69,6 +105,10 @@ type AlterStage struct {
 	CredentialsOption StageCredentials
 	StatusOption      StageStatus
 	Comment           StageComment
+}
+
+func (node *AlterStage) Free() {
+	reuse.Free[AlterStage](node, nil)
 }
 
 func (node *AlterStage) Format(ctx *FmtCtx) {
@@ -84,8 +124,25 @@ func (node *AlterStage) Format(ctx *FmtCtx) {
 	node.Comment.Format(ctx)
 }
 
+func (node *AlterStage) reset() {
+	*node = AlterStage{}
+}
+
 func (node *AlterStage) GetStatementType() string { return "Alter Stage" }
 func (node *AlterStage) GetQueryType() string     { return QueryTypeOth }
+
+func (node AlterStage) TypeName() string { return "tree.AlterStage" }
+
+func NewAlterStage(ifNotExists bool, name Identifier, urlOption StageUrl, credentialsOption StageCredentials, statusOption StageStatus, comment StageComment) *AlterStage {
+	alterStage := reuse.Alloc[AlterStage](nil)
+	alterStage.IfNotExists = ifNotExists
+	alterStage.Name = name
+	alterStage.UrlOption = urlOption
+	alterStage.CredentialsOption = credentialsOption
+	alterStage.StatusOption = statusOption
+	alterStage.Comment = comment
+	return alterStage
+}
 
 type StageStatusOption int
 

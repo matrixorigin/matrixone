@@ -76,12 +76,14 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	Expr                   *plan.Expr
+	FilterExpr             *plan.Expr //todo: change this to []*plan.Expr
+	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	OrderBy            []*plan.OrderBySpec // for ordered scan
 }
 
 // Col is the information of attribute

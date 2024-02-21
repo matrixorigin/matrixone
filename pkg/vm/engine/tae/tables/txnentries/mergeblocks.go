@@ -45,7 +45,8 @@ type mergeBlocksEntry struct {
 	transMappings      *BlkTransferBooking
 	skippedBlks        []int
 
-	rt *dbutils.Runtime
+	rt      *dbutils.Runtime
+	pageIds []*common.ID
 }
 
 func NewMergeBlocksEntry(
@@ -75,10 +76,40 @@ func NewMergeBlocksEntry(
 		skippedBlks:        skipBlks,
 		rt:                 rt,
 	}
+	entry.prepareTransferPage()
+	return entry
+}
+
+func (entry *mergeBlocksEntry) prepareTransferPage() {
+	for i, blk := range entry.droppedBlks {
+		if entry.isSkipped(i) {
+			if len(entry.transMappings.Mappings[i]) != 0 {
+				panic("empty block do not match")
+			}
+			continue
+		}
+		mapping := entry.transMappings.Mappings[i]
+		if len(mapping) == 0 {
+			panic("cannot tranfer empty block")
+		}
+		tblEntry := blk.GetObject().GetTable()
+		isTransient := !tblEntry.GetLastestSchema().HasPK()
+		id := blk.AsCommonID()
+		page := model.NewTransferHashPage(id, time.Now(), isTransient)
+		for srcRow, dst := range mapping {
+			blkid := entry.createdBlks[dst.Idx].ID
+			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+		}
+		entry.pageIds = append(entry.pageIds, id)
+		_ = entry.rt.TransferTable.AddPage(page)
+	}
 }
 
 func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
-	// TODO: remove block file? (should be scheduled and executed async)
+	for _, id := range entry.pageIds {
+		_ = entry.rt.TransferTable.DeletePage(id)
+	}
+	entry.pageIds = nil
 	return
 }
 func (entry *mergeBlocksEntry) ApplyRollback() (err error) {
@@ -133,20 +164,8 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	tblEntry := dropped.GetTable()
-	isTransient := !tblEntry.GetLastestSchema().HasPK()
-	id := dropped.AsCommonID()
-	id.SetBlockOffset(blkID)
-	page := model.NewTransferHashPage(id, time.Now(), isTransient)
-	for srcRow, dst := range mapping {
-		objid := created.GetID()
-		blkOffset := dst.Idx
-		blkID := objectio.NewBlockidWithObjectID(objid, uint16(blkOffset))
-		page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
-	}
-	_ = entry.rt.TransferTable.AddPage(page)
-
 	dataBlock := dropped.GetBlockData()
+	tblEntry := dropped.GetObject().GetTable()
 
 	bat, _, err := dataBlock.CollectDeleteInRange(
 		entry.txn.GetContext(),

@@ -114,7 +114,7 @@ func (m *mockedBackgroundHandler) init(mp *mpool.MPool) {
 		"create database sub4 from account1 publication pub4",
 	}, nil, mp)
 	v11 := vector.NewVec(types.T_timestamp.ToType())
-	_ = vector.AppendFixedList(v11, []int64{1234568, 4234568}, nil, mp)
+	_ = vector.AppendFixedList(v11, []types.Timestamp{1234568, 4234568}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v9, v10, v11}}
 	b.SetRowCount(2)
 	m.subBatches = []*batch.Batch{b}
@@ -164,7 +164,7 @@ func (m *mockedBackgroundHandler) initLike(mp *mpool.MPool) {
 		"create database sub4 from account1 publication pub4",
 	}, nil, mp)
 	v11 := vector.NewVec(types.T_timestamp.ToType())
-	_ = vector.AppendFixedList(v11, []int64{1234568, 4234568}, nil, mp)
+	_ = vector.AppendFixedList(v11, []types.Timestamp{1234568, 4234568}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v9, v10, v11}}
 	b.SetRowCount(2)
 	m.subBatches = []*batch.Batch{b}

@@ -238,22 +238,25 @@ func (blk *baseBlock) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, 
 	if location.IsEmpty() {
 		return
 	}
-	bat, err := blockio.LoadColumns(
+	//Extend lifetime of vectors is without the function.
+	//need to copy. closeFunc will be nil.
+	vectors, _, err := blockio.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
 		blk.rt.Fs.Service,
 		location,
-		nil,
 		fileservice.Policy(0),
+		true,
+		blk.rt.VectorPool.Transient,
 	)
 	if err != nil {
 		return
 	}
-	if bat.Vecs[0].GetType().Oid != types.T_TS {
+	if vectors[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToTNVector(bat.Vecs[0], common.DefaultAllocator)
+	vec = vectors[0]
 	return
 }
 
@@ -469,6 +472,7 @@ func (blk *baseBlock) foreachPersistedDeletes(
 	if deletes == nil || err != nil {
 		return
 	}
+	//defer deletes.Close()
 	if persistedByCN {
 		if !visible {
 			return

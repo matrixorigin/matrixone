@@ -112,10 +112,10 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
 	if config.RemoteCacheEnabled {
-		if config.CacheClient == nil {
-			return moerr.NewInternalError(ctx, "cache client is nil")
+		if config.QueryClient == nil {
+			return moerr.NewInternalError(ctx, "query client is nil")
 		}
-		l.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", l.name),
 		)
@@ -823,6 +823,10 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 
 	// create
 	if err := os.Mkdir(nativePath, 0755); err != nil {
+		if os.IsExist(err) {
+			// existed
+			return nil
+		}
 		return err
 	}
 

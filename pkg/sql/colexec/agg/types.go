@@ -310,11 +310,3 @@ func (m *EncodeAggDistinct[T]) UnmarshalBinary(data []byte) error {
 
 	return nil
 }
-
-func (agg *UnaryAgg[T1, T2]) SetPartialResult(PartialResult any) {
-	agg.PartialResult = PartialResult
-}
-
-func (agg *UnaryDistAgg[T1, T2]) SetPartialResult(PartialResult any) {
-	agg.PartialResult = PartialResult
-}

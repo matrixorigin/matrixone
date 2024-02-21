@@ -22,8 +22,6 @@ import (
 const (
 	InFilterCardLimit    = 10000
 	BloomFilterCardLimit = 100 * InFilterCardLimit
-
-	MinProbeTableRows    = 8192 * 20 // Don't generate runtime filter for small tables
 	SelectivityThreshold = 0.5
 )
 
@@ -81,12 +79,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Cost < MinProbeTableRows {
-		return
-	}
-
-	statsCache := builder.compCtx.GetStatsCache()
-	if statsCache == nil {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil {
 		return
 	}
 
@@ -169,7 +162,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	tableDef := leftChild.TableDef
-
 	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}

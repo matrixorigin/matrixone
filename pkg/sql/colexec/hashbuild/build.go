@@ -86,7 +86,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.Info.Idx, arg.Info.ParallelIdx, arg.Info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -95,7 +95,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.Info.IsFirst); err != nil {
+			if err := ctr.build(ap, proc, anal, arg.GetIsFirst()); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
@@ -114,12 +114,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case SendHashMap:
 			result.Batch = batch.NewWithSize(0)
 			if ctr.inputBatchRowCount > 0 {
+				var jm *hashmap.JoinMap
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						result.Batch.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						jm = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
+					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+					result.Batch.AuxData = jm
 				}
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
@@ -443,6 +446,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			Card: int32(vec.Length()),
 			Data: data,
 		}
+		ctr.runtimeFilterIn = true
 	}
 
 	select {

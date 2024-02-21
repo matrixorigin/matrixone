@@ -38,6 +38,14 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 			packer.Reset()
 		}
 
+	case types.T_bit:
+		s := vector.MustFixedCol[uint64](vec)
+		for _, v := range s {
+			packer.EncodeUint64(v)
+			ret = append(ret, packer.Bytes())
+			packer.Reset()
+		}
+
 	case types.T_int8:
 		s := vector.MustFixedCol[int8](vec)
 		for _, v := range s {

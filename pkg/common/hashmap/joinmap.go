@@ -34,6 +34,14 @@ func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMa
 	}
 }
 
+func (jm *JoinMap) SetPushedRuntimeFilterIn(b bool) {
+	jm.runtimeFilter_In = b
+}
+
+func (jm *JoinMap) PushedRuntimeFilterIn() bool {
+	return jm.runtimeFilter_In
+}
+
 func (jm *JoinMap) Sels() [][]int32 {
 	return jm.multiSels
 }
