@@ -133,9 +133,13 @@ type State struct {
 func (c *PushClient) GetState() State {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
+	subTables := make(map[SubTableID]SubTableStatus, len(c.subscribed.m))
+	for k, v := range c.subscribed.m {
+		subTables[k] = v
+	}
 	return State{
 		LatestTS:  c.receivedLogTailTime.getTimestamp(),
-		SubTables: c.subscribed.m,
+		SubTables: subTables,
 	}
 }
 
