@@ -176,8 +176,9 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			TableID: tid,
 			BlockID: *BlockID,
 		}
-		t.addBlock(id, objectStats.ObjectName().String())
-		if !deleteAt.IsEmpty() {
+		if deleteAt.IsEmpty() {
+			t.addBlock(id, objectStats.ObjectName().String())
+		} else {
 			t.deleteBlock(id, objectStats.ObjectName().String())
 		}
 	}
