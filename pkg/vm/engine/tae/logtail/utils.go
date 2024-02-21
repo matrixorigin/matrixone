@@ -2052,18 +2052,15 @@ func LoadBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
-	var releases []func()
+	var releases func()
 	defer func() {
-		for i := range releases {
-			if releases[i] != nil {
-				releases[i]()
-			}
+		if releases != nil {
+			releases()
 		}
 	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		releases = make([]func(), 1)
-		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioResults[0], releases, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
 		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
@@ -2108,22 +2105,19 @@ func LoadCNSubBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
-	var releases []func()
+	var release func()
 	bats := make([]*batch.Batch, 0)
 	defer func() {
-		for i := range releases {
-			if releases[i] != nil {
-				releases[i]()
-			}
+		if release != nil {
+			release()
 		}
 	}()
 	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
-		releases = make([]func(), 1)
-		ioResults[0], releases[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+		ioResults[0], release, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
 		idxs = validateBeforeLoadBlkCol(version, idxs, colNames)
-		ioResults, releases, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
+		ioResults, release, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	}
 	if err != nil {
 		return nil, err
