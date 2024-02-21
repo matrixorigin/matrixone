@@ -1370,8 +1370,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 	}
 	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
-	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
 	return tableDef
+}
+
+func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
+	tbl.GetTableDef(ctx)
+	return plan2.DeepCopyTableDef(tbl.tableDef, true)
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1536,7 +1540,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl.defs = tbl.defs
 	newtbl.tableName = tbl.tableName
 	newtbl.tableId = tbl.tableId
-	newtbl.GetTableDef(ctx)
+	newtbl.CopyTableDef(ctx)
 
 	{
 		sql := getSql(ctx)

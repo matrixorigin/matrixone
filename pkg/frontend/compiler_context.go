@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -284,7 +286,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 		ObjName:    tableName,
 		Obj:        int64(tableId),
 	}
-	tableDef := table.GetTableDef(txnCtx)
+	tableDef := table.CopyTableDef(txnCtx)
 	return obj, tableDef
 }
 
@@ -302,7 +304,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	tableDef := table.GetTableDef(ctx)
+	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
