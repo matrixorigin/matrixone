@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -47,7 +47,7 @@ type sqlExecutor struct {
 	txnClient client.TxnClient
 	fs        fileservice.FileService
 	ls        lockservice.LockService
-	qs        queryservice.QueryService
+	qc        qclient.QueryClient
 	hakeeper  logservice.CNHAKeeperClient
 	us        udf.Service
 	aicm      *defines.AutoIncrCacheManager
@@ -61,7 +61,7 @@ func NewSQLExecutor(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
-	qs queryservice.QueryService,
+	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	us udf.Service,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
@@ -75,7 +75,7 @@ func NewSQLExecutor(
 		txnClient: txnClient,
 		fs:        fs,
 		ls:        v.(lockservice.LockService),
-		qs:        qs,
+		qc:        qc,
 		hakeeper:  hakeeper,
 		us:        us,
 		aicm:      aicm,
@@ -251,7 +251,7 @@ func (exec *txnExecutor) Exec(
 		exec.opts.Txn(),
 		exec.s.fs,
 		exec.s.ls,
-		exec.s.qs,
+		exec.s.qc,
 		exec.s.hakeeper,
 		exec.s.us,
 		exec.s.aicm,
@@ -339,7 +339,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 		txnOp,
 		exec.s.fs,
 		exec.s.ls,
-		exec.s.qs,
+		exec.s.qc,
 		exec.s.hakeeper,
 		exec.s.us,
 		exec.s.aicm,

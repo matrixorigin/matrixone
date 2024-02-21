@@ -24,13 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
-
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,13 +34,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -64,6 +63,8 @@ func New(
 	fs fileservice.FileService,
 	cli client.TxnClient,
 	hakeeper logservice.CNHAKeeperClient,
+	keyRouter client2.KeyRouter[pb.StatsInfoKey],
+	threshold int,
 ) *Engine {
 	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
@@ -104,6 +105,10 @@ func New(
 			},
 		),
 	}
+
+	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		WithLogtailUpdateStatsThreshold(threshold),
+	)
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
@@ -512,7 +517,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op,
 		e.fs,
 		e.ls,
-		e.qs,
+		e.qc,
 		e.hakeeper,
 		e.us,
 		nil,
@@ -722,4 +727,8 @@ func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) err
 // UnsubscribeTable implements the LogtailEngine interface.
 func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
 	return e.PushClient().UnsubscribeTable(ctx, dbID, tbID)
+}
+
+func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return e.globalStats.Get(ctx, key, sync)
 }
