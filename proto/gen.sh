@@ -108,8 +108,8 @@ fi
 for file in `ls $PROTOC_DIR/*.proto`
 do
   outArgName="gogofast_out"
-  # For fileservice.proto, extra fields are redundant.
-  if echo $file | grep "cache.proto" >/dev/null; then
+  # For query.proto and statsinfo.proto, extra fields are redundant.
+  if echo $file | egrep "query.proto|statsinfo.proto" >/dev/null; then
     outArgName="gogofaster_out"
   fi
 	dir=$(basename $file .proto)
