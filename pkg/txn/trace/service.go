@@ -37,15 +37,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+var (
+	eventWorkerNum = 10
+)
+
+type events struct {
+	txnC    chan txnEvent
+	entryC  chan entryEvent
+	bufferC chan *buffer
+}
+
+func newEvents() *events {
+	return &events{
+		txnC:    make(chan txnEvent, 10000),
+		entryC:  make(chan entryEvent, 10000),
+		bufferC: make(chan *buffer, 10000),
+	}
+}
+
+func (e *events) close() {
+	close(e.bufferC)
+	close(e.txnC)
+	close(e.entryC)
+}
+
 type service struct {
-	cn           string
-	client       client.TxnClient
-	clock        clock.Clock
-	executor     executor.SQLExecutor
-	txnEventC    chan txnEvent
-	entryC       chan entryEvent
-	closeBufferC chan *buffer
-	stopper      *stopper.Stopper
+	cn       string
+	client   client.TxnClient
+	clock    clock.Clock
+	executor executor.SQLExecutor
+	stopper  *stopper.Stopper
+	events   []*events
+	seq      atomic.Uint64
 
 	mu struct {
 		sync.RWMutex
@@ -70,13 +93,10 @@ func NewService(cn string,
 	executor executor.SQLExecutor,
 	opts ...Option) (Service, error) {
 	s := &service{
-		stopper:      stopper.NewStopper("txn-trace"),
-		client:       client,
-		clock:        clock,
-		executor:     executor,
-		txnEventC:    make(chan txnEvent, 100000),
-		entryC:       make(chan entryEvent, 100000),
-		closeBufferC: make(chan *buffer, 100000),
+		stopper:  stopper.NewStopper("txn-trace"),
+		client:   client,
+		clock:    clock,
+		executor: executor,
 	}
 	s.options.forceFlush = 60 * time.Second
 	s.options.flushBatch = 512
@@ -84,8 +104,15 @@ func NewService(cn string,
 		opt(s)
 	}
 
-	if err := s.stopper.RunTask(s.handleEvents); err != nil {
-		panic(err)
+	for i := 0; i < eventWorkerNum; i++ {
+		e := newEvents()
+		s.events = append(s.events, e)
+		if err := s.stopper.RunTask(
+			func(ctx context.Context) {
+				s.handleEvents(ctx, e)
+			}); err != nil {
+			panic(err)
+		}
 	}
 	return s, nil
 }
@@ -104,8 +131,7 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	if s.mu.closed {
 		return
 	}
-
-	s.txnEventC <- newTxnCreated(op.Txn())
+	s.getEvents().txnC <- newTxnCreated(op.Txn())
 	op.AppendEventCallback(client.ActiveEvent, s.handleTxnActive)
 	op.AppendEventCallback(client.ClosedEvent, s.handleTxnClosed)
 	op.AppendEventCallback(client.SnapshotUpdatedEvent, s.handleTxnSnapshotUpdated)
@@ -122,7 +148,7 @@ func (s *service) handleTxnActive(meta txn.TxnMeta) {
 		return
 	}
 
-	s.txnEventC <- newTxnActive(meta)
+	s.getEvents().txnC <- newTxnActive(meta)
 }
 
 func (s *service) handleTxnClosed(meta txn.TxnMeta) {
@@ -136,7 +162,7 @@ func (s *service) handleTxnClosed(meta txn.TxnMeta) {
 		return
 	}
 
-	s.txnEventC <- newTxnClosed(meta)
+	s.getEvents().txnC <- newTxnClosed(meta)
 }
 
 func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
@@ -150,7 +176,7 @@ func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
 		return
 	}
 
-	s.txnEventC <- newTxnSnapshotUpdated(meta)
+	s.getEvents().txnC <- newTxnSnapshotUpdated(meta)
 }
 
 func (s *service) CommitEntries(
@@ -178,6 +204,7 @@ func (s *service) CommitEntries(
 	}()
 
 	n := 0
+	events := s.getEvents()
 	for _, entry := range entries {
 		if entryData == nil {
 			entryData = newEntryData(entry, -1, ts)
@@ -201,7 +228,7 @@ func (s *service) CommitEntries(
 			txnID,
 			buf,
 			func(e entryEvent) {
-				s.entryC <- e
+				events.entryC <- e
 			},
 			&s.atomic.completedPKTables)
 		n++
@@ -211,7 +238,7 @@ func (s *service) CommitEntries(
 		buf.close()
 		return
 	}
-	s.closeBufferC <- buf
+	events.bufferC <- buf
 }
 
 func (s *service) TxnRead(
@@ -246,15 +273,16 @@ func (s *service) TxnRead(
 		return
 	}
 
+	events := s.getEvents()
 	buf := reuse.Alloc[buffer](nil)
 	entryData.createRead(
 		txnID,
 		buf,
 		func(e entryEvent) {
-			s.entryC <- e
+			events.entryC <- e
 		},
 		&s.atomic.completedPKTables)
-	s.closeBufferC <- buf
+	events.bufferC <- buf
 }
 
 func (s *service) ChangedCheck(
@@ -286,7 +314,7 @@ func (s *service) ChangedCheck(
 	if skipped {
 		return
 	}
-	s.txnEventC <- newTxnCheckChanged(txnID, from, to, changed)
+	s.getEvents().txnC <- newTxnCheckChanged(txnID, from, to, changed)
 }
 
 func (s *service) ApplyLogtail(
@@ -322,14 +350,15 @@ func (s *service) ApplyLogtail(
 		return
 	}
 
+	events := s.getEvents()
 	buf := reuse.Alloc[buffer](nil)
 	entryData.createApply(
 		buf,
 		func(e entryEvent) {
-			s.entryC <- e
+			events.entryC <- e
 		},
 		&s.atomic.completedPKTables)
-	s.closeBufferC <- buf
+	events.bufferC <- buf
 }
 
 func (s *service) Enable() error {
@@ -475,12 +504,14 @@ func (s *service) Close() {
 	defer s.mu.Unlock()
 
 	s.mu.closed = true
-	close(s.txnEventC)
-	close(s.entryC)
-	close(s.closeBufferC)
+	for _, e := range s.events {
+		e.close()
+	}
 }
 
-func (s *service) handleEvents(ctx context.Context) {
+func (s *service) handleEvents(
+	ctx context.Context,
+	events *events) {
 	ticker := time.NewTicker(s.options.forceFlush)
 	defer ticker.Stop()
 
@@ -537,20 +568,25 @@ func (s *service) handleEvents(ctx context.Context) {
 			return
 		case <-ticker.C:
 			flush()
-		case e := <-s.txnEventC:
+		case e := <-events.txnC:
 			txnEvents = append(txnEvents, e)
 			if isFull() {
 				flush()
 			}
-		case e := <-s.entryC:
+		case e := <-events.entryC:
 			entryEvents = append(entryEvents, e)
 			if isFull() {
 				flush()
 			}
-		case buf := <-s.closeBufferC:
+		case buf := <-events.bufferC:
 			buf.close()
 		}
 	}
+}
+
+func (s *service) getEvents() *events {
+	n := s.seq.Add(1)
+	return s.events[n%uint64(len(s.events))]
 }
 
 // EntryData entry data
