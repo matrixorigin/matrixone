@@ -368,7 +368,9 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		w.WriteString(prefix)
 		objID := it2.Item().ObjectID
 		w.WriteString(objID.String())
+		it2.Item().GetObject().(*ObjectEntry).RLock()
 		w.WriteString(it2.Item().StringLocked())
+		it2.Item().GetObject().(*ObjectEntry).RUnlock()
 	}
 	return w.String()
 }

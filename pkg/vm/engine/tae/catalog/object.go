@@ -285,6 +285,7 @@ func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*Objec
 	}
 	entry.Unlock()
 }
+
 func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
 	stats := *objectio.NewObjectStats()
 

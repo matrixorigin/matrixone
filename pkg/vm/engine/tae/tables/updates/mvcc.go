@@ -979,11 +979,19 @@ func (n *MVCCHandle) GetDeltaLocAndCommitTSByTxn(txn txnif.TxnReader) (objectio.
 	ts := node.End
 	return str, ts
 }
-func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
+func (n *MVCCHandle) isEmpty() bool {
+	n.RLock()
+	defer n.RUnlock()
 	if n.deltaloc.Depth() != 0 {
-		return
+		return false
 	}
 	if !n.deletes.IsEmpty() {
+		return false
+	}
+	return true
+}
+func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
+	if !n.isEmpty(){
 		return
 	}
 	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)

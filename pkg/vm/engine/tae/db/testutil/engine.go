@@ -738,19 +738,26 @@ func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
 				return true
 			}
+			flushed := true
+			if se.IsAppendable() && !node.HasDropCommitted() {
+				flushed = false
+			}
 			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
 			assert.NoError(e.t, err)
-			if onlyCheckName {
+			if onlyCheckName || !flushed {
 				assert.Equal(e.t, stats.ObjectLocation().Name(),
 					node.BaseNode.ObjectStats.ObjectLocation().Name(),
 					"load %v, get %v",
 					stats.String(),
 					node.BaseNode.ObjectStats.String())
-				assert.Equal(e.t, stats.ObjectLocation().Extent(),
-					node.BaseNode.ObjectStats.ObjectLocation().Extent(),
-					"load %v, get %v",
-					stats.String(),
-					node.BaseNode.ObjectStats.String())
+				if flushed {
+					assert.Equal(e.t, stats.ObjectLocation().Extent(),
+						node.BaseNode.ObjectStats.ObjectLocation().Extent(),
+						"load %v, get %v",
+						stats.String(),
+						node.BaseNode.ObjectStats.String())
+
+				}
 			} else {
 				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
 			}

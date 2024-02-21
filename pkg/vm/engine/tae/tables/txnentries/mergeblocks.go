@@ -97,7 +97,7 @@ func (entry *mergeBlocksEntry) prepareTransferPage() {
 		id := blk.AsCommonID()
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range mapping {
-			objID := entry.createdObjs[dst.Idx].ID
+			objID := entry.createdObjs[0].ID
 			blkOffset := dst.Idx
 			blkID := objectio.NewBlockidWithObjectID(&objID, uint16(blkOffset))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
