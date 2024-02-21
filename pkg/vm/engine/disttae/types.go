@@ -24,23 +24,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -107,7 +106,7 @@ type Engine struct {
 	mp         *mpool.MPool
 	fs         fileservice.FileService
 	ls         lockservice.LockService
-	qs         queryservice.QueryService
+	qc         qclient.QueryClient
 	hakeeper   logservice.CNHAKeeperClient
 	us         udf.Service
 	cli        client.TxnClient
@@ -120,7 +119,11 @@ type Engine struct {
 	gcPool *ants.Pool
 
 	// XXX related to cn push model
-	pClient pushClient
+	pClient PushClient
+
+	// globalStats is the global stats information, which is updated
+	// from logtail updates.
+	globalStats *GlobalStats
 }
 
 // Transaction represents a transaction

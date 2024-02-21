@@ -85,7 +85,7 @@ jobs:
           ./run.sh -n -g -o -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e pessimistic_transaction 2>&1
 
       - name: export log
-        if: ${{ failure() }}
+        if: ${{ failure() || cancelled()}}
         run: |
           mkdir -p ${{ github.workspace }}/mo-tester/report
           mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
@@ -177,7 +177,7 @@ jobs:
 
           ./run.sh -n -g -o -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
       - name: export log
-        if: ${{ failure() }}
+        if: ${{ failure() || cancelled()}}
         run: |
           mkdir -p ${{ github.workspace }}/mo-tester/report
           mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
