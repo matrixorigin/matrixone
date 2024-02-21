@@ -408,6 +408,13 @@ func makePlan2Type(typ *types.Type) *plan.Type {
 		Scale: typ.Scale,
 	}
 }
+func makePlan2TypeValue(typ *types.Type) plan.Type {
+	return plan.Type{
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
+	}
+}
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 
