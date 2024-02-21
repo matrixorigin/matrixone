@@ -308,57 +308,100 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 // It returns true if the primary key filter can be used, otherwise it returns false.
 // The primary key filter can be used if the following conditions are met:
 // NOTE : For hidden tables created by UNIQUE INDEX, the situation is more subtle.
-//  0. table contains primary key
-//  1. CNPrimaryCheck is true.
-//  2. The insert statement is INSERT VALUES INTO and insert values contains primary key columns
-//  3. the pk values inserted contains no nil (for auto increment pk, it is allowed to insert nil)
+//  0. CNPrimaryCheck is true.
+//  1. The insert statement is INSERT VALUES type
+//  2. table contains primary key
+//  3. for auto-incr primary key, must contain corresponding columns, and values must not contain nil.
 //  4. performance constraints: (maybe outdated)
 //     4.1 for single priamry key and the type of pk is number type, the number of rows being inserted is less than or equal to 20_000
 //     4.2 otherwise : the number of rows being inserted is less than or equal to defaultmaxRowThenUnusePkFilterExpr
 //
 // Otherwise, the primary key filter cannot be used.
 func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string) bool {
-	pkPos, pkTyp := getPkPos(tableDef, true)
-	if pkPos == -1 {
-		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-			return false // break condition 0
-		}
-	} else if pkTyp.AutoIncr {
-
-		found := false
-		for _, c := range insertColsName {
-			if c == tableDef.Pkey.PkeyColName {
-				found = true
-				break
-			}
-		}
-		if !found {
-			// insert values does not contain auto primary key columns
-			return false // break condition 2
-		}
-
-		var bat *batch.Batch
-		proc := ctx.GetProcess()
-		node := builder.qry.Nodes[0]
-		if builder.isPrepareStatement {
-			bat = proc.GetPrepareBatch()
-		} else {
-			bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
-		}
-
-		pkVec := bat.Vecs[pkPos]
-		if nulls.Any(pkVec.GetNulls()) {
-			// has at least one values is null, then can not use pk filter
-			return false // break conditon 3
-		}
-	}
-
 	if !CNPrimaryCheck {
-		return false // break condition 1
+		return false // break condition 0
 	}
 
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
-		return false // break condition 2
+		return false // break condition 1
+	}
+
+	// check for auto increment primary key
+	pkPos, pkTyp := getPkPos(tableDef, true)
+	if pkPos == -1 {
+		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+			return false // break condition 2
+		}
+
+		pkNameMap := make(map[string]int)
+		for pkIdx, pkName := range tableDef.Pkey.Names {
+			pkNameMap[pkName] = pkIdx
+		}
+
+		autoIncIdx := -1
+		for _, col := range tableDef.Cols {
+			if _, ok := pkNameMap[col.Name]; ok {
+				if col.Typ.AutoIncr {
+					foundInStmt := false
+					for i, name := range insertColsName {
+						if name == col.Name {
+							foundInStmt = true
+							autoIncIdx = i
+							break
+						}
+					}
+					if !foundInStmt {
+						// one of pk cols is auto incr col and this col was not in values, break condition 3
+						return false
+					}
+				}
+			}
+		}
+
+		if autoIncIdx != -1 {
+			var bat *batch.Batch
+			proc := ctx.GetProcess()
+			node := builder.qry.Nodes[0]
+			if builder.isPrepareStatement {
+				bat = proc.GetPrepareBatch()
+			} else {
+				bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+			}
+			autoPkVec := bat.Vecs[autoIncIdx]
+			if nulls.Any(autoPkVec.GetNulls()) {
+				// has at least one values is null, then can not use pk filter, break conditon 2
+				return false
+			}
+		}
+	} else if pkTyp.AutoIncr { // single auto incr primary key
+		var bat *batch.Batch
+
+		autoIncIdx := -1
+		for i, name := range insertColsName {
+			if tableDef.Pkey.PkeyColName == name {
+				autoIncIdx = i
+				break
+			}
+		}
+
+		if autoIncIdx == -1 {
+			// have no auto pk col in values, break condition 2
+			return false
+		} else {
+			proc := ctx.GetProcess()
+			node := builder.qry.Nodes[0]
+			if builder.isPrepareStatement {
+				bat = proc.GetPrepareBatch()
+			} else {
+				bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+			}
+
+			autoPkVec := bat.Vecs[autoIncIdx]
+			if nulls.Any(autoPkVec.GetNulls()) {
+				// has at least one values is null, then can not use pk filter, break conditon 2
+				return false
+			}
+		}
 	}
 
 	isCompound := len(insertColsName) > 1
