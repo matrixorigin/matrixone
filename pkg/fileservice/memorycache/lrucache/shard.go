@@ -31,9 +31,10 @@ func (s *shard[K, V]) Set(ctx context.Context, h uint64, key K, value V) {
 	item.Size = size
 	s.Lock()
 	defer s.Unlock()
-	if ok := s.kv.Set(h, key, item); ok {
+	if _, ok := s.kv.Get(h, key); ok {
 		return
 	}
+	s.kv.Set(h, key, item)
 	s.size += size
 	atomic.AddInt64(s.totalSize, size)
 	s.evicts.PushFront(item)

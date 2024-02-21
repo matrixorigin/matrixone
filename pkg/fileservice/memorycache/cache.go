@@ -80,9 +80,6 @@ func (c *Cache) Get(ctx context.Context, key cache.CacheKey) (CacheData, bool) {
 }
 
 func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) error {
-	if _, ok := c.l.Get(ctx, key); ok {
-		return nil
-	}
 	if r, ok := value.(RCBytes); ok {
 		c.l.Set(ctx, key, r.d)
 	}
