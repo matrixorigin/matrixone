@@ -2345,6 +2345,9 @@ func appendJoinNodeForParentFkCheck(ctx CompilerContext,
 		}
 
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
+		if parentTableDef == nil {
+			return -1, moerr.NewInternalError(ctx.GetContext(), "parent table %d not found", fk.ForeignTbl)
+		}
 		newTableDef := DeepCopyTableDef(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
 		for _, col := range parentTableDef.Cols {
@@ -3893,7 +3896,6 @@ func makeDeleteFkSqlForDropConstraint(db, tbl, constraint string) string {
 func makeDeleteFkSqlForDropDatabase(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
-	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' or refer_db_name = '%s'", db, db))
+	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
 	return sb.String()
 }

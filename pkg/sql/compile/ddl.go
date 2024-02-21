@@ -81,7 +81,17 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	//TODO: if foreign_key_checks = 0 or 1
+	yes, err := s.hasFkeysReferToMe(c, dbName)
+	if err != nil {
+		return err
+	}
+	if yes {
+		return moerr.NewInternalError(c.ctx,
+			"can not drop database '%v' which has been referenced by foreign keys", dbName)
+	}
+
+	err = c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -106,6 +116,32 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Scope) hasFkeysReferToMe(c *Compile, dbName string) (bool, error) {
+	database, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return false, err
+	}
+
+	relations, err := database.Relations(c.ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, rel := range relations {
+		relation, err := database.Relation(c.ctx, rel, nil)
+		if err != nil {
+			return false, err
+		}
+		yes, err := s.hasChildTables(c, relation)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Drop the old view, and create the new view.
@@ -1760,6 +1796,31 @@ func (s *Scope) removeParentTblIdInChildTable(c *Compile, fkRelation engine.Rela
 		return err
 	}
 	return fkRelation.UpdateConstraint(c.ctx, newCt)
+}
+
+func (s *Scope) hasChildTables(c *Compile, fkRelation engine.Relation) (bool, error) {
+	fkTableDef, err := fkRelation.TableDefs(c.ctx)
+	if err != nil {
+		return false, err
+	}
+	var oldCt *engine.ConstraintDef
+	for _, def := range fkTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+	for _, ct := range oldCt.Cts {
+		if def, ok := ct.(*engine.RefChildTableDef); ok {
+			for _, refTable := range def.Tables {
+				if refTable != 0 {
+					return true, nil
+				}
+			}
+			break
+		}
+	}
+	return false, nil
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
