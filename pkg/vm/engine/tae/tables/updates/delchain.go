@@ -134,6 +134,7 @@ func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
 	var yes bool
 	for i := start; i < end+1; i++ {
 		if chain.mask.Contains(i) || chain.persistedMask.Contains(i) {
+			logutil.Infof("lalala blk %v-%d, delete %d, %d, mask %v, persisted %v", chain.mvcc.meta.ID.String(), chain.mvcc.blkID, start, end, chain.mask, chain.persistedMask)
 			yes = true
 			break
 		}
@@ -352,6 +353,8 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	})
 	return
 }
+
+func (chain *DeleteChain) ResetPersistedMask() { chain.persistedMask = &nulls.Bitmap{} }
 
 func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 	if node == nil || node.mask == nil {

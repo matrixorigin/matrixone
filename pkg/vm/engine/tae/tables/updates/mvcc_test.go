@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,7 +28,13 @@ import (
 func TestMutationControllerAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mc := NewAppendMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	mc := NewAppendMVCCHandle(obj)
 
 	nodeCnt := 10000
 	rowsPerNode := uint32(5)
@@ -72,7 +79,13 @@ func TestMutationControllerAppend(t *testing.T) {
 // a4 1,5,5 true
 func TestGetVisibleRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	n := NewAppendMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	n := NewAppendMVCCHandle(obj)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)
 	an1.Prepare = types.BuildTS(1, 0)

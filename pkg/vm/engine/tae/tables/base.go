@@ -534,8 +534,10 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	if err != nil {
 		return nil, err
 	}
+	id := blk.meta.AsCommonID()
+	id.SetBlockOffset(blkID)
 	vecs, err := LoadPersistedColumnDatas(
-		ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, location, mp,
+		ctx, readSchema, blk.rt, id, colIdxs, location, mp,
 	)
 	if err != nil {
 		return nil, err
@@ -753,7 +755,9 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if blk.meta.IsAppendable() {
 		return
 	}
+	blk.RLock()
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
+	blk.RUnlock()
 	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
 }
 

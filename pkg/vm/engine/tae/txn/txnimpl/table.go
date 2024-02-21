@@ -712,7 +712,7 @@ func (tbl *txnTable) RangeDelete(
 		// }
 		// This err also captured by txn's write conflict check.
 		if err != nil {
-			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
+			logutil.Infof("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
 				id.BlockID.String(),

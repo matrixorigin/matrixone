@@ -128,6 +128,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	if len(entry.ablksHandles) == 0 {
 		return nil
 	}
+	// if created blk handles is nil, all rows in ablks are deleted
+	if entry.createdBlkHandles == nil {
+		return nil
+	}
 	var aconflictCnt, totalTrans int
 	// transfer deletes in (startts .. committs] for ablocks
 	delTbls := make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())

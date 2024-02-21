@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -32,12 +33,21 @@ func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	ts2 := types.BuildTS(2, 0)
-	mvcc := updates.NewAppendMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	mvcc := updates.NewAppendMVCCHandle(obj)
 	// blk := &dataBlock{
 	// 	mvcc: mvcc,
 	// }
 	b := &baseBlock{
-		RWMutex: mvcc.RWMutex,
+		RWMutex:    mvcc.RWMutex,
+		appendMVCC: mvcc,
+		meta:       obj,
 	}
 	mnode := &memoryNode{
 		block: b,

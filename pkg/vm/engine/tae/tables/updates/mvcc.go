@@ -610,6 +610,15 @@ func (d *DeltalocChain) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return catalog.NewDeltalocCmd(id, catalog.IOET_WALTxnCommand_Block, d.mvcc.GetID(), d.BaseEntryImpl), nil
 }
 func (d *DeltalocChain) PrepareRollback() error {
+	d.RLock()
+	node := d.GetLatestNodeLocked()
+	d.RUnlock()
+	// If it's deleted by deltaloc, reset persisted mask when rollback
+	if node.BaseNode.NeedCheckDeleteChainWhenCommit {
+		d.Lock()
+		d.mvcc.GetDeleteChain().ResetPersistedMask()
+		d.Unlock()
+	}
 	_, err := d.BaseEntryImpl.PrepareRollback()
 	return err
 }

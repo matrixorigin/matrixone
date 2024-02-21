@@ -88,21 +88,13 @@ func (n *anode) Close() (err error) {
 }
 
 func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
-	left := uint32(data.Length()) - offset
-	nodeLeft := MaxNodeRows - n.rows
-	if left <= nodeLeft {
-		return left
-	}
-	return nodeLeft
+	return uint32(data.Length()) - offset
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
 	if n.data == nil {
 		capacity := data.Length() - int(offset)
-		if capacity > int(MaxNodeRows) {
-			capacity = int(MaxNodeRows)
-		}
 		n.data = containers.BuildBatchWithPool(
 			schema.AllNames(),
 			schema.AllTypes(),
