@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/shirou/gopsutil/v3/mem"
+	"go.uber.org/zap"
 )
 
 func MakeDefaultSmallPool(name string) *containers.VectorPool {
@@ -116,7 +118,10 @@ func PrintMemStats() {
 		heapp := pprof.Lookup("heap")
 		buf := &bytes.Buffer{}
 		heapp.WriteTo(buf, 0)
-		logutil.Info(base64.RawStdEncoding.EncodeToString(buf.Bytes()))
+		mlimit := debug.SetMemoryLimit(-1)
+		logutil.Info(
+			base64.RawStdEncoding.EncodeToString(buf.Bytes()),
+			zap.String("mlimit", common.HumanReadableBytes(int(mlimit))))
 	}
 
 	prevHeapInuse = memstats.HeapInuse
