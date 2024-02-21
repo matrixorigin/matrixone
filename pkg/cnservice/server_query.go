@@ -52,6 +52,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -315,6 +316,21 @@ func (s *service) handleRemoveRemoteLockTable(
 	resp.RemoveRemoteLockTable = &query.RemoveRemoteLockTableResponse{}
 	if removed {
 		resp.RemoveRemoteLockTable.Count = 1
+	}
+	return nil
+}
+
+func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.UnsubscribeTable == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	err := s.storeEngine.UnsubscribeTable(ctx, req.UnsubscribeTable.DatabaseID, req.UnsubscribeTable.TableID)
+	if err != nil {
+		resp.WrapError(err)
+		return nil
+	}
+	resp.UnsubscribeTable = &query.UnsubscribeTableResponse{
+		Success: true,
 	}
 	return nil
 }

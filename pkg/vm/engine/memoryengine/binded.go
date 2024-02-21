@@ -89,3 +89,11 @@ func (b *BindedEngine) GetRelationById(ctx context.Context, op client.TxnOperato
 func (b *BindedEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return b.engine.AllocateIDByKey(ctx, key)
 }
+
+func (b *BindedEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return b.engine.TryToSubscribeTable(ctx, dbID, tbID)
+}
+
+func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return b.engine.UnsubscribeTable(ctx, dbID, tbID)
+}

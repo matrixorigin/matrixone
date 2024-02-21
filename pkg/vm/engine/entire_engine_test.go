@@ -291,6 +291,14 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 	return 0, nil
 }
 
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
 func newtestOperator() *testOperator {
 	return &testOperator{}
 }
