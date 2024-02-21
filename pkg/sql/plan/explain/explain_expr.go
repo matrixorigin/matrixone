@@ -173,9 +173,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
 		if vec.Length() > 16 {
 			//don't display too long data in explain
+			originalLen := vec.Length()
 			vec.SetLength(16)
 			buf.WriteString(vec.String())
-			buf.WriteString("......")
+			s := fmt.Sprintf("... %v values", originalLen)
+			buf.WriteString(s)
 		} else {
 			buf.WriteString(vec.String())
 		}

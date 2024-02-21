@@ -336,9 +336,6 @@ func (r *blockReader) needReadBlkByZM(i int) bool {
 	if !r.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
-
-	logutil.Infof("filterzm min %v, blockzm min %v", r.filterZM.GetMin(), zm.GetMin())
-
 	if r.desc {
 		return r.filterZM.CompareMax(zm) <= 0
 	} else {
