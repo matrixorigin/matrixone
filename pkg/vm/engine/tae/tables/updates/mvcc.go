@@ -441,10 +441,10 @@ func (n *ObjectMVCCHandle) GetDeltaLocAndCommitTSByTxn(blkID uint16, txn txnif.T
 	return deletes.GetDeltaLocAndCommitTSByTxn(txn)
 }
 
-func (n *ObjectMVCCHandle) StringLocked() string {
+func (n *ObjectMVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
 	s := ""
-	for blkID, deletes := range n.deletes {
-		s = fmt.Sprintf("%s%d:%s", s, blkID, deletes.StringLocked())
+	for _, deletes := range n.deletes {
+		s = fmt.Sprintf("%s%s", s, deletes.StringLocked(level, depth+1, prefix))
 	}
 	return s
 }
@@ -662,14 +662,16 @@ func (n *MVCCHandle) GetID() *common.ID {
 }
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
 
-func (n *MVCCHandle) StringLocked() string {
+func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
 	s := ""
+	inMemoryCount := 0
 	if n.deletes.DepthLocked() > 0 {
 		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
-		s = fmt.Sprintf("InMemory:Cnt %d\n", n.deletes.mask.GetCardinality())
+		inMemoryCount = n.deletes.mask.GetCardinality()
 	}
+	s = fmt.Sprintf("%sBLK[%d]InMem:%d\n", common.RepeatStr("\t", depth), n.blkID, inMemoryCount)
 	if n.deltaloc.Depth() > 0 {
-		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())
+		s = fmt.Sprintf("%s%s%s", s, common.RepeatStr("\t", depth), n.deltaloc.StringLocked())
 	}
 	return s
 }
@@ -991,7 +993,7 @@ func (n *MVCCHandle) isEmpty() bool {
 	return true
 }
 func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location, needCheckWhenCommit bool) (entry txnif.TxnEntry, ok bool, err error) {
-	if !n.isEmpty(){
+	if !n.isEmpty() {
 		return
 	}
 	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)

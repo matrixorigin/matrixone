@@ -167,7 +167,7 @@ type Tombstone interface {
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
-	StringLocked() string
+	StringLocked(level common.PPLevel, depth int, prefix string) string
 	// TryGetDeleteChain(blkID uint16) *updates.MVCCHandle
 	UpgradeAllDeleteChain()
 	UpgradeDeleteChain(blkID uint16)

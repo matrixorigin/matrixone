@@ -367,9 +367,9 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		w.WriteString(common.RepeatStr("\t", depth+1))
 		w.WriteString(prefix)
 		objID := it2.Item().ObjectID
-		w.WriteString(objID.String())
+		w.WriteString(fmt.Sprintf("Tombstone[%s]\n", objID.String()))
 		it2.Item().GetObject().(*ObjectEntry).RLock()
-		w.WriteString(it2.Item().StringLocked())
+		w.WriteString(it2.Item().StringLocked(level, depth+1, prefix))
 		it2.Item().GetObject().(*ObjectEntry).RUnlock()
 	}
 	return w.String()

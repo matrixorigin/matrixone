@@ -732,7 +732,7 @@ func (blk *baseBlock) DeletesInfo() string {
 	if mvcc == nil {
 		return ""
 	}
-	return mvcc.StringLocked()
+	return mvcc.StringLocked(1,0,"")
 }
 
 func (blk *baseBlock) RangeDelete(
@@ -776,7 +776,7 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 		mvcc := blk.tryGetMVCC()
 		var s2 string
 		if mvcc != nil {
-			s2 = mvcc.StringLocked()
+			s2 = mvcc.StringLocked(1,0,"")
 		}
 		blk.RUnlock()
 		if s2 != "" {
