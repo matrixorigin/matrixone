@@ -361,16 +361,18 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
 		it.Next()
 	}
-	it2 := entry.deleteList.Copy().Iter()
-	for it2.Next() {
+	if level > common.PPL2 {
 		_ = w.WriteByte('\n')
-		w.WriteString(common.RepeatStr("\t", depth+1))
-		w.WriteString(prefix)
-		objID := it2.Item().ObjectID
-		w.WriteString(fmt.Sprintf("Tombstone[%s]\n", objID.String()))
-		it2.Item().GetObject().(*ObjectEntry).RLock()
-		w.WriteString(it2.Item().StringLocked(level, depth+1, prefix))
-		it2.Item().GetObject().(*ObjectEntry).RUnlock()
+		it2 := entry.deleteList.Copy().Iter()
+		for it2.Next() {
+			w.WriteString(common.RepeatStr("\t", depth+1))
+			w.WriteString(prefix)
+			objID := it2.Item().ObjectID
+			w.WriteString(fmt.Sprintf("Tombstone[%s]\n", objID.String()))
+			it2.Item().GetObject().(*ObjectEntry).RLock()
+			w.WriteString(it2.Item().StringLocked(level, depth+1, prefix))
+			it2.Item().GetObject().(*ObjectEntry).RUnlock()
+		}
 	}
 	return w.String()
 }

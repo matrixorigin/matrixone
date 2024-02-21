@@ -3227,7 +3227,7 @@ func TestDelete3(t *testing.T) {
 			}
 		}
 	}
-	t.Logf(tae.Catalog.SimplePPString(common.PPL3))
+	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDropCreated1(t *testing.T) {
